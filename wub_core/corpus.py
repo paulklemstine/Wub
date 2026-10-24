@@ -151,7 +151,8 @@ class CorpusStore:
                 continue
             for d in data[: max_points // 4]:
                 pts.append({"x": d["x"], "y": d["y"], "stem": stem,
-                            "segment_id": d.get("segment_id")})
+                            "segment_id": d.get("segment_id"),
+                            "track_id": d.get("track_id")})
         return pts
 
     def summary(self) -> dict:

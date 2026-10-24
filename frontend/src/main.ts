@@ -229,6 +229,7 @@ class WubApp {
   // AudioBuffer cache keyed by track_id + segment_id, insertion-ordered LRU.
   private bufferCache = new Map<string, Promise<AudioBuffer>>();
   private segmentPositions = new Map<string, { x: number; y: number }>();
+  private trackStemPositions = new Map<string, { x: number; y: number }>();
   private activeSlices: Partial<Record<StemName, SliceSpec>> = {};
   private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
@@ -278,10 +279,17 @@ class WubApp {
         const x = asNumber(item["x"], -1);
         const y = asNumber(item["y"], -1);
         const segId = asString(item["segment_id"], "");
+        const trackId = asString(item["track_id"], "");
         if (stem !== null && x >= 0 && y >= 0) {
-          pts.push({ stem, x, y });
+          pts.push({ stem, x, y, trackId: trackId || undefined });
           if (segId) {
             this.segmentPositions.set(segId, { x, y });
+            if (trackId) {
+              this.segmentPositions.set(`${trackId}:${segId}`, { x, y });
+            }
+          }
+          if (trackId) {
+            this.trackStemPositions.set(`${trackId}:${stem}`, { x, y });
           }
         }
       }
@@ -291,6 +299,33 @@ class WubApp {
     } catch {
       // Fallback stays as seeded demo points
     }
+  }
+
+  private getSliceCoordinates(stem: StemName, trackId: string, segmentId: string): { x: number; y: number } {
+    const direct = this.segmentPositions.get(segmentId) ?? this.segmentPositions.get(`${trackId}:${segmentId}`);
+    if (direct) return direct;
+
+    const trackStem = this.trackStemPositions.get(`${trackId}:${stem}`);
+    if (trackStem) return trackStem;
+
+    const centers: Record<StemName, { x: number; y: number }> = {
+      drums: { x: 0.25, y: 0.3 },
+      bass: { x: 0.7, y: 0.3 },
+      vocals: { x: 0.3, y: 0.72 },
+      other: { x: 0.72, y: 0.7 },
+    };
+    const c = centers[stem];
+    let h = 0;
+    const key = `${trackId}:${segmentId}`;
+    for (let i = 0; i < key.length; i++) {
+      h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    }
+    const angle = (h % 628) / 100;
+    const dist = 0.02 + ((h % 60) / 1000);
+    return {
+      x: Math.min(0.95, Math.max(0.05, c.x + Math.cos(angle) * dist)),
+      y: Math.min(0.95, Math.max(0.05, c.y + Math.sin(angle) * dist)),
+    };
   }
 
   // -- transport -----------------------------------------------------------
@@ -335,6 +370,7 @@ class WubApp {
     }
     this.tatumQueue = [];
     this.nextTatumTime = 0;
+    this.activeSlices = {};
     if (this.ws !== null) {
       try {
         this.ws.close();
@@ -637,10 +673,21 @@ class WubApp {
       return;
     }
     if (!this.playing) return;
-    this.activeSlices[stem] = spec;
-    const pos = this.segmentPositions.get(spec.segmentId);
-    if (pos && this.nebula !== null) {
-      this.nebula.setActiveSlice(stem, pos.x, pos.y, performance.now() / 1000);
+    const pos = this.getSliceCoordinates(stem, spec.trackId, spec.segmentId);
+    const delayMs = Math.max(0, (when - this.engine.now()) * 1000);
+    if (delayMs <= 10) {
+      this.activeSlices[stem] = spec;
+      if (this.nebula !== null) {
+        this.nebula.setSlicePosition(stem, pos.x, pos.y);
+      }
+    } else {
+      setTimeout(() => {
+        if (!this.playing) return;
+        this.activeSlices[stem] = spec;
+        if (this.nebula !== null) {
+          this.nebula.setSlicePosition(stem, pos.x, pos.y);
+        }
+      }, delayMs);
     }
     try {
       this.engine.scheduleSlice(stem, buffer, when, {

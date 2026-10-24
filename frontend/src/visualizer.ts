@@ -444,12 +444,21 @@ export class NebulaRenderer {
     vocals: { ...DEFAULT_RETICLES.vocals },
     other: { ...DEFAULT_RETICLES.other },
   };
+  private targetReticleMap: Record<StemName, { x: number; y: number }> = {
+    drums: { ...DEFAULT_RETICLES.drums },
+    bass: { ...DEFAULT_RETICLES.bass },
+    vocals: { ...DEFAULT_RETICLES.vocals },
+    other: { ...DEFAULT_RETICLES.other },
+  };
   private onReticleMove?: ReticleMoveHandler;
   private dragStem: StemName | null = null;
-  private activeSliceMarkers: Partial<Record<StemName, { x: number; y: number; timeSec: number }>> = {};
 
-  setActiveSlice(stem: StemName, x: number, y: number, timeSec: number): void {
-    this.activeSliceMarkers[stem] = { x: clamp01(x), y: clamp01(y), timeSec };
+  setSlicePosition(stem: StemName, x: number, y: number): void {
+    this.targetReticleMap[stem] = { x: clamp01(x), y: clamp01(y) };
+  }
+
+  setActiveSlice(stem: StemName, x: number, y: number, _timeSec?: number): void {
+    this.setSlicePosition(stem, x, y);
   }
 
   private handlePointerDown: (e: PointerEvent) => void;
@@ -548,7 +557,9 @@ export class NebulaRenderer {
 
   /** Programmatic move (no callback, so server echoes cannot loop). */
   setReticle(stem: StemName, x: number, y: number): void {
-    this.reticleMap[stem] = { x: clamp01(x), y: clamp01(y) };
+    const p = { x: clamp01(x), y: clamp01(y) };
+    this.reticleMap[stem] = { ...p };
+    this.targetReticleMap[stem] = { ...p };
   }
 
   render(frame: NebulaFrame): void {
@@ -590,7 +601,17 @@ export class NebulaRenderer {
     }
     ctx.globalAlpha = 1;
 
-    // Gravity reticles with a beat-synced pulse.
+    // Smoothly glide reticles to currently playing slice locations
+    for (const stem of RETICLE_STEMS) {
+      if (this.dragStem !== stem) {
+        const cur = this.reticleMap[stem];
+        const tgt = this.targetReticleMap[stem];
+        cur.x += (tgt.x - cur.x) * 0.28;
+        cur.y += (tgt.y - cur.y) * 0.28;
+      }
+    }
+
+    // Bouncing throbbing circle indicators tracking active slices
     const bpm = Number.isFinite(frame.bpm) && frame.bpm > 0 ? frame.bpm : 120;
     const beatPhase = (frame.timeSec * bpm) / 60;
     const pulse = 0.5 + 0.5 * Math.sin(2 * Math.PI * (beatPhase - Math.floor(beatPhase)));
@@ -599,56 +620,40 @@ export class NebulaRenderer {
       const px = r.x * w;
       const py = r.y * h;
       const level = frame.levels !== undefined ? (frame.levels[stem] ?? 0) : 0;
-      const radius = 12 + 4 * pulse + 10 * Math.min(1, Math.max(0, level));
+      const radius = 12 + 4 * pulse + 12 * Math.min(1, Math.max(0, level));
       const color = STEM_COLORS[stem];
+
+      // Outer glow pulse
+      ctx.beginPath();
+      ctx.arc(px, py, radius + 4, 0, 2 * Math.PI);
       ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.95;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.3 * (0.5 + 0.5 * pulse);
+      ctx.stroke();
+
+      // Main pulsing circle
       ctx.beginPath();
       ctx.arc(px, py, radius, 0, 2 * Math.PI);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.2;
+      ctx.globalAlpha = 0.95;
       ctx.stroke();
-      // Crosshair.
+
+      // Center crosshairs
       ctx.beginPath();
       ctx.moveTo(px - radius - 6, py);
       ctx.lineTo(px + radius + 6, py);
       ctx.moveTo(px, py - radius - 6);
       ctx.lineTo(px, py + radius + 6);
-      ctx.globalAlpha = 0.6;
+      ctx.globalAlpha = 0.65;
       ctx.stroke();
       ctx.globalAlpha = 1;
+
+      // Stem label badge
       ctx.fillStyle = color;
-      ctx.font = "11px system-ui, sans-serif";
+      ctx.font = "bold 11px system-ui, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(`${stem} (drag)`, px, py - radius - 8);
-    }
-
-    // Active playing sample pings on the map
-    for (const stem of RETICLE_STEMS) {
-      const marker = this.activeSliceMarkers[stem];
-      if (!marker) continue;
-      const age = frame.timeSec - marker.timeSec;
-      if (age < 0 || age > 1.2) continue;
-      const progress = age / 1.2;
-      const alpha = Math.max(0, 1 - progress);
-      const pingR = 4 + 18 * progress;
-      const px = marker.x * w;
-      const py = marker.y * h;
-      const color = STEM_COLORS[stem];
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(px, py, pingR, 0, 2 * Math.PI);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2 * alpha;
-      ctx.globalAlpha = 0.8 * alpha;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(px, py, 3.5, 0, 2 * Math.PI);
-      ctx.fillStyle = "#ffffff";
-      ctx.globalAlpha = alpha;
-      ctx.fill();
-      ctx.restore();
+      ctx.fillText(stem.toUpperCase(), px, py - radius - 8);
     }
   }
 
@@ -684,6 +689,7 @@ export class NebulaRenderer {
   private moveReticleFromEvent(stem: StemName, e: PointerEvent): void {
     const p = this.toNormalized(e);
     this.reticleMap[stem] = p;
+    this.targetReticleMap[stem] = p;
     if (this.onReticleMove !== undefined) {
       this.onReticleMove(stem, p.x, p.y);
     }
