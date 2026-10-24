@@ -28,6 +28,8 @@ def main() -> None:
     ap.add_argument("--min-bpm", type=float, default=122.0, help="min BPM filter")
     ap.add_argument("--max-bpm", type=float, default=132.0, help="max BPM filter")
     ap.add_argument("--fast-cpu", action="store_true", default=True, help="use fast CPU mode")
+    ap.add_argument("--indices", default="data/indices", help="FAISS indices directory")
+    ap.add_argument("--no-rebuild", action="store_true", help="skip rebuilding indices and UMAP after batch")
     args = ap.parse_args()
 
     proc_dir = Path(args.processed)
@@ -83,6 +85,12 @@ def main() -> None:
             print(f"  --> Failed: {e}\n")
 
     print(f"Batch completed. Stems directory now has {len([d for d in stems_dir.iterdir() if d.is_dir() and not d.name.startswith('_')])} stemmed tracks.")
+
+    if not args.no_rebuild and len(selected) > 0:
+        import subprocess
+        print("\nRebuilding FAISS indices and 2D UMAP projections...")
+        subprocess.run(["python3", "scripts/build_umap.py", "--indices-dir", args.indices], check=False)
+        print("Indices and UMAP updated.")
 
 
 if __name__ == "__main__":
