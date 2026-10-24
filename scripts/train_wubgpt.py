@@ -37,7 +37,8 @@ def main() -> None:
     ap.add_argument("--processed", default="data/processed")
     ap.add_argument("--model-out", default="data/wubgpt/wubgpt.pt")
     ap.add_argument("--epochs", type=int, default=8)
-    ap.add_argument("--k", type=int, default=256)
+    ap.add_argument("--k", type=int, default=512,
+                    help="VQ codebook resolution (clusters per stem, e.g. 512 or 1024)")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--device", default="cpu")

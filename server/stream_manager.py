@@ -14,7 +14,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -76,6 +76,36 @@ def find_active_tatums(tr: TrackAnalysis, stem: str, bar_phase: Optional[int] = 
     return active or [0]
 
 
+_WUBGPT_CACHE: Dict[str, Any] = {}
+
+
+def get_cached_wubgpt() -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
+    if "model" in _WUBGPT_CACHE:
+        return _WUBGPT_CACHE["model"], _WUBGPT_CACHE.get("vqs")
+    if _WUBGPT_CACHE.get("checked", False):
+        return None, None
+
+    _WUBGPT_CACHE["checked"] = True
+    candidates = [
+        Path("data/wubgpt/wubgpt.pt"),
+        Path("data/wubgpt.pt"),
+    ]
+    for p in candidates:
+        if p.exists():
+            try:
+                from wub_core.model_transformer import load_checkpoint
+
+                m, v, _ = load_checkpoint(p)
+                m.eval()
+                _WUBGPT_CACHE["model"] = m
+                _WUBGPT_CACHE["vqs"] = v
+                print(f"[WubGPT] Active live transformer model loaded from {p}")
+                return m, v
+            except Exception as e:
+                print(f"[WubGPT] Could not load checkpoint from {p}: {e}")
+    return None, None
+
+
 @dataclass
 class StreamSession:
     store: CorpusStore
@@ -91,6 +121,10 @@ class StreamSession:
     pitch_lock: bool = True
     key: str = "C major"
     gravity: Dict[str, list] = field(default_factory=dict)
+    temperature: float = 0.75
+    top_p: float = 0.85
+    top_k: int = 32
+    use_wubgpt: bool = True
     _track_centers: Dict[str, Dict[str, Tuple[float, float]]] = field(default_factory=dict)
     _buffer: List[dict] = field(default_factory=list)
     _tatum_index: int = 0
@@ -166,6 +200,71 @@ class StreamSession:
         rng = np.random.default_rng(self.seed + self._rng_seed)
         self._rng_seed += 1
 
+        # 1. If WubGPT model checkpoint exists, generate using Top-P nucleus sampling
+        if self.use_wubgpt:
+            model, vqs = get_cached_wubgpt()
+            if model is not None and vqs is not None:
+                try:
+                    from wub_core.model_transformer import sample as wub_sample, tokens_to_slices
+                    pools = self.store.pools(exclude_silent=True)
+                    if pools:
+                        cur_phase = self._tatum_index % 16
+                        seed_steps = [{"r": (cur_phase + i) % 16, **{s: 0 for s in STEMS}} for i in range(16)]
+                        sampled = wub_sample(
+                            model=model,
+                            vqs=vqs,
+                            seed_steps=seed_steps,
+                            steps=32,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=self.top_k,
+                            seed=int(self.seed + self._rng_seed),
+                        )
+                        seq = tokens_to_slices(sampled, pools, vqs)
+                        for step_idx in range(len(sampled)):
+                            master_tatum = self._tatum_index
+                            slices: Dict[str, Optional[dict]] = {}
+                            for stem in STEMS:
+                                sref_list = seq.get(stem, [])
+                                sref = sref_list[step_idx] if step_idx < len(sref_list) else None
+                                if sref is not None:
+                                    tr = tracks_by_id.get(sref.track_id)
+                                    src_bpm = float(tr.bpm) if (tr and tr.bpm > 0) else self.bpm
+                                    rate = max(0.5, min(2.0, float(self.bpm) / float(src_bpm)))
+                                    rate_cents = 1200.0 * np.log2(rate) if rate > 0 else 0.0
+                                    detune_cents = 0
+                                    if stem in ("bass", "vocals", "other") and self.pitch_lock and tr:
+                                        shift = get_key_semitones(tr.key, self.key)
+                                        detune_cents = int(shift * 100 - rate_cents)
+                                    else:
+                                        detune_cents = int(-rate_cents)
+
+                                    slices[stem] = {
+                                        "track_id": sref.track_id,
+                                        "segment_id": sref.segment_id,
+                                        "start": sref.start,
+                                        "duration": sref.duration,
+                                        "url": f"/audio/{sref.track_id}/{sref.segment_id}.wav",
+                                        "detune_cents": detune_cents,
+                                        "rate": rate,
+                                        "synth_blend": self.synth_blend.get(stem, 0.0),
+                                    }
+                                else:
+                                    slices[stem] = None
+
+                            self._buffer.append({
+                                "type": "tatum",
+                                "tatum_index": master_tatum,
+                                "bpm": self.bpm,
+                                "tatum_duration": self.tatum_duration,
+                                "slices": slices,
+                            })
+                            self._tatum_index += 1
+                        return
+                except Exception:
+                    pass
+
+        # 2. Phrase-locked metrical lookahead generator with gravity timbre steering
         # Initialize heads if empty — lock to active downbeats so all stems start sounding immediately
         for stem in STEMS:
             if stem not in self._heads:

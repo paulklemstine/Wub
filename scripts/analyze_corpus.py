@@ -75,14 +75,16 @@ def process_one(args_tuple) -> dict:
     warnings.filterwarnings("ignore")
     from wub_core.analyzer import analyze_track
     from wub_core.schema import TrackAnalysis
-    from wub_core.separator import compute_track_id, separate_track
+    from wub_core.separator import compute_track_id, separate_track, stems_dir_for, stems_exist
 
     path = Path(path_str)
     proc_dir = Path(proc_dir_str)
     try:
         track_id = compute_track_id(path)
         out_json = proc_dir / f"{track_id}.json"
-        if out_json.exists():
+        sdir = stems_dir_for(Path(stems_base_str), track_id)
+        has_stems = stems_exist(sdir)
+        if out_json.exists() and (no_sep or has_stems):
             tr = TrackAnalysis(**json.loads(out_json.read_text()))
             return {"path": path_str, "status": "cached", "track_id": track_id,
                     "bpm": tr.bpm, "tatums": len(tr.tatums), "segments": len(tr.segments)}
@@ -107,6 +109,7 @@ def run_pass(in_dir: Path, proc_dir: Path, idx_dir: Path, stems_base: Path,
 
     from wub_core.indexer import build_indices
     from wub_core.schema import TrackAnalysis
+    from wub_core.separator import stems_exist
 
     manifest = load_manifest(proc_dir)
     now = time.time()
@@ -127,8 +130,14 @@ def run_pass(in_dir: Path, proc_dir: Path, idx_dir: Path, stems_base: Path,
         entry = manifest.get(key)
         if not overwrite and entry and entry.get("status") in ("ok", "cached") \
                 and entry.get("size") == fp["size"] and entry.get("mtime") == fp["mtime"]:
-            continue
+            if no_sep:
+                continue
+            tid = entry.get("track_id") or compute_track_id_fast(p)
+            if stems_exist(stems_base / tid):
+                continue
         eligible.append(p)
+        if limit and len(eligible) >= limit:
+            break
     if limit and limit > 0:
         eligible = eligible[:limit]
 
@@ -207,22 +216,25 @@ def run_pass(in_dir: Path, proc_dir: Path, idx_dir: Path, stems_base: Path,
                     top_up()
         save_manifest(proc_dir, manifest)
 
-    # Rebuild indices from all analyses (fast relative to DSP)
-    analyses: list[TrackAnalysis] = []
-    for jf in proc_dir.glob("*.json"):
-        if jf.name.startswith("_") or jf.name.startswith("meta_"):
-            continue
-        try:
-            analyses.append(TrackAnalysis(**json.loads(jf.read_text())))
-        except Exception as e:
-            print(f"  WARN: skipping corrupt {jf.name}: {e}")
-    if analyses:
-        paths = build_indices(analyses, idx_dir)
-        print(f"Indices rebuilt from {len(analyses)} tracks: "
-              + ", ".join(f"{k}={v.name}" for k, v in paths.items()))
-        stats["indexed_tracks"] = len(analyses)
+    # Rebuild indices only when new tracks were analyzed or indices don't exist
+    if stats["ok"] > 0 or not list(idx_dir.glob("index_*.faiss")):
+        analyses: list[TrackAnalysis] = []
+        for jf in proc_dir.glob("*.json"):
+            if jf.name.startswith("_") or jf.name.startswith("meta_"):
+                continue
+            try:
+                analyses.append(TrackAnalysis(**json.loads(jf.read_text())))
+            except Exception as e:
+                print(f"  WARN: skipping corrupt {jf.name}: {e}")
+        if analyses:
+            paths = build_indices(analyses, idx_dir)
+            print(f"Indices rebuilt from {len(analyses)} tracks: "
+                  + ", ".join(f"{k}={v.name}" for k, v in paths.items()))
+            stats["indexed_tracks"] = len(analyses)
+        else:
+            print("No analyses yet; indices skipped.")
     else:
-        print("No analyses yet; indices skipped.")
+        stats["indexed_tracks"] = len(list(proc_dir.glob("*.json")))
     return stats
 
 

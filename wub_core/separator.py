@@ -55,13 +55,17 @@ def separate_track(
     if stems_exist(out_dir) and not overwrite:
         return track_id, out_dir
 
-    # Resolve device
+    # Resolve device (require at least 1.8GB VRAM free on CUDA, else fallback to CPU)
     if device is None:
         try:
             import torch
 
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        except ImportError:
+            if torch.cuda.is_available():
+                free_bytes = torch.cuda.mem_get_info()[0] if hasattr(torch.cuda, "mem_get_info") else 0
+                device = "cuda" if free_bytes > int(1.8 * (1 << 30)) else "cpu"
+            else:
+                device = "cpu"
+        except Exception:
             device = "cpu"
 
     cmd = [
@@ -80,7 +84,8 @@ def separate_track(
     if fast_cpu:
         # Fewer overlap segments + mp3 output is faster but we need wav;
         # use shifts=1 and overlap=0.25 for speed, keep wav for fidelity.
-        cmd += ["--shifts", "1", "--overlap", "0.25", "--segment", "8"]
+        # htdemucs max segment is 7.8 seconds, so use 7.
+        cmd += ["--shifts", "1", "--overlap", "0.25", "--segment", "7"]
     cmd += [str(input_mp3)]
 
     try:

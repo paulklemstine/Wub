@@ -42,12 +42,12 @@ def main() -> None:
                     help="original audio library directory for rendering")
     ap.add_argument("--steps", type=int, default=256,
                     help="number of tatum steps to autoregressively sample")
-    ap.add_argument("--temperature", type=float, default=1.0,
-                    help="sampling temperature (>0.0; lower is more deterministic)")
+    ap.add_argument("--temperature", type=float, default=0.75,
+                    help="sampling temperature (>0.0; 0.75 locks rhythm while staying expressive)")
     ap.add_argument("--top-k", type=int, default=32,
                     help="top-k filtering per stem head")
-    ap.add_argument("--top-p", type=float, default=0.95,
-                    help="nucleus filtering top-p (None or 0.0-1.0)")
+    ap.add_argument("--top-p", type=float, default=0.85,
+                    help="nucleus filtering top-p (0.85 removes long-tail noise)")
     ap.add_argument("--target-bpm", type=float, default=128.0,
                     help="target BPM to lock and time-stretch slices to (0 = no stretch)")
     ap.add_argument("--pitch-lock", action="store_true", default=True,
