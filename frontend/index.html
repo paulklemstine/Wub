@@ -66,6 +66,8 @@
     }
     #rings-canvas { aspect-ratio: 16 / 10; }
     #nebula-canvas { aspect-ratio: 16 / 10; cursor: crosshair; }
+    #master-canvas { aspect-ratio: 24 / 7; }
+    .master-card { grid-column: 1 / -1; }
     #status-line { margin-top: 12px; opacity: 0.85; font-size: 0.9rem; min-height: 1.2em; }
   </style>
 </head>
@@ -159,6 +161,13 @@
         <span>Drag crosshairs to steer sound</span>
       </div>
       <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
+    </div>
+    <div class="stage-card master-card">
+      <div class="stage-header">
+        <span style="color: #4ade80;">Master Combined Audio Analysis</span>
+        <span>Summed Mix Waveform • 64-Band FFT Spectrum • Peak VU</span>
+      </div>
+      <canvas id="master-canvas" class="stage" width="720" height="240"></canvas>
     </div>
   </section>
 

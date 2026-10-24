@@ -74,6 +74,7 @@ export class AudioEngine {
 
   private ctx_: AudioContext | null = null;
   private master_: DynamicsCompressorNode | null = null;
+  private masterAnalyser_: AnalyserNode | null = null;
   private buses_: Record<StemName, StemBus> | null = null;
   private timer_: ReturnType<typeof setInterval> | null = null;
   private liveSources_: Map<AudioBufferSourceNode, number> = new Map();
@@ -106,7 +107,13 @@ export class AudioEngine {
     master.ratio.value = 4;
     master.attack.value = 0.003;
     master.release.value = 0.2;
-    master.connect(ctx.destination);
+
+    const masterAnalyser = ctx.createAnalyser();
+    masterAnalyser.fftSize = 2048;
+    masterAnalyser.smoothingTimeConstant = 0.8;
+
+    master.connect(masterAnalyser);
+    masterAnalyser.connect(ctx.destination);
 
     const buses = {} as Record<StemName, StemBus>;
     for (const stem of STEMS) {
@@ -127,6 +134,7 @@ export class AudioEngine {
 
     this.ctx_ = ctx;
     this.master_ = master;
+    this.masterAnalyser_ = masterAnalyser;
     this.buses_ = buses;
     this.applyGains();
     this.startWatchdog();
@@ -213,6 +221,12 @@ export class AudioEngine {
     const buses = this.buses_;
     if (buses === null) throw new Error("AudioEngine buses not initialised");
     return buses[stem].analyser;
+  }
+
+  getMasterAnalyser(): AnalyserNode {
+    this.ensureCtx();
+    if (this.masterAnalyser_ === null) throw new Error("AudioEngine master analyser not initialised");
+    return this.masterAnalyser_;
   }
 
   /** Current audio-clock time, or 0 when the context does not exist yet. */
@@ -347,6 +361,7 @@ export class AudioEngine {
     const ctx = this.ctx_;
     this.ctx_ = null;
     this.master_ = null;
+    this.masterAnalyser_ = null;
     this.buses_ = null;
     if (ctx !== null) {
       void ctx.close().catch(() => undefined);

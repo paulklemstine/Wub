@@ -280,6 +280,216 @@ export function drawWaveformAnalysis(
   ctx2d.restore();
 }
 
+export interface MasterAnalysisState {
+  timeDomain?: Uint8Array<ArrayBuffer>;
+  frequency?: Uint8Array<ArrayBuffer>;
+  level: number;
+  bpm: number;
+  /** Visual-clock seconds (performance.now()/1000). */
+  timeSec: number;
+}
+
+/**
+ * Combined Master Output Audio Analysis.
+ * Shows the full-mix stereo oscilloscope waveform, 64-band FFT spectrum,
+ * vertical beat grid lines, and master peak/RMS meter.
+ */
+export function drawMasterAnalysis(
+  ctx2d: CanvasRenderingContext2D,
+  state: MasterAnalysisState,
+): void {
+  const canvas = ctx2d.canvas;
+  const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  const cssW = canvas.clientWidth > 0 ? canvas.clientWidth : canvas.width;
+  const cssH = canvas.clientHeight > 0 ? canvas.clientHeight : canvas.height;
+  const wantW = Math.max(1, Math.round(cssW * dpr));
+  const wantH = Math.max(1, Math.round(cssH * dpr));
+  if (canvas.width !== wantW || canvas.height !== wantH) {
+    canvas.width = wantW;
+    canvas.height = wantH;
+  }
+  ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+  ctx2d.clearRect(0, 0, w, h);
+
+  // Studio background
+  const bg = ctx2d.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, "#080812");
+  bg.addColorStop(0.5, "#0d0d1a");
+  bg.addColorStop(1, "#080812");
+  ctx2d.fillStyle = bg;
+  ctx2d.fillRect(0, 0, w, h);
+
+  // Center zero-axis
+  const midY = h / 2;
+  ctx2d.strokeStyle = "rgba(255, 255, 255, 0.06)";
+  ctx2d.lineWidth = 1;
+  ctx2d.beginPath();
+  ctx2d.moveTo(0, midY);
+  ctx2d.lineTo(w, midY);
+  ctx2d.stroke();
+
+  // Vertical musical beat grid lines
+  const bpm = Number.isFinite(state.bpm) && state.bpm > 0 ? state.bpm : 126;
+  const beatsInView = 4;
+  for (let b = 1; b < beatsInView; b++) {
+    const bx = (b / beatsInView) * w;
+    ctx2d.strokeStyle = b === 2 ? "rgba(255, 255, 255, 0.12)" : "rgba(255, 255, 255, 0.05)";
+    ctx2d.beginPath();
+    ctx2d.moveTo(bx, 0);
+    ctx2d.lineTo(bx, h);
+    ctx2d.stroke();
+  }
+
+  // 64-band FFT Spectrum Analyzer (Background)
+  const freq = state.frequency;
+  if (freq && freq.length > 0) {
+    const numBars = 64;
+    const barPad = 2;
+    const barW = Math.max(2, (w - 180) / numBars);
+    const startX = 110;
+
+    for (let b = 0; b < numBars; b++) {
+      const bin = Math.floor((b / numBars) * (freq.length * 0.7));
+      const val = freq[bin] / 255.0;
+      const barH = val * (h * 0.82);
+      const bx = startX + b * barW;
+
+      const barGrad = ctx2d.createLinearGradient(0, h, 0, h - barH);
+      barGrad.addColorStop(0, "rgba(34, 197, 94, 0.2)");
+      barGrad.addColorStop(0.6, "rgba(56, 189, 248, 0.25)");
+      barGrad.addColorStop(1, "rgba(168, 85, 247, 0.35)");
+
+      ctx2d.fillStyle = barGrad;
+      ctx2d.fillRect(bx, h - barH, barW - barPad, barH);
+    }
+  }
+
+  // Mirrored Master Oscilloscope Waveform (Glowing Emerald-Cyan)
+  const time = state.timeDomain;
+  if (time && time.length > 0) {
+    const step = Math.max(1, Math.floor(time.length / 320));
+    const waveStartX = 110;
+    const waveEndX = w - 70;
+    const waveWidth = waveEndX - waveStartX;
+    const maxAmp = h * 0.44;
+    const points: { x: number; topY: number; botY: number }[] = [];
+
+    let pIdx = 0;
+    for (let tIdx = 0; tIdx < time.length; tIdx += step) {
+      const norm = (time[tIdx] - 128) / 128.0;
+      const amp = Math.abs(norm);
+      const x = waveStartX + (pIdx / (time.length / step)) * waveWidth;
+      const yOff = Math.max(1, amp * maxAmp);
+      points.push({ x, topY: midY - yOff, botY: midY + yOff });
+      pIdx++;
+    }
+
+    if (points.length > 1) {
+      // Mirrored gradient envelope
+      const grad = ctx2d.createLinearGradient(0, midY - maxAmp, 0, midY + maxAmp);
+      grad.addColorStop(0, "rgba(34, 197, 94, 0.45)");
+      grad.addColorStop(0.5, "rgba(6, 182, 212, 0.15)");
+      grad.addColorStop(1, "rgba(34, 197, 94, 0.45)");
+
+      ctx2d.fillStyle = grad;
+      ctx2d.beginPath();
+      ctx2d.moveTo(points[0].x, points[0].topY);
+      for (let p = 1; p < points.length; p++) ctx2d.lineTo(points[p].x, points[p].topY);
+      for (let p = points.length - 1; p >= 0; p--) ctx2d.lineTo(points[p].x, points[p].botY);
+      ctx2d.closePath();
+      ctx2d.fill();
+
+      // Top glowing neon trace
+      ctx2d.save();
+      ctx2d.strokeStyle = "#4ade80";
+      ctx2d.lineWidth = 1.8;
+      ctx2d.shadowColor = "#22d3ee";
+      ctx2d.shadowBlur = 9;
+      ctx2d.beginPath();
+      ctx2d.moveTo(points[0].x, points[0].topY);
+      for (let p = 1; p < points.length; p++) ctx2d.lineTo(points[p].x, points[p].topY);
+      ctx2d.stroke();
+
+      // Bottom glowing neon trace
+      ctx2d.beginPath();
+      ctx2d.moveTo(points[0].x, points[0].botY);
+      for (let p = 1; p < points.length; p++) ctx2d.lineTo(points[p].x, points[p].botY);
+      ctx2d.stroke();
+      ctx2d.restore();
+    }
+  }
+
+  // Master Badge & Labels
+  ctx2d.fillStyle = "#ffffff";
+  ctx2d.font = "bold 13px system-ui, sans-serif";
+  ctx2d.textAlign = "left";
+  ctx2d.fillText("MASTER MIX", 16, 26);
+
+  ctx2d.fillStyle = "rgba(255, 255, 255, 0.55)";
+  ctx2d.font = "10px monospace";
+  ctx2d.fillText("COMBINED OUTPUT", 16, 42);
+
+  // Status LED dot
+  const level = state.level;
+  const isPlaying = level > 0.005;
+  ctx2d.beginPath();
+  ctx2d.arc(104, 22, 4, 0, 2 * Math.PI);
+  ctx2d.fillStyle = isPlaying ? "#22c55e" : "rgba(255, 255, 255, 0.2)";
+  if (isPlaying) {
+    ctx2d.shadowColor = "#4ade80";
+    ctx2d.shadowBlur = 8;
+  }
+  ctx2d.fill();
+  ctx2d.shadowBlur = 0;
+
+  // Master Stereo VU Meter (Right Side)
+  const meterX = w - 55;
+  const meterW = 42;
+  const meterH = h - 36;
+  const meterY = 18;
+
+  ctx2d.fillStyle = "rgba(14, 14, 24, 0.8)";
+  ctx2d.strokeStyle = "rgba(255, 255, 255, 0.12)";
+  ctx2d.lineWidth = 1;
+  ctx2d.fillRect(meterX, meterY, meterW, meterH);
+  ctx2d.strokeRect(meterX, meterY, meterW, meterH);
+
+  const fillH = Math.max(0, Math.min(meterH, level * meterH));
+  if (fillH > 0) {
+    const meterGrad = ctx2d.createLinearGradient(0, meterY + meterH, 0, meterY);
+    meterGrad.addColorStop(0, "#22c55e");
+    meterGrad.addColorStop(0.7, "#eab308");
+    meterGrad.addColorStop(1, "#ef4444");
+    ctx2d.fillStyle = meterGrad;
+    ctx2d.fillRect(meterX + 2, meterY + meterH - fillH + 2, meterW - 4, fillH - 4);
+  }
+
+  // Numerical dB readout
+  const db = level > 0.001 ? Math.round(20 * Math.log10(level)) : -60;
+  ctx2d.fillStyle = db > -3 ? "#ef4444" : "rgba(255, 255, 255, 0.85)";
+  ctx2d.font = "bold 10px monospace";
+  ctx2d.textAlign = "center";
+  ctx2d.fillText(db > -60 ? `${db}dB` : "-inf", meterX + meterW / 2, h - 8);
+
+  // Master Global Playhead Laser Line
+  const beatPhase = (state.timeSec * bpm) / 60.0;
+  const playheadX = ((beatPhase % 4) / 4) * w;
+  ctx2d.save();
+  ctx2d.strokeStyle = "#ffffff";
+  ctx2d.lineWidth = 2;
+  ctx2d.shadowColor = "#4ade80";
+  ctx2d.shadowBlur = 10;
+  ctx2d.globalAlpha = 0.9;
+  ctx2d.beginPath();
+  ctx2d.moveTo(playheadX, 0);
+  ctx2d.lineTo(playheadX, h);
+  ctx2d.stroke();
+  ctx2d.restore();
+}
+
 /** One recently scheduled slice, pushed by the app when it schedules audio. */
 export interface SliceArcEvent {
   stem: StemName;

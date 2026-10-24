@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -89,10 +91,54 @@ class StreamSession:
     pitch_lock: bool = True
     key: str = "C major"
     gravity: Dict[str, list] = field(default_factory=dict)
+    _track_centers: Dict[str, Dict[str, Tuple[float, float]]] = field(default_factory=dict)
     _buffer: List[dict] = field(default_factory=list)
     _tatum_index: int = 0
     _rng_seed: int = 0
     _heads: Dict[str, StemHeadState] = field(default_factory=dict)
+
+    def _get_track_center(self, stem: str, track_id: str) -> Optional[Tuple[float, float]]:
+        if not self._track_centers:
+            idx_dir = Path("data/indices")
+            for s in STEMS:
+                f = idx_dir / f"umap_{s}.json"
+                if f.exists():
+                    try:
+                        pts = json.loads(f.read_text())
+                        accum: Dict[str, List[Tuple[float, float]]] = defaultdict(list)
+                        for p in pts:
+                            tid = p.get("track_id")
+                            if tid and "x" in p and "y" in p:
+                                accum[tid].append((float(p["x"]), float(p["y"])))
+                        self._track_centers[s] = {
+                            tid: (float(np.mean([pt[0] for pt in pts_list])),
+                                  float(np.mean([pt[1] for pt in pts_list])))
+                            for tid, pts_list in accum.items()
+                        }
+                    except Exception:
+                        pass
+        return self._track_centers.get(stem, {}).get(track_id)
+
+    def _pick_candidate_track(self, stem: str, candidates: List[TrackAnalysis], rng: np.random.Generator) -> TrackAnalysis:
+        if len(candidates) <= 1:
+            return candidates[0]
+        grav = self.gravity.get(stem)
+        if not grav or len(grav) < 2:
+            return candidates[int(rng.choice(len(candidates)))]
+        try:
+            gx, gy = float(grav[0]), float(grav[1])
+        except (ValueError, TypeError):
+            return candidates[int(rng.choice(len(candidates)))]
+        weights = []
+        for tr in candidates:
+            c = self._get_track_center(stem, tr.track_id)
+            dist = np.hypot(c[0] - gx, c[1] - gy) if c else 0.45
+            weights.append(float(np.exp(-12.0 * (dist ** 2))))
+        tot = sum(weights)
+        if tot <= 1e-6:
+            return candidates[int(rng.choice(len(candidates)))]
+        probs = [w / tot for w in weights]
+        return candidates[int(rng.choice(len(candidates), p=probs))]
 
     def configure(self, stem: Optional[str] = None, chaos: Optional[float] = None,
                   bpm: Optional[float] = None, synth_blend: Optional[float] = None) -> None:
@@ -128,15 +174,20 @@ class StreamSession:
                     cands = [t for t in all_tracks if stem in t.stems_available]
                 if not cands:
                     continue
-                chosen_t = cands[int(rng.choice(len(cands)))]
+                if stem == "bass" and "drums" in self._heads and rng.random() < 0.7:
+                    drums_tid = self._heads["drums"].track_id
+                    chosen_t = tracks_by_id.get(drums_tid) or self._pick_candidate_track(stem, cands, rng)
+                else:
+                    chosen_t = self._pick_candidate_track(stem, cands, rng)
                 active_dbs = find_active_tatums(chosen_t, stem, bar_phase=0)
                 init_tat = int(rng.choice(active_dbs[:8])) if active_dbs else 0
+                phrase_len = int(rng.choice([64, 128])) if stem in ("drums", "bass") else int(rng.choice([32, 64]))
                 self._heads[stem] = StemHeadState(
                     track_id=chosen_t.track_id,
                     tatum_offset=init_tat,
                     active_seg_id=None,
                     dwell_tatums=0,
-                    phrase_tatums=int(rng.choice([32, 64])),
+                    phrase_tatums=phrase_len,
                     silent_tatums=0,
                 )
 
@@ -183,10 +234,17 @@ class StreamSession:
                         can_jump = rng.random() < ch
 
                 if can_jump:
-                    next_tr = tr if (ch == 0.0 or len(cands) == 1) else cands[int(rng.choice(len(cands)))]
+                    if ch == 0.0 or len(cands) == 1:
+                        next_tr = tr
+                    elif stem == "bass" and "drums" in self._heads and rng.random() < 0.6:
+                        drums_tr = tracks_by_id.get(self._heads["drums"].track_id)
+                        next_tr = drums_tr if (drums_tr and "bass" in drums_tr.stems_available) else self._pick_candidate_track(stem, cands, rng)
+                    else:
+                        next_tr = self._pick_candidate_track(stem, cands, rng)
+
                     head.track_id = next_tr.track_id
                     head.dwell_tatums = 0
-                    head.phrase_tatums = int(rng.choice([32, 64]))
+                    head.phrase_tatums = int(rng.choice([64, 128])) if stem in ("drums", "bass") else int(rng.choice([32, 64]))
                     head.active_seg_id = None
                     tr = next_tr
 

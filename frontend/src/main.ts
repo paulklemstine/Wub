@@ -23,7 +23,7 @@
 // Late (negative/small) values are clamped to now + 10 ms so slices still
 // sound instead of throwing.
 import { AudioEngine, STEMS } from "./audio_engine";
-import { NebulaRenderer, drawRings, drawWaveformAnalysis } from "./visualizer";
+import { NebulaRenderer, drawRings, drawWaveformAnalysis, drawMasterAnalysis } from "./visualizer";
 import type { SliceArcEvent, NebulaPoint, WaveformStemData } from "./visualizer";
 import type { StemName } from "./types";
 
@@ -206,6 +206,7 @@ class WubApp {
   private engine = new AudioEngine();
   private nebula: NebulaRenderer | null = null;
   private ringsCtx: CanvasRenderingContext2D | null = null;
+  private masterCtx: CanvasRenderingContext2D | null = null;
 
   private states: Record<StemName, StemState> = {
     drums: { stem: "drums", mute: false, solo: false, volume: 1, chaos: 0.1, synthBlend: 0.0 },
@@ -233,6 +234,8 @@ class WubApp {
   private activeSlices: Partial<Record<StemName, SliceSpec>> = {};
   private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
+  private masterTimeScratch: Uint8Array<ArrayBuffer> | null = null;
+  private masterFreqScratch: Uint8Array<ArrayBuffer> | null = null;
   private ringEvents: SliceArcEvent[] = [];
   private analyserScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private statusEl!: HTMLElement;
@@ -244,6 +247,11 @@ class WubApp {
     const rings = ringsCanvas.getContext("2d");
     if (rings === null) throw new Error("2D context unavailable for #rings-canvas");
     this.ringsCtx = rings;
+
+    const masterCanvas = el<HTMLCanvasElement>("master-canvas");
+    const master = masterCanvas.getContext("2d");
+    if (master === null) throw new Error("2D context unavailable for #master-canvas");
+    this.masterCtx = master;
 
     this.nebula = new NebulaRenderer(el<HTMLCanvasElement>("nebula-canvas"), {
       onReticleMove: (stem, x, y) => {
@@ -771,6 +779,40 @@ class WubApp {
       }
       drawWaveformAnalysis(this.ringsCtx, {
         stems: stemsData,
+        bpm: this.bpm,
+        timeSec: t,
+      });
+    }
+    if (this.masterCtx !== null) {
+      let time = this.masterTimeScratch;
+      let freq = this.masterFreqScratch;
+      let level = 0;
+      try {
+        const analyser = this.engine.getMasterAnalyser();
+        if (!time || time.length !== analyser.fftSize) {
+          time = new Uint8Array(analyser.fftSize);
+          this.masterTimeScratch = time;
+        }
+        if (!freq || freq.length !== analyser.frequencyBinCount) {
+          freq = new Uint8Array(analyser.frequencyBinCount);
+          this.masterFreqScratch = freq;
+        }
+        analyser.getByteTimeDomainData(time);
+        analyser.getByteFrequencyData(freq);
+        let sum = 0;
+        for (let i = 0; i < time.length; i++) {
+          const v = (time[i] - 128) / 128;
+          sum += v * v;
+        }
+        level = Math.min(1, Math.sqrt(sum / time.length) * 2.2);
+      } catch {
+        // Analyser not initialised yet pre-gesture
+      }
+
+      drawMasterAnalysis(this.masterCtx, {
+        timeDomain: time ?? undefined,
+        frequency: freq ?? undefined,
+        level,
         bpm: this.bpm,
         timeSec: t,
       });
