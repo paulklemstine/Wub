@@ -46,6 +46,32 @@ class StemHeadState:
     active_seg_id: Optional[str] = None
     dwell_tatums: int = 0
     phrase_tatums: int = 32
+    silent_tatums: int = 0
+
+
+def find_active_tatums(tr: TrackAnalysis, stem: str, bar_phase: Optional[int] = None) -> List[int]:
+    """Return tatum indices where `stem` has audible (non-silent) acoustic slices."""
+    if not tr.tatums:
+        return [0]
+    segs_by_id = {s.id: s for s in tr.segments if s.stem == stem}
+    active: List[int] = []
+    for tat in tr.tatums:
+        if bar_phase is not None:
+            if (tat.beat_position * 4 + tat.tatum_position) % 16 != bar_phase:
+                continue
+        sids = tat.stem_segments.get(stem, [])
+        for sid in sids:
+            seg = segs_by_id.get(sid)
+            if seg is not None and not seg.is_silent and seg.loudness_max > -32.0:
+                active.append(tat.index)
+                break
+    if not active:
+        if bar_phase is not None:
+            active = [tat.index for tat in tr.tatums
+                      if (tat.beat_position * 4 + tat.tatum_position) % 16 == bar_phase]
+        else:
+            active = [tat.index for tat in tr.tatums]
+    return active or [0]
 
 
 @dataclass
@@ -58,7 +84,7 @@ class StreamSession:
         "other": 0.5,   # Synths and hooks
     })
     synth_blend: Dict[str, float] = field(default_factory=lambda: {s: 0.0 for s in STEMS})
-    bpm: float = 128.0
+    bpm: float = 126.0
     seed: int = 0
     pitch_lock: bool = True
     key: str = "C major"
@@ -94,7 +120,7 @@ class StreamSession:
         rng = np.random.default_rng(self.seed + self._rng_seed)
         self._rng_seed += 1
 
-        # Initialize heads if empty
+        # Initialize heads if empty — lock to active downbeats so all stems start sounding immediately
         for stem in STEMS:
             if stem not in self._heads:
                 cands = [t for t in pool_tracks if stem in t.stems_available]
@@ -103,19 +129,15 @@ class StreamSession:
                 if not cands:
                     continue
                 chosen_t = cands[int(rng.choice(len(cands)))]
-                init_tat = 0
-                if chosen_t.tatums:
-                    # Pick an aligned downbeat in the first 8 bars if possible
-                    downbeats = [tat.index for tat in chosen_t.tatums[:128]
-                                 if (tat.beat_position * 4 + tat.tatum_position) % 16 == 0]
-                    if downbeats:
-                        init_tat = int(rng.choice(downbeats[:4]))
+                active_dbs = find_active_tatums(chosen_t, stem, bar_phase=0)
+                init_tat = int(rng.choice(active_dbs[:8])) if active_dbs else 0
                 self._heads[stem] = StemHeadState(
                     track_id=chosen_t.track_id,
                     tatum_offset=init_tat,
                     active_seg_id=None,
                     dwell_tatums=0,
-                    phrase_tatums=int(rng.choice([32, 64]))
+                    phrase_tatums=int(rng.choice([32, 64])),
+                    silent_tatums=0,
                 )
 
         # Generate next 32 tatums (2 full bars)
@@ -168,16 +190,13 @@ class StreamSession:
                     head.active_seg_id = None
                     tr = next_tr
 
-                    # Match metrical bar phase
-                    if tr.tatums:
-                        matching = [tat.index for tat in tr.tatums[:256]
-                                    if (tat.beat_position * 4 + tat.tatum_position) % 16 == bar_phase]
-                        head.tatum_offset = int(rng.choice(matching[:4])) if matching else 0
-                    else:
-                        head.tatum_offset = 0
+                    # Match metrical bar phase in an active musical section
+                    active_matches = find_active_tatums(tr, stem, bar_phase=bar_phase)
+                    head.tatum_offset = int(rng.choice(active_matches[:8])) if active_matches else 0
 
                 # Resolve slice at current tatum offset
                 cur_seg_id: Optional[str] = None
+                cur_seg = None
                 if tr.tatums and head.tatum_offset < len(tr.tatums):
                     tat = tr.tatums[head.tatum_offset]
                     stem_segs = tat.stem_segments.get(stem, [])
@@ -188,35 +207,51 @@ class StreamSession:
                     if stem_segs_all:
                         cur_seg_id = stem_segs_all[head.tatum_offset % len(stem_segs_all)].id
 
+                if cur_seg_id is not None:
+                    cur_seg = next((s for s in tr.segments if s.id == cur_seg_id), None)
+
+                # Silence recovery: if stem is silent for >8 tatums, jump to active section
+                if cur_seg is None or cur_seg.is_silent or cur_seg.loudness_max < -32.0:
+                    head.silent_tatums += 1
+                    if head.silent_tatums >= 8:
+                        active_matches = find_active_tatums(tr, stem, bar_phase=bar_phase)
+                        head.tatum_offset = int(rng.choice(active_matches[:8])) if active_matches else 0
+                        head.silent_tatums = 0
+                else:
+                    head.silent_tatums = 0
+
                 # Onset vs sustain
                 is_first_tatum = (self._tatum_index == 0)
                 is_onset = (cur_seg_id is not None) and (cur_seg_id != head.active_seg_id or is_first_tatum)
 
-                if is_onset and cur_seg_id is not None:
+                if is_onset and cur_seg is not None and not cur_seg.is_silent:
                     head.active_seg_id = cur_seg_id
-                    seg = next((s for s in tr.segments if s.id == cur_seg_id), None)
-                    if seg is not None:
-                        src_bpm = float(tr.bpm) if tr.bpm > 0 else self.bpm
-                        rate = float(self.bpm) / float(src_bpm)
-                        rate = max(0.5, min(2.0, rate))
+                    src_bpm = float(tr.bpm) if tr.bpm > 0 else self.bpm
+                    rate = float(self.bpm) / float(src_bpm)
+                    rate = max(0.5, min(2.0, rate))
+                    rate_cents = 1200.0 * np.log2(rate) if rate > 0 else 0.0
 
-                        detune_cents = 0
-                        if self.pitch_lock and stem in ("bass", "vocals", "other"):
+                    detune_cents = 0
+                    if stem in ("bass", "vocals", "other"):
+                        if self.pitch_lock:
                             shift = get_key_semitones(tr.key, self.key)
-                            detune_cents = int(shift * 100)
-
-                        slices[stem] = {
-                            "track_id": tr.track_id,
-                            "segment_id": cur_seg_id,
-                            "start": seg.start,
-                            "duration": seg.duration,
-                            "url": f"/audio/{tr.track_id}/{cur_seg_id}.wav",
-                            "detune_cents": detune_cents,
-                            "rate": rate,
-                            "synth_blend": self.synth_blend.get(stem, 0.0),
-                        }
+                            detune_cents = int(shift * 100 - rate_cents)
+                        else:
+                            detune_cents = int(-rate_cents)
                     else:
-                        slices[stem] = None
+                        # Drums: preserve natural punch and kick tuning
+                        detune_cents = int(-rate_cents)
+
+                    slices[stem] = {
+                        "track_id": tr.track_id,
+                        "segment_id": cur_seg_id,
+                        "start": cur_seg.start,
+                        "duration": cur_seg.duration,
+                        "url": f"/audio/{tr.track_id}/{cur_seg_id}.wav",
+                        "detune_cents": detune_cents,
+                        "rate": rate,
+                        "synth_blend": self.synth_blend.get(stem, 0.0),
+                    }
                 else:
                     slices[stem] = None
                     if cur_seg_id is None:

@@ -38,7 +38,7 @@ export interface StemState {
 
 const BPM_MIN = 80;
 const BPM_MAX = 175;
-const DEFAULT_BPM = 128;
+const DEFAULT_BPM = 126;
 const CACHE_CAP = 300;
 const WS_PATH = "/ws/stream";
 const RECONNECT_BASE_MS = 500;
@@ -228,6 +228,7 @@ class WubApp {
 
   // AudioBuffer cache keyed by track_id + segment_id, insertion-ordered LRU.
   private bufferCache = new Map<string, Promise<AudioBuffer>>();
+  private segmentPositions = new Map<string, { x: number; y: number }>();
   private ringEvents: SliceArcEvent[] = [];
   private analyserScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private statusEl!: HTMLElement;
@@ -273,8 +274,12 @@ class WubApp {
         const stem = asStem(item["stem"]);
         const x = asNumber(item["x"], -1);
         const y = asNumber(item["y"], -1);
+        const segId = asString(item["segment_id"], "");
         if (stem !== null && x >= 0 && y >= 0) {
           pts.push({ stem, x, y });
+          if (segId) {
+            this.segmentPositions.set(segId, { x, y });
+          }
         }
       }
       if (pts.length > 0 && this.nebula !== null) {
@@ -629,6 +634,10 @@ class WubApp {
       return;
     }
     if (!this.playing) return;
+    const pos = this.segmentPositions.get(spec.segmentId);
+    if (pos && this.nebula !== null) {
+      this.nebula.setActiveSlice(stem, pos.x, pos.y, performance.now() / 1000);
+    }
     try {
       this.engine.scheduleSlice(stem, buffer, when, {
         rate: spec.rate,

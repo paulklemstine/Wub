@@ -178,6 +178,11 @@ export class NebulaRenderer {
   };
   private onReticleMove?: ReticleMoveHandler;
   private dragStem: StemName | null = null;
+  private activeSliceMarkers: Partial<Record<StemName, { x: number; y: number; timeSec: number }>> = {};
+
+  setActiveSlice(stem: StemName, x: number, y: number, timeSec: number): void {
+    this.activeSliceMarkers[stem] = { x: clamp01(x), y: clamp01(y), timeSec };
+  }
 
   private handlePointerDown: (e: PointerEvent) => void;
   private handlePointerMove: (e: PointerEvent) => void;
@@ -346,7 +351,36 @@ export class NebulaRenderer {
       ctx.fillStyle = color;
       ctx.font = "11px system-ui, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(stem, px, py - radius - 8);
+      ctx.fillText(`${stem} (drag)`, px, py - radius - 8);
+    }
+
+    // Active playing sample pings on the map
+    for (const stem of RETICLE_STEMS) {
+      const marker = this.activeSliceMarkers[stem];
+      if (!marker) continue;
+      const age = frame.timeSec - marker.timeSec;
+      if (age < 0 || age > 1.2) continue;
+      const progress = age / 1.2;
+      const alpha = Math.max(0, 1 - progress);
+      const pingR = 4 + 18 * progress;
+      const px = marker.x * w;
+      const py = marker.y * h;
+      const color = STEM_COLORS[stem];
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(px, py, pingR, 0, 2 * Math.PI);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * alpha;
+      ctx.globalAlpha = 0.8 * alpha;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(px, py, 3.5, 0, 2 * Math.PI);
+      ctx.fillStyle = "#ffffff";
+      ctx.globalAlpha = alpha;
+      ctx.fill();
+      ctx.restore();
     }
   }
 
