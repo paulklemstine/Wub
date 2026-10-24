@@ -37,13 +37,13 @@ class SequencerPattern:
 def classify_drum_groove(onset_grid: List[int], length: int) -> str:
     """Classify 16-step drum pattern into dance groove categories."""
     first_16 = set(s for s in onset_grid if s < 16)
-    has_four_on_floor = {0, 4, 8, 12}.issubset(first_16)
     density = len(first_16) / 16.0
 
-    if density >= 0.75:
+    if density >= 0.8:
         return "fill"  # High density snare/drum roll or turnaround
+    has_four_on_floor = {0, 4, 8, 12}.issubset(first_16)
     if has_four_on_floor:
-        if 6 in first_16 or 14 in first_16 or 2 in first_16 or 10 in first_16:
+        if 2 in first_16 or 6 in first_16 or 10 in first_16 or 14 in first_16:
             return "four_on_floor_hats"
         return "four_on_floor"
     if density <= 0.25:
@@ -181,30 +181,32 @@ class PatternBank:
                         if sref is None:
                             continue
                         if stem == "drums":
-                            if step_idx in (0, 4, 8, 12) and sref.loud_max > -24.0:
+                            if step_idx in (0, 8) and sref.loud_max > -30.0:
                                 self.slice_palette["drums"]["kick"].append(sref)
-                            elif step_idx in (4, 12) and sref.loud_max > -24.0:
+                            elif step_idx in (4, 12) and sref.loud_max > -30.0:
                                 self.slice_palette["drums"]["snare"].append(sref)
                             elif step_idx in (2, 6, 10, 14):
                                 self.slice_palette["drums"]["hat"].append(sref)
-                            if groove_type == "fill":
+                            else:
                                 self.slice_palette["drums"]["fill"].append(sref)
                         elif stem == "bass":
                             if step_idx in (2, 6, 10, 14):
                                 self.slice_palette["bass"]["sub"].append(sref)
-                            elif groove_type == "rolling":
+                            elif groove_type == "rolling" or step_idx in (1, 3, 5, 7, 9, 11, 13, 15):
                                 self.slice_palette["bass"]["rolling"].append(sref)
                             else:
                                 self.slice_palette["bass"]["stab"].append(sref)
                         elif stem == "other":
-                            if groove_type == "pad":
+                            if sref.duration >= 0.25 or density <= 0.25:
                                 self.slice_palette["other"]["pad"].append(sref)
-                            elif groove_type == "riff":
-                                self.slice_palette["other"]["arp"].append(sref)
-                            else:
                                 self.slice_palette["other"]["chord"].append(sref)
+                            elif step_idx in (2, 6, 10, 14):
+                                self.slice_palette["other"]["chord"].append(sref)
+                                self.slice_palette["other"]["stab"].append(sref)
+                            else:
+                                self.slice_palette["other"]["arp"].append(sref)
                         elif stem == "vocals":
-                            if sref.duration < 0.25:
+                            if sref.duration < 0.3:
                                 self.slice_palette["vocals"]["chop"].append(sref)
                             else:
                                 self.slice_palette["vocals"]["phrase"].append(sref)
@@ -284,7 +286,8 @@ class PatternBank:
         is_strict = strict_groove or (groove_type == "fill")
         candidates = self.get_patterns(stem, groove_type, min_energy, max_energy, strict_groove=is_strict)
         if not candidates:
-            return None
+            synth_type = groove_type or ("four_on_floor_hats" if stem == "drums" else ("offbeat" if stem == "bass" else "chords"))
+            return self.create_groove_pattern(stem, synth_type, preferred_track_id=preferred_track_id, rng=rng)
 
         if preferred_track_id:
             track_matches = [p for p in candidates if p.track_id == preferred_track_id]

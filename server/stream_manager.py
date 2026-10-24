@@ -144,8 +144,8 @@ class StreamSession:
     temperature: float = 0.75
     top_p: float = 0.85
     top_k: int = 32
-    use_wubgpt: bool = True
-    use_groovebox: bool = False
+    use_wubgpt: bool = False
+    use_groovebox: bool = True
     _conductor: Optional[Any] = None
     _track_centers: Dict[str, Dict[str, Tuple[float, float]]] = field(default_factory=dict)
     _buffer: List[dict] = field(default_factory=list)

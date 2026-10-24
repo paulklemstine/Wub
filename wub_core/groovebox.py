@@ -17,15 +17,15 @@ from wub_core.schema import STEMS, TrackAnalysis
 
 
 # Macro song arrangement section types
-SECTIONS = ("INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN")
+SECTIONS = ("GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN", "DROP")
 
 # Standard section lengths in bars (4/4 time, 1 bar = 16 tatums)
 SECTION_DURATIONS = {
-    "INTRO": 8,        # 8 bars = 128 tatums (hats, subtle synth)
     "GROOVE_A": 16,    # 16 bars = 256 tatums (main verse groove)
     "BUILDUP": 8,      # 8 bars = 128 tatums (snare rolls, rising tension)
     "DROP": 16,        # 16 bars = 256 tatums (peak energy drop, heavy drums & bass)
-    "BREAKDOWN": 8,    # 8 bars = 128 tatums (melodic vocal/pad release, kick drops out)
+    "BREAKDOWN": 8,    # 8 bars = 128 tatums (melodic vocal/pad release)
+    "INTRO": 8,        # 8 bars = 128 tatums (groove with synth hook)
 }
 
 # Next section transition map
@@ -74,19 +74,19 @@ class GrooveboxConductor:
             bass_type = "rolling" if self.rng.random() < 0.6 else "offbeat"
             min_energy = 0.5
         elif sec == "BUILDUP":
-            drum_type = "four_on_floor"
-            bass_type = "stabs"
+            drum_type = "four_on_floor_hats"
+            bass_type = "rolling"
             min_energy = 0.4
         elif sec == "BREAKDOWN":
-            drum_type = "minimal"
+            drum_type = "four_on_floor_hats"
             bass_type = "sustained"
-            min_energy = 0.1
-        elif sec == "INTRO":
-            drum_type = "minimal"
-            bass_type = "stabs"
             min_energy = 0.2
+        elif sec == "INTRO":
+            drum_type = "four_on_floor_hats"
+            bass_type = "offbeat"
+            min_energy = 0.3
         else:  # GROOVE_A
-            drum_type = "four_on_floor"
+            drum_type = "four_on_floor_hats"
             bass_type = "offbeat"
             min_energy = 0.35
 
@@ -124,6 +124,7 @@ class GrooveboxConductor:
         phrase_bar = self.state.phrase_bar  # 0..7
         self.state.bar_in_section += 1
         self.section_bars_remaining -= 1
+        self.active_slice_ids = {s: None for s in STEMS}
 
         # Check section transition
         if self.section_bars_remaining <= 0:
@@ -178,6 +179,27 @@ class GrooveboxConductor:
                 if lead_other_pat:
                     self.active_patterns["other"] = lead_other_pat
 
+        # Guarantee solid groove presence across all stems on every bar
+        if self.active_patterns.get("drums") is None or len(self.active_patterns["drums"].onset_grid) < 4:
+            self.active_patterns["drums"] = self.bank.pick_pattern(
+                "drums", groove_type="four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng
+            ) or self.bank.create_groove_pattern("drums", "four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng)
+
+        if self.active_patterns.get("bass") is None or len(self.active_patterns["bass"].onset_grid) < 2:
+            self.active_patterns["bass"] = self.bank.pick_pattern(
+                "bass", groove_type="offbeat", preferred_track_id=self.lead_track_id, rng=self.rng
+            ) or self.bank.create_groove_pattern("bass", "offbeat", preferred_track_id=self.lead_track_id, rng=self.rng)
+
+        if self.active_patterns.get("other") is None or len(self.active_patterns["other"].onset_grid) < 2:
+            self.active_patterns["other"] = self.bank.pick_pattern(
+                "other", preferred_track_id=self.lead_track_id, rng=self.rng
+            ) or self.bank.create_groove_pattern("other", "chords", preferred_track_id=self.lead_track_id, rng=self.rng)
+
+        if self.active_patterns.get("vocals") is None:
+            self.active_patterns["vocals"] = self.bank.pick_pattern(
+                "vocals", preferred_track_id=self.lead_track_id, rng=self.rng
+            ) or self.bank.create_groove_pattern("vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng)
+
     def next_step(self) -> Tuple[Dict[str, Optional[SliceRef]], dict]:
         """Advance the groovebox sequencer by 1 tatum step (1/16th note).
         
@@ -203,54 +225,50 @@ class GrooveboxConductor:
             # Section dynamics & arrangement sculpting:
             candidate_sref: Optional[SliceRef] = None
             if sec == "INTRO":
-                # Bars 0..3: Hats & synths only, no heavy kick/bass
-                if p_bar < 4:
-                    if stem == "drums":
-                        candidate_sref = pat.steps[step] if step in (2, 6, 10, 14) else None
-                    elif stem == "bass":
-                        candidate_sref = None
-                    else:
-                        candidate_sref = pat.steps[step % len(pat.steps)]
+                # Intro groove: steady hats and synth hook with kicks on 0, 8
+                if stem == "drums":
+                    candidate_sref = pat.steps[step % len(pat.steps)] if step in (0, 4, 8, 12, 2, 6, 10, 14) else None
+                elif stem == "bass":
+                    candidate_sref = pat.steps[step % len(pat.steps)] if (p_bar >= 4 and step in (2, 6, 10, 14)) else None
                 else:
                     candidate_sref = pat.steps[step % len(pat.steps)]
 
             elif sec == "BREAKDOWN":
-                # Breakdown: Kick drops out completely, bass cut, melodic chords & vocals
+                # Melodic breakdown: sustained pads/chords and vocals, with steady offbeat hats/snares
                 if stem == "drums":
-                    # Only soft percussion on offbeats
-                    candidate_sref = pat.steps[step] if step in (6, 14) and self.rng.random() < 0.4 else None
+                    candidate_sref = pat.steps[step % len(pat.steps)] if step in (4, 12, 2, 6, 10, 14) else None
                 elif stem == "bass":
-                    candidate_sref = None
+                    candidate_sref = pat.steps[step % len(pat.steps)] if step in (0, 8) else None
                 else:
                     candidate_sref = pat.steps[step % len(pat.steps)]
 
             elif sec == "BUILDUP":
                 # Buildup snare rush & rising tension:
                 if stem == "bass":
-                    # Mute bass in second half of buildup for huge drop impact
-                    candidate_sref = None if p_bar >= 4 else pat.steps[step % len(pat.steps)]
+                    candidate_sref = pat.steps[step % len(pat.steps)] if (p_bar < 7 and step in (0, 4, 8, 12)) else None
                 elif stem == "drums":
-                    # Accelerated snare build:
                     if p_bar in (0, 1, 2, 3):
-                        candidate_sref = pat.steps[step] if step % 4 == 0 else None
+                        candidate_sref = pat.steps[step % len(pat.steps)] if step % 4 == 0 else None
                     elif p_bar in (4, 5):
-                        candidate_sref = pat.steps[step] if step % 2 == 0 else None
+                        candidate_sref = pat.steps[step % len(pat.steps)] if step % 2 == 0 else None
                     elif p_bar == 6:
-                        candidate_sref = pat.steps[step] or pat.steps[4] or pat.steps[0]
+                        candidate_sref = pat.steps[step % len(pat.steps)] or pat.steps[4] or pat.steps[0]
                     elif p_bar == 7:
-                        candidate_sref = None if step == 15 else (pat.steps[step] or pat.steps[4] or pat.steps[0])
+                        # Final bar: Roll on 0..14, Step 15 breath of silence before the DROP!
+                        candidate_sref = None if step == 15 else (pat.steps[step % len(pat.steps)] or pat.steps[4] or pat.steps[0])
                     else:
                         candidate_sref = pat.steps[step % len(pat.steps)]
                 else:
                     candidate_sref = pat.steps[step % len(pat.steps)]
 
             elif sec == "DROP":
-                # Turnaround Bar 8: cut bass on last beat (steps 12..15) for turnaround
+                # Peak energy: full four-on-the-floor, rolling bass, main lead
                 if self.state.is_fill_bar and stem == "bass" and step >= 12:
-                    candidate_sref = None
+                    candidate_sref = None  # Brief turnaround cut
                 else:
                     candidate_sref = pat.steps[step % len(pat.steps)]
             else:
+                # Default GROOVE_A: full solid 16-step dance groove
                 candidate_sref = pat.steps[step % len(pat.steps)]
 
             # Onset vs sustain awareness: only re-trigger if segment changes or at start
