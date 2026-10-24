@@ -686,14 +686,14 @@ class WubApp {
     if (delayMs <= 10) {
       this.activeSlices[stem] = spec;
       if (this.nebula !== null) {
-        this.nebula.setSlicePosition(stem, pos.x, pos.y);
+        this.nebula.setActiveSlice(stem, pos.x, pos.y, visualNow());
       }
     } else {
       setTimeout(() => {
         if (!this.playing) return;
         this.activeSlices[stem] = spec;
         if (this.nebula !== null) {
-          this.nebula.setSlicePosition(stem, pos.x, pos.y);
+          this.nebula.setActiveSlice(stem, pos.x, pos.y, visualNow());
         }
       }, delayMs);
     }
