@@ -35,12 +35,36 @@
     .deck .val { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.8; }
     .deck .toggles { display: flex; gap: 8px; }
     .deck .toggles button { flex: 1; }
-    #stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
-    canvas.stage {
-      width: 100%; height: auto; background: #0b0b14;
-      border: 1px solid #2a2a45; border-radius: 10px;
+    #stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; margin-top: 14px; }
+    .stage-card {
+      background: #11111e;
+      border: 1px solid #2a2a45;
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
-    #rings-canvas { aspect-ratio: 1 / 1; }
+    .stage-header {
+      padding: 7px 12px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #94a3b8;
+      border-bottom: 1px solid #232338;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #141424;
+    }
+    .stage-header span:last-child {
+      font-size: 0.72rem;
+      font-weight: normal;
+      opacity: 0.75;
+    }
+    canvas.stage {
+      width: 100%; height: auto; background: #090910;
+      display: block;
+    }
+    #rings-canvas { aspect-ratio: 16 / 10; }
     #nebula-canvas { aspect-ratio: 16 / 10; cursor: crosshair; }
     #status-line { margin-top: 12px; opacity: 0.85; font-size: 0.9rem; min-height: 1.2em; }
   </style>
@@ -122,8 +146,20 @@
   </section>
 
   <section id="stages" aria-label="Visualizers">
-    <canvas id="rings-canvas" class="stage" width="560" height="560"></canvas>
-    <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
+    <div class="stage-card">
+      <div class="stage-header">
+        <span>4-Stem Real-Time Waveform Analysis</span>
+        <span>Oscilloscope • FFT • RMS Meter</span>
+      </div>
+      <canvas id="rings-canvas" class="stage" width="720" height="450"></canvas>
+    </div>
+    <div class="stage-card">
+      <div class="stage-header">
+        <span>2D Timbre Nebula &amp; Gravity Reticles</span>
+        <span>Drag crosshairs to steer sound</span>
+      </div>
+      <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
+    </div>
   </section>
 
   <div id="status-line" role="status">Loading…</div>

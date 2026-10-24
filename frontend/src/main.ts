@@ -23,8 +23,8 @@
 // Late (negative/small) values are clamped to now + 10 ms so slices still
 // sound instead of throwing.
 import { AudioEngine, STEMS } from "./audio_engine";
-import { NebulaRenderer, drawRings } from "./visualizer";
-import type { SliceArcEvent, NebulaPoint } from "./visualizer";
+import { NebulaRenderer, drawRings, drawWaveformAnalysis } from "./visualizer";
+import type { SliceArcEvent, NebulaPoint, WaveformStemData } from "./visualizer";
 import type { StemName } from "./types";
 
 export interface StemState {
@@ -229,6 +229,9 @@ class WubApp {
   // AudioBuffer cache keyed by track_id + segment_id, insertion-ordered LRU.
   private bufferCache = new Map<string, Promise<AudioBuffer>>();
   private segmentPositions = new Map<string, { x: number; y: number }>();
+  private activeSlices: Partial<Record<StemName, SliceSpec>> = {};
+  private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
+  private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private ringEvents: SliceArcEvent[] = [];
   private analyserScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private statusEl!: HTMLElement;
@@ -634,6 +637,7 @@ class WubApp {
       return;
     }
     if (!this.playing) return;
+    this.activeSlices[stem] = spec;
     const pos = this.segmentPositions.get(spec.segmentId);
     if (pos && this.nebula !== null) {
       this.nebula.setActiveSlice(stem, pos.x, pos.y, performance.now() / 1000);
@@ -686,7 +690,43 @@ class WubApp {
       this.ringEvents.shift();
     }
     if (this.ringsCtx !== null) {
-      drawRings(this.ringsCtx, { events: this.ringEvents, bpm: this.bpm, timeSec: t });
+      const stemsData = {} as Record<StemName, WaveformStemData>;
+      for (const stem of STEMS) {
+        let time = this.timeScratch.get(stem);
+        let freq = this.freqScratch.get(stem);
+        let level = 0;
+        try {
+          const analyser = this.engine.getAnalyser(stem);
+          if (!time || time.length !== analyser.fftSize) {
+            time = new Uint8Array(analyser.fftSize);
+            this.timeScratch.set(stem, time);
+          }
+          if (!freq || freq.length !== analyser.frequencyBinCount) {
+            freq = new Uint8Array(analyser.frequencyBinCount);
+            this.freqScratch.set(stem, freq);
+          }
+          analyser.getByteTimeDomainData(time);
+          analyser.getByteFrequencyData(freq);
+          level = this.analyserLevel(stem);
+        } catch {
+          // Analyser not initialised yet pre-gesture
+        }
+        const active = this.activeSlices[stem];
+        stemsData[stem] = {
+          timeDomain: time,
+          frequency: freq,
+          level,
+          activeTrackId: active?.trackId,
+          activeSegmentId: active?.segmentId,
+          isMuted: this.engine.isMuted(stem),
+          isSolo: this.engine.isSolo(stem),
+        };
+      }
+      drawWaveformAnalysis(this.ringsCtx, {
+        stems: stemsData,
+        bpm: this.bpm,
+        timeSec: t,
+      });
     }
     if (this.nebula !== null) {
       this.nebula.render({
