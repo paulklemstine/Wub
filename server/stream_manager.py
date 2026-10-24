@@ -27,6 +27,7 @@ SLICE_CACHE_CAP = 2000
 class StreamSession:
     store: CorpusStore
     chaos: Dict[str, float] = field(default_factory=lambda: {s: 0.6 for s in STEMS})
+    synth_blend: Dict[str, float] = field(default_factory=lambda: {s: 0.0 for s in STEMS})
     bpm: float = 128.0
     seed: int = 0
     pitch_lock: bool = False
@@ -37,9 +38,11 @@ class StreamSession:
     _rng_seed: int = 0
 
     def configure(self, stem: Optional[str] = None, chaos: Optional[float] = None,
-                  bpm: Optional[float] = None) -> None:
+                  bpm: Optional[float] = None, synth_blend: Optional[float] = None) -> None:
         if stem and chaos is not None and stem in self.chaos:
             self.chaos[stem] = max(0.0, min(1.0, float(chaos)))
+        if stem and synth_blend is not None and stem in self.synth_blend:
+            self.synth_blend[stem] = max(0.0, min(1.0, float(synth_blend)))
         if bpm:
             self.bpm = max(80.0, min(175.0, float(bpm)))
 
@@ -74,6 +77,7 @@ class StreamSession:
                         "url": f"/audio/{r.track_id}/{r.segment_id}.wav",
                         "detune_cents": 0,
                         "rate": self.bpm / src_bpm,
+                        "synth_blend": self.synth_blend.get(stem, 0.0),
                     }
             self._buffer.append({"type": "tatum", "tatum_index": self._tatum_index,
                                  "tatum_duration": self.tatum_duration,

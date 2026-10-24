@@ -158,7 +158,9 @@ class StemLatentSynth:
 
     @staticmethod
     def _flat(z: np.ndarray) -> np.ndarray:
-        return z.reshape(-1).astype(np.float64)
+        if z.ndim > 1:
+            return z.mean(axis=-1).astype(np.float64)
+        return z.astype(np.float64)
 
     def snap(self, stem: str, z: np.ndarray) -> SliceLatent:
         cands = self.embedded.get(stem, [])
@@ -171,6 +173,10 @@ class StemLatentSynth:
     def blend(self, stem: str, z_a: np.ndarray, z_b: np.ndarray, alpha: float) -> np.ndarray:
         a = np.asarray(z_a, dtype=np.float64)
         b = np.asarray(z_b if z_b is not None else z_a, dtype=np.float64)
+        if a.shape != b.shape and a.ndim == 2 and b.ndim == 2:
+            x_old = np.linspace(0, 1, b.shape[1])
+            x_new = np.linspace(0, 1, a.shape[1])
+            b = np.stack([np.interp(x_new, x_old, b[c]) for c in range(b.shape[0])])
         # slerp-ish: lerp then rescale to mean norm (keeps vocoder in range)
         z = (1 - alpha) * a + alpha * b
         target = (1 - alpha) * np.linalg.norm(a) + alpha * np.linalg.norm(b) + 1e-9

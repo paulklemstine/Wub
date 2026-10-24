@@ -33,6 +33,7 @@ export interface StemState {
   solo: boolean;
   volume: number;
   chaos: number;
+  synthBlend: number;
 }
 
 const BPM_MIN = 80;
@@ -207,10 +208,10 @@ class WubApp {
   private ringsCtx: CanvasRenderingContext2D | null = null;
 
   private states: Record<StemName, StemState> = {
-    drums: { stem: "drums", mute: false, solo: false, volume: 1, chaos: 0.5 },
-    bass: { stem: "bass", mute: false, solo: false, volume: 1, chaos: 0.5 },
-    vocals: { stem: "vocals", mute: false, solo: false, volume: 1, chaos: 0.5 },
-    other: { stem: "other", mute: false, solo: false, volume: 1, chaos: 0.5 },
+    drums: { stem: "drums", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
+    bass: { stem: "bass", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
+    vocals: { stem: "vocals", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
+    other: { stem: "other", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
   };
 
   private bpm: number = DEFAULT_BPM;
@@ -372,11 +373,15 @@ class WubApp {
     const volVal = el<HTMLElement>(`${stem}-vol-val`);
     const chaos = el<HTMLInputElement>(`${stem}-chaos`);
     const chaosVal = el<HTMLElement>(`${stem}-chaos-val`);
+    const synth = el<HTMLInputElement>(`${stem}-synth`);
+    const synthVal = el<HTMLElement>(`${stem}-synth-val`);
 
     vol.value = String(st.volume);
     volVal.textContent = st.volume.toFixed(2);
     chaos.value = String(st.chaos);
     chaosVal.textContent = st.chaos.toFixed(2);
+    synth.value = String(st.synthBlend);
+    synthVal.textContent = st.synthBlend.toFixed(2);
 
     muteBtn.addEventListener("click", () => {
       st.mute = !st.mute;
@@ -403,6 +408,13 @@ class WubApp {
       st.chaos = Math.min(1, Math.max(0, c));
       chaosVal.textContent = st.chaos.toFixed(2);
       this.send({ type: "set", stem, chaos: st.chaos });
+    });
+    synth.addEventListener("input", () => {
+      const s = Number(synth.value);
+      if (!Number.isFinite(s)) return;
+      st.synthBlend = Math.min(1, Math.max(0, s));
+      synthVal.textContent = st.synthBlend.toFixed(2);
+      this.send({ type: "set_synth", stem, blend: st.synthBlend });
     });
   }
 

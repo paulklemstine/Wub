@@ -23,6 +23,8 @@ def test_all_python_compiles():
 
 def test_cli_help_parses():
     for argv in (["scripts/analyze_corpus.py", "--help"],
+                 ["scripts/build_umap.py", "--help"],
+                 ["scripts/demo_wubsynth.py", "--help"],
                  ["scripts/generate_mashup.py", "--help"],
                  ["scripts/sample_wubgpt.py", "--help"],
                  ["scripts/train_wubgpt.py", "--help"],

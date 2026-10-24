@@ -108,6 +108,8 @@ async def ws_stream(ws: WebSocket) -> None:
                 msg = await asyncio.wait_for(ws.receive_json(), timeout=0.02)
                 if msg.get("type") == "set" and "stem" in msg:
                     session.configure(stem=msg["stem"], chaos=msg.get("chaos"))
+                elif msg.get("type") == "set_synth" and "stem" in msg:
+                    session.configure(stem=msg["stem"], synth_blend=msg.get("blend"))
                 elif msg.get("type") == "set_bpm":
                     session.configure(bpm=msg.get("bpm"))
                 elif msg.get("type") == "set_chaos":
