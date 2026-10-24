@@ -152,6 +152,7 @@ class StreamSession:
     _tatum_index: int = 0
     _rng_seed: int = 0
     _heads: Dict[str, StemHeadState] = field(default_factory=dict)
+    _wubgpt_active_segs: Dict[str, Optional[str]] = field(default_factory=dict)
 
     def get_conductor(self) -> Any:
         if self._conductor is None:
@@ -314,29 +315,36 @@ class StreamSession:
                                 sref_list = seq.get(stem, [])
                                 sref = sref_list[step_idx] if step_idx < len(sref_list) else None
                                 if sref is not None:
-                                    tr = tracks_by_id.get(sref.track_id)
-                                    src_bpm = float(tr.bpm) if (tr and tr.bpm > 0) else self.bpm
-                                    rate = max(0.5, min(2.0, float(self.bpm) / float(src_bpm)))
-                                    rate_cents = 1200.0 * np.log2(rate) if rate > 0 else 0.0
-                                    detune_cents = 0
-                                    if stem in ("bass", "vocals", "other") and self.pitch_lock and tr:
-                                        shift = get_key_semitones(tr.key, self.key)
-                                        detune_cents = int(shift * 100 - rate_cents)
-                                    else:
-                                        detune_cents = int(-rate_cents)
+                                    seg_id = sref.segment_id
+                                    is_onset = (seg_id != self._wubgpt_active_segs.get(stem) or self._tatum_index == 0)
+                                    if is_onset:
+                                        self._wubgpt_active_segs[stem] = seg_id
+                                        tr = tracks_by_id.get(sref.track_id)
+                                        src_bpm = float(tr.bpm) if (tr and tr.bpm > 0) else self.bpm
+                                        rate = max(0.5, min(2.0, float(self.bpm) / float(src_bpm)))
+                                        rate_cents = 1200.0 * np.log2(rate) if rate > 0 else 0.0
+                                        detune_cents = 0
+                                        if stem in ("bass", "vocals", "other") and self.pitch_lock and tr:
+                                            shift = get_key_semitones(tr.key, self.key)
+                                            detune_cents = int(shift * 100 - rate_cents)
+                                        else:
+                                            detune_cents = int(-rate_cents)
 
-                                    slices[stem] = {
-                                        "track_id": sref.track_id,
-                                        "segment_id": sref.segment_id,
-                                        "start": sref.start,
-                                        "duration": sref.duration,
-                                        "url": f"/audio/{sref.track_id}/{sref.segment_id}.wav",
-                                        "detune_cents": detune_cents,
-                                        "rate": rate,
-                                        "synth_blend": self.synth_blend.get(stem, 0.0),
-                                    }
+                                        slices[stem] = {
+                                            "track_id": sref.track_id,
+                                            "segment_id": sref.segment_id,
+                                            "start": sref.start,
+                                            "duration": sref.duration,
+                                            "url": f"/audio/{sref.track_id}/{sref.segment_id}.wav",
+                                            "detune_cents": detune_cents,
+                                            "rate": rate,
+                                            "synth_blend": self.synth_blend.get(stem, 0.0),
+                                        }
+                                    else:
+                                        slices[stem] = None
                                 else:
                                     slices[stem] = None
+                                    self._wubgpt_active_segs[stem] = None
 
                             master_tatum = self._tatum_index
                             step_in_bar = (master_tatum % 16) + 1
