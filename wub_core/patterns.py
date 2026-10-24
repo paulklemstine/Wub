@@ -244,11 +244,20 @@ class PatternBank:
         groove_type: Optional[str] = None,
         min_energy: float = 0.0,
         max_energy: float = 1.0,
+        strict_groove: bool = False,
     ) -> List[SequencerPattern]:
         """Query patterns matching stem, groove type, and energy."""
-        candidates = self.patterns_by_type.get(stem, {}).get(groove_type, []) if groove_type else self.patterns_by_stem.get(stem, [])
+        if groove_type:
+            candidates = list(self.patterns_by_type.get(stem, {}).get(groove_type, []))
+            if not candidates and strict_groove:
+                return []
+        else:
+            candidates = list(self.patterns_by_stem.get(stem, []))
+
         if not candidates:
-            candidates = self.patterns_by_stem.get(stem, [])
+            if strict_groove:
+                return []
+            candidates = list(self.patterns_by_stem.get(stem, []))
         if not candidates:
             return []
 
@@ -256,7 +265,7 @@ class PatternBank:
             p for p in candidates
             if min_energy <= p.energy <= max_energy
         ]
-        return matched if matched else candidates
+        return matched if matched else (candidates if not strict_groove else [])
 
     def pick_pattern(
         self,
@@ -266,12 +275,14 @@ class PatternBank:
         max_energy: float = 1.0,
         preferred_track_id: Optional[str] = None,
         rng: Optional[np.random.Generator] = None,
+        strict_groove: bool = False,
     ) -> Optional[SequencerPattern]:
         """Pick a musically compatible pattern using RNG."""
         if rng is None:
             rng = np.random.default_rng()
 
-        candidates = self.get_patterns(stem, groove_type, min_energy, max_energy)
+        is_strict = strict_groove or (groove_type == "fill")
+        candidates = self.get_patterns(stem, groove_type, min_energy, max_energy, strict_groove=is_strict)
         if not candidates:
             return None
 
