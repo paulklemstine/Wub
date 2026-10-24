@@ -45,7 +45,7 @@ elif mode in ('put', 'get'):
                 '-o', 'ConnectTimeout=15', '-r', src, 'raver1975@127.0.0.1:' + dst]
     else:
         args = ['scp', '-P', '2223', '-o', 'StrictHostKeyChecking=no',
-                '-o', 'ConnectTimeout=15', 'raver1975@127.0.0.1:' + src, dst]
+                '-o', 'ConnectTimeout=15', '-r', 'raver1975@127.0.0.1:' + src, dst]
     c = pexpect.spawn(args[0], args[1:], timeout=1200, encoding='utf-8')
     while True:
         i = c.expect(['password:', 'Password:', pexpect.EOF, pexpect.TIMEOUT])

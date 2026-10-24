@@ -222,6 +222,9 @@ class WubApp {
   private reconnectDelay = RECONNECT_BASE_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private tatumCount = 0;
+  private nextTatumTime = 0;
+  private tatumQueue: TatumMessage[] = [];
+  private schedulerTimer: ReturnType<typeof setInterval> | null = null;
 
   // AudioBuffer cache keyed by track_id + segment_id, insertion-ordered LRU.
   private bufferCache = new Map<string, Promise<AudioBuffer>>();
@@ -304,15 +307,26 @@ class WubApp {
       this.setStatus(`Audio failed: ${err instanceof Error ? err.message : "unknown error"}`);
       return;
     }
+    this.nextTatumTime = 0;
+    this.tatumQueue = [];
+    if (this.schedulerTimer !== null) clearInterval(this.schedulerTimer);
+    this.schedulerTimer = setInterval(() => this.scheduleLoop(), 20);
+
     this.applyAllMixerState();
     this.connectWs();
-    this.setStatus("Playing — connecting to stream…");
+    this.setStatus("Playing — streaming synchronized stems…");
   }
 
   private async stop(): Promise<void> {
     this.playing = false;
     this.manualClose = true;
     this.clearReconnect();
+    if (this.schedulerTimer !== null) {
+      clearInterval(this.schedulerTimer);
+      this.schedulerTimer = null;
+    }
+    this.tatumQueue = [];
+    this.nextTatumTime = 0;
     if (this.ws !== null) {
       try {
         this.ws.close();
@@ -327,6 +341,10 @@ class WubApp {
 
   private teardown(): void {
     this.clearReconnect();
+    if (this.schedulerTimer !== null) {
+      clearInterval(this.schedulerTimer);
+      this.schedulerTimer = null;
+    }
     if (this.ws !== null) {
       try {
         this.ws.close();
@@ -524,9 +542,48 @@ class WubApp {
     }
     for (const stem of STEMS) {
       const spec = msg.slices[stem];
-      if (spec === null) continue;
-      this.pushRingEvent({ stem, trackId: spec.trackId, atSec: visualNow() });
-      void this.loadAndSchedule(stem, spec, msg.startTime);
+      if (spec !== null) {
+        this.prefetchSlice(spec);
+      }
+    }
+    this.tatumQueue.push(msg);
+    if (this.tatumQueue.length > 64) {
+      this.tatumQueue.splice(0, this.tatumQueue.length - 64);
+    }
+  }
+
+  private prefetchSlice(spec: SliceSpec): void {
+    const key = `${spec.trackId}:${spec.segmentId}`;
+    if (this.cacheGet(key) === undefined) {
+      const pending = this.fetchAndDecode(spec.url);
+      this.cacheSet(key, pending);
+    }
+  }
+
+  private scheduleLoop(): void {
+    if (!this.playing) return;
+    const now = this.engine.now();
+    if (now <= 0) return;
+
+    const lookAheadSec = 0.25;
+    const tatumDur = 60.0 / this.bpm / 4.0;
+
+    if (this.nextTatumTime < now) {
+      this.nextTatumTime = now + 0.12;
+    }
+
+    while (this.nextTatumTime < now + lookAheadSec && this.tatumQueue.length > 0) {
+      const msg = this.tatumQueue.shift()!;
+      const when = this.nextTatumTime;
+
+      for (const stem of STEMS) {
+        const spec = msg.slices[stem];
+        if (spec !== null) {
+          this.pushRingEvent({ stem, trackId: spec.trackId, atSec: when });
+          void this.loadAndScheduleAt(stem, spec, when);
+        }
+      }
+      this.nextTatumTime += tatumDur;
     }
   }
 
@@ -556,7 +613,7 @@ class WubApp {
     }
   }
 
-  private async loadAndSchedule(stem: StemName, spec: SliceSpec, startOffset: number): Promise<void> {
+  private async loadAndScheduleAt(stem: StemName, spec: SliceSpec, when: number): Promise<void> {
     const key = `${spec.trackId}:${spec.segmentId}`;
     let pending = this.cacheGet(key);
     if (pending === undefined) {
@@ -572,13 +629,11 @@ class WubApp {
       return;
     }
     if (!this.playing) return;
-    const offset = Number.isFinite(startOffset) ? startOffset : 0;
-    const when = this.engine.now() + Math.max(0.01, offset);
     try {
       this.engine.scheduleSlice(stem, buffer, when, {
         rate: spec.rate,
         detuneCents: spec.detuneCents,
-        fadeMs: 3,
+        fadeMs: 4,
       });
     } catch {
       // Scheduling races (e.g. dispose during stop); safe to drop.

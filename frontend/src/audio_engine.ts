@@ -77,6 +77,7 @@ export class AudioEngine {
   private buses_: Record<StemName, StemBus> | null = null;
   private timer_: ReturnType<typeof setInterval> | null = null;
   private liveSources_: Map<AudioBufferSourceNode, number> = new Map();
+  private activeVoices_: Partial<Record<StemName, { source: AudioBufferSourceNode; gain: GainNode; endAt: number }>> = {};
   private targetBpm_: number = 128;
 
   // Desired mixer state, applied lazily so UI can be touched before the
@@ -252,6 +253,21 @@ export class AudioEngine {
     const startAt = Math.max(when, ctx.currentTime + 0.005);
     const durSec = buffer.duration / rate;
 
+    // Crossfade out previous voice on this stem so voices never pile up into noise
+    const prev = this.activeVoices_[stem];
+    if (prev && prev.endAt > startAt) {
+      const crossfadeSec = Math.min(requestedFadeMs / 1000, 0.008);
+      const stopAt = startAt + crossfadeSec;
+      try {
+        prev.gain.gain.cancelScheduledValues(startAt);
+        prev.gain.gain.setValueAtTime(prev.gain.gain.value, startAt);
+        prev.gain.gain.linearRampToValueAtTime(0, stopAt);
+        prev.source.stop(stopAt + 0.01);
+      } catch {
+        // Safe if already stopped
+      }
+    }
+
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = rate;
@@ -286,8 +302,12 @@ export class AudioEngine {
     }
 
     const endAt = startAt + durSec;
+    this.activeVoices_[stem] = { source, gain: sliceGain, endAt };
     source.onended = () => {
       this.liveSources_.delete(source);
+      if (this.activeVoices_[stem]?.source === source) {
+        delete this.activeVoices_[stem];
+      }
       try {
         source.disconnect();
         sliceGain.disconnect();
@@ -323,6 +343,7 @@ export class AudioEngine {
       }
     }
     this.liveSources_.clear();
+    this.activeVoices_ = {};
     const ctx = this.ctx_;
     this.ctx_ = null;
     this.master_ = null;

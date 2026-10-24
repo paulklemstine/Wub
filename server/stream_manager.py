@@ -54,7 +54,8 @@ class StreamSession:
         from wub_core import model_markov as mm
 
         self.store.refresh()
-        pools = self.store.pools()
+        multistem = [t for t in self.store.tracks if len(t.stems_available) == 4]
+        pools = mm.build_pools(multistem if multistem else self.store.tracks)
         if not pools:
             return
         seq = mm.generate(pools, steps=32,
@@ -71,12 +72,23 @@ class StreamSession:
                     slices[stem] = None
                 else:
                     src_bpm = bpms.get(r.track_id, self.bpm) or self.bpm
+                    rate = float(self.bpm) / float(src_bpm) if src_bpm > 0 else 1.0
+                    rate = max(0.5, min(2.0, rate))
+
+                    detune_cents = 0
+                    if stem in ("bass", "vocals", "other") and hasattr(r, "chroma") and r.chroma is not None:
+                        c = np.asarray(r.chroma)
+                        if np.max(c) > 1e-6:
+                            c = c / np.max(c)
+                            shift = -(((int(np.argmax(c)) + 6) % 12) - 6)
+                            detune_cents = int(max(-6, min(6, shift)) * 100)
+
                     slices[stem] = {
                         "track_id": r.track_id, "segment_id": r.segment_id,
                         "start": r.start, "duration": r.duration,
                         "url": f"/audio/{r.track_id}/{r.segment_id}.wav",
-                        "detune_cents": 0,
-                        "rate": self.bpm / src_bpm,
+                        "detune_cents": detune_cents,
+                        "rate": rate,
                         "synth_blend": self.synth_blend.get(stem, 0.0),
                     }
             self._buffer.append({"type": "tatum", "tatum_index": self._tatum_index,
