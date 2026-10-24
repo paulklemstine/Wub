@@ -339,6 +339,155 @@ export class AudioEngine {
     return source;
   }
 
+  /**
+   * Synthesize real punchy drum, bass, or melodic stabs in Web Audio.
+   * Feeds directly into stem buses, respecting mutes, volume, and visualizers.
+   */
+  triggerSynth(
+    stem: StemName,
+    when: number,
+    opts: { type?: string; freq?: number; gain?: number; decay?: number } = {},
+  ): void {
+    const ctx = this.ensureCtx();
+    const buses = this.buses_;
+    if (buses === null) return;
+
+    const startAt = Math.max(when, ctx.currentTime);
+    const busInput = buses[stem].input;
+
+    if (stem === "drums") {
+      const type = opts.type || "kick";
+      if (type === "kick") {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(busInput);
+
+        const decay = opts.decay || 0.28;
+        osc.frequency.setValueAtTime(155, startAt);
+        osc.frequency.exponentialRampToValueAtTime(36, startAt + decay * 0.4);
+
+        gain.gain.setValueAtTime(1.1 * (opts.gain ?? 1), startAt);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + decay);
+
+        osc.start(startAt);
+        osc.stop(startAt + decay + 0.05);
+      } else if (type === "snare" || type === "clap") {
+        const osc = ctx.createOscillator();
+        const oscGain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(180, startAt);
+        osc.frequency.exponentialRampToValueAtTime(80, startAt + 0.1);
+        oscGain.gain.setValueAtTime(0.7 * (opts.gain ?? 1), startAt);
+        oscGain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.15);
+        osc.connect(oscGain);
+        oscGain.connect(busInput);
+        osc.start(startAt);
+        osc.stop(startAt + 0.16);
+
+        const noiseLen = Math.floor(ctx.sampleRate * 0.15);
+        const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
+        const data = noiseBuf.getChannelData(0);
+        for (let i = 0; i < noiseLen; i++) data[i] = Math.random() * 2 - 1;
+        const noiseNode = ctx.createBufferSource();
+        noiseNode.buffer = noiseBuf;
+
+        const noiseFilter = ctx.createBiquadFilter();
+        noiseFilter.type = "bandpass";
+        noiseFilter.frequency.value = 1600;
+        noiseFilter.Q.value = 1.2;
+
+        const noiseGain = ctx.createGain();
+        noiseGain.gain.setValueAtTime(0.8 * (opts.gain ?? 1), startAt);
+        noiseGain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.15);
+
+        noiseNode.connect(noiseFilter);
+        noiseFilter.connect(noiseGain);
+        noiseGain.connect(busInput);
+        noiseNode.start(startAt);
+        noiseNode.stop(startAt + 0.16);
+      } else {
+        const isClosed = type !== "open_hat";
+        const decay = isClosed ? 0.05 : 0.22;
+        const noiseLen = Math.floor(ctx.sampleRate * decay);
+        const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
+        const data = noiseBuf.getChannelData(0);
+        for (let i = 0; i < noiseLen; i++) data[i] = Math.random() * 2 - 1;
+        const noiseNode = ctx.createBufferSource();
+        noiseNode.buffer = noiseBuf;
+
+        const noiseFilter = ctx.createBiquadFilter();
+        noiseFilter.type = "highpass";
+        noiseFilter.frequency.value = 7500;
+
+        const noiseGain = ctx.createGain();
+        noiseGain.gain.setValueAtTime(0.4 * (opts.gain ?? 1), startAt);
+        noiseGain.gain.exponentialRampToValueAtTime(0.001, startAt + decay);
+
+        noiseNode.connect(noiseFilter);
+        noiseFilter.connect(noiseGain);
+        noiseGain.connect(busInput);
+        noiseNode.start(startAt);
+        noiseNode.stop(startAt + decay + 0.02);
+      }
+    } else if (stem === "bass") {
+      const osc = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+
+      osc.type = "sawtooth";
+      const freq = opts.freq || 65.4;
+      osc.frequency.setValueAtTime(freq, startAt);
+
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(700, startAt);
+      filter.frequency.exponentialRampToValueAtTime(180, startAt + 0.2);
+      filter.Q.value = 3.0;
+
+      const decay = opts.decay || 0.22;
+      gain.gain.setValueAtTime(0.7 * (opts.gain ?? 1), startAt);
+      gain.gain.exponentialRampToValueAtTime(0.001, startAt + decay);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(busInput);
+
+      osc.start(startAt);
+      osc.stop(startAt + decay + 0.05);
+    } else {
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+
+      osc1.type = stem === "vocals" ? "triangle" : "sawtooth";
+      osc2.type = "square";
+
+      const freq = opts.freq || (stem === "vocals" ? 330 : 261.6);
+      osc1.frequency.setValueAtTime(freq, startAt);
+      osc2.frequency.setValueAtTime(freq * 1.004, startAt);
+
+      filter.type = "bandpass";
+      filter.frequency.setValueAtTime(1400, startAt);
+      filter.frequency.exponentialRampToValueAtTime(600, startAt + 0.25);
+      filter.Q.value = 2.0;
+
+      const decay = opts.decay || 0.25;
+      gain.gain.setValueAtTime(0.35 * (opts.gain ?? 1), startAt);
+      gain.gain.exponentialRampToValueAtTime(0.001, startAt + decay);
+
+      osc1.connect(filter);
+      osc2.connect(filter);
+      filter.connect(gain);
+      gain.connect(busInput);
+
+      osc1.start(startAt);
+      osc2.start(startAt);
+      osc1.stop(startAt + decay + 0.05);
+      osc2.stop(startAt + decay + 0.05);
+    }
+  }
+
   dispose(): void {
     if (this.timer_ !== null) {
       clearInterval(this.timer_);

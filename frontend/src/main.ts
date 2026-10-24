@@ -250,6 +250,7 @@ class WubApp {
   private reconnectDelay = RECONNECT_BASE_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private tatumCount = 0;
+  private localStepCount = 0;
   private nextTatumTime = 0;
   private tatumQueue: TatumMessage[] = [];
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
@@ -366,7 +367,9 @@ class WubApp {
     raw = raw.trim();
 
     if (!raw) {
-      if (
+      if (window.location.hostname.endsWith("github.io")) {
+        raw = "https://lamb-programmes-basis-api.trycloudflare.com";
+      } else if (
         window.location.hostname === "localhost" ||
         window.location.hostname === "127.0.0.1" ||
         window.location.hostname.startsWith("192.168.") ||
@@ -843,6 +846,49 @@ class WubApp {
       }
       this.nextTatumTime += tatumDur;
     }
+
+    // Fallback: If disconnected or waiting for network buffer, keep the groove going via local synth!
+    while (this.nextTatumTime < now + lookAheadSec && this.tatumQueue.length === 0) {
+      const when = this.nextTatumTime;
+      const stepIdx = this.localStepCount % 16;
+      const barIdx = Math.floor(this.localStepCount / 16) % 8;
+      this.localStepCount++;
+
+      const isBeat = stepIdx % 4 === 0;
+      const isSnare = stepIdx === 4 || stepIdx === 12;
+      const isOpenHat = stepIdx === 2 || stepIdx === 6 || stepIdx === 10 || stepIdx === 14;
+
+      if (isBeat) this.engine.triggerSynth("drums", when, { type: "kick" });
+      if (isSnare) this.engine.triggerSynth("drums", when, { type: "snare" });
+      if (isOpenHat) this.engine.triggerSynth("drums", when, { type: "open_hat" });
+      this.engine.triggerSynth("drums", when, { type: "hat", gain: 0.3 });
+
+      if (isOpenHat || stepIdx % 2 === 1) {
+        const bassFreq = 65.41 * (stepIdx === 14 ? 1.122 : 1.0);
+        this.engine.triggerSynth("bass", when, { freq: bassFreq });
+      }
+
+      const chordScale = [261.63, 311.13, 392.0, 466.16, 523.25];
+      const noteFreq = chordScale[stepIdx % chordScale.length];
+      if (stepIdx % 2 === 0) {
+        this.engine.triggerSynth("other", when, { freq: noteFreq, gain: 0.4 });
+      }
+
+      this.updateGrooveboxUI({
+        section: "GROOVE A",
+        phraseBar: barIdx + 1,
+        stepInBar: stepIdx + 1,
+        isFill: barIdx === 7,
+        patterns: {
+          drums: "Internal 909 Groove",
+          bass: "Offbeat Sub",
+          other: "Chord Arp",
+          vocals: "Atmosphere",
+        },
+      });
+
+      this.nextTatumTime += tatumDur;
+    }
   }
 
   private pushRingEvent(ev: SliceArcEvent): void {
@@ -943,6 +989,9 @@ class WubApp {
     } catch {
       // Evict poisoned entries so a retry refetches.
       this.bufferCache.delete(key);
+      if (stem === "drums") this.engine.triggerSynth(stem, when, { type: "kick" });
+      else if (stem === "bass") this.engine.triggerSynth(stem, when, { freq: 65.4 });
+      else this.engine.triggerSynth(stem, when, { freq: 261.6 });
       return;
     }
     if (!this.playing) return;
