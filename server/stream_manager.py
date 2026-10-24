@@ -279,6 +279,7 @@ class StreamSession:
                             "tatum_index": master_tatum,
                             "bpm": self.bpm,
                             "tatum_duration": self.tatum_duration,
+                            "start_time": 0.06,
                             "slices": slices,
                             "groovebox": meta,
                         })
@@ -359,6 +360,7 @@ class StreamSession:
                                 "tatum_index": master_tatum,
                                 "bpm": self.bpm,
                                 "tatum_duration": self.tatum_duration,
+                                "start_time": 0.06,
                                 "slices": slices,
                                 "groovebox": {
                                     "section": section,
