@@ -83,8 +83,22 @@
       <span id="backend-label" style="opacity: 0.8;">Server:</span>
       <input id="backend-host-input" type="text" placeholder="localhost:8123" style="background: #1c1c2c; border: 1px solid #3a3a55; border-radius: 4px; color: #e8e8f0; padding: 3px 6px; font-size: 0.8rem; width: 170px;" />
       <button id="btn-backend-connect" type="button" style="padding: 3px 8px; font-size: 0.78rem;">Connect</button>
+      <button id="btn-backend-help" type="button" title="How to connect backend" style="padding: 3px 6px; font-size: 0.75rem; border-radius: 50%; width: 22px; height: 22px; line-height: 1;">?</button>
     </div>
   </header>
+
+  <dialog id="backend-help-dialog" style="background: #12121e; color: #e8e8f0; border: 1px solid #3a3a55; border-radius: 8px; max-width: 520px; padding: 18px; line-height: 1.5; font-size: 0.88rem;">
+    <h3 style="margin-top: 0; color: #a78bfa;">Connecting to Wub Backend</h3>
+    <p>This web page can stream directly from your running Python server:</p>
+    <ul style="padding-left: 20px;">
+      <li><b>Local LAN Direct (Recommended):</b> Open <code>http://192.168.1.136:8123</code> directly in your browser. (The backend server serves this entire UI natively without mixed-content restrictions).</li>
+      <li><b>Cloudflare Tunnel (HTTPS/WSS):</b> Run <code>cloudflared tunnel --url http://127.0.0.1:8123</code> on the host machine and paste the resulting <code>https://...trycloudflare.com</code> URL into the Server box. Works over GitHub Pages without browser warnings!</li>
+      <li><b>GitHub Pages + Insecure Content:</b> If connecting to <code>http://192.168.1.136:8123</code> from <code>https://paulklemstine.github.io/Wub/</code>, your browser will block mixed content by default. In Chrome/Edge: click the icon next to the URL in the address bar &rarr; <i>Site Settings</i> &rarr; set <i>Insecure content</i> to <b>Allow</b>.</li>
+    </ul>
+    <div style="text-align: right; margin-top: 14px;">
+      <button id="btn-close-dialog" type="button">Close</button>
+    </div>
+  </dialog>
 
   <section id="master" aria-label="Master controls">
     <label>BPM

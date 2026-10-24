@@ -27,6 +27,12 @@ import { NebulaRenderer, drawRings, drawWaveformAnalysis, drawMasterAnalysis } f
 import type { SliceArcEvent, NebulaPoint, WaveformStemData } from "./visualizer";
 import type { StemName } from "./types";
 
+interface BackendConfig {
+  httpBase: string;
+  wsUrl: string;
+  raw: string;
+}
+
 export interface StemState {
   stem: StemName;
   mute: boolean;
@@ -278,10 +284,31 @@ class WubApp {
   private bindBackendConfig(): void {
     const input = document.getElementById("backend-host-input") as HTMLInputElement | null;
     const btn = document.getElementById("btn-backend-connect") as HTMLButtonElement | null;
+    const helpBtn = document.getElementById("btn-backend-help") as HTMLButtonElement | null;
+    const dialog = document.getElementById("backend-help-dialog") as HTMLDialogElement | null;
+    const closeBtn = document.getElementById("btn-close-dialog") as HTMLButtonElement | null;
+
+    const cfg = this.getBackendConfig();
     if (input) {
-      input.value = this.getBackendHost();
+      input.value = cfg.raw;
       input.placeholder = window.location.hostname.endsWith("github.io") ? "192.168.1.136:8123" : window.location.host;
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") btn?.click();
+      });
     }
+
+    if (helpBtn && dialog) {
+      helpBtn.addEventListener("click", () => dialog.showModal());
+    }
+    if (closeBtn && dialog) {
+      closeBtn.addEventListener("click", () => dialog.close());
+    }
+    if (dialog) {
+      dialog.addEventListener("click", (e) => {
+        if (e.target === dialog) dialog.close();
+      });
+    }
+
     if (btn && input) {
       btn.addEventListener("click", () => {
         const val = input.value.trim();
@@ -312,47 +339,79 @@ class WubApp {
     else dot.style.background = "#ef4444";
   }
 
-  private getBackendHost(): string {
+  private getBackendConfig(): BackendConfig {
     const params = new URLSearchParams(window.location.search);
-    const paramBackend = params.get("backend");
-    if (paramBackend) return paramBackend.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    let raw = params.get("backend") || localStorage.getItem("wub_backend") || "";
+    raw = raw.trim();
 
-    const saved = localStorage.getItem("wub_backend");
-    if (saved) return saved.replace(/^https?:\/\//, "").replace(/\/$/, "");
-
-    if (
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1" ||
-      window.location.hostname.startsWith("192.168.") ||
-      window.location.hostname.startsWith("10.")
-    ) {
-      return window.location.host;
+    if (!raw) {
+      if (
+        window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1" ||
+        window.location.hostname.startsWith("192.168.") ||
+        window.location.hostname.startsWith("10.")
+      ) {
+        raw = window.location.host;
+      }
     }
 
-    return "";
-  }
+    if (!raw) {
+      return { httpBase: "", wsUrl: "", raw: "" };
+    }
 
-  private getHttpBase(): string {
-    const host = this.getBackendHost();
-    if (!host) return "";
-    const isHttps =
-      window.location.protocol === "https:" &&
-      !host.startsWith("localhost") &&
-      !host.startsWith("127.") &&
-      !host.startsWith("192.168.");
-    const proto = isHttps ? "https:" : "http:";
-    return `${proto}//${host}`;
+    let httpBase = "";
+    let wsUrl = "";
+
+    if (/^https?:\/\//i.test(raw)) {
+      httpBase = raw.replace(/\/+$/, "");
+      const wsProto = raw.toLowerCase().startsWith("https:") ? "wss:" : "ws:";
+      wsUrl = httpBase.replace(/^https?:/i, wsProto) + WS_PATH;
+    } else if (/^wss?:\/\//i.test(raw)) {
+      wsUrl = raw.replace(/\/+$/, "");
+      if (!wsUrl.endsWith(WS_PATH)) wsUrl += WS_PATH;
+      const httpProto = raw.toLowerCase().startsWith("wss:") ? "https:" : "http:";
+      httpBase = raw.replace(/^wss?:/i, httpProto).replace(new RegExp(WS_PATH + "$"), "").replace(/\/+$/, "");
+    } else {
+      const cleanHost = raw.replace(/\/+$/, "");
+      const isCloudflareOrSecure = cleanHost.includes("trycloudflare.com") || cleanHost.includes("ngrok");
+      const isLocal =
+        cleanHost.startsWith("192.168.") ||
+        cleanHost.startsWith("10.") ||
+        cleanHost.startsWith("localhost") ||
+        cleanHost.startsWith("127.");
+
+      let httpProto = "http:";
+      let wsProto = "ws:";
+
+      if (isCloudflareOrSecure) {
+        httpProto = "https:";
+        wsProto = "wss:";
+      } else if (window.location.protocol === "https:" && !isLocal) {
+        httpProto = "https:";
+        wsProto = "wss:";
+      } else {
+        httpProto = "http:";
+        wsProto = "ws:";
+      }
+
+      httpBase = `${httpProto}//${cleanHost}`;
+      wsUrl = `${wsProto}//${cleanHost}${WS_PATH}`;
+    }
+
+    return { httpBase, wsUrl, raw };
   }
 
   private async loadUmapPoints(): Promise<void> {
     try {
       let data: unknown = null;
-      const base = this.getHttpBase();
-      try {
-        const res = await fetch(`${base}/api/umap`);
-        if (res.ok) data = (await res.json()) as unknown;
-      } catch {
-        // Fall back to bundled static coordinates
+      const cfg = this.getBackendConfig();
+      if (cfg.httpBase) {
+        try {
+          const res = await fetch(`${cfg.httpBase}/api/umap`);
+          if (res.ok) data = (await res.json()) as unknown;
+        } catch {
+          // Fall back to bundled static coordinates
+        }
       }
 
       if (!Array.isArray(data) || data.length === 0) {
@@ -592,30 +651,36 @@ class WubApp {
 
   // -- websocket -----------------------------------------------------------
 
-  private wsUrl(): string {
-    const host = this.getBackendHost() || window.location.host;
-    const isWss =
-      window.location.protocol === "https:" &&
-      !host.startsWith("localhost") &&
-      !host.startsWith("127.") &&
-      !host.startsWith("192.168.");
-    const proto = isWss ? "wss" : "ws";
-    return `${proto}://${host}${WS_PATH}`;
-  }
-
   private connectWs(): void {
     if (!this.playing || this.ws !== null) return;
+    const cfg = this.getBackendConfig();
+    if (!cfg.wsUrl) {
+      this.updateBackendStatus("disconnected");
+      this.setStatus("Offline demo mode — enter backend address in Server box to stream.");
+      return;
+    }
+
     this.updateBackendStatus("connecting");
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.wsUrl());
-    } catch {
+      ws = new WebSocket(cfg.wsUrl);
+    } catch (err: unknown) {
       this.updateBackendStatus("disconnected");
+      const isMixed = window.location.protocol === "https:" && cfg.wsUrl.startsWith("ws:");
+      if (isMixed) {
+        this.setStatus(
+          "⚠️ Mixed Content Blocked: Browser refused unencrypted ws:// from HTTPS. " +
+          "Fix: In Chrome, click 🔒 next to URL → Site Settings → Insecure content: Allow, " +
+          "or connect directly at http://192.168.1.136:8123"
+        );
+      } else {
+        this.setStatus(`Connection error: ${(err as Error)?.message || "Failed"}`);
+      }
       this.scheduleReconnect();
       return;
     }
     this.ws = ws;
-    this.setStatus("Connecting to /ws/stream…");
+    this.setStatus(`Connecting to ${cfg.wsUrl}…`);
 
     ws.onopen = () => {
       this.reconnectDelay = RECONNECT_BASE_MS;
@@ -638,7 +703,16 @@ class WubApp {
     };
     ws.onerror = () => {
       this.updateBackendStatus("disconnected");
-      this.setStatus("Stream error — retrying…");
+      const isMixed = window.location.protocol === "https:" && cfg.wsUrl.startsWith("ws:");
+      if (isMixed) {
+        this.setStatus(
+          "⚠️ Mixed Content Blocked: Browser refused unencrypted connection from HTTPS. " +
+          "Fix: Click 🔒 in address bar → Site Settings → Insecure content: Allow, " +
+          "or open http://192.168.1.136:8123 directly."
+        );
+      } else {
+        this.setStatus("Stream error — retrying…");
+      }
     };
     ws.onclose = () => {
       if (this.ws === ws) this.ws = null;
@@ -812,11 +886,21 @@ class WubApp {
   }
 
   private async fetchAndDecode(url: string): Promise<AudioBuffer> {
-    const fullUrl = url.startsWith("http") ? url : `${this.getHttpBase()}${url}`;
-    const res = await fetch(fullUrl);
-    if (!res.ok) throw new Error(`Slice fetch failed: ${res.status}`);
-    const bytes = await res.arrayBuffer();
-    return await this.engine.decodeWav(bytes);
+    const cfg = this.getBackendConfig();
+    const fullUrl = url.startsWith("http") ? url : `${cfg.httpBase}${url}`;
+    try {
+      const res = await fetch(fullUrl);
+      if (!res.ok) throw new Error(`Slice fetch failed: ${res.status}`);
+      const bytes = await res.arrayBuffer();
+      return await this.engine.decodeWav(bytes);
+    } catch (err) {
+      if (window.location.protocol === "https:" && fullUrl.startsWith("http:")) {
+        this.setStatus(
+          "⚠️ Mixed Content Blocked: Browser blocked slice fetch. In Chrome: Site Settings → Insecure Content: Allow."
+        );
+      }
+      throw err;
+    }
   }
 
   // -- render loop ---------------------------------------------------------
