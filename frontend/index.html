@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wub — Infinite Jukebox</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      background: #0a0a12; color: #e8e8f0;
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0; padding: 16px;
+    }
+    header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    h1 { font-size: 1.4rem; margin: 0 8px 0 0; }
+    button {
+      background: #1c1c2c; color: #e8e8f0; border: 1px solid #3a3a55;
+      border-radius: 6px; padding: 8px 14px; cursor: pointer;
+    }
+    button:hover { background: #262640; }
+    button.active { background: #6d28d9; border-color: #a78bfa; }
+    #transport { display: flex; gap: 8px; align-items: center; }
+    #master { display: flex; gap: 16px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+    #master label { display: flex; gap: 8px; align-items: center; }
+    #decks { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .deck {
+      background: #12121e; border: 1px solid #2a2a45; border-radius: 10px;
+      padding: 12px;
+    }
+    .deck h2 { margin: 0 0 8px; font-size: 1rem; text-transform: capitalize; }
+    .deck .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+    .deck label { display: flex; gap: 8px; align-items: center; flex: 1; font-size: 0.85rem; }
+    .deck input[type="range"] { flex: 1; min-width: 0; }
+    .deck .val { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.8; }
+    .deck .toggles { display: flex; gap: 8px; }
+    .deck .toggles button { flex: 1; }
+    #stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+    canvas.stage {
+      width: 100%; height: auto; background: #0b0b14;
+      border: 1px solid #2a2a45; border-radius: 10px;
+    }
+    #rings-canvas { aspect-ratio: 1 / 1; }
+    #nebula-canvas { aspect-ratio: 16 / 10; cursor: crosshair; }
+    #status-line { margin-top: 12px; opacity: 0.85; font-size: 0.9rem; min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Wub — Infinite Jukebox</h1>
+    <div id="transport">
+      <button id="btn-play" type="button">Play</button>
+      <button id="btn-stop" type="button">Stop</button>
+    </div>
+  </header>
+
+  <section id="master" aria-label="Master controls">
+    <label>BPM
+      <input id="bpm-slider" type="range" min="80" max="175" step="1" value="128" />
+      <span id="bpm-value">128 BPM</span>
+    </label>
+    <label>Key
+      <select id="key-select">
+        <option value="C" selected>C</option>
+        <option value="G">G</option>
+        <option value="D">D</option>
+        <option value="A">A</option>
+        <option value="E">E</option>
+        <option value="B">B</option>
+        <option value="F#">F#</option>
+        <option value="F">F</option>
+        <option value="Bb">Bb</option>
+        <option value="Eb">Eb</option>
+        <option value="Am">Am</option>
+        <option value="Em">Em</option>
+        <option value="Dm">Dm</option>
+      </select>
+    </label>
+  </section>
+
+  <section id="decks" aria-label="Stem decks">
+    <div class="deck" id="deck-drums">
+      <h2>Drums</h2>
+      <div class="row toggles">
+        <button id="drums-mute" type="button" aria-pressed="false">Mute</button>
+        <button id="drums-solo" type="button" aria-pressed="false">Solo</button>
+      </div>
+      <div class="row"><label>Volume <input id="drums-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="drums-vol-val">1.00</span></div>
+      <div class="row"><label>Chaos <input id="drums-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="drums-chaos-val">0.50</span></div>
+    </div>
+    <div class="deck" id="deck-bass">
+      <h2>Bass</h2>
+      <div class="row toggles">
+        <button id="bass-mute" type="button" aria-pressed="false">Mute</button>
+        <button id="bass-solo" type="button" aria-pressed="false">Solo</button>
+      </div>
+      <div class="row"><label>Volume <input id="bass-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="bass-vol-val">1.00</span></div>
+      <div class="row"><label>Chaos <input id="bass-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="bass-chaos-val">0.50</span></div>
+    </div>
+    <div class="deck" id="deck-vocals">
+      <h2>Vocals</h2>
+      <div class="row toggles">
+        <button id="vocals-mute" type="button" aria-pressed="false">Mute</button>
+        <button id="vocals-solo" type="button" aria-pressed="false">Solo</button>
+      </div>
+      <div class="row"><label>Volume <input id="vocals-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="vocals-vol-val">1.00</span></div>
+      <div class="row"><label>Chaos <input id="vocals-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="vocals-chaos-val">0.50</span></div>
+    </div>
+    <div class="deck" id="deck-other">
+      <h2>Other</h2>
+      <div class="row toggles">
+        <button id="other-mute" type="button" aria-pressed="false">Mute</button>
+        <button id="other-solo" type="button" aria-pressed="false">Solo</button>
+      </div>
+      <div class="row"><label>Volume <input id="other-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="other-vol-val">1.00</span></div>
+      <div class="row"><label>Chaos <input id="other-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="other-chaos-val">0.50</span></div>
+    </div>
+  </section>
+
+  <section id="stages" aria-label="Visualizers">
+    <canvas id="rings-canvas" class="stage" width="560" height="560"></canvas>
+    <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
+  </section>
+
+  <div id="status-line" role="status">Loading…</div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
