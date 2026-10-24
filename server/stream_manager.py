@@ -252,14 +252,9 @@ class StreamSession:
                                 rate_cents = 1200.0 * np.log2(rate) if rate > 0 else 0.0
 
                                 detune_cents = 0
-                                if stem in ("bass", "vocals", "other"):
-                                    if self.pitch_lock and tr:
-                                        shift = get_key_semitones(tr.key, self.key)
-                                        detune_cents = int(shift * 100 - rate_cents)
-                                    else:
-                                        detune_cents = int(-rate_cents)
-                                else:
-                                    detune_cents = int(-rate_cents)
+                                if stem in ("bass", "vocals", "other") and self.pitch_lock and tr:
+                                    shift = get_key_semitones(tr.key, self.key)
+                                    detune_cents = int(shift * 100)
 
                                 slices[stem] = {
                                     "track_id": sref.track_id,
@@ -327,9 +322,7 @@ class StreamSession:
                                         detune_cents = 0
                                         if stem in ("bass", "vocals", "other") and self.pitch_lock and tr:
                                             shift = get_key_semitones(tr.key, self.key)
-                                            detune_cents = int(shift * 100 - rate_cents)
-                                        else:
-                                            detune_cents = int(-rate_cents)
+                                            detune_cents = int(shift * 100)
 
                                         slices[stem] = {
                                             "track_id": sref.track_id,
@@ -504,15 +497,9 @@ class StreamSession:
                     rate_cents = 1200.0 * np.log2(rate) if rate > 0 else 0.0
 
                     detune_cents = 0
-                    if stem in ("bass", "vocals", "other"):
-                        if self.pitch_lock:
-                            shift = get_key_semitones(tr.key, self.key)
-                            detune_cents = int(shift * 100 - rate_cents)
-                        else:
-                            detune_cents = int(-rate_cents)
-                    else:
-                        # Drums: preserve natural punch and kick tuning
-                        detune_cents = int(-rate_cents)
+                    if stem in ("bass", "vocals", "other") and self.pitch_lock:
+                        shift = get_key_semitones(tr.key, self.key)
+                        detune_cents = int(shift * 100)
 
                     slices[stem] = {
                         "track_id": tr.track_id,

@@ -161,3 +161,39 @@ def test_groovebox_palette_and_pattern_synthesis():
     assert bass_pat is not None
     assert bass_pat.length == 16
     assert set(bass_pat.onset_grid).intersection({2, 6, 10, 14})
+
+
+def test_multistem_song_phrase_cohesion():
+    """Verify that MultiStemPatterns and SongPhrases lock all 4 stems to the same track."""
+    tr = _make_dance_track("test_tr_cohesive", bpm=126.0, n_bars=8)
+    bank = PatternBank()
+    bank.load_from_tracks([tr])
+
+    assert len(bank.multistem_patterns) == 8
+    assert len(bank.phrases) == 1
+
+    phrase = bank.phrases[0]
+    assert phrase.track_id == "test_tr_cohesive"
+    assert len(phrase.bars) == 8
+
+    # All bars must belong to the exact same track
+    for b in phrase.bars:
+        assert b.track_id == "test_tr_cohesive"
+        assert "drums" in b.stems
+        assert "bass" in b.stems
+        assert "other" in b.stems
+        assert "vocals" in b.stems
+        assert len(b.stems["drums"]) == 16
+
+    # Test playback with GrooveboxConductor
+    conductor = GrooveboxConductor(bank, seed=42)
+    assert conductor.current_phrase is not None
+    assert conductor.current_phrase.track_id == "test_tr_cohesive"
+
+    # Step through Bar 1
+    slices_0, meta_0 = conductor.next_step()
+    assert meta_0["phrase_bar"] == 1
+    assert meta_0["step_in_bar"] == 1
+    # On Step 0 (beat 1), drums and other stems are triggered
+    assert slices_0["drums"] is not None
+    assert slices_0["drums"].track_id == "test_tr_cohesive"

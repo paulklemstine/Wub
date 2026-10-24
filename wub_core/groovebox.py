@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from wub_core.model_markov import SliceRef
-from wub_core.patterns import PatternBank, SequencerPattern
+from wub_core.patterns import MultiStemPattern, PatternBank, SequencerPattern, SongPhrase
 from wub_core.schema import STEMS, TrackAnalysis
 
 
@@ -60,14 +60,37 @@ class GrooveboxConductor:
         self.state.section = "GROOVE_A"
         self.section_bars_remaining = SECTION_DURATIONS.get(self.state.section, 16)
         self.active_patterns: Dict[str, Optional[SequencerPattern]] = {s: None for s in STEMS}
+        self.current_phrase: Optional[SongPhrase] = None
+        self.current_pattern: Optional[MultiStemPattern] = None
         self.lead_track_id: Optional[str] = None
         self.lead_base_bar: int = 0
         self.active_slice_ids: Dict[str, Optional[str]] = {s: None for s in STEMS}
         self._init_section_patterns()
 
     def _init_section_patterns(self) -> None:
-        """Select initial patterns matching the current section."""
+        """Select a cohesive 8-bar SongPhrase or fallback patterns matching the active section."""
         sec = self.state.section
+
+        # Try to select an authentic multi-stem 8-bar phrase
+        phrase = self.bank.pick_phrase(
+            section=sec,
+            preferred_track_id=self.lead_track_id,
+            rng=self.rng,
+        )
+        if phrase and phrase.bars:
+            self.current_phrase = phrase
+            self.lead_track_id = phrase.track_id
+            self.current_pattern = phrase.bars[0]
+            self.lead_base_bar = self.current_pattern.bar_num
+            for s in STEMS:
+                self.active_patterns[s] = self.bank.get_track_pattern(
+                    self.current_pattern.track_id, s, self.current_pattern.bar_num
+                ) or self.bank.pick_pattern(s, preferred_track_id=self.lead_track_id, rng=self.rng)
+            return
+
+        # Fallback to single-stem patterns if no cohesive multi-stem phrase is available
+        self.current_phrase = None
+        self.current_pattern = None
 
         if sec == "DROP":
             drum_type = "four_on_floor_hats"
@@ -90,7 +113,6 @@ class GrooveboxConductor:
             bass_type = "offbeat"
             min_energy = 0.35
 
-        # Pick drums as the anchor
         self.active_patterns["drums"] = self.bank.pick_pattern(
             "drums", groove_type=drum_type, min_energy=min_energy, rng=self.rng
         ) or self.bank.create_groove_pattern("drums", "four_on_floor", rng=self.rng)
@@ -99,20 +121,17 @@ class GrooveboxConductor:
             self.lead_track_id = self.active_patterns["drums"].track_id
             self.lead_base_bar = self.active_patterns["drums"].bar_num
 
-        # Pick bass matching lead track or key
         self.active_patterns["bass"] = self.bank.pick_pattern(
             "bass", groove_type=bass_type, min_energy=min_energy,
             preferred_track_id=self.lead_track_id, rng=self.rng
         ) or self.bank.create_groove_pattern("bass", "offbeat", preferred_track_id=self.lead_track_id, rng=self.rng)
 
-        # Pick synths / other
         synth_type = "riff" if sec == "DROP" else ("pad" if sec in ("BREAKDOWN", "INTRO") else "hook")
         self.active_patterns["other"] = self.bank.pick_pattern(
             "other", groove_type=synth_type, min_energy=min_energy,
             preferred_track_id=self.lead_track_id, rng=self.rng
         ) or self.bank.create_groove_pattern("other", "chords" if sec in ("DROP", "GROOVE_A") else "pad", preferred_track_id=self.lead_track_id, rng=self.rng)
 
-        # Pick vocals
         self.active_patterns["vocals"] = self.bank.pick_pattern(
             "vocals", min_energy=0.0,
             preferred_track_id=self.lead_track_id, rng=self.rng
@@ -135,14 +154,43 @@ class GrooveboxConductor:
             self._init_section_patterns()
             return
 
-        # Check for 8-bar turnaround / fill bar
-        is_turnaround = (phrase_bar == 7)  # Bar 8 of 8-bar phrase
+        is_turnaround = (phrase_bar == 7)
         self.state.is_fill_bar = is_turnaround
 
-        sec = self.state.section
+        # Cohesive Multi-Stem Phrase progression
+        if self.current_phrase and phrase_bar < len(self.current_phrase.bars):
+            if phrase_bar == 0 and self.state.total_bars > 0:
+                # Phrase boundary: check for next phrase in current track or transition
+                track_phrases = self.bank.phrases_by_track.get(self.current_phrase.track_id, [])
+                next_p_idx = self.current_phrase.phrase_index + 1
+                if next_p_idx < len(track_phrases) and self.rng.random() < 0.7:
+                    self.current_phrase = track_phrases[next_p_idx]
+                else:
+                    self.current_phrase = (
+                        self.bank.pick_phrase(section=self.state.section, preferred_track_id=self.lead_track_id, rng=self.rng)
+                        or self.current_phrase
+                    )
 
+            self.current_pattern = self.current_phrase.bars[phrase_bar]
+            self.lead_track_id = self.current_phrase.track_id
+            for s in STEMS:
+                self.active_patterns[s] = self.bank.get_track_pattern(
+                    self.current_pattern.track_id, s, self.current_pattern.bar_num
+                ) or self.active_patterns.get(s)
+
+            if is_turnaround:
+                fill_drums = (
+                    self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
+                    or self.bank.create_groove_pattern("drums", "fill", preferred_track_id=self.lead_track_id, rng=self.rng)
+                )
+                if fill_drums:
+                    self.active_patterns["drums"] = fill_drums
+                    if self.current_pattern:
+                        self.current_pattern.stems["drums"] = list(fill_drums.steps)
+            return
+
+        # Fallback single-stem mode (used in tests with small synthetic tracks)
         if is_turnaround:
-            # Inject drum fill into the turnaround bar!
             fill_pat = (
                 self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
                 or self.bank.create_groove_pattern("drums", "fill", preferred_track_id=self.lead_track_id, rng=self.rng)
@@ -150,15 +198,12 @@ class GrooveboxConductor:
             if fill_pat:
                 self.active_patterns["drums"] = fill_pat
         elif phrase_bar == 0:
-            # Bar 1 of new phrase: restore solid groove
             self._init_section_patterns()
         elif phrase_bar == 3 and self.rng.random() < 0.6:
-            # Bar 4 mini-turnaround (4-bar musical phrase boundary)
             var_drums = self.bank.pick_pattern("drums", min_energy=0.4, preferred_track_id=self.lead_track_id, rng=self.rng)
             if var_drums:
                 self.active_patterns["drums"] = var_drums
         elif phrase_bar == 4:
-            # Bar 5 energy lift (phrase 2 starts — open hats / rolling bass)
             lift_drums = self.bank.pick_pattern("drums", groove_type="four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng)
             if lift_drums:
                 self.active_patterns["drums"] = lift_drums
@@ -166,7 +211,6 @@ class GrooveboxConductor:
             if lift_bass:
                 self.active_patterns["bass"] = lift_bass
         else:
-            # Bars 1, 2, 5, 6: Follow consecutive bars from the lead track for natural musical development!
             if self.lead_track_id:
                 track_bar = self.lead_base_bar + phrase_bar
                 lead_drum_pat = self.bank.get_track_pattern(self.lead_track_id, "drums", track_bar)
@@ -179,97 +223,35 @@ class GrooveboxConductor:
                 if lead_other_pat:
                     self.active_patterns["other"] = lead_other_pat
 
-        # Guarantee solid groove presence across all stems on every bar
-        if self.active_patterns.get("drums") is None or len(self.active_patterns["drums"].onset_grid) < 4:
-            self.active_patterns["drums"] = self.bank.pick_pattern(
-                "drums", groove_type="four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng
-            ) or self.bank.create_groove_pattern("drums", "four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng)
-
-        if self.active_patterns.get("bass") is None or len(self.active_patterns["bass"].onset_grid) < 2:
-            self.active_patterns["bass"] = self.bank.pick_pattern(
-                "bass", groove_type="offbeat", preferred_track_id=self.lead_track_id, rng=self.rng
-            ) or self.bank.create_groove_pattern("bass", "offbeat", preferred_track_id=self.lead_track_id, rng=self.rng)
-
-        if self.active_patterns.get("other") is None or len(self.active_patterns["other"].onset_grid) < 2:
-            self.active_patterns["other"] = self.bank.pick_pattern(
-                "other", preferred_track_id=self.lead_track_id, rng=self.rng
-            ) or self.bank.create_groove_pattern("other", "chords", preferred_track_id=self.lead_track_id, rng=self.rng)
-
+        if self.active_patterns.get("drums") is None:
+            self.active_patterns["drums"] = self.bank.create_groove_pattern("drums", "four_on_floor_hats", rng=self.rng)
+        if self.active_patterns.get("bass") is None:
+            self.active_patterns["bass"] = self.bank.create_groove_pattern("bass", "offbeat", rng=self.rng)
+        if self.active_patterns.get("other") is None:
+            self.active_patterns["other"] = self.bank.create_groove_pattern("other", "chords", rng=self.rng)
         if self.active_patterns.get("vocals") is None:
-            self.active_patterns["vocals"] = self.bank.pick_pattern(
-                "vocals", preferred_track_id=self.lead_track_id, rng=self.rng
-            ) or self.bank.create_groove_pattern("vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng)
+            self.active_patterns["vocals"] = self.bank.create_groove_pattern("vocals", "chop", rng=self.rng)
 
     def next_step(self) -> Tuple[Dict[str, Optional[SliceRef]], dict]:
-        """Advance the groovebox sequencer by 1 tatum step (1/16th note).
-        
-        Returns:
-            slices: Dict mapping stem ("drums", "bass", "vocals", "other") to SliceRef or None.
-            metadata: Dict with current section, bar (1..8), step (1..16), and fill status.
-        """
+        """Advance the groovebox sequencer by 1 tatum step (1/16th note)."""
         step = self.state.step_in_bar
 
         if step == 0:
             self._on_bar_start()
 
         sec = self.state.section
-        p_bar = self.state.phrase_bar
         slices: Dict[str, Optional[SliceRef]] = {}
 
         for stem in STEMS:
-            pat = self.active_patterns.get(stem)
-            if pat is None or not pat.steps:
-                slices[stem] = None
-                continue
-
-            # Section dynamics & arrangement sculpting:
-            candidate_sref: Optional[SliceRef] = None
-            if sec == "INTRO":
-                # Intro groove: steady hats and synth hook with kicks on 0, 8
-                if stem == "drums":
-                    candidate_sref = pat.steps[step % len(pat.steps)] if step in (0, 4, 8, 12, 2, 6, 10, 14) else None
-                elif stem == "bass":
-                    candidate_sref = pat.steps[step % len(pat.steps)] if (p_bar >= 4 and step in (2, 6, 10, 14)) else None
-                else:
-                    candidate_sref = pat.steps[step % len(pat.steps)]
-
-            elif sec == "BREAKDOWN":
-                # Melodic breakdown: sustained pads/chords and vocals, with steady offbeat hats/snares
-                if stem == "drums":
-                    candidate_sref = pat.steps[step % len(pat.steps)] if step in (4, 12, 2, 6, 10, 14) else None
-                elif stem == "bass":
-                    candidate_sref = pat.steps[step % len(pat.steps)] if step in (0, 8) else None
-                else:
-                    candidate_sref = pat.steps[step % len(pat.steps)]
-
-            elif sec == "BUILDUP":
-                # Buildup snare rush & rising tension:
-                if stem == "bass":
-                    candidate_sref = pat.steps[step % len(pat.steps)] if (p_bar < 7 and step in (0, 4, 8, 12)) else None
-                elif stem == "drums":
-                    if p_bar in (0, 1, 2, 3):
-                        candidate_sref = pat.steps[step % len(pat.steps)] if step % 4 == 0 else None
-                    elif p_bar in (4, 5):
-                        candidate_sref = pat.steps[step % len(pat.steps)] if step % 2 == 0 else None
-                    elif p_bar == 6:
-                        candidate_sref = pat.steps[step % len(pat.steps)] or pat.steps[4] or pat.steps[0]
-                    elif p_bar == 7:
-                        # Final bar: Roll on 0..14, Step 15 breath of silence before the DROP!
-                        candidate_sref = None if step == 15 else (pat.steps[step % len(pat.steps)] or pat.steps[4] or pat.steps[0])
-                    else:
-                        candidate_sref = pat.steps[step % len(pat.steps)]
-                else:
-                    candidate_sref = pat.steps[step % len(pat.steps)]
-
-            elif sec == "DROP":
-                # Peak energy: full four-on-the-floor, rolling bass, main lead
-                if self.state.is_fill_bar and stem == "bass" and step >= 12:
-                    candidate_sref = None  # Brief turnaround cut
-                else:
-                    candidate_sref = pat.steps[step % len(pat.steps)]
+            if self.current_pattern and stem in self.current_pattern.stems:
+                stem_steps = self.current_pattern.stems[stem]
+                candidate_sref = stem_steps[step] if step < len(stem_steps) else None
             else:
-                # Default GROOVE_A: full solid 16-step dance groove
-                candidate_sref = pat.steps[step % len(pat.steps)]
+                pat = self.active_patterns.get(stem)
+                if pat and pat.steps:
+                    candidate_sref = pat.steps[step % len(pat.steps)]
+                else:
+                    candidate_sref = None
 
             # Onset vs sustain awareness: only re-trigger if segment changes or at start
             if candidate_sref is None:
@@ -281,16 +263,20 @@ class GrooveboxConductor:
                     slices[stem] = candidate_sref
                     self.active_slice_ids[stem] = seg_id
                 else:
-                    slices[stem] = None  # Sustain existing slice naturally!
+                    slices[stem] = None
 
         meta = {
             "section": sec,
-            "phrase_bar": self.state.phrase_bar + 1,  # 1..8
-            "step_in_bar": step + 1,                 # 1..16
+            "phrase_bar": self.state.phrase_bar + 1,
+            "step_in_bar": step + 1,
             "total_bars": self.state.total_bars,
             "is_fill": self.state.is_fill_bar,
             "patterns": {
-                s: (self.active_patterns[s].pattern_name if self.active_patterns.get(s) else "empty")
+                s: (
+                    f"{self.current_pattern.track_title[:16]} Bar {self.current_pattern.bar_num} ({self.current_pattern.groove_types.get(s, 'groove')})"
+                    if (self.current_pattern and self.current_pattern.track_title)
+                    else (self.active_patterns[s].pattern_name if self.active_patterns.get(s) else "empty")
+                )
                 for s in STEMS
             },
         }
