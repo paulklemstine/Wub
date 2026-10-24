@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 import sys
 
+import torch
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
@@ -41,8 +43,13 @@ def main() -> None:
                     help="VQ codebook resolution (clusters per stem, e.g. 512 or 1024)")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--d-model", type=int, default=128, help="Transformer embedding dimension")
+    ap.add_argument("--n-layers", type=int, default=4, help="Transformer layer count")
+    ap.add_argument("--n-heads", type=int, default=4, help="Transformer attention head count")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--multistem-only", action="store_true",
+                    help="train exclusively on multi-stem (4-stem) separated tracks")
     ap.add_argument("--max-tracks", type=int, default=0,
                     help="use at most N tracks (0 = all)")
     ap.add_argument("--chunk-tracks", type=int, default=200,
@@ -65,6 +72,12 @@ def main() -> None:
         p for p in proc_dir.glob("*.json")
         if not p.name.startswith(("_", "meta_"))
     )
+    if args.multistem_only:
+        stems_dir = Path("data/stems")
+        if stems_dir.exists():
+            ms_tids = set(p.name for p in stems_dir.iterdir() if p.is_dir() and (p / "drums.wav").exists())
+            files = [p for p in files if p.stem in ms_tids]
+            print(f"Filtered to {len(files)} multi-stem tracks for focused groove training.")
     if args.max_tracks and args.max_tracks > 0:
         rng = random.Random(args.seed)
         files = sorted(rng.sample(files, min(args.max_tracks, len(files))))
@@ -113,7 +126,13 @@ def main() -> None:
     if len(dataset) < 2:
         raise SystemExit("Need at least 2 tatum rows to train.")
 
-    model = mt.WubGPT.from_vqs(vqs)
+    model = mt.WubGPT.from_vqs(
+        vqs,
+        d_model=args.d_model,
+        n_layers=args.n_layers,
+        n_heads=args.n_heads,
+        ff=args.d_model * 4,
+    )
     n_params = sum(p.numel() for p in model.parameters())
     print(f"model: {n_params / 1e6:.1f}M params, vocabs={model.vocabs}")
 

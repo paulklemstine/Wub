@@ -20,6 +20,7 @@ import numpy as np
 import soundfile as sf
 
 from wub_core.corpus import CorpusStore
+from wub_core.groovebox import SECTIONS
 from wub_core.schema import TrackAnalysis
 
 STEMS = ("drums", "bass", "vocals", "other")
@@ -144,7 +145,7 @@ class StreamSession:
     top_p: float = 0.85
     top_k: int = 32
     use_wubgpt: bool = True
-    use_groovebox: bool = True
+    use_groovebox: bool = False
     _conductor: Optional[Any] = None
     _track_centers: Dict[str, Dict[str, Tuple[float, float]]] = field(default_factory=dict)
     _buffer: List[dict] = field(default_factory=list)
@@ -337,12 +338,31 @@ class StreamSession:
                                 else:
                                     slices[stem] = None
 
+                            master_tatum = self._tatum_index
+                            step_in_bar = (master_tatum % 16) + 1
+                            phrase_bar = ((master_tatum // 16) % 8) + 1
+                            total_bars = master_tatum // 16
+                            sec_idx = (total_bars // 16) % len(SECTIONS)
+                            section = SECTIONS[sec_idx]
+                            is_fill = (phrase_bar == 8)
+
                             self._buffer.append({
                                 "type": "tatum",
                                 "tatum_index": master_tatum,
                                 "bpm": self.bpm,
                                 "tatum_duration": self.tatum_duration,
                                 "slices": slices,
+                                "groovebox": {
+                                    "section": section,
+                                    "phrase_bar": phrase_bar,
+                                    "step_in_bar": step_in_bar,
+                                    "total_bars": total_bars,
+                                    "is_fill": is_fill,
+                                    "patterns": {
+                                        s: (f"{tracks_by_id[sl['track_id']].filename[:12]} (WubGPT)" if sl and sl.get("track_id") in tracks_by_id else "rest")
+                                        for s, sl in slices.items()
+                                    },
+                                },
                             })
                             self._tatum_index += 1
                         return
@@ -502,13 +522,32 @@ class StreamSession:
                 head.tatum_offset += 1
                 head.dwell_tatums += 1
 
+            master_tatum = self._tatum_index
+            step_in_bar = (master_tatum % 16) + 1
+            phrase_bar = ((master_tatum // 16) % 8) + 1
+            total_bars = master_tatum // 16
+            sec_idx = (total_bars // 16) % len(SECTIONS)
+            section = SECTIONS[sec_idx]
+            is_fill = (phrase_bar == 8)
+
             self._buffer.append({
                 "type": "tatum",
-                "tatum_index": self._tatum_index,
+                "tatum_index": master_tatum,
                 "tatum_duration": self.tatum_duration,
                 "start_time": 0.06,
                 "bpm": self.bpm,
                 "slices": slices,
+                "groovebox": {
+                    "section": section,
+                    "phrase_bar": phrase_bar,
+                    "step_in_bar": step_in_bar,
+                    "total_bars": total_bars,
+                    "is_fill": is_fill,
+                    "patterns": {
+                        s: (f"{tracks_by_id[sl['track_id']].filename[:12]} ({s})" if sl and sl.get("track_id") in tracks_by_id else "rest")
+                        for s, sl in slices.items()
+                    },
+                },
             })
             self._tatum_index += 1
 
