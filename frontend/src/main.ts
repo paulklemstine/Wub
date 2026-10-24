@@ -73,12 +73,21 @@ interface SliceSpec {
   rate: number;
 }
 
+export interface GrooveboxMeta {
+  section: string;
+  phraseBar: number;
+  stepInBar: number;
+  isFill: boolean;
+  patterns: Record<string, string>;
+}
+
 interface TatumMessage {
   type: "tatum";
   tatumIndex: number;
   startTime: number;
   bpm: number;
   slices: Record<StemName, SliceSpec | null>;
+  groovebox?: GrooveboxMeta;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -146,12 +155,24 @@ function parseServerMessage(raw: string): HelloMessage | TatumMessage | null {
       const spec = isRecord(slicesRaw) ? parseSliceSpec(slicesRaw[stem]) : null;
       slices[stem] = spec;
     }
+    let gb: GrooveboxMeta | undefined = undefined;
+    const gbRaw = parsed["groovebox"];
+    if (isRecord(gbRaw)) {
+      gb = {
+        section: asString(gbRaw["section"], "GROOVE_A"),
+        phraseBar: asNumber(gbRaw["phrase_bar"], 1),
+        stepInBar: asNumber(gbRaw["step_in_bar"], 1),
+        isFill: Boolean(gbRaw["is_fill"]),
+        patterns: isRecord(gbRaw["patterns"]) ? (gbRaw["patterns"] as Record<string, string>) : {},
+      };
+    }
     return {
       type: "tatum",
       tatumIndex: Math.round(asNumber(parsed["tatum_index"], 0)),
       startTime: asNumber(parsed["start_time"], 0),
       bpm: asNumber(parsed["bpm"], DEFAULT_BPM),
       slices,
+      groovebox: gb,
     };
   }
   return null;
@@ -805,6 +826,14 @@ class WubApp {
       const msg = this.tatumQueue.shift()!;
       const when = this.nextTatumTime;
 
+      if (msg.groovebox) {
+        const delayMs = Math.max(0, (when - now) * 1000);
+        setTimeout(() => {
+          if (!this.playing) return;
+          this.updateGrooveboxUI(msg.groovebox!);
+        }, delayMs);
+      }
+
       for (const stem of STEMS) {
         const spec = msg.slices[stem];
         if (spec !== null) {
@@ -820,6 +849,65 @@ class WubApp {
     this.ringEvents.push(ev);
     if (this.ringEvents.length > RING_EVENT_CAP) {
       this.ringEvents.splice(0, this.ringEvents.length - RING_EVENT_CAP);
+    }
+  }
+
+  private updateGrooveboxUI(gb: GrooveboxMeta): void {
+    // 1. Step in Bar (1..16)
+    for (let s = 1; s <= 16; s++) {
+      const stepEl = document.getElementById(`gb-step-${s}`);
+      if (stepEl) {
+        if (s === gb.stepInBar) stepEl.classList.add("active");
+        else stepEl.classList.remove("active");
+      }
+    }
+
+    // 2. Bar in Phrase (1..8)
+    const barNumEl = document.getElementById("gb-bar-num");
+    if (barNumEl) barNumEl.textContent = String(gb.phraseBar);
+
+    for (let b = 1; b <= 8; b++) {
+      const dot = document.getElementById(`gb-dot-${b}`);
+      if (dot) {
+        if (b === gb.phraseBar) {
+          if (gb.isFill) dot.className = "gb-bar-dot fill";
+          else dot.className = "gb-bar-dot active";
+        } else if (b < gb.phraseBar) {
+          dot.className = "gb-bar-dot active";
+        } else {
+          dot.className = "gb-bar-dot";
+        }
+      }
+    }
+
+    // 3. Section badge
+    const secBadge = document.getElementById("gb-section-badge");
+    if (secBadge) {
+      secBadge.textContent = gb.section.replace("_", " ");
+      const secColors: Record<string, string> = {
+        DROP: "#ea580c",
+        GROOVE_A: "#7c3aed",
+        BUILDUP: "#ca8a04",
+        BREAKDOWN: "#0891b2",
+        INTRO: "#475569",
+      };
+      secBadge.style.background = secColors[gb.section] || "#6d28d9";
+    }
+
+    // 4. Fill badge
+    const fillBadge = document.getElementById("gb-fill-badge");
+    if (fillBadge) {
+      fillBadge.style.display = gb.isFill ? "inline-block" : "none";
+    }
+
+    // 5. Patterns readout
+    if (gb.patterns) {
+      for (const stem of STEMS) {
+        const patEl = document.getElementById(`gb-pat-${stem}`);
+        if (patEl && gb.patterns[stem]) {
+          patEl.textContent = gb.patterns[stem];
+        }
+      }
     }
   }
 

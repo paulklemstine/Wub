@@ -69,6 +69,22 @@
     #master-canvas { aspect-ratio: 24 / 7; }
     .master-card { grid-column: 1 / -1; }
     #status-line { margin-top: 12px; opacity: 0.85; font-size: 0.9rem; min-height: 1.2em; }
+    .gb-step {
+      background: #151522; border: 1px solid #2e2e48; border-radius: 4px;
+      height: 24px; display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; font-weight: 600; color: #71717a; transition: all 0.05s ease-out;
+      user-select: none;
+    }
+    .gb-step.beat { border-color: #4b5563; color: #9ca3af; background: #1a1a2c; }
+    .gb-step.active {
+      background: #4ade80 !important; color: #000 !important; border-color: #86efac !important;
+      box-shadow: 0 0 10px rgba(74, 222, 128, 0.8); transform: translateY(-1px);
+    }
+    .gb-bar-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: #27273a; border: 1px solid #3f3f5a;
+    }
+    .gb-bar-dot.active { background: #4ade80; border-color: #86efac; box-shadow: 0 0 6px #4ade80; }
+    .gb-bar-dot.fill { background: #ef4444; border-color: #fca5a5; box-shadow: 0 0 6px #ef4444; }
   </style>
 </head>
 <body>
@@ -122,6 +138,57 @@
         <option value="Dm">Dm</option>
       </select>
     </label>
+  </section>
+
+  <section id="groovebox-panel" aria-label="Groovebox Sequencer" style="background: #11111e; border: 1px solid #2a2a45; border-radius: 10px; padding: 10px 14px; margin: 12px 0; display: flex; flex-direction: column; gap: 8px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-weight: 700; font-size: 0.85rem; letter-spacing: 0.05em; color: #a78bfa;">GROOVEBOX SEQUENCER</span>
+        <span id="gb-section-badge" style="background: #6d28d9; color: #fff; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 0.72rem; letter-spacing: 0.05em;">GROOVE A</span>
+        <span id="gb-fill-badge" style="display: none; background: #dc2626; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 0.7rem;">FILL</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; font-size: 0.82rem; opacity: 0.9;">
+        <span>Bar: <b id="gb-bar-num" style="color: #4ade80;">1</b>/8</span>
+        <div id="gb-bars-dots" style="display: flex; gap: 4px; align-items: center;">
+          <div class="gb-bar-dot active" id="gb-dot-1"></div>
+          <div class="gb-bar-dot" id="gb-dot-2"></div>
+          <div class="gb-bar-dot" id="gb-dot-3"></div>
+          <div class="gb-bar-dot" id="gb-dot-4"></div>
+          <div class="gb-bar-dot" id="gb-dot-5"></div>
+          <div class="gb-bar-dot" id="gb-dot-6"></div>
+          <div class="gb-bar-dot" id="gb-dot-7"></div>
+          <div class="gb-bar-dot" id="gb-dot-8"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 16-Step Sequencer LED strip -->
+    <div id="gb-step-strip" style="display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px;">
+      <div class="gb-step beat" id="gb-step-1">1</div>
+      <div class="gb-step" id="gb-step-2">2</div>
+      <div class="gb-step" id="gb-step-3">3</div>
+      <div class="gb-step" id="gb-step-4">4</div>
+      <div class="gb-step beat" id="gb-step-5">5</div>
+      <div class="gb-step" id="gb-step-6">6</div>
+      <div class="gb-step" id="gb-step-7">7</div>
+      <div class="gb-step" id="gb-step-8">8</div>
+      <div class="gb-step beat" id="gb-step-9">9</div>
+      <div class="gb-step" id="gb-step-10">10</div>
+      <div class="gb-step" id="gb-step-11">11</div>
+      <div class="gb-step" id="gb-step-12">12</div>
+      <div class="gb-step beat" id="gb-step-13">13</div>
+      <div class="gb-step" id="gb-step-14">14</div>
+      <div class="gb-step" id="gb-step-15">15</div>
+      <div class="gb-step" id="gb-step-16">16</div>
+    </div>
+
+    <!-- Active Stem Patterns readout -->
+    <div id="gb-patterns-row" style="display: flex; justify-content: space-between; gap: 8px; font-size: 0.73rem; opacity: 0.75; overflow-x: auto; white-space: nowrap; padding-top: 4px; border-top: 1px solid #1f1f33;">
+      <span>Drums: <span id="gb-pat-drums" style="color: #4ade80;">Four-on-the-Floor</span></span>
+      <span>Bass: <span id="gb-pat-bass" style="color: #60a5fa;">Offbeat</span></span>
+      <span>Synths: <span id="gb-pat-other" style="color: #f472b6;">Hook</span></span>
+      <span>Vocals: <span id="gb-pat-vocals" style="color: #fbbf24;">Phrase</span></span>
+    </div>
   </section>
 
   <section id="decks" aria-label="Stem decks">

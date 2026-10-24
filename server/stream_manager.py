@@ -106,6 +106,25 @@ def get_cached_wubgpt() -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
     return None, None
 
 
+_GLOBAL_PATTERN_BANK: Optional[PatternBank] = None
+
+
+def get_cached_pattern_bank(store: CorpusStore) -> PatternBank:
+    global _GLOBAL_PATTERN_BANK
+    if _GLOBAL_PATTERN_BANK is not None and len(_GLOBAL_PATTERN_BANK.patterns_by_stem.get("drums", [])) > 0:
+        return _GLOBAL_PATTERN_BANK
+
+    from wub_core.patterns import PatternBank
+
+    bank = PatternBank()
+    multistem = [t for t in store.tracks if len(t.stems_available) == 4]
+    target_tracks = multistem if multistem else store.tracks
+    count = bank.load_from_tracks(target_tracks)
+    print(f"[Groovebox] Loaded {count} sequencer patterns into pattern memory bank.")
+    _GLOBAL_PATTERN_BANK = bank
+    return bank
+
+
 @dataclass
 class StreamSession:
     store: CorpusStore
@@ -125,11 +144,20 @@ class StreamSession:
     top_p: float = 0.85
     top_k: int = 32
     use_wubgpt: bool = True
+    use_groovebox: bool = True
+    _conductor: Optional[Any] = None
     _track_centers: Dict[str, Dict[str, Tuple[float, float]]] = field(default_factory=dict)
     _buffer: List[dict] = field(default_factory=list)
     _tatum_index: int = 0
     _rng_seed: int = 0
     _heads: Dict[str, StemHeadState] = field(default_factory=dict)
+
+    def get_conductor(self) -> Any:
+        if self._conductor is None:
+            from wub_core.groovebox import GrooveboxConductor
+            bank = get_cached_pattern_bank(self.store)
+            self._conductor = GrooveboxConductor(bank, seed=int(self.seed + self._rng_seed))
+        return self._conductor
 
     def _get_track_center(self, stem: str, track_id: str) -> Optional[Tuple[float, float]]:
         if not self._track_centers:
@@ -200,7 +228,61 @@ class StreamSession:
         rng = np.random.default_rng(self.seed + self._rng_seed)
         self._rng_seed += 1
 
-        # 1. If WubGPT model checkpoint exists, generate using Top-P nucleus sampling
+        # 1. Groovebox Conductor (Macro Arrangement & 16-Step Pattern Sequencer)
+        if self.use_groovebox:
+            try:
+                conductor = self.get_conductor()
+                if conductor.bank.patterns_by_stem.get("drums"):
+                    for _ in range(32):
+                        master_tatum = self._tatum_index
+                        raw_slices, meta = conductor.next_step()
+                        slices: Dict[str, Optional[dict]] = {}
+
+                        for stem in STEMS:
+                            sref = raw_slices.get(stem)
+                            if sref is not None:
+                                tr = tracks_by_id.get(sref.track_id)
+                                src_bpm = float(tr.bpm) if (tr and tr.bpm > 0) else self.bpm
+                                rate = max(0.5, min(2.0, float(self.bpm) / float(src_bpm)))
+                                rate_cents = 1200.0 * np.log2(rate) if rate > 0 else 0.0
+
+                                detune_cents = 0
+                                if stem in ("bass", "vocals", "other"):
+                                    if self.pitch_lock and tr:
+                                        shift = get_key_semitones(tr.key, self.key)
+                                        detune_cents = int(shift * 100 - rate_cents)
+                                    else:
+                                        detune_cents = int(-rate_cents)
+                                else:
+                                    detune_cents = int(-rate_cents)
+
+                                slices[stem] = {
+                                    "track_id": sref.track_id,
+                                    "segment_id": sref.segment_id,
+                                    "start": sref.start,
+                                    "duration": sref.duration,
+                                    "url": f"/audio/{sref.track_id}/{sref.segment_id}.wav",
+                                    "detune_cents": detune_cents,
+                                    "rate": rate,
+                                    "synth_blend": self.synth_blend.get(stem, 0.0),
+                                }
+                            else:
+                                slices[stem] = None
+
+                        self._buffer.append({
+                            "type": "tatum",
+                            "tatum_index": master_tatum,
+                            "bpm": self.bpm,
+                            "tatum_duration": self.tatum_duration,
+                            "slices": slices,
+                            "groovebox": meta,
+                        })
+                        self._tatum_index += 1
+                    return
+            except Exception as e:
+                print(f"[Groovebox] Fallback on refill error: {e}")
+
+        # 2. If WubGPT model checkpoint exists, generate using Top-P nucleus sampling
         if self.use_wubgpt:
             model, vqs = get_cached_wubgpt()
             if model is not None and vqs is not None:
