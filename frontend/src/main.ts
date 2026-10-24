@@ -262,6 +262,7 @@ class WubApp {
     void this.loadUmapPoints();
 
     this.bindTransport();
+    this.bindBackendConfig();
     this.bindMaster();
     for (const stem of STEMS) this.bindStem(stem);
 
@@ -274,11 +275,102 @@ class WubApp {
     requestAnimationFrame((t) => this.frame(t));
   }
 
+  private bindBackendConfig(): void {
+    const input = document.getElementById("backend-host-input") as HTMLInputElement | null;
+    const btn = document.getElementById("btn-backend-connect") as HTMLButtonElement | null;
+    if (input) {
+      input.value = this.getBackendHost();
+      input.placeholder = window.location.hostname.endsWith("github.io") ? "192.168.1.136:8123" : window.location.host;
+    }
+    if (btn && input) {
+      btn.addEventListener("click", () => {
+        const val = input.value.trim();
+        if (val) {
+          localStorage.setItem("wub_backend", val);
+        } else {
+          localStorage.removeItem("wub_backend");
+        }
+        this.updateBackendStatus("connecting");
+        if (this.playing) {
+          if (this.ws) {
+            this.manualClose = true;
+            this.ws.close();
+            this.ws = null;
+          }
+          this.connectWs();
+        }
+        void this.loadUmapPoints();
+      });
+    }
+  }
+
+  private updateBackendStatus(state: "connected" | "connecting" | "disconnected"): void {
+    const dot = document.getElementById("backend-status-dot");
+    if (!dot) return;
+    if (state === "connected") dot.style.background = "#22c55e";
+    else if (state === "connecting") dot.style.background = "#eab308";
+    else dot.style.background = "#ef4444";
+  }
+
+  private getBackendHost(): string {
+    const params = new URLSearchParams(window.location.search);
+    const paramBackend = params.get("backend");
+    if (paramBackend) return paramBackend.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+    const saved = localStorage.getItem("wub_backend");
+    if (saved) return saved.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+    if (
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname.startsWith("192.168.") ||
+      window.location.hostname.startsWith("10.")
+    ) {
+      return window.location.host;
+    }
+
+    return "";
+  }
+
+  private getHttpBase(): string {
+    const host = this.getBackendHost();
+    if (!host) return "";
+    const isHttps =
+      window.location.protocol === "https:" &&
+      !host.startsWith("localhost") &&
+      !host.startsWith("127.") &&
+      !host.startsWith("192.168.");
+    const proto = isHttps ? "https:" : "http:";
+    return `${proto}//${host}`;
+  }
+
   private async loadUmapPoints(): Promise<void> {
     try {
-      const res = await fetch("/api/umap");
-      if (!res.ok) return;
-      const data = (await res.json()) as unknown;
+      let data: unknown = null;
+      const base = this.getHttpBase();
+      try {
+        const res = await fetch(`${base}/api/umap`);
+        if (res.ok) data = (await res.json()) as unknown;
+      } catch {
+        // Fall back to bundled static coordinates
+      }
+
+      if (!Array.isArray(data) || data.length === 0) {
+        const fallbackPts: unknown[] = [];
+        for (const s of STEMS) {
+          try {
+            const fres = await fetch(`./data/indices/umap_${s}.json`);
+            if (fres.ok) {
+              const rows = (await fres.json()) as unknown;
+              if (Array.isArray(rows)) fallbackPts.push(...rows);
+            }
+          } catch {
+            // ignore
+          }
+        }
+        data = fallbackPts;
+      }
+
       if (!Array.isArray(data) || data.length === 0) return;
       const pts: NebulaPoint[] = [];
       for (const item of data) {
@@ -501,16 +593,24 @@ class WubApp {
   // -- websocket -----------------------------------------------------------
 
   private wsUrl(): string {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${window.location.host}${WS_PATH}`;
+    const host = this.getBackendHost() || window.location.host;
+    const isWss =
+      window.location.protocol === "https:" &&
+      !host.startsWith("localhost") &&
+      !host.startsWith("127.") &&
+      !host.startsWith("192.168.");
+    const proto = isWss ? "wss" : "ws";
+    return `${proto}://${host}${WS_PATH}`;
   }
 
   private connectWs(): void {
     if (!this.playing || this.ws !== null) return;
+    this.updateBackendStatus("connecting");
     let ws: WebSocket;
     try {
       ws = new WebSocket(this.wsUrl());
     } catch {
+      this.updateBackendStatus("disconnected");
       this.scheduleReconnect();
       return;
     }
@@ -520,6 +620,7 @@ class WubApp {
     ws.onopen = () => {
       this.reconnectDelay = RECONNECT_BASE_MS;
       this.setStatus("Streaming.");
+      this.updateBackendStatus("connected");
       // Re-sync server-side steering state after (re)connect.
       this.send({ type: "set_bpm", bpm: this.bpm });
       this.send({ type: "set_key", key: this.musicalKey });
@@ -536,10 +637,12 @@ class WubApp {
       else this.onTatum(msg);
     };
     ws.onerror = () => {
+      this.updateBackendStatus("disconnected");
       this.setStatus("Stream error — retrying…");
     };
     ws.onclose = () => {
       if (this.ws === ws) this.ws = null;
+      this.updateBackendStatus("disconnected");
       if (this.playing && !this.manualClose) {
         this.setStatus("Stream closed — reconnecting…");
         this.scheduleReconnect();
@@ -709,7 +812,8 @@ class WubApp {
   }
 
   private async fetchAndDecode(url: string): Promise<AudioBuffer> {
-    const res = await fetch(url);
+    const fullUrl = url.startsWith("http") ? url : `${this.getHttpBase()}${url}`;
+    const res = await fetch(fullUrl);
     if (!res.ok) throw new Error(`Slice fetch failed: ${res.status}`);
     const bytes = await res.arrayBuffer();
     return await this.engine.decodeWav(bytes);

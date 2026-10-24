@@ -78,6 +78,12 @@
       <button id="btn-play" type="button">Play</button>
       <button id="btn-stop" type="button">Stop</button>
     </div>
+    <div id="backend-config" style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.82rem; background: #141424; padding: 4px 10px; border-radius: 6px; border: 1px solid #2a2a45;">
+      <span id="backend-status-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #6b7280;"></span>
+      <span id="backend-label" style="opacity: 0.8;">Server:</span>
+      <input id="backend-host-input" type="text" placeholder="localhost:8123" style="background: #1c1c2c; border: 1px solid #3a3a55; border-radius: 4px; color: #e8e8f0; padding: 3px 6px; font-size: 0.8rem; width: 170px;" />
+      <button id="btn-backend-connect" type="button" style="padding: 3px 8px; font-size: 0.78rem;">Connect</button>
+    </div>
   </header>
 
   <section id="master" aria-label="Master controls">
