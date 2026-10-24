@@ -61,6 +61,7 @@ class GrooveboxConductor:
         self.section_bars_remaining = SECTION_DURATIONS.get(self.state.section, 16)
         self.active_patterns: Dict[str, Optional[SequencerPattern]] = {s: None for s in STEMS}
         self.lead_track_id: Optional[str] = None
+        self.lead_base_bar: int = 0
         self._init_section_patterns()
 
     def _init_section_patterns(self) -> None:
@@ -91,32 +92,35 @@ class GrooveboxConductor:
         # Pick drums as the anchor
         self.active_patterns["drums"] = self.bank.pick_pattern(
             "drums", groove_type=drum_type, min_energy=min_energy, rng=self.rng
-        )
+        ) or self.bank.create_groove_pattern("drums", "four_on_floor", rng=self.rng)
+
         if self.active_patterns["drums"]:
             self.lead_track_id = self.active_patterns["drums"].track_id
+            self.lead_base_bar = self.active_patterns["drums"].bar_num
 
         # Pick bass matching lead track or key
         self.active_patterns["bass"] = self.bank.pick_pattern(
             "bass", groove_type=bass_type, min_energy=min_energy,
             preferred_track_id=self.lead_track_id, rng=self.rng
-        )
+        ) or self.bank.create_groove_pattern("bass", "offbeat", preferred_track_id=self.lead_track_id, rng=self.rng)
 
         # Pick synths / other
         synth_type = "riff" if sec == "DROP" else ("pad" if sec in ("BREAKDOWN", "INTRO") else "hook")
         self.active_patterns["other"] = self.bank.pick_pattern(
             "other", groove_type=synth_type, min_energy=min_energy,
             preferred_track_id=self.lead_track_id, rng=self.rng
-        )
+        ) or self.bank.create_groove_pattern("other", "chords" if sec in ("DROP", "GROOVE_A") else "pad", preferred_track_id=self.lead_track_id, rng=self.rng)
 
         # Pick vocals
         self.active_patterns["vocals"] = self.bank.pick_pattern(
             "vocals", min_energy=0.0,
             preferred_track_id=self.lead_track_id, rng=self.rng
-        )
+        ) or self.bank.create_groove_pattern("vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng)
 
     def _on_bar_start(self) -> None:
         """Triggered on Step 0 of each bar (beat 1)."""
         self.state.phrase_bar = self.state.total_bars % 8
+        phrase_bar = self.state.phrase_bar  # 0..7
         self.state.bar_in_section += 1
         self.section_bars_remaining -= 1
 
@@ -130,22 +134,48 @@ class GrooveboxConductor:
             return
 
         # Check for 8-bar turnaround / fill bar
-        is_turnaround = (self.state.phrase_bar == 7)  # Bar 8 of 8-bar phrase
+        is_turnaround = (phrase_bar == 7)  # Bar 8 of 8-bar phrase
         self.state.is_fill_bar = is_turnaround
+
+        sec = self.state.section
 
         if is_turnaround:
             # Inject drum fill into the turnaround bar!
-            fill_pat = self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
+            fill_pat = (
+                self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
+                or self.bank.create_groove_pattern("drums", "fill", preferred_track_id=self.lead_track_id, rng=self.rng)
+            )
             if fill_pat:
                 self.active_patterns["drums"] = fill_pat
-        elif self.state.phrase_bar == 0:
+        elif phrase_bar == 0:
             # Bar 1 of new phrase: restore solid groove
             self._init_section_patterns()
-        elif self.state.phrase_bar == 4 and self.rng.random() < 0.5:
-            # Bar 5 subtle variation (4-bar phrase switch)
-            new_bass = self.bank.pick_pattern("bass", preferred_track_id=self.lead_track_id, rng=self.rng)
-            if new_bass:
-                self.active_patterns["bass"] = new_bass
+        elif phrase_bar == 3 and self.rng.random() < 0.6:
+            # Bar 4 mini-turnaround (4-bar musical phrase boundary)
+            var_drums = self.bank.pick_pattern("drums", min_energy=0.4, preferred_track_id=self.lead_track_id, rng=self.rng)
+            if var_drums:
+                self.active_patterns["drums"] = var_drums
+        elif phrase_bar == 4:
+            # Bar 5 energy lift (phrase 2 starts — open hats / rolling bass)
+            lift_drums = self.bank.pick_pattern("drums", groove_type="four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng)
+            if lift_drums:
+                self.active_patterns["drums"] = lift_drums
+            lift_bass = self.bank.pick_pattern("bass", groove_type="rolling", preferred_track_id=self.lead_track_id, rng=self.rng)
+            if lift_bass:
+                self.active_patterns["bass"] = lift_bass
+        else:
+            # Bars 1, 2, 5, 6: Follow consecutive bars from the lead track for natural musical development!
+            if self.lead_track_id:
+                track_bar = self.lead_base_bar + phrase_bar
+                lead_drum_pat = self.bank.get_track_pattern(self.lead_track_id, "drums", track_bar)
+                if lead_drum_pat and lead_drum_pat.energy >= 0.2:
+                    self.active_patterns["drums"] = lead_drum_pat
+                lead_bass_pat = self.bank.get_track_pattern(self.lead_track_id, "bass", track_bar)
+                if lead_bass_pat:
+                    self.active_patterns["bass"] = lead_bass_pat
+                lead_other_pat = self.bank.get_track_pattern(self.lead_track_id, "other", track_bar)
+                if lead_other_pat:
+                    self.active_patterns["other"] = lead_other_pat
 
     def next_step(self) -> Tuple[Dict[str, Optional[SliceRef]], dict]:
         """Advance the groovebox sequencer by 1 tatum step (1/16th note).
@@ -160,6 +190,7 @@ class GrooveboxConductor:
             self._on_bar_start()
 
         sec = self.state.section
+        p_bar = self.state.phrase_bar
         slices: Dict[str, Optional[SliceRef]] = {}
 
         for stem in STEMS:
@@ -168,20 +199,61 @@ class GrooveboxConductor:
                 slices[stem] = None
                 continue
 
-            # In Breakdown, mute drums and bass to create the dramatic drop setup
-            if sec == "BREAKDOWN":
+            # Section dynamics & arrangement sculpting:
+            if sec == "INTRO":
+                # Bars 0..3: Hats & synths only, no heavy kick/bass
+                if p_bar < 4:
+                    if stem == "drums":
+                        slices[stem] = pat.steps[step] if step in (2, 6, 10, 14) else None
+                        continue
+                    elif stem == "bass":
+                        slices[stem] = None
+                        continue
+
+            elif sec == "BREAKDOWN":
+                # Breakdown: Kick drops out completely, bass cut, melodic chords & vocals
                 if stem == "drums":
-                    # Only allow subtle hats/percs on offbeats or silence
+                    # Only soft percussion on offbeats
                     slices[stem] = pat.steps[step] if step in (6, 14) and self.rng.random() < 0.4 else None
                     continue
                 elif stem == "bass":
                     slices[stem] = None
                     continue
 
-            # In Buildup last 2 bars (phrase_bar in 6, 7), drop the bass before the drop!
-            if sec == "BUILDUP" and self.state.phrase_bar in (6, 7) and stem == "bass":
-                slices[stem] = None
-                continue
+            elif sec == "BUILDUP":
+                # Buildup snare rush & rising tension:
+                if stem == "bass":
+                    # Mute bass in second half of buildup for huge drop impact
+                    if p_bar >= 4:
+                        slices[stem] = None
+                        continue
+                elif stem == "drums":
+                    # Accelerated snare build:
+                    if p_bar in (0, 1, 2, 3):
+                        # Quarter note hits (0, 4, 8, 12)
+                        slices[stem] = pat.steps[step] if step % 4 == 0 else None
+                        continue
+                    elif p_bar in (4, 5):
+                        # Eighth note hits (0, 2, 4, 6, 8, 10, 12, 14)
+                        slices[stem] = pat.steps[step] if step % 2 == 0 else None
+                        continue
+                    elif p_bar == 6:
+                        # 16th note rush (all 16 steps)
+                        slices[stem] = pat.steps[step] or pat.steps[4] or pat.steps[0]
+                        continue
+                    elif p_bar == 7:
+                        # Final bar: Roll on 0..14, Step 15 DEAD SILENCE before the DROP!
+                        if step == 15:
+                            slices[stem] = None
+                        else:
+                            slices[stem] = pat.steps[step] or pat.steps[4] or pat.steps[0]
+                        continue
+
+            elif sec == "DROP":
+                # Turnaround Bar 8: cut bass on last beat (steps 12..15) for turnaround
+                if self.state.is_fill_bar and stem == "bass" and step >= 12:
+                    slices[stem] = None
+                    continue
 
             step_idx = step % len(pat.steps)
             slices[stem] = pat.steps[step_idx]

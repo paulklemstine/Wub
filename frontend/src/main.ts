@@ -243,6 +243,7 @@ class WubApp {
   };
 
   private bpm: number = DEFAULT_BPM;
+  private userSetBpm = false;
   private musicalKey: string = "C";
   private playing = false;
   private ws: WebSocket | null = null;
@@ -596,6 +597,7 @@ class WubApp {
     slider.addEventListener("input", () => {
       const next = Math.min(BPM_MAX, Math.max(BPM_MIN, Number(slider.value)));
       if (!Number.isFinite(next)) return;
+      this.userSetBpm = true;
       this.bpm = next;
       value.textContent = `${Math.round(next)} BPM`;
       this.engine.setTargetBpm(next);
@@ -775,7 +777,7 @@ class WubApp {
   }
 
   private onHello(msg: HelloMessage): void {
-    if (Number.isFinite(msg.bpm) && msg.bpm > 0) {
+    if (!this.userSetBpm && Number.isFinite(msg.bpm) && msg.bpm > 0) {
       this.bpm = Math.min(BPM_MAX, Math.max(BPM_MIN, msg.bpm));
       const slider = document.getElementById("bpm-slider");
       if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
@@ -789,9 +791,13 @@ class WubApp {
 
   private onTatum(msg: TatumMessage): void {
     this.tatumCount += 1;
-    if (Number.isFinite(msg.bpm) && msg.bpm > 0) {
+    if (!this.userSetBpm && Number.isFinite(msg.bpm) && msg.bpm > 0) {
       this.bpm = msg.bpm;
       this.engine.setTargetBpm(msg.bpm);
+      const slider = document.getElementById("bpm-slider");
+      if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
+      const label = document.getElementById("bpm-value");
+      if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
     }
     for (const stem of STEMS) {
       const spec = msg.slices[stem];
@@ -841,52 +847,9 @@ class WubApp {
         const spec = msg.slices[stem];
         if (spec !== null) {
           this.pushRingEvent({ stem, trackId: spec.trackId, atSec: when });
-          void this.loadAndScheduleAt(stem, spec, when);
+          void this.loadAndScheduleAt(stem, spec, when, msg.bpm);
         }
       }
-      this.nextTatumTime += tatumDur;
-    }
-
-    // Fallback: If disconnected or waiting for network buffer, keep the groove going via local synth!
-    while (this.nextTatumTime < now + lookAheadSec && this.tatumQueue.length === 0) {
-      const when = this.nextTatumTime;
-      const stepIdx = this.localStepCount % 16;
-      const barIdx = Math.floor(this.localStepCount / 16) % 8;
-      this.localStepCount++;
-
-      const isBeat = stepIdx % 4 === 0;
-      const isSnare = stepIdx === 4 || stepIdx === 12;
-      const isOpenHat = stepIdx === 2 || stepIdx === 6 || stepIdx === 10 || stepIdx === 14;
-
-      if (isBeat) this.engine.triggerSynth("drums", when, { type: "kick" });
-      if (isSnare) this.engine.triggerSynth("drums", when, { type: "snare" });
-      if (isOpenHat) this.engine.triggerSynth("drums", when, { type: "open_hat" });
-      this.engine.triggerSynth("drums", when, { type: "hat", gain: 0.3 });
-
-      if (isOpenHat || stepIdx % 2 === 1) {
-        const bassFreq = 65.41 * (stepIdx === 14 ? 1.122 : 1.0);
-        this.engine.triggerSynth("bass", when, { freq: bassFreq });
-      }
-
-      const chordScale = [261.63, 311.13, 392.0, 466.16, 523.25];
-      const noteFreq = chordScale[stepIdx % chordScale.length];
-      if (stepIdx % 2 === 0) {
-        this.engine.triggerSynth("other", when, { freq: noteFreq, gain: 0.4 });
-      }
-
-      this.updateGrooveboxUI({
-        section: "GROOVE A",
-        phraseBar: barIdx + 1,
-        stepInBar: stepIdx + 1,
-        isFill: barIdx === 7,
-        patterns: {
-          drums: "Internal 909 Groove",
-          bass: "Offbeat Sub",
-          other: "Chord Arp",
-          vocals: "Atmosphere",
-        },
-      });
-
       this.nextTatumTime += tatumDur;
     }
   }
@@ -976,7 +939,12 @@ class WubApp {
     }
   }
 
-  private async loadAndScheduleAt(stem: StemName, spec: SliceSpec, when: number): Promise<void> {
+  private async loadAndScheduleAt(
+    stem: StemName,
+    spec: SliceSpec,
+    when: number,
+    serverBpm?: number
+  ): Promise<void> {
     const key = `${spec.trackId}:${spec.segmentId}`;
     let pending = this.cacheGet(key);
     if (pending === undefined) {
@@ -989,9 +957,6 @@ class WubApp {
     } catch {
       // Evict poisoned entries so a retry refetches.
       this.bufferCache.delete(key);
-      if (stem === "drums") this.engine.triggerSynth(stem, when, { type: "kick" });
-      else if (stem === "bass") this.engine.triggerSynth(stem, when, { freq: 65.4 });
-      else this.engine.triggerSynth(stem, when, { freq: 261.6 });
       return;
     }
     if (!this.playing) return;
@@ -1012,8 +977,13 @@ class WubApp {
       }, delayMs);
     }
     try {
+      const origRate = spec.rate ?? 1.0;
+      const sBpm = serverBpm && serverBpm > 0 ? serverBpm : 126.0;
+      const tempoRatio = this.bpm / sBpm;
+      const finalRate = origRate * tempoRatio;
+
       this.engine.scheduleSlice(stem, buffer, when, {
-        rate: spec.rate,
+        rate: finalRate,
         detuneCents: spec.detuneCents,
         fadeMs: 4,
       });

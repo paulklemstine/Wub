@@ -209,7 +209,10 @@ class StreamSession:
         if stem and synth_blend is not None and stem in self.synth_blend:
             self.synth_blend[stem] = max(0.0, min(1.0, float(synth_blend)))
         if bpm:
-            self.bpm = max(80.0, min(175.0, float(bpm)))
+            new_bpm = max(60.0, min(180.0, float(bpm)))
+            if abs(new_bpm - self.bpm) > 0.05:
+                self.bpm = new_bpm
+                self._buffer.clear()
 
     @property
     def tatum_duration(self) -> float:

@@ -112,6 +112,11 @@ async def ws_stream(ws: WebSocket) -> None:
     await ws.send_json({"type": "hello",
                         "stems": [s for s in ("drums", "bass", "vocals", "other")],
                         "bpm": session.bpm, "sample_rate": 44100})
+    # Burst initial 32 tatums (2 full bars) to prime the client buffer immediately
+    for _ in range(32):
+        ev = session.next_event()
+        if ev is not None:
+            await ws.send_json(ev)
     try:
         while True:
             try:

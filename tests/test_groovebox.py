@@ -138,3 +138,26 @@ def test_groovebox_conductor_steps_and_turnarounds():
     assert bars_seen == {1, 2, 3, 4, 5, 6, 7, 8}
     # Turnaround fill should have triggered on Bar 8
     assert fill_seen is True
+
+
+def test_groovebox_palette_and_pattern_synthesis():
+    tr = _make_dance_track("test_tr_02", bpm=128.0, n_bars=8)
+    bank = PatternBank()
+    bank.load_from_tracks([tr])
+
+    assert len(bank.slice_palette["drums"]["kick"]) > 0
+    assert len(bank.slice_palette["bass"]["sub"]) > 0
+
+    # Test synthesizing a high-energy drum fill pattern
+    fill_pat = bank.create_groove_pattern("drums", "fill")
+    assert fill_pat is not None
+    assert fill_pat.length == 16
+    assert fill_pat.groove_type == "fill"
+    # Ensure active steps in the fill
+    assert len(fill_pat.onset_grid) >= 4
+
+    # Test synthesizing an offbeat bass pattern
+    bass_pat = bank.create_groove_pattern("bass", "offbeat")
+    assert bass_pat is not None
+    assert bass_pat.length == 16
+    assert set(bass_pat.onset_grid).intersection({2, 6, 10, 14})

@@ -29,6 +29,7 @@ class SequencerPattern:
     density: float  # Fraction of active (non-silent) steps
     onset_grid: List[int]  # Which step indices (0..15) have slice onsets
     groove_type: str  # e.g. "four_on_floor", "break", "fill", "rolling", "offbeat", "stabs", "riff", "pad"
+    bar_num: int = 0
     bpm: float = 126.0
     key: str = "C major"
 
@@ -73,6 +74,14 @@ def classify_synth_groove(onset_grid: List[int], density: float) -> str:
     return "hook"
 
 
+def classify_vocal_groove(onset_grid: List[int], density: float) -> str:
+    if density >= 0.4:
+        return "phrase"  # Full vocal phrase / verse line
+    if density <= 0.15:
+        return "chop"  # Vocal chop / stab
+    return "hook"
+
+
 class PatternBank:
     """In-memory bank of categorized 1-bar and 2-bar sequencer patterns."""
 
@@ -80,6 +89,14 @@ class PatternBank:
         self.patterns_by_stem: Dict[str, List[SequencerPattern]] = {s: [] for s in STEMS}
         self.patterns_by_type: Dict[str, Dict[str, List[SequencerPattern]]] = {
             s: {} for s in STEMS
+        }
+        self.patterns_by_track: Dict[Tuple[str, str, int], SequencerPattern] = {}
+        self.track_bar_counts: Dict[Tuple[str, str], int] = {}
+        self.slice_palette: Dict[str, Dict[str, List[SliceRef]]] = {
+            "drums": {"kick": [], "snare": [], "hat": [], "fill": []},
+            "bass": {"sub": [], "stab": [], "rolling": []},
+            "other": {"chord": [], "stab": [], "arp": [], "pad": []},
+            "vocals": {"chop": [], "phrase": []},
         }
 
     def load_from_tracks(self, tracks: List[TrackAnalysis], min_bpm: float = 118.0, max_bpm: float = 138.0) -> int:
@@ -154,8 +171,43 @@ class PatternBank:
                         groove_type = classify_drum_groove(onset_grid, 16)
                     elif stem == "bass":
                         groove_type = classify_bass_groove(onset_grid, 16)
+                    elif stem == "vocals":
+                        groove_type = classify_vocal_groove(onset_grid, density)
                     else:
                         groove_type = classify_synth_groove(onset_grid, density)
+
+                    # Harvest slices into acoustic slice palette for groove building
+                    for step_idx, sref in enumerate(steps):
+                        if sref is None:
+                            continue
+                        if stem == "drums":
+                            if step_idx in (0, 4, 8, 12) and sref.loud_max > -24.0:
+                                self.slice_palette["drums"]["kick"].append(sref)
+                            elif step_idx in (4, 12) and sref.loud_max > -24.0:
+                                self.slice_palette["drums"]["snare"].append(sref)
+                            elif step_idx in (2, 6, 10, 14):
+                                self.slice_palette["drums"]["hat"].append(sref)
+                            if groove_type == "fill":
+                                self.slice_palette["drums"]["fill"].append(sref)
+                        elif stem == "bass":
+                            if step_idx in (2, 6, 10, 14):
+                                self.slice_palette["bass"]["sub"].append(sref)
+                            elif groove_type == "rolling":
+                                self.slice_palette["bass"]["rolling"].append(sref)
+                            else:
+                                self.slice_palette["bass"]["stab"].append(sref)
+                        elif stem == "other":
+                            if groove_type == "pad":
+                                self.slice_palette["other"]["pad"].append(sref)
+                            elif groove_type == "riff":
+                                self.slice_palette["other"]["arp"].append(sref)
+                            else:
+                                self.slice_palette["other"]["chord"].append(sref)
+                        elif stem == "vocals":
+                            if sref.duration < 0.25:
+                                self.slice_palette["vocals"]["chop"].append(sref)
+                            else:
+                                self.slice_palette["vocals"]["phrase"].append(sref)
 
                     pattern_id = f"pat_{stem}_{tr.track_id[:6]}_{bar_num:03d}"
                     pat = SequencerPattern(
@@ -169,15 +221,22 @@ class PatternBank:
                         density=density,
                         onset_grid=onset_grid,
                         groove_type=groove_type,
+                        bar_num=bar_num,
                         bpm=tr.bpm,
                         key=tr.key,
                     )
 
                     self.patterns_by_stem[stem].append(pat)
                     self.patterns_by_type[stem].setdefault(groove_type, []).append(pat)
+                    self.patterns_by_track[(tr.track_id, stem, bar_num)] = pat
+                    prev_max = self.track_bar_counts.get((tr.track_id, stem), 0)
+                    self.track_bar_counts[(tr.track_id, stem)] = max(prev_max, bar_num + 1)
                     total_extracted += 1
 
         return total_extracted
+
+    def get_track_pattern(self, track_id: str, stem: str, bar_num: int) -> Optional[SequencerPattern]:
+        return self.patterns_by_track.get((track_id, stem, bar_num))
 
     def get_patterns(
         self,
@@ -222,3 +281,102 @@ class PatternBank:
                 return track_matches[int(rng.choice(len(track_matches)))]
 
         return candidates[int(rng.choice(len(candidates)))]
+
+    def create_groove_pattern(
+        self,
+        stem: str,
+        template_name: str,
+        preferred_track_id: Optional[str] = None,
+        rng: Optional[np.random.Generator] = None,
+    ) -> Optional[SequencerPattern]:
+        """Synthesize a dedicated 16-step dance groove pattern using real slices from the palette."""
+        if rng is None:
+            rng = np.random.default_rng()
+
+        pal = self.slice_palette.get(stem, {})
+        steps: List[Optional[SliceRef]] = [None] * 16
+
+        def _pick_slice(pool_name: str) -> Optional[SliceRef]:
+            pool = pal.get(pool_name, [])
+            if not pool:
+                # Fallback to any slices for this stem
+                pool = [s for p in self.patterns_by_stem.get(stem, []) for s in p.steps if s is not None]
+            if not pool:
+                return None
+            if preferred_track_id:
+                sub = [s for s in pool if s.track_id == preferred_track_id]
+                if sub and rng.random() < 0.7:
+                    return sub[int(rng.choice(len(sub)))]
+            return pool[int(rng.choice(len(pool)))]
+
+        if stem == "drums":
+            if template_name == "fill":
+                # Snare / tom rush fill into the next section
+                for idx in (6, 8, 10, 12, 13, 14, 15):
+                    steps[idx] = _pick_slice("fill") or _pick_slice("snare")
+                steps[0] = _pick_slice("kick")
+                steps[4] = _pick_slice("kick")
+            elif template_name == "buildup_8th":
+                for idx in (0, 2, 4, 6, 8, 10, 12, 14):
+                    steps[idx] = _pick_slice("snare")
+            elif template_name == "buildup_16th":
+                for idx in range(16):
+                    steps[idx] = _pick_slice("snare")
+            elif template_name == "four_on_floor_hats":
+                for idx in (0, 4, 8, 12):
+                    steps[idx] = _pick_slice("kick")
+                for idx in (4, 12):
+                    steps[idx] = _pick_slice("snare")
+                for idx in (2, 6, 10, 14):
+                    steps[idx] = _pick_slice("hat")
+            else:  # standard four_on_floor
+                for idx in (0, 4, 8, 12):
+                    steps[idx] = _pick_slice("kick")
+                for idx in (4, 12):
+                    steps[idx] = _pick_slice("snare")
+        elif stem == "bass":
+            if template_name == "offbeat":
+                for idx in (2, 6, 10, 14):
+                    steps[idx] = _pick_slice("sub")
+            elif template_name == "rolling":
+                for idx in (2, 3, 6, 7, 10, 11, 14, 15):
+                    steps[idx] = _pick_slice("rolling") or _pick_slice("sub")
+            else:
+                for idx in (0, 3, 8, 11):
+                    steps[idx] = _pick_slice("stab")
+        elif stem == "other":
+            if template_name == "chords":
+                for idx in (2, 6, 10, 14):
+                    steps[idx] = _pick_slice("chord")
+            elif template_name == "pad":
+                steps[0] = _pick_slice("pad")
+            else:
+                for idx in (0, 2, 4, 6, 8, 10, 12, 14):
+                    steps[idx] = _pick_slice("arp")
+        elif stem == "vocals":
+            if template_name == "chop":
+                steps[6] = _pick_slice("chop")
+                steps[14] = _pick_slice("chop")
+            else:
+                steps[0] = _pick_slice("phrase")
+
+        onset_grid = [i for i, s in enumerate(steps) if s is not None]
+        if not onset_grid:
+            return None
+
+        density = len(onset_grid) / 16.0
+        return SequencerPattern(
+            id=f"synth_{stem}_{template_name}_{int(rng.integers(1000, 9999))}",
+            stem=stem,
+            track_id=preferred_track_id or "groovebox",
+            pattern_name=f"Groovebox {template_name.title()} ({stem})",
+            length=16,
+            steps=steps,
+            energy=0.7 if "fill" in template_name else 0.5,
+            density=density,
+            onset_grid=onset_grid,
+            groove_type=template_name,
+            bar_num=0,
+            bpm=126.0,
+            key="C major",
+        )
