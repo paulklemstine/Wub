@@ -46,6 +46,9 @@ class SliceRef:
     loud_max: float
     track_pos: int  # chronological order within (track, stem)
     track_bpm: float = 120.0  # source tempo, for time-stretch ratios
+    beat_pos: int = 0  # 0..3 within bar
+    tatum_pos: int = 0  # 0..3 within beat
+    tatum_in_bar: int = 0  # 0..15 within 4/4 bar
 
 
 @dataclass
@@ -66,6 +69,16 @@ def build_pools(analyses: List[TrackAnalysis],
     pools: Dict[str, StemPool] = {}
     # Deterministic order: track, then time within (track, stem).
     for tr in sorted(analyses, key=lambda t: t.track_id):
+        # Build segment metrical lookup from tatums
+        seg_metrical: Dict[str, Tuple[int, int, int]] = {}
+        for tat in getattr(tr, "tatums", []):
+            subdiv = int((tat.beat_position * 4 + tat.tatum_position) % 16)
+            for s_name, s_ids in getattr(tat, "stem_segments", {}).items():
+                for sid in s_ids:
+                    if sid not in seg_metrical:
+                        seg_metrical[sid] = (tat.beat_position, tat.tatum_position, subdiv)
+
+        tatum_sec = (60.0 / tr.bpm / 4.0) if (getattr(tr, "bpm", 0) and tr.bpm > 0) else 0.125
         per_stem: Dict[str, List] = {}
         for sg in sorted(tr.segments, key=lambda s: s.start):
             if exclude_silent and sg.is_silent:
@@ -76,13 +89,22 @@ def build_pools(analyses: List[TrackAnalysis],
             for pos, sg in enumerate(segs):
                 if sg.duration > max_duration:
                     continue  # pre-cap corpora: unusable as atoms, toxic to render
+                beat_p, tat_p, subdiv = seg_metrical.get(
+                    sg.id,
+                    (
+                        int(round(sg.start / (tatum_sec * 4.0))) % 4,
+                        int(round(sg.start / tatum_sec)) % 4,
+                        int(round(sg.start / tatum_sec)) % 16,
+                    )
+                )
                 pool.slices.append(SliceRef(
                     stem=stem, track_id=tr.track_id, segment_id=sg.id,
                     start=sg.start, duration=sg.duration,
                     timbre=np.asarray(sg.timbre, dtype=np.float32),
                     chroma=np.asarray(sg.pitches, dtype=np.float32),
                     loud_max=sg.loudness_max, track_pos=pos,
-                    track_bpm=float(tr.bpm)))
+                    track_bpm=float(tr.bpm),
+                    beat_pos=beat_p, tatum_pos=tat_p, tatum_in_bar=subdiv))
     return pools
 
 
@@ -122,7 +144,9 @@ def generate(pools: Dict[str, StemPool],
              force_tracks: Optional[Dict[str, str]] = None,
              candidate_sample: int = 512,
              w_timbre: float = 1.0, w_pitch: float = 1.5, w_harmony: float = 1.0,
-             seed: int = 0) -> Dict[str, List[SliceRef]]:
+             seed: int = 0,
+             initial_heads: Optional[Dict[str, int]] = None,
+             min_dwell: int = 8) -> Dict[str, List[SliceRef]]:
     """Generate `steps` slice choices per stem. Returns {stem: [SliceRef...]}."""
     rng = np.random.default_rng(seed)
     chaos = chaos or {}
@@ -137,8 +161,15 @@ def generate(pools: Dict[str, StemPool],
             cand_idx[stem] = np.asarray(idx)
         else:
             cand_idx[stem] = np.arange(len(pool.slices))
-    # Init heads at random candidates
-    head: Dict[str, int] = {s: int(rng.choice(cand_idx[s])) for s in pools}
+    # Init heads
+    if initial_heads is not None:
+        head: Dict[str, int] = {s: int(initial_heads[s]) for s in pools if s in initial_heads}
+        for s in pools:
+            if s not in head:
+                head[s] = int(cand_idx[s][0])
+    else:
+        head = {s: int(cand_idx[s][0]) for s in pools}
+    dwell: Dict[str, int] = {s: 0 for s in pools}
     # Pre-stack features
     feat: Dict[str, Tuple[np.ndarray, np.ndarray]] = {
         s: (pools[s].array("timbre"), pools[s].array("chroma")) for s in pools
@@ -158,9 +189,16 @@ def generate(pools: Dict[str, StemPool],
                     and pool.slices[k].track_pos == cur.track_pos + 1]
             if same:
                 succ = pool.slices[same[0]]
-            want_jump = rng.random() < ch
+
+            # Jumps:
+            # - If chaos == 0.0: NEVER jump as long as track has slices; loop to start if it ends.
+            # - Allow jumps when dwell >= min_dwell (or lower for very high chaos) or when track ends.
+            eff_dwell = max(2, min_dwell if ch < 0.8 else min_dwell // 2)
+            want_jump = (ch > 0.0) and ((dwell[stem] >= eff_dwell and rng.random() < ch) or succ is None)
+
             if not want_jump and succ is not None:
                 head[stem] = same[0]
+                dwell[stem] += 1
             elif not want_jump:
                 # Track ran out but chaos says continue: loop to its start.
                 # chaos=0 therefore means straight looping playback.
@@ -168,44 +206,46 @@ def generate(pools: Dict[str, StemPool],
                         if pool.slices[k].track_id == cur.track_id
                         and pool.slices[k].track_pos == 0]
                 head[stem] = loop[0] if loop else head[stem]
+                dwell[stem] = 0
             else:
+                dwell[stem] = 0
                 idx = cand_idx[stem]
                 if len(idx) > candidate_sample:
                     idx = rng.choice(idx, size=candidate_sample, replace=False)
-                # No self-loops and no chronological successor: a jump must
-                # move somewhere surprising.
+                # No self-loops and no chronological successor
                 if len(idx) > 1:
                     idx = idx[idx != head[stem]]
-                # A jump is a real jump: exclude the chronological successor
-                # so high chaos actually crosses songs (continuity-first
-                # sampling still picks the smoothest landing).
                 if succ is not None:
-                    succ_idx = next((k for k in range(len(pool.slices))
-                                     if pool.slices[k] is succ), None)
-                    if succ_idx is not None:
-                        idx = idx[idx != succ_idx]
-                        if len(idx) == 0:
-                            head[stem] = same[0]
-                            seq.setdefault(stem, []).append(pool.slices[head[stem]])
-                            continue
-                if rng.random() < 0.5:
-                    # Free dig: uniform pick ignoring cost. This is what makes
-                    # high chaos reliably cross songs instead of collapsing
-                    # onto the smoothest same-track landing.
-                    head[stem] = int(rng.choice(idx))
+                    succ_idx = same[0]
+                    idx = idx[idx != succ_idx]
+                if len(idx) == 0:
+                    head[stem] = same[0] if succ is not None else head[stem]
                     seq.setdefault(stem, []).append(pool.slices[head[stem]])
                     continue
+
+                # Target metrical position to preserve groove
+                target_subdiv = (cur.tatum_in_bar + 1) % 16
+                cand_subdivs = np.array([pool.slices[i].tatum_in_bar for i in idx])
+
+                exact_metric = idx[cand_subdivs == target_subdiv]
+                beat_metric = idx[cand_subdivs % 4 == target_subdiv % 4]
+                if len(exact_metric) >= 4:
+                    eval_idx = exact_metric
+                elif len(beat_metric) >= 4:
+                    eval_idx = beat_metric
+                else:
+                    eval_idx = idx
+
                 T, C = feat[stem]
-                ct, cc = T[idx], C[idx]
+                ct, cc = T[eval_idx], C[eval_idx]
                 harm_ref = bass_chroma if stem != "bass" else None
                 total, _, _ = transition_cost(cur, succ, ct, cc, harm_ref,
                                               w_timbre, w_pitch, w_harmony)
-                # softmax sampling (temperature 0.35) for musical variety.
-                # Center by min first so weights can't underflow to all-zeros.
-                temp = max(0.35 * float(total.std()), 1e-6)
+
+                temp = max(0.25 * float(total.std()), 1e-4)
                 w = np.exp(-(total - total.min()) / temp).astype(np.float64)
                 w = w / w.sum()
-                head[stem] = int(rng.choice(idx, p=w))
+                head[stem] = int(rng.choice(eval_idx, p=w))
             seq.setdefault(stem, []).append(pool.slices[head[stem]])
     return seq
 

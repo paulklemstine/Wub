@@ -208,8 +208,8 @@ class WubApp {
   private ringsCtx: CanvasRenderingContext2D | null = null;
 
   private states: Record<StemName, StemState> = {
-    drums: { stem: "drums", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
-    bass: { stem: "bass", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
+    drums: { stem: "drums", mute: false, solo: false, volume: 1, chaos: 0.1, synthBlend: 0.0 },
+    bass: { stem: "bass", mute: false, solo: false, volume: 1, chaos: 0.3, synthBlend: 0.0 },
     vocals: { stem: "vocals", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
     other: { stem: "other", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
   };

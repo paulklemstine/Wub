@@ -38,13 +38,18 @@ class CorpusStore:
 
     # ---- refresh ----
 
-    def refresh(self) -> int:
+    def refresh(self, force: bool = False, min_interval: float = 5.0) -> int:
         """Load new/changed analyses. Returns number of (re)loaded tracks."""
         from wub_core.schema import TrackAnalysis as TA
+
+        now = time.time()
+        if not force and self.last_scan > 0 and (now - self.last_scan < min_interval):
+            return 0
 
         n = 0
         if not self.processed_dir.exists():
             return 0
+
         for jf in self.processed_dir.glob("*.json"):
             if jf.name.startswith(("_", "meta_")):
                 continue
@@ -55,12 +60,13 @@ class CorpusStore:
             if jf.name in self.mtimes and self.mtimes[jf.name] >= mt:
                 continue
             try:
-                tr = TA(**json.loads(jf.read_text()))
+                tr = TA.model_validate_json(jf.read_bytes())
             except Exception:
                 continue
             self.analyses[tr.track_id] = tr
             self.mtimes[jf.name] = mt
             n += 1
+
         self.last_scan = time.time()
         return n
 

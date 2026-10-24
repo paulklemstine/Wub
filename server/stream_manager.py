@@ -18,24 +18,55 @@ import numpy as np
 import soundfile as sf
 
 from wub_core.corpus import CorpusStore
+from wub_core.schema import TrackAnalysis
 
 STEMS = ("drums", "bass", "vocals", "other")
 SLICE_CACHE_CAP = 2000
+
+PITCH_NAMES = {'C': 0, 'C#': 1, 'Db': 1, 'D': 2, 'D#': 3, 'Eb': 3,
+               'E': 4, 'F': 5, 'F#': 6, 'Gb': 6, 'G': 7, 'G#': 8,
+               'Ab': 8, 'A': 9, 'A#': 10, 'Bb': 10, 'B': 11}
+
+
+def get_key_semitones(src_key: str, target_key: str = "C major") -> int:
+    try:
+        s = src_key.strip().split()[0]
+        t = target_key.strip().split()[0]
+        s_idx = PITCH_NAMES.get(s, 0)
+        t_idx = PITCH_NAMES.get(t, 0)
+        return ((t_idx - s_idx + 6) % 12) - 6
+    except Exception:
+        return 0
+
+
+@dataclass
+class StemHeadState:
+    track_id: str
+    tatum_offset: int = 0
+    active_seg_id: Optional[str] = None
+    dwell_tatums: int = 0
+    phrase_tatums: int = 32
 
 
 @dataclass
 class StreamSession:
     store: CorpusStore
-    chaos: Dict[str, float] = field(default_factory=lambda: {s: 0.6 for s in STEMS})
+    chaos: Dict[str, float] = field(default_factory=lambda: {
+        "drums": 0.1,   # Rhythmic backbone: steady 2-4 bar loops
+        "bass": 0.3,    # Harmonic foundation: 2-4 bar phrases
+        "vocals": 0.5,  # Vocal phrases
+        "other": 0.5,   # Synths and hooks
+    })
     synth_blend: Dict[str, float] = field(default_factory=lambda: {s: 0.0 for s in STEMS})
     bpm: float = 128.0
     seed: int = 0
-    pitch_lock: bool = False
+    pitch_lock: bool = True
     key: str = "C major"
     gravity: Dict[str, list] = field(default_factory=dict)
     _buffer: List[dict] = field(default_factory=list)
     _tatum_index: int = 0
     _rng_seed: int = 0
+    _heads: Dict[str, StemHeadState] = field(default_factory=dict)
 
     def configure(self, stem: Optional[str] = None, chaos: Optional[float] = None,
                   bpm: Optional[float] = None, synth_blend: Optional[float] = None) -> None:
@@ -51,50 +82,157 @@ class StreamSession:
         return 60.0 / self.bpm / 4.0
 
     def _refill(self) -> None:
-        from wub_core import model_markov as mm
-
         self.store.refresh()
-        multistem = [t for t in self.store.tracks if len(t.stems_available) == 4]
-        pools = mm.build_pools(multistem if multistem else self.store.tracks)
-        if not pools:
+        all_tracks = self.store.tracks
+        if not all_tracks:
             return
-        seq = mm.generate(pools, steps=32,
-                          chaos={s: self.chaos.get(s, 0.6) for s in pools},
-                          seed=self.seed + self._rng_seed)
+
+        tracks_by_id: Dict[str, TrackAnalysis] = {t.track_id: t for t in all_tracks}
+        multistem = [t for t in all_tracks if len(t.stems_available) == 4]
+        pool_tracks = multistem if multistem else all_tracks
+
+        rng = np.random.default_rng(self.seed + self._rng_seed)
         self._rng_seed += 1
-        bpms = {t.track_id: t.bpm for t in self.store.tracks}
-        for k in range(32):
+
+        # Initialize heads if empty
+        for stem in STEMS:
+            if stem not in self._heads:
+                cands = [t for t in pool_tracks if stem in t.stems_available]
+                if not cands:
+                    cands = [t for t in all_tracks if stem in t.stems_available]
+                if not cands:
+                    continue
+                chosen_t = cands[int(rng.choice(len(cands)))]
+                init_tat = 0
+                if chosen_t.tatums:
+                    # Pick an aligned downbeat in the first 8 bars if possible
+                    downbeats = [tat.index for tat in chosen_t.tatums[:128]
+                                 if (tat.beat_position * 4 + tat.tatum_position) % 16 == 0]
+                    if downbeats:
+                        init_tat = int(rng.choice(downbeats[:4]))
+                self._heads[stem] = StemHeadState(
+                    track_id=chosen_t.track_id,
+                    tatum_offset=init_tat,
+                    active_seg_id=None,
+                    dwell_tatums=0,
+                    phrase_tatums=int(rng.choice([32, 64]))
+                )
+
+        # Generate next 32 tatums (2 full bars)
+        for _ in range(32):
+            master_tatum = self._tatum_index
+            bar_phase = master_tatum % 16
             slices: Dict[str, Optional[dict]] = {}
+
             for stem in STEMS:
-                refs = seq.get(stem)
-                r = refs[k] if refs and k < len(refs) else None
-                if r is None:
+                if stem not in self._heads:
                     slices[stem] = None
+                    continue
+
+                head = self._heads[stem]
+                tr = tracks_by_id.get(head.track_id)
+                cands = [t for t in pool_tracks if stem in t.stems_available]
+                if not cands:
+                    cands = [t for t in all_tracks if stem in t.stems_available]
+                if not cands:
+                    slices[stem] = None
+                    continue
+
+                if tr is None or stem not in tr.stems_available:
+                    tr = cands[int(rng.choice(len(cands)))]
+                    head.track_id = tr.track_id
+                    head.tatum_offset = 0
+                    head.active_seg_id = None
+                    head.dwell_tatums = 0
+
+                ch = float(self.chaos.get(stem, 0.5))
+
+                # Check transition condition (phrase & bar quantized)
+                track_ended = bool(tr.tatums and head.tatum_offset >= len(tr.tatums))
+                can_jump = False
+                if track_ended:
+                    can_jump = True
+                elif ch > 0.0 and head.dwell_tatums >= head.phrase_tatums:
+                    if stem == "drums" and bar_phase == 0:
+                        can_jump = rng.random() < ch
+                    elif stem == "bass" and bar_phase in (0, 8):
+                        can_jump = rng.random() < ch
+                    elif stem in ("vocals", "other") and bar_phase in (0, 4, 8, 12):
+                        can_jump = rng.random() < ch
+
+                if can_jump:
+                    next_tr = tr if (ch == 0.0 or len(cands) == 1) else cands[int(rng.choice(len(cands)))]
+                    head.track_id = next_tr.track_id
+                    head.dwell_tatums = 0
+                    head.phrase_tatums = int(rng.choice([32, 64]))
+                    head.active_seg_id = None
+                    tr = next_tr
+
+                    # Match metrical bar phase
+                    if tr.tatums:
+                        matching = [tat.index for tat in tr.tatums[:256]
+                                    if (tat.beat_position * 4 + tat.tatum_position) % 16 == bar_phase]
+                        head.tatum_offset = int(rng.choice(matching[:4])) if matching else 0
+                    else:
+                        head.tatum_offset = 0
+
+                # Resolve slice at current tatum offset
+                cur_seg_id: Optional[str] = None
+                if tr.tatums and head.tatum_offset < len(tr.tatums):
+                    tat = tr.tatums[head.tatum_offset]
+                    stem_segs = tat.stem_segments.get(stem, [])
+                    if stem_segs:
+                        cur_seg_id = stem_segs[-1]
                 else:
-                    src_bpm = bpms.get(r.track_id, self.bpm) or self.bpm
-                    rate = float(self.bpm) / float(src_bpm) if src_bpm > 0 else 1.0
-                    rate = max(0.5, min(2.0, rate))
+                    stem_segs_all = [s for s in tr.segments if s.stem == stem]
+                    if stem_segs_all:
+                        cur_seg_id = stem_segs_all[head.tatum_offset % len(stem_segs_all)].id
 
-                    detune_cents = 0
-                    if stem in ("bass", "vocals", "other") and hasattr(r, "chroma") and r.chroma is not None:
-                        c = np.asarray(r.chroma)
-                        if np.max(c) > 1e-6:
-                            c = c / np.max(c)
-                            shift = -(((int(np.argmax(c)) + 6) % 12) - 6)
-                            detune_cents = int(max(-6, min(6, shift)) * 100)
+                # Onset vs sustain
+                is_first_tatum = (self._tatum_index == 0)
+                is_onset = (cur_seg_id is not None) and (cur_seg_id != head.active_seg_id or is_first_tatum)
 
-                    slices[stem] = {
-                        "track_id": r.track_id, "segment_id": r.segment_id,
-                        "start": r.start, "duration": r.duration,
-                        "url": f"/audio/{r.track_id}/{r.segment_id}.wav",
-                        "detune_cents": detune_cents,
-                        "rate": rate,
-                        "synth_blend": self.synth_blend.get(stem, 0.0),
-                    }
-            self._buffer.append({"type": "tatum", "tatum_index": self._tatum_index,
-                                 "tatum_duration": self.tatum_duration,
-                                 "start_time": 0.06,
-                                 "bpm": self.bpm, "slices": slices})
+                if is_onset and cur_seg_id is not None:
+                    head.active_seg_id = cur_seg_id
+                    seg = next((s for s in tr.segments if s.id == cur_seg_id), None)
+                    if seg is not None:
+                        src_bpm = float(tr.bpm) if tr.bpm > 0 else self.bpm
+                        rate = float(self.bpm) / float(src_bpm)
+                        rate = max(0.5, min(2.0, rate))
+
+                        detune_cents = 0
+                        if self.pitch_lock and stem in ("bass", "vocals", "other"):
+                            shift = get_key_semitones(tr.key, self.key)
+                            detune_cents = int(shift * 100)
+
+                        slices[stem] = {
+                            "track_id": tr.track_id,
+                            "segment_id": cur_seg_id,
+                            "start": seg.start,
+                            "duration": seg.duration,
+                            "url": f"/audio/{tr.track_id}/{cur_seg_id}.wav",
+                            "detune_cents": detune_cents,
+                            "rate": rate,
+                            "synth_blend": self.synth_blend.get(stem, 0.0),
+                        }
+                    else:
+                        slices[stem] = None
+                else:
+                    slices[stem] = None
+                    if cur_seg_id is None:
+                        head.active_seg_id = None
+
+                head.tatum_offset += 1
+                head.dwell_tatums += 1
+
+            self._buffer.append({
+                "type": "tatum",
+                "tatum_index": self._tatum_index,
+                "tatum_duration": self.tatum_duration,
+                "start_time": 0.06,
+                "bpm": self.bpm,
+                "slices": slices,
+            })
             self._tatum_index += 1
 
     def next_event(self) -> Optional[dict]:
