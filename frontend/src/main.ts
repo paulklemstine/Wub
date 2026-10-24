@@ -242,6 +242,7 @@ class WubApp {
       },
     });
     this.nebula.setPoints(demoPoints());
+    void this.loadUmapPoints();
 
     this.bindTransport();
     this.bindMaster();
@@ -254,6 +255,30 @@ class WubApp {
 
     this.setStatus("Ready — press Play.");
     requestAnimationFrame((t) => this.frame(t));
+  }
+
+  private async loadUmapPoints(): Promise<void> {
+    try {
+      const res = await fetch("/api/umap");
+      if (!res.ok) return;
+      const data = (await res.json()) as unknown;
+      if (!Array.isArray(data) || data.length === 0) return;
+      const pts: NebulaPoint[] = [];
+      for (const item of data) {
+        if (!isRecord(item)) continue;
+        const stem = asStem(item["stem"]);
+        const x = asNumber(item["x"], -1);
+        const y = asNumber(item["y"], -1);
+        if (stem !== null && x >= 0 && y >= 0) {
+          pts.push({ stem, x, y });
+        }
+      }
+      if (pts.length > 0 && this.nebula !== null) {
+        this.nebula.setPoints(pts);
+      }
+    } catch {
+      // Fallback stays as seeded demo points
+    }
   }
 
   // -- transport -----------------------------------------------------------
