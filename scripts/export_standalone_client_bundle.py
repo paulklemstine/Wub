@@ -78,10 +78,10 @@ def export_bundle() -> None:
 
             extracted_slices_manifest[stem][cat] = []
 
-            # Pick top 2 distinct slices per category
+            # Pick top 4 distinct slices per category across different pitch classes
             taken = 0
             for s in candidates:
-                if taken >= 2:
+                if taken >= 4:
                     break
                 # Find source stem audio file
                 stem_path = Path("data/stems") / s.track_id / f"{stem}.wav"
@@ -109,12 +109,16 @@ def export_bundle() -> None:
                     data_bytes = out_wav.read_bytes()
                     b64_uri = f"data:audio/wav;base64,{base64.b64encode(data_bytes).decode('ascii')}"
 
+                    dominant_pitch = int(np.argmax(s.chroma)) if s.chroma is not None and len(s.chroma) == 12 else 0
+
                     extracted_slices_manifest[stem][cat].append({
                         "name": out_name,
                         "url": f"data/slices/{out_name}",
                         "b64": b64_uri if len(b64_uri) < 65000 else None,
                         "duration": float(s.duration),
                         "centroid": float(getattr(s, "spectral_centroid", 0.0)),
+                        "pitch": dominant_pitch,
+                        "loudness": float(s.loud_max),
                         "track_id": s.track_id,
                         "segment_id": s.segment_id,
                     })
@@ -125,7 +129,38 @@ def export_bundle() -> None:
 
     print(f"✓ Exported {slice_count} clean acoustic slice WAVs to {slices_dir}", flush=True)
 
-    # 4. Serialize Curated Pattern Bank for In-Browser ML Sequencing
+    # 4. Extract authentic harmonic chord progressions from real tracks
+    chord_progressions: List[dict] = []
+    for tr in multistem_tracks[:30]:
+        tatums = getattr(tr, "tatums", [])
+        n_bars = len(tatums) // 16
+        bar_roots: List[int] = []
+        for b in range(min(8, n_bars)):
+            bar_tats = tatums[b*16:(b+1)*16]
+            chroma_sum = np.zeros(12)
+            for t in bar_tats:
+                for st in ("bass", "other"):
+                    sids = getattr(t, "stem_segments", {}).get(st, [])
+                    for sid in sids:
+                        for s in getattr(tr, "segments", []):
+                            if s.id == sid and not s.is_silent:
+                                chroma_sum += np.array(s.pitches)
+            if np.sum(chroma_sum) > 0.05:
+                bar_roots.append(int(np.argmax(chroma_sum)))
+            else:
+                bar_roots.append(bar_roots[-1] if bar_roots else 0)
+        if len(bar_roots) >= 4:
+            # Pad to 8 bars if needed
+            while len(bar_roots) < 8:
+                bar_roots.append(bar_roots[-1])
+            chord_progressions.append({
+                "track_id": tr.track_id,
+                "key": getattr(tr, "key", "C major"),
+                "roots": bar_roots[:8],
+            })
+    print(f"✓ Extracted {len(chord_progressions)} authentic chord progressions from corpus", flush=True)
+
+    # 5. Serialize Curated Pattern Bank for In-Browser ML Sequencing
     serialized_patterns: Dict[str, List[dict]] = {s: [] for s in STEMS}
     for stem, pats in bank.patterns_by_stem.items():
         # Curate top 32 patterns per stem
@@ -169,6 +204,7 @@ def export_bundle() -> None:
     standalone_manifest = {
         "version": 1,
         "default_bpm": 126.0,
+        "chord_progressions": chord_progressions,
         "patterns": serialized_patterns,
         "phrases": serialized_phrases,
         "slices": extracted_slices_manifest,
