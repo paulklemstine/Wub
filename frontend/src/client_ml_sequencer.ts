@@ -2080,6 +2080,22 @@ export class ClientGrooveboxConductor {
     return this.playbackMode;
   }
 
+  public getMovementPhase(): "FOUNDATION" | "DEVELOPMENT" | "CLIMAX" | "PRE_TRANSITION" {
+    const bar = this.arranger.getBarInSection();
+    const total = this.arranger.getSectionDuration();
+    const left = total - bar;
+    if (left <= 2 && total >= 8) {
+      return "PRE_TRANSITION";
+    }
+    if (bar < 8) {
+      return "FOUNDATION";
+    }
+    if (bar < 16) {
+      return "DEVELOPMENT";
+    }
+    return "CLIMAX";
+  }
+
   public setCycleMode(mode: string): boolean {
     const valid = ["4x16", "8x16", "16x32"];
     if (!valid.includes(mode)) return false;
@@ -2476,17 +2492,35 @@ export class ClientGrooveboxConductor {
     }
 
     // =========================================================================
-    // Master Section Transition Sound Effects ("Moments of Audio Pleasures")
+    // Master Section Transition Sound Effects & Movement Orchestration
     // =========================================================================
+    const movement = this.getMovementPhase();
+    const barsLeft = this.arranger.getSectionBarsLeft();
+    const isTransitionBar = (barsLeft <= 1);
+
     // 1. DROP Explosive Impact on Step 0 (Crash Cymbal + Sub Boom)
     if (sec === "DROP" && barInSec === 0 && (step % 16) === 0) {
       this.synth.playCrashCymbal(when, 1.0, dInput);
       this.synth.playSubDropImpact(when, 1.0, bDest);
     }
-    // 2. Reverse Cymbal Swell on Bar 7 Step 11 of BUILDUP leading into Drop Gap Breath
-    if (sec === "BUILDUP" && barInSec === 7 && (step % 16) === 11) {
+    // 2. Reverse Cymbal Swell leading into Drop Gap Breath or Major Section Transition
+    if ((sec === "BUILDUP" && barInSec === 7 && (step % 16) === 11) ||
+        (movement === "PRE_TRANSITION" && isTransitionBar && (step % 16) === 11)) {
       const stepDur = (60 / this.currentBpm / 4);
       this.synth.playReverseCymbalSwell(when, stepDur * 3.8, dInput);
+    }
+    // 3. Dynamic Filter Automation on Transitions
+    if (movement === "PRE_TRANSITION") {
+      const nextSec = sec === "BUILDUP" ? "DROP" : (sec === "DROP" ? "BREAKDOWN" : "BUILDUP");
+      if (nextSec === "BREAKDOWN") {
+        const progressInBar = (step % 16) / 16;
+        const cutoff = 18000 - progressInBar * 14000;
+        this.engine.setStemFilter("other", Math.max(3000, cutoff), 1.0);
+      } else if (nextSec === "DROP" || nextSec === "BUILDUP") {
+        const progressInBar = (step % 16) / 16;
+        const cutoff = 4000 + progressInBar * 14000;
+        this.engine.setStemFilter("other", Math.min(20000, cutoff), 1.1);
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -2504,8 +2538,8 @@ export class ClientGrooveboxConductor {
       if (sec === "BUILDUP" && barInSec === 6 && step === 0) {
         this.synth.playRiser(when, (60 / this.currentBpm) * 8, dInput);
       }
-      // Groovy Slicer Turnaround on Bar 7 Step 14
-      if (phraseBar === 7 && (step % 16) === 14) {
+      // Groovy Slicer Turnaround on Bar 7 Step 14 or pre-transition turnaround
+      if ((phraseBar === 7 || (movement === "PRE_TRANSITION" && isTransitionBar)) && (step % 16) === 14) {
         const fillSlice = this.getBestSlice("drums:fill", undefined, dSteer.y, dTerr);
         if (fillSlice) {
           this.engine.scheduleSlice("drums", fillSlice.buffer, when, {
@@ -2516,8 +2550,8 @@ export class ClientGrooveboxConductor {
           });
         }
       }
-      // Groovy Ghost Perc on Step 10 if energy / steer Y is high
-      if (dSteer.y > 0.70 && (step % 16) === 10) {
+      // Groovy Ghost Perc on Step 10 during DEVELOPMENT or CLIMAX
+      if ((movement === "DEVELOPMENT" || movement === "CLIMAX" || dSteer.y > 0.70) && (step % 16) === 10) {
         const percSlice = this.getBestSlice("drums:percussion", undefined, dSteer.y, dTerr);
         if (percSlice) {
           this.engine.scheduleSlice("drums", percSlice.buffer, when, {
@@ -2525,6 +2559,18 @@ export class ClientGrooveboxConductor {
             fadeMs: 1.5,
             gain: 0.65,
             voiceKey: "drums:percussion",
+          });
+        }
+      }
+      // Crisp Open Hi-Hat on offbeats during CLIMAX (step 2 & 10)
+      if (movement === "CLIMAX" && (step % 16 === 2 || step % 16 === 10)) {
+        const hatSlice = this.getBestSlice("drums:hat_open", undefined, dSteer.y, dTerr);
+        if (hatSlice) {
+          this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
+            rate: 1.0,
+            fadeMs: 1.0,
+            gain: 0.45,
+            voiceKey: "drums:hat_open",
           });
         }
       }
@@ -2975,12 +3021,12 @@ export class ClientGrooveboxConductor {
     }
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
-      // 128-Tick Sequence Phrase Lock Architecture:
-      // - DRUMS & BASS: Only re-roll on brand-new 128-tick phrase (phraseBar === 0) or on section transition!
-      //   Keep them firmly locked on bars 1, 2, 3, 4, 5, 6 so the listener can groove to the rhythm!
-      // - OTHER (Synths/Pads/Chords): Only re-roll on 2-bar chord boundaries (phraseBar % 2 === 0) or on section transition.
-      // - VOCALS: Staged according to section arrangement and phrase bar.
-      const shouldLockStem = !isSectionChange && !isNewPhrase &&
+      // Section-Wide Rhythm Lock & Phrased Movement Architecture:
+      // - DRUMS & BASS: Firmly lock for the ENTIRE SECTION! (Only re-roll when isSectionChange is true!)
+      //   Never swap out the foundational groove in the middle of a section or after 128 ticks!
+      // - OTHER (Synths/Pads/Chords): Update on 2-bar chord boundaries (phraseBar % 2 === 0) or on section transition.
+      // - VOCALS: Staged according to section movements (Foundation -> Development -> Climax -> Pre-transition).
+      const shouldLockStem = !isSectionChange &&
         ((stem === "drums" || stem === "bass") ||
          (stem === "other" && !isChordBoundary) ||
          (stem === "vocals" && !isChordBoundary));
@@ -3027,6 +3073,8 @@ export class ClientGrooveboxConductor {
 
       // Section-specific musical arrangement logic & Reticule Y steering
       const steerY = this.steering[stem].y;
+      const movement = this.getMovementPhase();
+
       if (stem === "drums") {
         if (steerY < 0.35) {
           nextG = "minimal_downbeats";
@@ -3046,6 +3094,12 @@ export class ClientGrooveboxConductor {
           nextG = "pad";
         } else if (steerY > 0.70) {
           nextG = "riff";
+        } else if (movement === "FOUNDATION") {
+          nextG = "pad";
+        } else if (movement === "DEVELOPMENT") {
+          nextG = "chords";
+        } else if (movement === "CLIMAX") {
+          nextG = "riff";
         } else {
           nextG = "chords";
         }
@@ -3061,7 +3115,15 @@ export class ClientGrooveboxConductor {
         } else if (sec === "BREAKDOWN" || sec === "INTRO") {
           nextG = "vocal_sustained";
         } else if (sec === "GROOVE_A") {
-          nextG = (phraseBar % 2 === 0) ? "vocal_verse" : "vocal_call_response";
+          if (movement === "FOUNDATION") {
+            nextG = "vocal_call_response";
+          } else if (movement === "DEVELOPMENT") {
+            nextG = (phraseBar % 2 === 0) ? "vocal_verse" : "vocal_call_response";
+          } else if (movement === "CLIMAX") {
+            nextG = "vocal_syncopated_chop";
+          } else {
+            nextG = "vocal_call_response";
+          }
         }
       }
 
@@ -3401,6 +3463,14 @@ export class ClientGrooveboxConductor {
       sectionTotalBars: this.arranger.getSectionDuration(),
       section_bars_left: this.arranger.getSectionBarsLeft(),
       sectionBarsLeft: this.arranger.getSectionBarsLeft(),
+      movement_phase: this.getMovementPhase(),
+      movementPhase: this.getMovementPhase(),
+      bars_until_transition: this.arranger.getSectionBarsLeft(),
+      barsUntilTransition: this.arranger.getSectionBarsLeft(),
+      is_transition_bar: this.arranger.getSectionBarsLeft() <= 1,
+      isTransitionBar: this.arranger.getSectionBarsLeft() <= 1,
+      transition_type: `${sec}_TO_${sec === "BUILDUP" ? "DROP" : (sec === "DROP" ? "GROOVE_A" : "BUILDUP")}`,
+      transitionType: `${sec}_TO_${sec === "BUILDUP" ? "DROP" : (sec === "DROP" ? "GROOVE_A" : "BUILDUP")}`,
       next_section: sec === "BUILDUP" ? "DROP" : (sec === "DROP" ? "GROOVE_A" : "BUILDUP"),
       nextSection: sec === "BUILDUP" ? "DROP" : (sec === "DROP" ? "GROOVE_A" : "BUILDUP"),
       is_fill: isFill,

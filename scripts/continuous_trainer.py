@@ -280,6 +280,11 @@ def main() -> None:
                 subprocess.run([sys.executable, "scripts/train_multistem_cohesion_feedback.py", "--bars", "50"], check=False)
                 log("Multi-Stem Cohesion Feedback Weights updated.")
 
+                # Composing ML Phrase and Section Transitions Refinement
+                log("Refining Composing ML Phrase & Section Transition Models...")
+                subprocess.run([sys.executable, "scripts/train_composing_ml.py", "--max-tracks", "60"], check=False)
+                log("Composing ML Models refined.")
+
                 # Refresh standalone client bundle
                 log("Exporting updated standalone client bundle...")
                 subprocess.run([sys.executable, "scripts/export_standalone_client_bundle.py"], check=False)

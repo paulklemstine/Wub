@@ -48,6 +48,9 @@ export interface GrooveboxMeta {
   sectionTotalBars?: number;
   nextSection?: string;
   sectionBarsLeft?: number;
+  movementPhase?: string;
+  isTransitionBar?: boolean;
+  transitionType?: string;
   cycleMode?: string;
   patternInCycle?: number;
   patternsPerCycle?: number;
@@ -772,7 +775,8 @@ class WubApp {
     }
     const nextSecEl = document.getElementById("struct-next-sec");
     if (nextSecEl && gb.nextSection && gb.sectionBarsLeft !== undefined) {
-      nextSecEl.textContent = `NEXT: ${gb.nextSection.replace("_", " ")} IN ${gb.sectionBarsLeft} BARS`;
+      const movement = gb.movementPhase ? `[${gb.movementPhase}] ` : "";
+      nextSecEl.textContent = `${movement}NEXT: ${gb.nextSection.replace("_", " ")} IN ${gb.sectionBarsLeft} BARS`;
     }
     const secProgressEl = document.getElementById("struct-sec-progress");
     if (secProgressEl && gb.sectionBarsElapsed !== undefined && gb.sectionTotalBars) {
