@@ -114,6 +114,7 @@ def assemble_pattern_waveform(
     bpm: float = 126.0,
     sr: int = DEFAULT_SR,
     cache: Optional[SliceAudioCache] = None,
+    velocities: Optional[List[float]] = None,
 ) -> np.ndarray:
     """Assemble individual slices of a pattern into a continuous audio waveform across 1 or 2 bars."""
     if cache is None:
@@ -152,6 +153,15 @@ def assemble_pattern_waveform(
             y[:fade_samples] *= ramp
             y[-fade_samples:] *= ramp[::-1]
 
+        # Velocity and tight envelope shaping
+        if velocities is not None and i < len(velocities):
+            y *= float(velocities[i])
+
+        if stem == "drums" and getattr(slice_ref, "spectral_centroid", 0.0) > 2600.0 and slice_ref.duration < 0.14:
+            # Shape closed hat decay to prevent trailing hiss/mud
+            from wub_core.groovy_pattern_assembler import apply_hihat_envelope
+            y = apply_hihat_envelope(y, is_closed=True, sr=sr)
+
         end_idx = min(total_samples, start_idx + len(y))
         chunk_len = end_idx - start_idx
         if chunk_len > 0:
@@ -186,6 +196,25 @@ def assemble_multistem_waveform(
             continue
         w = assemble_pattern_waveform(steps, audio_for, fallback_audio, stem=stem, bpm=bpm, sr=sr)
         stem_waves[stem] = w
+
+    # Apply physical sidechain ducking to bass if drums have kick hits
+    if "bass" in stem_waves and "drums" in multistem_steps:
+        drum_steps = multistem_steps.get("drums", [])
+        # Identify kick steps (e.g. 0, 4, 8, 12 or slices classified as kick)
+        kick_steps = []
+        for idx, s in enumerate(drum_steps):
+            if s is not None:
+                cent = getattr(s, "spectral_centroid", 1000.0)
+                if cent < 950.0 or idx in (0, 4, 8, 12):
+                    kick_steps.append(idx)
+        if kick_steps:
+            from wub_core.groovy_pattern_assembler import apply_sidechain_ducking
+            stem_waves["bass"] = apply_sidechain_ducking(stem_waves["bass"], kick_steps, bpm=bpm, sr=sr)
+
+    for stem in STEMS:
+        w = stem_waves.get(stem)
+        if w is None:
+            continue
         scaled = w * float(stem_weights.get(stem, 0.8))
         if master_wave is None:
             master_wave = np.zeros_like(scaled)

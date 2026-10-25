@@ -276,6 +276,26 @@ class PatternComposer:
                 self.lead_track_id = new_patterns["drums"].track_id
                 self.lead_base_bar = new_patterns["drums"].bar_num
 
+        # Infill any missing stems using physical acoustic groove phrase evolution
+        missing_stems = [s for s in STEMS if new_patterns.get(s) is None]
+        if missing_stems:
+            try:
+                from wub_core.groovy_pattern_assembler import assemble_evolving_phrase
+                evolved = assemble_evolving_phrase(
+                    phrase_bar=phrase_bar,
+                    palette=self.bank.slice_palette,
+                    target_key=target_key,
+                    preferred_track_id=self.lead_track_id,
+                    feedback_weights=feedback_weights,
+                    section=section,
+                    rng=self.rng,
+                )
+                for s in missing_stems:
+                    if evolved.get(s):
+                        new_patterns[s] = evolved[s]
+            except Exception:
+                pass
+
         self.active_patterns = new_patterns
         self.current_bar_state = BarState(
             drum_type=target_grooves.get("drums", "four_on_floor"),

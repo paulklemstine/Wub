@@ -33,6 +33,7 @@ class SequencerPattern:
     bpm: float = 126.0
     key: str = "C major"
     audio_similarity_score: float = 0.5  # Acoustic similarity to real song audio (0.0..1.0)
+    velocities: Optional[List[float]] = None  # Per-step velocity curve (0.0..1.0)
 
 
 @dataclass
@@ -154,6 +155,18 @@ class PatternBank:
         pools = build_pools(tracks, exclude_silent=False)
         total_extracted = 0
 
+        # Build fast O(1) lookup: (track_id, stem) -> List[SliceRef] and pre-populate acoustic palette
+        slices_by_track_stem: Dict[Tuple[str, str], List[SliceRef]] = {}
+        from wub_core.groovy_pattern_assembler import AcousticSliceClassifier
+        for stem, stem_pool in pools.items():
+            for s in stem_pool.slices:
+                slices_by_track_stem.setdefault((s.track_id, stem), []).append(s)
+                cat = AcousticSliceClassifier.classify(s)
+                if cat in self.slice_palette.get(stem, {}):
+                    self.slice_palette[stem][cat].append(s)
+                if stem == "drums" and "hat" in cat:
+                    self.slice_palette["drums"]["hat"].append(s)
+
         for tr in tracks:
             if not (min_bpm <= tr.bpm <= max_bpm):
                 continue
@@ -162,35 +175,11 @@ class PatternBank:
             if n_tatums < 16:
                 continue
 
-            # Map from (stem, segment_id) -> SliceRef and pre-populate slice palette
+            # Map from (stem, segment_id) -> SliceRef
             seg_lookup: Dict[Tuple[str, str], SliceRef] = {}
             for stem in tr.stems_available:
-                stem_pool = pools.get(stem)
-                if stem_pool:
-                    for s in stem_pool.slices:
-                        if s.track_id == tr.track_id:
-                            seg_lookup[(stem, s.segment_id)] = s
-                            if stem == "drums":
-                                cent = getattr(s, "spectral_centroid", 1500.0)
-                                if cent < 1200.0 and s.loud_max > -32.0:
-                                    self.slice_palette["drums"]["kick"].append(s)
-                                elif 1200.0 <= cent <= 3500.0 and s.loud_max > -35.0:
-                                    self.slice_palette["drums"]["snare"].append(s)
-                                elif cent > 2500.0:
-                                    self.slice_palette["drums"]["hat"].append(s)
-                                else:
-                                    self.slice_palette["drums"]["fill"].append(s)
-                            elif stem == "bass":
-                                if s.duration > 0.15:
-                                    self.slice_palette["bass"]["sub"].append(s)
-                                else:
-                                    self.slice_palette["bass"]["stab"].append(s)
-                            elif stem == "other":
-                                self.slice_palette["other"]["chord"].append(s)
-                                self.slice_palette["other"]["pad"].append(s)
-                            elif stem == "vocals":
-                                self.slice_palette["vocals"]["chop"].append(s)
-                                self.slice_palette["vocals"]["phrase"].append(s)
+                for s in slices_by_track_stem.get((tr.track_id, stem), []):
+                    seg_lookup[(stem, s.segment_id)] = s
 
             # Find downbeat bars (every 16 tatums starting from a downbeat)
             downbeat_indices = [
@@ -709,6 +698,19 @@ class PatternBank:
         onset_grid = [i for i, s in enumerate(steps) if s is not None]
         density = len(onset_grid) / float(len(steps))
 
+        # Compute dynamic velocity / accent curves for densified pattern
+        velocities: List[float] = [0.0] * len(steps)
+        for i, s in enumerate(steps):
+            if s is None:
+                continue
+            sub = i % 16
+            if sub in (0, 4, 8, 12):
+                velocities[i] = 1.0 if stem in ("drums", "bass") else 0.92
+            elif sub in (2, 6, 10, 14):
+                velocities[i] = 0.90
+            else:
+                velocities[i] = 0.65
+
         return SequencerPattern(
             id=pat.id,
             stem=stem,
@@ -724,6 +726,7 @@ class PatternBank:
             bpm=pat.bpm,
             key=pat.key,
             audio_similarity_score=pat.audio_similarity_score,
+            velocities=velocities,
         )
 
     def create_groove_pattern(
@@ -733,9 +736,24 @@ class PatternBank:
         preferred_track_id: Optional[str] = None,
         rng: Optional[np.random.Generator] = None,
     ) -> Optional[SequencerPattern]:
-        """Synthesize a dedicated 16-step dance groove pattern using statistical ML and real slices."""
+        """Synthesize a dedicated 16-step dance groove pattern using physical ML classification and real slices."""
         if rng is None:
             rng = np.random.default_rng()
+
+        # Try advanced acoustic classifier and groove template assembler first
+        try:
+            from wub_core.groovy_pattern_assembler import assemble_groovy_pattern
+            g_pat = assemble_groovy_pattern(
+                stem=stem,
+                template_name=template_name,
+                palette=self.slice_palette,
+                preferred_track_id=preferred_track_id,
+                rng=rng,
+            )
+            if g_pat is not None and g_pat.density > 0.0:
+                return self.densify_pattern(g_pat, rng=rng)
+        except Exception:
+            pass
 
         if self.groove_model is not None:
             stat_pat = self.groove_model.generate_statistical_groove(

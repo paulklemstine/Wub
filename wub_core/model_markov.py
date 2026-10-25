@@ -49,6 +49,7 @@ class SliceRef:
     beat_pos: int = 0  # 0..3 within bar
     tatum_pos: int = 0  # 0..3 within beat
     tatum_in_bar: int = 0  # 0..15 within 4/4 bar
+    spectral_centroid: float = 0.0  # physical brightness in Hz
 
 
 @dataclass
@@ -104,7 +105,8 @@ def build_pools(analyses: List[TrackAnalysis],
                     chroma=np.asarray(sg.pitches, dtype=np.float32),
                     loud_max=sg.loudness_max, track_pos=pos,
                     track_bpm=float(tr.bpm),
-                    beat_pos=beat_p, tatum_pos=tat_p, tatum_in_bar=subdiv))
+                    beat_pos=beat_p, tatum_pos=tat_p, tatum_in_bar=subdiv,
+                    spectral_centroid=float(getattr(sg, "spectral_centroid", 0.0))))
     return pools
 
 
