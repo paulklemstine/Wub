@@ -1120,7 +1120,7 @@ export class ClientGrooveboxConductor {
       if (!stemSlices) continue;
       for (const [cat, list] of Object.entries(stemSlices)) {
         const assets: SliceAsset[] = [];
-        for (let i = 0; i < Math.min(4, list.length); i++) {
+        for (let i = 0; i < Math.min(8, list.length); i++) {
           const item = list[i];
           try {
             const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
@@ -1154,7 +1154,23 @@ export class ClientGrooveboxConductor {
   }
 
   private getBestSlice(stemCategory: string, targetPitch?: number): { buffer: AudioBuffer; rate: number } | null {
-    const list = this.sliceRegistry.get(stemCategory);
+    let list = this.sliceRegistry.get(stemCategory);
+    if (!list || list.length === 0) {
+      // Intelligent fallback within same stem
+      const [stem, cat] = stemCategory.split(":");
+      if (stem === "vocals") {
+        for (const alt of ["hook", "phrase", "call", "chop"]) {
+          if (alt !== cat) {
+            const altList = this.sliceRegistry.get(`vocals:${alt}`);
+            if (altList && altList.length > 0) {
+              list = altList;
+              break;
+            }
+          }
+        }
+      }
+    }
+
     if (!list || list.length === 0) {
       const fallbackBuf = this.synth.getSliceBuffer(stemCategory);
       return fallbackBuf ? { buffer: fallbackBuf, rate: 1.0 } : null;
@@ -1524,29 +1540,50 @@ export class ClientGrooveboxConductor {
         const durSec = (syl.durationSteps * 60) / (this.currentBpm * 4);
 
         // Store live vocal metadata for UI
+        const patternTitle = vPat.name || this.vocalSongArranger.getSongTitle();
         this.currentVocalMeta = {
           lyric: this.vocalSongArranger.getCurrentLyricLine(sec, phraseBar),
           syllable: syl.text,
           vowel: syl.vowel,
           note: noteName,
-          songTitle: this.vocalSongArranger.getSongTitle(),
+          songTitle: patternTitle,
           sectionName: sec,
         };
 
-        // Try acoustic slice sample first (phrase for long, chop for short)
-        const isLong = syl.durationSteps >= 4 || sec === "BREAKDOWN" || sec === "INTRO";
-        const slice = isLong
-          ? (this.getBestSlice("vocals:phrase", melodyPitch) || this.getBestSlice("vocals:chop", melodyPitch))
-          : (this.getBestSlice("vocals:chop", melodyPitch) || this.getBestSlice("vocals:phrase", melodyPitch));
+        // Select real slice matching musical intent and section
+        let slice = null;
+        if (sec === "DROP") {
+          slice = this.getBestSlice("vocals:hook", melodyPitch) ||
+                  this.getBestSlice("vocals:phrase", melodyPitch) ||
+                  this.getBestSlice("vocals:call", melodyPitch);
+        } else if (sec === "BUILDUP") {
+          slice = this.getBestSlice("vocals:call", melodyPitch) ||
+                  this.getBestSlice("vocals:chop", melodyPitch) ||
+                  this.getBestSlice("vocals:hook", melodyPitch);
+        } else if (sec === "BREAKDOWN" || sec === "INTRO") {
+          slice = this.getBestSlice("vocals:phrase", melodyPitch) ||
+                  this.getBestSlice("vocals:hook", melodyPitch);
+        } else {
+          // GROOVE_A
+          const isDownbeat = (step % 8) === 0;
+          slice = isDownbeat
+            ? (this.getBestSlice("vocals:phrase", melodyPitch) || this.getBestSlice("vocals:hook", melodyPitch))
+            : (this.getBestSlice("vocals:chop", melodyPitch) || this.getBestSlice("vocals:call", melodyPitch));
+        }
 
+        if (!slice) {
+          slice = this.getBestSlice("vocals:chop", melodyPitch) || this.getBestSlice("vocals:phrase", melodyPitch);
+        }
+
+        const isLong = syl.durationSteps >= 4 || sec === "BREAKDOWN" || sec === "INTRO";
         if (slice) {
-          // Schedule real slice repitched to the singing melody note
+          // Schedule real acoustic singing slice repitched to the active melody note
           this.engine.scheduleSlice("vocals", slice.buffer, when, {
             rate: slice.rate,
-            fadeMs: isLong ? 8 : 4,
+            fadeMs: isLong ? 12 : 6,
           });
-          // Also softly layer the singing formant body for authentic vocal formant clarity
-          this.synth.playSingingVoice(when, noteHz, syl.vowel, Math.min(0.4, durSec), vel * 0.45, vInput);
+          // Also softly layer the singing formant body for authentic vocal vowel clarity & pitch resonance
+          this.synth.playSingingVoice(when, noteHz, syl.vowel, Math.min(0.45, durSec), vel * 0.40, vInput);
         } else {
           // Autonomous singing formant synthesizer
           this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vel, vInput);
@@ -1561,19 +1598,56 @@ export class ClientGrooveboxConductor {
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       const currG = this.activePatterns[stem]?.groove_type || "four_on_floor_hats";
-      const nextG = isTurnaround && stem === "drums"
+      let nextG = isTurnaround && stem === "drums"
         ? "turnaround_fill"
         : this.phraseModel.sampleNextGroove(phraseBar, stem, currG);
+
+      // Section-specific musical arrangement logic
+      if (stem === "vocals") {
+        if (sec === "DROP") {
+          nextG = (phraseBar === 7) ? "vocal_hook" : (phraseBar % 2 === 0 ? "vocal_hook" : "vocal_syncopated_chop");
+        } else if (sec === "BUILDUP") {
+          nextG = (phraseBar >= 6) ? "vocal_stutter" : "vocal_call_response";
+        } else if (sec === "BREAKDOWN" || sec === "INTRO") {
+          nextG = "vocal_sustained";
+        } else if (sec === "GROOVE_A") {
+          nextG = (phraseBar % 2 === 0) ? "vocal_verse" : "vocal_call_response";
+        }
+      }
 
       this.activePatterns[stem] = this.synthesizePattern(stem, nextG);
     }
   }
 
   private synthesizePattern(stem: StemName, grooveType: string): SerializedPattern {
-    // 1. Try to find matching pattern in standalone manifest
+    // 1. Try to find matching authentic patterns in standalone manifest
     if (this.manifest && this.manifest.patterns && this.manifest.patterns[stem]) {
-      const match = this.manifest.patterns[stem].find((p) => p.groove_type === grooveType);
-      if (match) return match;
+      const pats = this.manifest.patterns[stem];
+      const matches = pats.filter((p) => {
+        if (p.groove_type === grooveType) return true;
+        if (stem === "vocals") {
+          if (grooveType === "vocal_hook" && (p.groove_type === "vocal_hook" || p.groove_type === "hook")) return true;
+          if (grooveType === "vocal_verse" && (p.groove_type === "vocal_verse" || p.groove_type === "vocal_call_response" || p.groove_type === "phrase")) return true;
+          if (grooveType === "vocal_call_response" && (p.groove_type === "vocal_call_response" || p.groove_type === "call")) return true;
+          if (grooveType === "vocal_syncopated_chop" && (p.groove_type === "vocal_syncopated_chop" || p.groove_type === "chop")) return true;
+          if (grooveType === "vocal_sustained" && (p.groove_type === "vocal_sustained" || p.groove_type === "phrase")) return true;
+          if (grooveType === "vocal_stutter" && p.groove_type === "vocal_stutter") return true;
+        } else if (stem === "drums") {
+          if (grooveType === "turnaround_fill" && (p.groove_type === "turnaround_fill" || p.groove_type === "fill")) return true;
+          if (grooveType === "mini_turnaround" && (p.groove_type === "mini_turnaround" || p.groove_type === "fill")) return true;
+          if (grooveType === "four_on_floor_hats" && (p.groove_type === "four_on_floor_hats" || p.groove_type === "four_on_floor")) return true;
+        } else if (stem === "bass") {
+          if (grooveType === "offbeat" && (p.groove_type === "offbeat" || p.groove_type === "sub")) return true;
+        } else if (stem === "other") {
+          if (grooveType === "chords" && (p.groove_type === "chords" || p.groove_type === "pad")) return true;
+        }
+        return false;
+      });
+
+      if (matches.length > 0) {
+        const idx = Math.floor(Math.random() * matches.length);
+        return matches[idx];
+      }
     }
 
     // 2. Synthesize dynamic groove pattern

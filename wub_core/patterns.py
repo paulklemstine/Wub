@@ -111,11 +111,46 @@ def classify_synth_groove(onset_grid: List[int], density: float) -> str:
 
 
 def classify_vocal_groove(onset_grid: List[int], density: float) -> str:
-    if density >= 0.4:
-        return "phrase"  # Full vocal phrase / verse line
-    if density <= 0.15:
-        return "chop"  # Vocal chop / stab
-    return "hook"
+    if not onset_grid:
+        return "chop"
+
+    # Rapid repeats / rolls (e.g. 8th or 16th consecutive onsets)
+    consecutive_count = 0
+    max_consecutive = 0
+    for i in range(len(onset_grid) - 1):
+        if onset_grid[i + 1] - onset_grid[i] <= 2:
+            consecutive_count += 1
+            max_consecutive = max(max_consecutive, consecutive_count)
+        else:
+            consecutive_count = 0
+    if max_consecutive >= 4:
+        return "vocal_stutter"
+
+    # Sustained / floating singing phrases (1 or 2 onsets on major beats like 0 or 8)
+    if len(onset_grid) <= 2 and all(s in (0, 4, 8, 12) for s in onset_grid):
+        return "vocal_sustained"
+
+    # Syncopated offbeat chops (onsets on odd 16th steps 1, 3, 5, 7, 9, 11, 13, 15)
+    odd_count = sum(1 for s in onset_grid if s % 2 == 1)
+    if odd_count >= 3 and odd_count / len(onset_grid) >= 0.5:
+        return "vocal_syncopated_chop"
+
+    # Call and response: onsets in first half (0..7) and second half (8..15) with an offbeat pause
+    has_call = any(s in (0, 2, 4) for s in onset_grid)
+    has_response = any(s in (8, 10, 12, 14) for s in onset_grid)
+    has_gap = any(s not in onset_grid for s in (5, 6, 7))
+    if has_call and has_response and has_gap and len(onset_grid) in (4, 5, 6, 7):
+        return "vocal_call_response"
+
+    # Anthemic hook: driving onsets with strong lead notes (3 to 6 onsets with step 0, 6, 12, or 14)
+    if any(s in (0, 6, 12, 14) for s in onset_grid) and 3 <= len(onset_grid) <= 7:
+        return "vocal_hook"
+
+    # Verse / Phrase: lyrical continuous flow
+    if density >= 0.25:
+        return "vocal_verse"
+
+    return "chop"
 
 
 class PatternBank:
@@ -363,11 +398,12 @@ class PatternBank:
                                 self.slice_palette["vocals"]["phrase"].append(sref)
 
                     pattern_id = f"pat_{stem}_{tr.track_id[:6]}_{bar_num:03d}"
+                    clean_name = tr.filename.replace(".mp3", "")
                     pat = SequencerPattern(
                         id=pattern_id,
                         stem=stem,
                         track_id=tr.track_id,
-                        pattern_name=f"{tr.filename[:16]} Bar {bar_num} ({groove_type})",
+                        pattern_name=f"{clean_name} Bar {bar_num} ({groove_type})",
                         length=16,
                         steps=steps,
                         energy=energy,
