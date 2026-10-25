@@ -12,6 +12,7 @@ pandora/
 *.wav
 !frontend/public/data/slices/*.wav
 !frontend/public/data/loops/*.wav
+!frontend/public/data/phrases/*.wav
 *.mp3
 *.ogg
 *.flac

@@ -83,6 +83,25 @@ export interface LoadedLoop {
   buffer: AudioBuffer;
 }
 
+export interface CohesivePhraseManifestItem {
+  id: string;
+  track_id: string;
+  track_title: string;
+  key: string;
+  source_bpm: number;
+  section: "INTRO" | "GROOVE_A" | "BUILDUP" | "DROP" | "BREAKDOWN";
+  energy: number;
+  bar_length: number;
+  duration: number;
+  stems: Record<StemName, string>;
+  onset_grids: Record<StemName, number[]>;
+}
+
+export interface LoadedPhraseBlock {
+  meta: CohesivePhraseManifestItem;
+  buffers: Partial<Record<StemName, AudioBuffer>>;
+}
+
 export interface StandaloneManifest {
   version: number;
   default_bpm: number;
@@ -95,6 +114,7 @@ export interface StandaloneManifest {
   phrases: SerializedPhrase[];
   slices: Record<StemName, Record<string, SliceManifestItem[]>>;
   loops?: Record<StemName, LoopManifestItem[]>;
+  phrase_blocks?: CohesivePhraseManifestItem[];
 }
 
 export interface ComposingMLWeights {
@@ -1050,6 +1070,9 @@ export class ClientGrooveboxConductor {
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
   private loopRegistry: Map<StemName, LoadedLoop[]> = new Map();
   private activeLoops: Partial<Record<StemName, LoadedLoop>> = {};
+  private phraseBlockRegistry: Map<string, LoadedPhraseBlock[]> = new Map();
+  private activePhraseBlock: LoadedPhraseBlock | null = null;
+  private phraseBarCount: number = 0;
   private vocalSongArranger: VocalSongArranger = new VocalSongArranger();
   private currentVocalMeta = {
     lyric: "",
@@ -1131,6 +1154,8 @@ export class ClientGrooveboxConductor {
         void this.preloadAudioSlices(basePath);
         // Preload authentic 1-bar studio whole-pattern stem loops
         void this.preloadPatternLoops(basePath);
+        // Preload authentic 4-bar cohesive multi-stem phrase blocks
+        void this.preloadPhraseBlocks(basePath);
       }
       return true;
     } catch (err) {
@@ -1204,6 +1229,50 @@ export class ClientGrooveboxConductor {
     }
     const totalLoops = Array.from(this.loopRegistry.values()).reduce((sum, l) => sum + l.length, 0);
     console.info(`[Client ML] Preloaded ${totalLoops} studio 1-bar whole-pattern stem loops across ${this.loopRegistry.size} stems.`);
+  }
+
+  private async preloadPhraseBlocks(basePath: string): Promise<void> {
+    if (!this.manifest || !this.manifest.phrase_blocks) return;
+    for (const item of this.manifest.phrase_blocks) {
+      const buffers: Partial<Record<StemName, AudioBuffer>> = {};
+      for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+        const urlStr = item.stems[stem];
+        if (!urlStr) continue;
+        try {
+          const url = urlStr.startsWith("http") ? urlStr : `${basePath}/${urlStr.replace(/^data\//, "")}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const bytes = await res.arrayBuffer();
+            const decoded = await this.engine.decodeWav(bytes);
+            buffers[stem] = decoded;
+          }
+        } catch {
+          // Graceful fallback
+        }
+      }
+      if (Object.keys(buffers).length > 0) {
+        const sec = item.section;
+        const list = this.phraseBlockRegistry.get(sec) || [];
+        list.push({ meta: item, buffers });
+        this.phraseBlockRegistry.set(sec, list);
+      }
+    }
+    const totalBlocks = Array.from(this.phraseBlockRegistry.values()).reduce((sum, l) => sum + l.length, 0);
+    console.info(`[Client ML] Preloaded ${totalBlocks} studio 4-bar cohesive multi-stem phrase blocks across ${this.phraseBlockRegistry.size} sections.`);
+  }
+
+  public getBestPhraseBlock(section: string): LoadedPhraseBlock | null {
+    const list = this.phraseBlockRegistry.get(section);
+    if (!list || list.length === 0) {
+      for (const fallbackSec of ["GROOVE_A", "DROP", "BUILDUP", "BREAKDOWN", "INTRO"]) {
+        const fbList = this.phraseBlockRegistry.get(fallbackSec);
+        if (fbList && fbList.length > 0) {
+          return fbList[Math.floor(Math.random() * fbList.length)];
+        }
+      }
+      return null;
+    }
+    return list[Math.floor(Math.random() * list.length)];
   }
 
   public getBestLoop(
@@ -1356,6 +1425,9 @@ export class ClientGrooveboxConductor {
   }
 
   public rerollStem(stem: StemName): void {
+    if (this.activePhraseBlock && this.activePhraseBlock.buffers[stem]) {
+      delete this.activePhraseBlock.buffers[stem];
+    }
     const sec = this.arranger.getSection();
     const chord = this.activeProgression[this.phraseBar % this.activeProgression.length];
     const loopMatch = this.getBestLoop(stem, sec, this.phraseBar, stem === "drums" ? undefined : chord.rootPitch);
@@ -1470,9 +1542,77 @@ export class ClientGrooveboxConductor {
       // Pick next harmonic chord progression for fresh section
       this.progressionIndex = (this.progressionIndex + 1) % DEFAULT_PROGRESSIONS.length;
       this.activeProgression = DEFAULT_PROGRESSIONS[this.progressionIndex];
+      this.phraseBarCount = 0;
+      this.activePhraseBlock = null;
       // Progress to next song composition when cycling into a new verse/song cycle
       if (section === "GROOVE_A" || section === "INTRO") {
         this.vocalSongArranger.nextSong();
+      }
+    } else {
+      this.phraseBarCount = (this.phraseBarCount + 1) % 4;
+    }
+  }
+
+  private schedulePhraseBlock(phrase: LoadedPhraseBlock, when: number, sec: string, barInSec: number): void {
+    const isBuildupClimax = (sec === "BUILDUP" && barInSec >= 4);
+    // On Bar 7 Step 15 of BUILDUP: Silent drop gap breath!
+    const dropGapBreathSec = isBuildupClimax ? (14.85 * 60) / (this.currentBpm * 4) : undefined;
+
+    // Tempo-only rate: NO PITCH RESAMPLING, ZERO DRIFT!
+    const rate = this.currentBpm / phrase.meta.source_bpm;
+
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const buffer = phrase.buffers[stem];
+      if (!buffer) continue;
+
+      // Invariant section muting rules:
+      if (sec === "BREAKDOWN" && (stem === "drums" || stem === "bass")) {
+        continue;
+      }
+      if (sec === "INTRO" && stem === "bass") {
+        continue;
+      }
+      if (sec === "BUILDUP" && stem === "bass" && barInSec >= 6) {
+        continue;
+      }
+
+      this.engine.scheduleSlice(stem, buffer, when, {
+        rate,
+        duration: dropGapBreathSec,
+        fadeMs: 6,
+      });
+
+      const grid = phrase.meta.onset_grids[stem] || [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+      const onsetIndices: number[] = [];
+      const vels: number[] = new Array(16).fill(0.0);
+      for (let i = 0; i < 16; i++) {
+        if (grid[i] === 1) {
+          onsetIndices.push(i);
+          vels[i] = 0.95;
+        }
+      }
+
+      this.activePatterns[stem] = {
+        id: `${phrase.meta.id}_${stem}`,
+        name: `${phrase.meta.track_title} [${sec}]`,
+        groove_type: phrase.meta.section.toLowerCase(),
+        energy: phrase.meta.energy,
+        density: onsetIndices.length / 16,
+        onset_grid: onsetIndices,
+        velocities: vels,
+        length: 16,
+        key: phrase.meta.key,
+      };
+
+      if (stem === "vocals") {
+        this.currentVocalMeta = {
+          lyric: phrase.meta.track_title,
+          songTitle: phrase.meta.track_title,
+          syllable: sec,
+          vowel: "EE",
+          note: phrase.meta.key,
+          sectionName: sec,
+        };
       }
     }
   }
@@ -1504,17 +1644,25 @@ export class ClientGrooveboxConductor {
     const oDest = this.synthSidechainGain || this.engine.getStemInput("other");
     const vInput = this.engine.getStemInput("vocals");
 
-    // 0. Trigger 1-bar studio whole-pattern loops on bar downbeat
+    // 0. Trigger 4-bar cohesive multi-stem phrase blocks or 1-bar studio loops on downbeat
     if (step % 16 === 0) {
-      this.scheduleBarLoops(when, sec, phraseBar, chord);
+      if (this.phraseBarCount === 0 || !this.activePhraseBlock) {
+        this.activePhraseBlock = this.getBestPhraseBlock(sec);
+        if (this.activePhraseBlock) {
+          this.schedulePhraseBlock(this.activePhraseBlock, when, sec, barInSec);
+        }
+      }
+      if (!this.activePhraseBlock) {
+        this.scheduleBarLoops(when, sec, phraseBar, chord);
+      }
     }
 
     // -------------------------------------------------------------------------
     // 1. DRUMS (Section-Aware Arrangement)
     // -------------------------------------------------------------------------
     const dPat = this.activePatterns.drums;
-    if (this.activeLoops.drums) {
-      // Continuous studio drum loop is active: dynamic sidechain ducking on downbeats
+    if (this.activePhraseBlock || this.activeLoops.drums) {
+      // Continuous studio drum phrase or loop is active: dynamic sidechain ducking on downbeats
       if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
         this.applySidechainDucking(when);
       }
@@ -1617,7 +1765,7 @@ export class ClientGrooveboxConductor {
     // 2. BASS (Harmonically Locked to Chord Progression Root)
     // -------------------------------------------------------------------------
     const bPat = this.activePatterns.bass;
-    if (!this.activeLoops.bass && bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
+    if (!this.activePhraseBlock && !this.activeLoops.bass && bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
       if (bPat.onset_grid.includes(step)) {
         let vel = bPat.velocities ? bPat.velocities[step] : 0.90;
         const dur = (bPat.groove_type === "rolling") ? 0.14 : 0.22;
@@ -1633,7 +1781,7 @@ export class ClientGrooveboxConductor {
     // 3. SYNTHS / OTHER (Full Harmonic Triads & Arpeggios)
     // -------------------------------------------------------------------------
     const oPat = this.activePatterns.other;
-    if (!this.activeLoops.other && oPat) {
+    if (!this.activePhraseBlock && !this.activeLoops.other && oPat) {
       if (oPat.onset_grid.includes(step)) {
         const vel = oPat.velocities ? oPat.velocities[step] : 0.85;
 
@@ -1678,7 +1826,7 @@ export class ClientGrooveboxConductor {
     const vPat = this.activePatterns.vocals;
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
-    if (!isDropGap && !this.activeLoops.vocals && vPat) {
+    if (!isDropGap && !this.activePhraseBlock && !this.activeLoops.vocals && vPat) {
       // 1. Check if the song engine has a lyrical singing syllable on this step
       const syllable = this.vocalSongArranger.getSyllableForStep(sec, phraseBar, step % 16);
 

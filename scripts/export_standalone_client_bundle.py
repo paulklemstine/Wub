@@ -231,15 +231,158 @@ def harvest_whole_pattern_loops(
     return manifest
 
 
+def harvest_cohesive_phrase_blocks(
+    multistem_tracks: List,
+    phrases_dir: Path,
+) -> List[dict]:
+    """Extract continuous 4-bar studio-grade multi-stem phrase blocks across iconic tracks."""
+    print("=== Harvesting 4-Bar Cohesive Multi-Stem Phrase Blocks ===", flush=True)
+    phrases_dir.mkdir(parents=True, exist_ok=True)
+    manifest_phrases: List[dict] = []
+
+    targets = {"DROP": 4, "GROOVE_A": 4, "BUILDUP": 3, "BREAKDOWN": 3, "INTRO": 3}
+    collected: Dict[str, List[dict]] = {sec: [] for sec in targets}
+
+    fade_len = int(0.004 * 44100)  # 4ms cosine fade
+    t_fade = np.linspace(0, 1, fade_len)
+    fade_in = np.sin(0.5 * np.pi * t_fade)
+    fade_out = np.cos(0.5 * np.pi * t_fade)
+
+    for tr in multistem_tracks:
+        tid = tr.track_id
+        tatums = getattr(tr, "tatums", [])
+        segments = getattr(tr, "segments", [])
+        n_bars = len(tatums) // 16
+        bpm = float(getattr(tr, "bpm", 126.0))
+        key = str(getattr(tr, "key", "A minor"))
+        clean_title = getattr(tr, "filename", "").replace(".mp3", "")
+
+        if not (118.0 <= bpm <= 132.0):
+            continue
+
+        stem_paths = {s: Path("data/stems") / tid / f"{s}.wav" for s in STEMS}
+        if not all(p.exists() for p in stem_paths.values()):
+            continue
+
+        for b in range(0, min(n_bars - 4, 120), 4):
+            t0 = tatums[b * 16]
+            t1 = tatums[(b + 4) * 16]
+            start = float(getattr(t0, "start", t0["start"] if isinstance(t0, dict) else 0.0))
+            end = float(getattr(t1, "start", t1["start"] if isinstance(t1, dict) else 0.0))
+            dur = end - start
+            if dur < 6.8 or dur > 8.4:
+                continue
+
+            bar_segs = [
+                s for s in segments
+                if float(getattr(s, "start", s.get("start", 0.0) if isinstance(s, dict) else 0.0)) >= start - 0.05
+                and float(getattr(s, "start", s.get("start", 0.0) if isinstance(s, dict) else 0.0)) < end
+                and not getattr(s, "is_silent", s.get("is_silent", False) if isinstance(s, dict) else False)
+            ]
+            loudness_by_stem = {s: -99.0 for s in STEMS}
+            for s in bar_segs:
+                st = getattr(s, "stem", s.get("stem", "") if isinstance(s, dict) else "")
+                if st in loudness_by_stem:
+                    loud = float(getattr(s, "loudness_max", getattr(s, "loud_max", s.get("loudness_max", -99.0) if isinstance(s, dict) else -99.0)))
+                    loudness_by_stem[st] = max(loudness_by_stem[st], loud)
+
+            d_loud = loudness_by_stem["drums"]
+            b_loud = loudness_by_stem["bass"]
+            o_loud = loudness_by_stem["other"]
+            v_loud = loudness_by_stem["vocals"]
+
+            sec = None
+            if d_loud >= -12.0 and b_loud >= -14.0 and o_loud >= -18.0:
+                sec = "DROP"
+            elif d_loud >= -15.0 and b_loud >= -18.0:
+                sec = "GROOVE_A"
+            elif d_loud < -25.0 and b_loud < -25.0 and (o_loud >= -22.0 or v_loud >= -22.0):
+                sec = "INTRO" if b <= 8 else "BREAKDOWN"
+            elif -22.0 <= d_loud < -14.0 and o_loud >= -18.0:
+                sec = "BUILDUP"
+
+            if not sec or len(collected[sec]) >= targets[sec]:
+                continue
+
+            if sum(1 for p in collected[sec] if p["track_id"] == tid) >= 2:
+                continue
+
+            f0 = int(round(start * 44100))
+            flen = int(round(dur * 44100))
+            phrase_id = f"phrase_{sec.lower()}_{len(collected[sec]) + 1}_{tid[:6]}"
+            stem_urls = {}
+            onset_grids = {}
+
+            valid_extraction = True
+            for stem in STEMS:
+                out_wav = phrases_dir / f"{phrase_id}_{stem}.wav"
+                try:
+                    data, sr = sf.read(str(stem_paths[stem]), start=f0, frames=flen, always_2d=True, dtype="float32")
+                    mono = data.mean(axis=1)
+
+                    peak = float(np.max(np.abs(mono)))
+                    if peak > 0.001:
+                        mono = mono * (0.89 / peak)
+
+                    if len(mono) > fade_len * 2:
+                        mono[:fade_len] *= fade_in
+                        mono[-fade_len:] *= fade_out
+
+                    sf.write(str(out_wav), mono, sr, subtype="PCM_16")
+                    stem_urls[stem] = f"data/phrases/{out_wav.name}"
+
+                    onsets = []
+                    for s in bar_segs:
+                        st_name = getattr(s, "stem", s.get("stem", "") if isinstance(s, dict) else "")
+                        if st_name == stem:
+                            s_start = float(getattr(s, "start", s.get("start", 0.0) if isinstance(s, dict) else 0.0))
+                            step_idx = int(round((s_start - start) / (dur / 16.0)))
+                            if 0 <= step_idx < 16 and step_idx not in onsets:
+                                onsets.append(step_idx)
+                    onsets.sort()
+                    grid_16 = [1 if i in onsets else 0 for i in range(16)]
+                    if sum(grid_16) == 0 and stem == "drums" and sec in ("DROP", "GROOVE_A"):
+                        grid_16 = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
+                    onset_grids[stem] = grid_16
+                except Exception:
+                    valid_extraction = False
+                    break
+
+            if not valid_extraction:
+                continue
+
+            phrase_item = {
+                "id": phrase_id,
+                "track_id": tid,
+                "track_title": clean_title,
+                "key": key,
+                "source_bpm": bpm,
+                "section": sec,
+                "energy": 0.95 if sec == "DROP" else (0.82 if sec == "GROOVE_A" else (0.65 if sec == "BUILDUP" else 0.25)),
+                "bar_length": 4,
+                "duration": round(dur, 3),
+                "stems": stem_urls,
+                "onset_grids": onset_grids,
+            }
+            collected[sec].append(phrase_item)
+            manifest_phrases.append(phrase_item)
+            print(f"   ✓ Extracted {sec} phrase: {clean_title} (bar {b}-{b+4}, {bpm} BPM, {key})", flush=True)
+
+    print(f"✓ Total harvested {len(manifest_phrases)} cohesive 4-bar multi-stem phrase blocks.", flush=True)
+    return manifest_phrases
+
+
 def export_bundle() -> None:
     print("=== Exporting Standalone In-Browser ML & Pattern Assets ===", flush=True)
 
     public_dir = Path("frontend/public/data")
     slices_dir = public_dir / "slices"
     loops_dir = public_dir / "loops"
+    phrases_dir = public_dir / "phrases"
     public_dir.mkdir(parents=True, exist_ok=True)
     slices_dir.mkdir(parents=True, exist_ok=True)
     loops_dir.mkdir(parents=True, exist_ok=True)
+    phrases_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Copy Composing ML Weights
     src_weights = Path("data/composing_ml_weights.json")
@@ -253,7 +396,7 @@ def export_bundle() -> None:
 
     # 2. Extract Multi-Stem Tracks & Patterns from Authentic Corpus
     store = CorpusStore(Path("data/processed"), stems_base=Path("data/stems"))
-    store.refresh(max_tracks=60)
+    store.refresh(max_tracks=40)
     multistem_tracks = [t for t in store.tracks if len(t.stems_available) == 4]
     if not multistem_tracks:
         multistem_tracks = store.tracks[:20]
@@ -262,7 +405,10 @@ def export_bundle() -> None:
     n_pats = bank.load_from_tracks(multistem_tracks)
     print(f"✓ Extracted {n_pats} patterns and {len(bank.phrases)} phrases across {len(multistem_tracks)} tracks into memory bank", flush=True)
 
-    # 3. Harvest Whole 1-Bar Pattern Loops Across Stems
+    # 3. Harvest Cohesive 4-Bar Multi-Stem Phrase Blocks
+    extracted_phrase_blocks = harvest_cohesive_phrase_blocks(multistem_tracks, phrases_dir)
+
+    # 4. Harvest Whole 1-Bar Pattern Loops Across Stems
     extracted_loops_manifest = harvest_whole_pattern_loops(multistem_tracks, loops_dir)
 
     # 4. Harvest Clean Audio Slices per Acoustic Category
@@ -497,7 +643,7 @@ def export_bundle() -> None:
             }
 
     standalone_manifest = {
-        "version": 2,
+        "version": 3,
         "default_bpm": 126.0,
         "chord_progressions": chord_progressions,
         "groove_templates": groove_templates,
@@ -505,6 +651,7 @@ def export_bundle() -> None:
         "phrases": serialized_phrases,
         "slices": extracted_slices_manifest,
         "loops": extracted_loops_manifest,
+        "phrase_blocks": extracted_phrase_blocks,
     }
 
     dst_patterns = public_dir / "standalone_patterns.json"
