@@ -135,41 +135,140 @@ export interface ChordStep {
   name: string;
 }
 
+// Camelot Harmonic Key Wheel Definitions
+export interface CamelotKeyInfo {
+  code: string;       // e.g. "8A", "8B"
+  name: string;       // e.g. "Am", "C"
+  rootPitch: number;  // 0..11
+  isMinor: boolean;
+}
+
+export const CAMELOT_KEYS: Record<string, CamelotKeyInfo> = {
+  "1A": { code: "1A", name: "G#m", rootPitch: 8, isMinor: true },
+  "2A": { code: "2A", name: "D#m", rootPitch: 3, isMinor: true },
+  "3A": { code: "3A", name: "A#m", rootPitch: 10, isMinor: true },
+  "4A": { code: "4A", name: "Fm",  rootPitch: 5, isMinor: true },
+  "5A": { code: "5A", name: "Cm",  rootPitch: 0, isMinor: true },
+  "6A": { code: "6A", name: "Gm",  rootPitch: 7, isMinor: true },
+  "7A": { code: "7A", name: "Dm",  rootPitch: 2, isMinor: true },
+  "8A": { code: "8A", name: "Am",  rootPitch: 9, isMinor: true },
+  "9A": { code: "9A", name: "Em",  rootPitch: 4, isMinor: true },
+  "10A": { code: "10A", name: "Bm", rootPitch: 11, isMinor: true },
+  "11A": { code: "11A", name: "F#m", rootPitch: 6, isMinor: true },
+  "12A": { code: "12A", name: "C#m", rootPitch: 1, isMinor: true },
+
+  "1B": { code: "1B", name: "B",   rootPitch: 11, isMinor: false },
+  "2B": { code: "2B", name: "F#",  rootPitch: 6, isMinor: false },
+  "3B": { code: "3B", name: "Db",  rootPitch: 1, isMinor: false },
+  "4B": { code: "4B", name: "Ab",  rootPitch: 8, isMinor: false },
+  "5B": { code: "5B", name: "Eb",  rootPitch: 3, isMinor: false },
+  "6B": { code: "6B", name: "Bb",  rootPitch: 10, isMinor: false },
+  "7B": { code: "7B", name: "F",   rootPitch: 5, isMinor: false },
+  "8B": { code: "8B", name: "C",   rootPitch: 0, isMinor: false },
+  "9B": { code: "9B", name: "G",   rootPitch: 7, isMinor: false },
+  "10B": { code: "10B", name: "D",  rootPitch: 2, isMinor: false },
+  "11B": { code: "11B", name: "A",  rootPitch: 9, isMinor: false },
+  "12B": { code: "12B", name: "E",  rootPitch: 4, isMinor: false },
+};
+
+export interface HarmonicTemplateStep {
+  semitoneOffset: number; // offset from key root
+  isMinor: boolean;
+}
+
+export const HARMONIC_TEMPLATES: HarmonicTemplateStep[][] = [
+  // 1. Epic Anthem: i - VI - III - VII (Am - F - C - G in 8A)
+  [
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 8, isMinor: false },
+    { semitoneOffset: 8, isMinor: false },
+    { semitoneOffset: 3, isMinor: false },
+    { semitoneOffset: 3, isMinor: false },
+    { semitoneOffset: 10, isMinor: false },
+    { semitoneOffset: 10, isMinor: false },
+  ],
+  // 2. Deep Melodic House: i - iv - v - i (Am - Dm - Em - Am in 8A)
+  [
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 5, isMinor: true },
+    { semitoneOffset: 5, isMinor: true },
+    { semitoneOffset: 7, isMinor: true },
+    { semitoneOffset: 7, isMinor: true },
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 0, isMinor: true },
+  ],
+  // 3. Dark Club Driving Pedal: i - i - VI - VII (Am - Am - F - G in 8A)
+  [
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 8, isMinor: false },
+    { semitoneOffset: 8, isMinor: false },
+    { semitoneOffset: 10, isMinor: false },
+    { semitoneOffset: 10, isMinor: false },
+  ],
+  // 4. Trance Uplift / Progressive: i - VII - VI - VII (Am - G - F - G in 8A)
+  [
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 0, isMinor: true },
+    { semitoneOffset: 10, isMinor: false },
+    { semitoneOffset: 10, isMinor: false },
+    { semitoneOffset: 8, isMinor: false },
+    { semitoneOffset: 8, isMinor: false },
+    { semitoneOffset: 10, isMinor: false },
+    { semitoneOffset: 10, isMinor: false },
+  ],
+];
+
+export function buildProgressionFromKey(key: CamelotKeyInfo, templateIdx: number): ChordStep[] {
+  const tmpl = HARMONIC_TEMPLATES[templateIdx % HARMONIC_TEMPLATES.length];
+  return tmpl.map((st) => {
+    const root = (key.rootPitch + st.semitoneOffset) % 12;
+    const isMinor = key.isMinor ? st.isMinor : !st.isMinor;
+    const bassHz = 440 * Math.pow(2, (root - 9 - 24) / 12);
+    const chordHz = 440 * Math.pow(2, (root - 9 - 12) / 12);
+    return {
+      rootPitch: root,
+      isMinor,
+      bassHz,
+      chordHz,
+      name: `${ROOT_NAMES[root]}${isMinor ? "m" : ""}`,
+    };
+  });
+}
+
+export function getAdjacentCamelotKey(currentCode: string): string {
+  const num = parseInt(currentCode, 10);
+  const letter = currentCode.endsWith("B") ? "B" : "A";
+  const roll = Math.random();
+  if (roll < 0.40) {
+    // Fifth up (+1 Camelot hour)
+    const nextNum = (num % 12) + 1;
+    return `${nextNum}${letter}`;
+  } else if (roll < 0.75) {
+    // Fifth down (-1 Camelot hour)
+    const prevNum = ((num - 2 + 12) % 12) + 1;
+    return `${prevNum}${letter}`;
+  } else if (roll < 0.90) {
+    // Relative Major / Minor toggle
+    const altLetter = letter === "A" ? "B" : "A";
+    return `${num}${altLetter}`;
+  } else {
+    // Energy boost (+2 Camelot hours / whole tone step)
+    const boostNum = ((num + 1) % 12) + 1;
+    return `${boostNum}${letter}`;
+  }
+}
+
 // Built-in authentic harmonic dance chord progressions learned from the corpus
 const DEFAULT_PROGRESSIONS: ChordStep[][] = [
-  // 1. Epic Anthem: i - VI - III - VII (Am - F - C - G)
-  [
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 5, isMinor: false, bassHz: 43.65, chordHz: 174.6, name: "F" },
-    { rootPitch: 5, isMinor: false, bassHz: 43.65, chordHz: 174.6, name: "F" },
-    { rootPitch: 0, isMinor: false, bassHz: 65.4, chordHz: 130.8, name: "C" },
-    { rootPitch: 0, isMinor: false, bassHz: 65.4, chordHz: 130.8, name: "C" },
-    { rootPitch: 7, isMinor: false, bassHz: 49.0, chordHz: 196.0, name: "G" },
-    { rootPitch: 7, isMinor: false, bassHz: 49.0, chordHz: 196.0, name: "G" },
-  ],
-  // 2. Deep Melodic House: i - iv - v - i (Am - Dm - Em - Am)
-  [
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 2, isMinor: true, bassHz: 73.4, chordHz: 146.8, name: "Dm" },
-    { rootPitch: 2, isMinor: true, bassHz: 73.4, chordHz: 146.8, name: "Dm" },
-    { rootPitch: 4, isMinor: true, bassHz: 82.4, chordHz: 164.8, name: "Em" },
-    { rootPitch: 4, isMinor: true, bassHz: 82.4, chordHz: 164.8, name: "Em" },
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-  ],
-  // 3. Dark Club Driving Pedal: i - i - bVI - bVII (Am - Am - F - G)
-  [
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 9, isMinor: true, bassHz: 55.0, chordHz: 110.0, name: "Am" },
-    { rootPitch: 5, isMinor: false, bassHz: 43.65, chordHz: 174.6, name: "F" },
-    { rootPitch: 5, isMinor: false, bassHz: 43.65, chordHz: 174.6, name: "F" },
-    { rootPitch: 7, isMinor: false, bassHz: 49.0, chordHz: 196.0, name: "G" },
-    { rootPitch: 7, isMinor: false, bassHz: 49.0, chordHz: 196.0, name: "G" },
-  ],
+  buildProgressionFromKey(CAMELOT_KEYS["8A"], 0),
+  buildProgressionFromKey(CAMELOT_KEYS["8A"], 1),
+  buildProgressionFromKey(CAMELOT_KEYS["8A"], 2),
+  buildProgressionFromKey(CAMELOT_KEYS["8A"], 3),
 ];
 
 // -----------------------------------------------------------------------------
@@ -1044,9 +1143,20 @@ export class ClientGrooveboxConductor {
   private stepsPerPattern: number = 16;
   private cycleMode: string = "8x16";
 
-  // Harmonic Progression State
+  // Harmonic Progression & Camelot Key State
+  private currentCamelotCode: string = "8A";
+  private currentTemplateIndex: number = 0;
+  private barsInCurrentKey: number = 0;
   private activeProgression: ChordStep[] = DEFAULT_PROGRESSIONS[0];
   private progressionIndex: number = 0;
+
+  // Real-time Reticule Steering State (guides timbre, filters, pattern sliding & slices)
+  private steering: Record<StemName, { x: number; y: number }> = {
+    drums: { x: 0.72, y: 0.65 },
+    bass: { x: 0.28, y: 0.62 },
+    vocals: { x: 0.68, y: 0.32 },
+    other: { x: 0.32, y: 0.35 },
+  };
 
   // Dynamic Sidechain Nodes
   private bassSidechainGain: GainNode | null = null;
@@ -1112,6 +1222,44 @@ export class ClientGrooveboxConductor {
     } catch {
       // In case engine is still initializing
     }
+  }
+
+  /**
+   * Guides and steers the timbre, texture, and pattern sliding of a stem
+   * based on reticule coordinates (0..1).
+   */
+  public setReticleSteering(stem: StemName, x: number, y: number): void {
+    const cx = Math.max(0, Math.min(1, x));
+    const cy = Math.max(0, Math.min(1, y));
+    this.steering[stem] = { x: cx, y: cy };
+
+    // Real-time Audio Filter manipulation based on X
+    if (stem === "bass") {
+      // 70 Hz (deep sub) to 3200 Hz (gritty acid growl)
+      const freq = 70 * Math.pow(3200 / 70, cx);
+      const q = 0.7 + 3.8 * cx;
+      this.engine.setStemFilter("bass", freq, q);
+    } else if (stem === "drums") {
+      // 1200 Hz (warm muffled punch) to 20000 Hz (crisp sizzle)
+      const freq = 1200 * Math.pow(20000 / 1200, cx);
+      const q = 0.7 + 1.2 * cx;
+      this.engine.setStemFilter("drums", freq, q);
+    } else if (stem === "other") {
+      // 250 Hz (warm floating ambient pad) to 18000 Hz (cutting saw lead)
+      const freq = 250 * Math.pow(18000 / 250, cx);
+      const q = 0.7 + 2.8 * cx;
+      this.engine.setStemFilter("other", freq, q);
+    } else if (stem === "vocals") {
+      // 600 Hz (warm telephone/muffled) to 15000 Hz (bright shimmering vocal)
+      const freq = 600 * Math.pow(15000 / 600, cx);
+      const q = 0.8 + 1.6 * cx;
+      this.engine.setStemFilter("vocals", freq, q);
+    }
+  }
+
+  public getReticleSteering(stem: StemName): { x: number; y: number } {
+    const s = this.steering[stem];
+    return { x: s.x, y: s.y };
   }
 
   public async loadStaticBundle(basePath: string = "data"): Promise<boolean> {
@@ -1342,7 +1490,11 @@ export class ClientGrooveboxConductor {
     return { loop: best, rate };
   }
 
-  private getBestSlice(stemCategory: string, targetPitch?: number): { buffer: AudioBuffer; rate: number } | null {
+  private getBestSlice(
+    stemCategory: string,
+    targetPitch?: number,
+    variationFraction?: number
+  ): { buffer: AudioBuffer; rate: number } | null {
     let list = this.sliceRegistry.get(stemCategory);
     if (!list || list.length === 0) {
       // Intelligent fallback within same stem
@@ -1386,8 +1538,9 @@ export class ClientGrooveboxConductor {
     }
 
     if (targetPitch === undefined) {
-      // Pick with slight variation across available slices
-      const idx = Math.floor(Math.random() * list.length);
+      // Pick with reticule sliding variation across available slices
+      const v = variationFraction !== undefined ? Math.max(0, Math.min(0.999, variationFraction)) : Math.random();
+      const idx = Math.floor(v * list.length) % list.length;
       return { buffer: list[idx].buffer, rate: 1.0 };
     }
 
@@ -1395,16 +1548,29 @@ export class ClientGrooveboxConductor {
     let best = list[0];
     let bestDiff = 999;
     let bestShift = 0;
+    const candidates: Array<{ item: SliceAsset; shift: number }> = [];
 
     for (const item of list) {
       let diff = (targetPitch - item.pitch) % 12;
       if (diff > 6) diff -= 12;
       if (diff < -6) diff += 12;
-      if (Math.abs(diff) < bestDiff) {
-        bestDiff = Math.abs(diff);
+      const absDiff = Math.abs(diff);
+      if (absDiff < bestDiff) {
+        bestDiff = absDiff;
         bestShift = diff;
         best = item;
       }
+      if (absDiff <= 1) {
+        candidates.push({ item, shift: diff });
+      }
+    }
+
+    // If multiple candidates have closest pitch, use variationFraction to slide through them
+    if (candidates.length > 0 && variationFraction !== undefined) {
+      const v = Math.max(0, Math.min(0.999, variationFraction));
+      const cIdx = Math.floor(v * candidates.length) % candidates.length;
+      best = candidates[cIdx].item;
+      bestShift = candidates[cIdx].shift;
     }
 
     // If exact chromatic pitch exists (bestDiff == 0), rate is 1.0 (zero drift!).
@@ -1561,10 +1727,25 @@ export class ClientGrooveboxConductor {
 
   private onBarStart(): void {
     const { isSectionChange, section } = this.arranger.advanceBar();
-    if (isSectionChange) {
-      // Pick next harmonic chord progression for fresh section
-      this.progressionIndex = (this.progressionIndex + 1) % DEFAULT_PROGRESSIONS.length;
-      this.activeProgression = DEFAULT_PROGRESSIONS[this.progressionIndex];
+    this.barsInCurrentKey++;
+
+    if (isSectionChange || this.barsInCurrentKey >= 32) {
+      // Modulate key on Camelot wheel for continuous infinite harmonic drift!
+      const shouldModulate = isSectionChange ? (Math.random() < 0.50) : (this.barsInCurrentKey >= 32);
+      if (shouldModulate) {
+        this.currentCamelotCode = getAdjacentCamelotKey(this.currentCamelotCode);
+        this.currentTemplateIndex = (this.currentTemplateIndex + 1) % HARMONIC_TEMPLATES.length;
+        this.barsInCurrentKey = 0;
+        const keyInfo = CAMELOT_KEYS[this.currentCamelotCode] || CAMELOT_KEYS["8A"];
+        this.activeProgression = buildProgressionFromKey(keyInfo, this.currentTemplateIndex);
+        console.info(`[KG-505 Harmonic Drift] Key shifted to ${keyInfo.code} (${keyInfo.name}) • Template #${this.currentTemplateIndex + 1}`);
+      } else {
+        // Switch progression template within current key
+        this.currentTemplateIndex = (this.currentTemplateIndex + 1) % HARMONIC_TEMPLATES.length;
+        const keyInfo = CAMELOT_KEYS[this.currentCamelotCode] || CAMELOT_KEYS["8A"];
+        this.activeProgression = buildProgressionFromKey(keyInfo, this.currentTemplateIndex);
+      }
+
       this.phraseBarCount = 0;
       this.activePhraseBlock = null;
       // Progress to next song composition when cycling into a new verse/song cycle
@@ -1686,9 +1867,10 @@ export class ClientGrooveboxConductor {
     }
 
     // -------------------------------------------------------------------------
-    // 1. DRUMS (Section-Aware Arrangement with Real Acoustic Slices)
+    // 1. DRUMS (Section-Aware Arrangement with Real Acoustic Slices & Reticule Steering)
     // -------------------------------------------------------------------------
     const dPat = this.activePatterns.drums;
+    const dSteer = this.steering.drums;
     if (this.playbackMode === "phrase_blocks" && (this.activePhraseBlock || this.activeLoops.drums)) {
       // Continuous studio drum phrase or loop is active: dynamic sidechain ducking on downbeats
       if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
@@ -1705,7 +1887,7 @@ export class ClientGrooveboxConductor {
       if (isBreakdown) {
         // Breakdown: Kicks completely muted, gentle closed hats on 2, 6, 10, 14
         if ([2, 6, 10, 14].includes(step % 16)) {
-          const hatSlice = this.getBestSlice("drums:hat_closed");
+          const hatSlice = this.getBestSlice("drums:hat_closed", undefined, dSteer.y);
           if (hatSlice) {
             this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
               rate: 1.0,
@@ -1736,7 +1918,7 @@ export class ClientGrooveboxConductor {
         }
 
         if (playSnare) {
-          const snareSlice = this.getBestSlice("drums:snare");
+          const snareSlice = this.getBestSlice("drums:snare", undefined, dSteer.y);
           if (snareSlice) {
             this.engine.scheduleSlice("drums", snareSlice.buffer, when, {
               rate: 1.0,
@@ -1751,7 +1933,7 @@ export class ClientGrooveboxConductor {
 
         // Downbeat Kick pulse (bars 1-5 only)
         if (step % 4 === 0 && barInSec < 6) {
-          const kickSlice = this.getBestSlice("drums:kick");
+          const kickSlice = this.getBestSlice("drums:kick", undefined, dSteer.y);
           if (kickSlice) {
             this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
               rate: 1.0,
@@ -1774,10 +1956,14 @@ export class ClientGrooveboxConductor {
         const hasHit = dPat.onset_grid.includes(step);
         const vel = dPat.velocities ? dPat.velocities[step] : 1.0;
 
-        // Kick triggers: 0, 4, 8, 12 (or syncopations)
-        const isKickStep = ([0, 4, 8, 12].includes(step % 16)) || ((step % 16) === 10 && dPat.groove_type.includes("syncopated"));
-        if (isKickStep && hasHit) {
-          const kickSlice = this.getBestSlice("drums:kick");
+        // Kick triggers: 0, 4, 8, 12 + ghost kicks on step 10 when Y is high
+        const isSparse = (dSteer.y < 0.35);
+        const isKickStep = isSparse
+          ? (step % 16 === 0 || step % 16 === 8)
+          : ([0, 4, 8, 12].includes(step % 16)) || ((step % 16) === 10 && (dSteer.y > 0.65 || dPat.groove_type.includes("syncopated")));
+
+        if (isKickStep && (hasHit || isKickStep)) {
+          const kickSlice = this.getBestSlice("drums:kick", undefined, dSteer.y);
           if (kickSlice) {
             this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
               rate: 1.0,
@@ -1791,10 +1977,13 @@ export class ClientGrooveboxConductor {
           this.applySidechainDucking(when);
         }
 
-        // Snare / Clap triggers: 4 and 12 (+ fill roll on bar 7)
-        const isSnareStep = ((step % 16) === 4 || (step % 16) === 12) || (phraseBar === 7 && (step % 16) >= 8 && (step % 16) !== 15);
-        if (isSnareStep) {
-          const snareSlice = this.getBestSlice("drums:snare");
+        // Snare / Clap triggers: 4 and 12 (+ fill roll on bar 7, + ghost on 14 when high Y)
+        const isSnareStep = ((step % 16) === 4 || (step % 16) === 12) ||
+          (phraseBar === 7 && (step % 16) >= 8 && (step % 16) !== 15) ||
+          (dSteer.y > 0.75 && (step % 16) === 14);
+
+        if (isSnareStep && (!isSparse || (step % 16 === 12))) {
+          const snareSlice = this.getBestSlice("drums:snare", undefined, dSteer.y);
           if (snareSlice) {
             this.engine.scheduleSlice("drums", snareSlice.buffer, when, {
               rate: 1.0,
@@ -1809,7 +1998,7 @@ export class ClientGrooveboxConductor {
 
         // Hi-Hats: Open hat on upbeats (2, 6, 10, 14) + closed 16th hats with choking
         if ([2, 6, 10, 14].includes(step % 16)) {
-          const hatSlice = this.getBestSlice("drums:hat_open");
+          const hatSlice = this.getBestSlice("drums:hat_open", undefined, dSteer.y);
           if (hatSlice) {
             this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
               rate: 1.0,
@@ -1820,8 +2009,8 @@ export class ClientGrooveboxConductor {
           } else {
             this.synth.playHat(when, 0.90, true, dInput);
           }
-        } else if (step % 2 === 1 && sec !== "INTRO") {
-          const hatSlice = this.getBestSlice("drums:hat_closed");
+        } else if (step % 2 === 1 && sec !== "INTRO" && (dSteer.y > 0.25)) {
+          const hatSlice = this.getBestSlice("drums:hat_closed", undefined, dSteer.y);
           const hatVel = (step % 4 === 1 || step % 4 === 3) ? 0.72 : 0.58;
           if (hatSlice) {
             this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
@@ -1837,8 +2026,8 @@ export class ClientGrooveboxConductor {
         }
 
         // Syncopated Perc on 3, 7, 11
-        if ([3, 7, 11].includes(step % 16) && (sec === "DROP" || sec === "GROOVE_A")) {
-          const percSlice = this.getBestSlice("drums:percussion");
+        if ([3, 7, 11].includes(step % 16) && (sec === "DROP" || sec === "GROOVE_A" || dSteer.y > 0.65)) {
+          const percSlice = this.getBestSlice("drums:percussion", undefined, dSteer.y);
           if (percSlice) {
             this.engine.scheduleSlice("drums", percSlice.buffer, when, {
               rate: 1.0,
@@ -1853,7 +2042,7 @@ export class ClientGrooveboxConductor {
 
         // Dramatic Turnaround Fill on Bar 7
         if (phraseBar === 7 && step === 14) {
-          const fillSlice = this.getBestSlice("drums:fill");
+          const fillSlice = this.getBestSlice("drums:fill", undefined, dSteer.y);
           if (fillSlice) {
             this.engine.scheduleSlice("drums", fillSlice.buffer, when, {
               rate: 1.0,
@@ -1867,15 +2056,24 @@ export class ClientGrooveboxConductor {
     }
 
     // -------------------------------------------------------------------------
-    // 2. BASS (Harmonically Locked to Chord Progression Root with Pure Slices)
+    // 2. BASS (Steered by Reticule X: Sub/Rolling/Stab & Y: Density/Variation)
     // -------------------------------------------------------------------------
     const bPat = this.activePatterns.bass;
+    const bSteer = this.steering.bass;
     if (bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
-      if (bPat.onset_grid.includes(step)) {
-        let vel = bPat.velocities ? bPat.velocities[step] : 0.90;
-        const dur = (bPat.groove_type === "rolling") ? 0.14 : 0.22;
-        const bassCat = bPat.groove_type === "rolling" ? "bass:rolling" : (bPat.groove_type === "stabs" ? "bass:stab" : "bass:sub");
-        const subSlice = this.getBestSlice(bassCat, chord.rootPitch);
+      // Reticule X steers acoustic profile: sub -> rolling -> stab
+      const bassCat = bSteer.x < 0.38 ? "bass:sub" : (bSteer.x < 0.72 ? "bass:rolling" : "bass:stab");
+      const isSparseBass = (bSteer.y < 0.35);
+      const isDenseBass = (bSteer.y > 0.70);
+
+      const shouldPlayBass = isSparseBass
+        ? (step % 16 === 0 || step % 16 === 8)
+        : (isDenseBass ? ([0, 2, 3, 5, 6, 8, 10, 11, 13, 14].includes(step % 16) || bPat.onset_grid.includes(step)) : bPat.onset_grid.includes(step));
+
+      if (shouldPlayBass) {
+        let vel = bPat.velocities ? (bPat.velocities[step] || 0.90) : 0.90;
+        const dur = (bassCat === "bass:rolling") ? 0.14 : (bassCat === "bass:sub" ? 0.28 : 0.20);
+        const subSlice = this.getBestSlice(bassCat, chord.rootPitch, bSteer.y);
         if (subSlice) {
           this.engine.scheduleSlice("bass", subSlice.buffer, when, {
             rate: subSlice.rate,
@@ -1890,15 +2088,25 @@ export class ClientGrooveboxConductor {
     }
 
     // -------------------------------------------------------------------------
-    // 3. SYNTHS / OTHER (Full Harmonic Triads & Arpeggios)
+    // 3. SYNTHS / OTHER (Steered by Reticule X: Pad/Chord/Arp & Y: Arp Density)
     // -------------------------------------------------------------------------
     const oPat = this.activePatterns.other;
+    const oSteer = this.steering.other;
     if (oPat) {
-      if (oPat.onset_grid.includes(step)) {
-        const vel = oPat.velocities ? oPat.velocities[step] : 0.85;
+      // Reticule X steers acoustic category: pad -> chord -> arp
+      const otherCat = oSteer.x < 0.40 ? "other:pad" : (oSteer.x < 0.75 ? "other:chord" : "other:arp");
+      const isArpMode = (otherCat === "other:arp" || sec === "DROP" || oSteer.y > 0.72);
+      const isSparsePad = (otherCat === "other:pad" || oSteer.y < 0.35);
 
-        if (oPat.groove_type === "riff" || sec === "DROP") {
-          const arpSlice = this.getBestSlice("other:arp", chord.rootPitch);
+      const shouldPlayOther = isSparsePad
+        ? (step % 16 === 0 || step % 16 === 8)
+        : (isArpMode ? (step % 2 === 0 || oPat.onset_grid.includes(step)) : oPat.onset_grid.includes(step));
+
+      if (shouldPlayOther) {
+        const vel = oPat.velocities ? (oPat.velocities[step] || 0.85) : 0.85;
+
+        if (isArpMode) {
+          const arpSlice = this.getBestSlice("other:arp", chord.rootPitch, oSteer.y);
           if (arpSlice) {
             this.engine.scheduleSlice("other", arpSlice.buffer, when, {
               rate: arpSlice.rate,
@@ -1925,9 +2133,10 @@ export class ClientGrooveboxConductor {
             this.synth.playArp(when, vel, arpFreq, oDest);
           }
         } else {
-          // Polyphonic Synth Chord on upbeats (2, 6, 10, 14)
-          const dur = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.45 : 0.28;
-          const chordSlice = this.getBestSlice("other:chord", chord.rootPitch);
+          // Polyphonic Synth Chord on upbeats (2, 6, 10, 14) or pad on downbeat
+          const dur = (sec === "BREAKDOWN" || sec === "INTRO" || isSparsePad) ? 0.45 : 0.28;
+          const targetSliceCat = isSparsePad ? "other:pad" : "other:chord";
+          const chordSlice = this.getBestSlice(targetSliceCat, chord.rootPitch, oSteer.y) || this.getBestSlice("other:chord", chord.rootPitch, oSteer.y);
           if (chordSlice) {
             this.engine.scheduleSlice("other", chordSlice.buffer, when, {
               rate: chordSlice.rate,
@@ -1943,16 +2152,25 @@ export class ClientGrooveboxConductor {
     }
 
     // -------------------------------------------------------------------------
-    // 4. VOCALS (Singing Melodic Song Engine & Rhythmic Chops)
+    // 4. VOCALS (Steered by Reticule X: Call/Hook/Chop & Y: Stutter/Chop Density)
     // -------------------------------------------------------------------------
     const vPat = this.activePatterns.vocals;
+    const vSteer = this.steering.vocals;
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
     if (!isDropGap && vPat) {
-      // 1. Check if the song engine has a lyrical singing syllable on this step
-      const syllable = this.vocalSongArranger.getSyllableForStep(sec, phraseBar, step % 16);
+      // Reticule X steers vocal category: call -> hook -> chop
+      const vocalCat = vSteer.x < 0.38 ? "vocals:call" : (vSteer.x < 0.72 ? "vocals:hook" : "vocals:chop");
+      const isDenseChop = (vocalCat === "vocals:chop" || vSteer.y > 0.72);
+      const isSparseVocal = (vSteer.y < 0.35);
 
-      if (syllable || vPat.onset_grid.includes(step % 16)) {
+      // Check if song engine or pattern triggers on this step
+      const syllable = this.vocalSongArranger.getSyllableForStep(sec, phraseBar, step % 16);
+      const shouldPlayVocal = isSparseVocal
+        ? ((step % 16 === 0 || step % 16 === 8) && (phraseBar % 2 === 0))
+        : (isDenseChop ? ((step % 4 === 0 || step % 4 === 2) || syllable !== undefined) : (syllable || vPat.onset_grid.includes(step % 16)));
+
+      if (shouldPlayVocal) {
         // Fallback syllable if triggered by pattern onset
         const syl: VocalSyllable = syllable || {
           text: (sec === "DROP") ? "FEEL" : "YEAH",
@@ -1980,25 +2198,11 @@ export class ClientGrooveboxConductor {
           sectionName: sec,
         };
 
-        // Select real slice matching musical intent and section
-        let slice = null;
-        if (sec === "DROP") {
-          slice = this.getBestSlice("vocals:hook", melodyPitch) ||
-                  this.getBestSlice("vocals:call", melodyPitch) ||
-                  this.getBestSlice("vocals:chop", melodyPitch);
-        } else if (sec === "BUILDUP") {
-          slice = this.getBestSlice("vocals:chop", melodyPitch) ||
-                  this.getBestSlice("vocals:call", melodyPitch);
-        } else if (sec === "BREAKDOWN" || sec === "INTRO") {
-          slice = this.getBestSlice("vocals:hook", melodyPitch) ||
-                  this.getBestSlice("vocals:call", melodyPitch);
-        } else {
-          // GROOVE_A
-          const isDownbeat = (step % 8) === 0;
-          slice = isDownbeat
-            ? (this.getBestSlice("vocals:call", melodyPitch) || this.getBestSlice("vocals:hook", melodyPitch))
-            : this.getBestSlice("vocals:chop", melodyPitch);
-        }
+        // Select real slice matching steered intent and section
+        const slice = this.getBestSlice(vocalCat, melodyPitch, vSteer.y) ||
+                      this.getBestSlice("vocals:hook", melodyPitch, vSteer.y) ||
+                      this.getBestSlice("vocals:call", melodyPitch, vSteer.y) ||
+                      this.getBestSlice("vocals:chop", melodyPitch, vSteer.y);
 
         if (slice) {
           this.engine.scheduleSlice("vocals", slice.buffer, when, {
@@ -2101,9 +2305,36 @@ export class ClientGrooveboxConductor {
         ? "turnaround_fill"
         : this.phraseModel.sampleNextGroove(phraseBar, stem, currG);
 
-      // Section-specific musical arrangement logic
-      if (stem === "vocals") {
-        if (sec === "DROP") {
+      // Section-specific musical arrangement logic & Reticule Y steering
+      const steerY = this.steering[stem].y;
+      if (stem === "drums") {
+        if (steerY < 0.35) {
+          nextG = "minimal_downbeats";
+        } else if (steerY > 0.72) {
+          nextG = isTurnaround ? "turnaround_fill" : "syncopated_breaks";
+        }
+      } else if (stem === "bass") {
+        if (steerY < 0.35) {
+          nextG = "sub";
+        } else if (steerY > 0.70) {
+          nextG = "rolling";
+        } else {
+          nextG = "offbeat";
+        }
+      } else if (stem === "other") {
+        if (steerY < 0.35) {
+          nextG = "pad";
+        } else if (steerY > 0.70) {
+          nextG = "riff";
+        } else {
+          nextG = "chords";
+        }
+      } else if (stem === "vocals") {
+        if (steerY < 0.35) {
+          nextG = "vocal_sustained";
+        } else if (steerY > 0.70) {
+          nextG = "vocal_syncopated_chop";
+        } else if (sec === "DROP") {
           nextG = (phraseBar === 7) ? "vocal_hook" : (phraseBar % 2 === 0 ? "vocal_hook" : "vocal_syncopated_chop");
         } else if (sec === "BUILDUP") {
           nextG = (phraseBar >= 6) ? "vocal_stutter" : "vocal_call_response";
@@ -2116,6 +2347,42 @@ export class ClientGrooveboxConductor {
 
       this.activePatterns[stem] = this.synthesizePattern(stem, nextG);
     }
+  }
+
+  private applyPatternMutation(stem: StemName, pat: SerializedPattern): SerializedPattern {
+    const mutated = {
+      ...pat,
+      onset_grid: [...pat.onset_grid],
+      velocities: pat.velocities ? [...pat.velocities] : new Array(16).fill(0.9),
+    };
+    const steerY = this.steering[stem].y;
+
+    if (stem === "drums") {
+      // High energy/Y: inject ghost kick on step 10
+      if (steerY > 0.65 && !mutated.onset_grid.includes(10)) {
+        mutated.onset_grid.push(10);
+        mutated.velocities[10] = 0.72;
+      }
+      // Add ghost percussion on step 7
+      if (steerY > 0.75 && !mutated.onset_grid.includes(7)) {
+        mutated.onset_grid.push(7);
+        mutated.velocities[7] = 0.65;
+      }
+      // Low Y: prune to minimal downbeats
+      if (steerY < 0.35) {
+        mutated.onset_grid = mutated.onset_grid.filter((s) => s === 0 || s === 8);
+      }
+    } else if (stem === "bass") {
+      if (steerY > 0.70 && !mutated.onset_grid.includes(10)) {
+        mutated.onset_grid.push(10);
+        mutated.velocities[10] = 0.85;
+      }
+      if (steerY < 0.35) {
+        mutated.onset_grid = mutated.onset_grid.filter((s) => s === 0 || s === 8);
+      }
+    }
+    mutated.onset_grid.sort((a, b) => a - b);
+    return mutated;
   }
 
   private synthesizePattern(stem: StemName, grooveType: string): SerializedPattern {
@@ -2144,8 +2411,10 @@ export class ClientGrooveboxConductor {
       });
 
       if (matches.length > 0) {
-        const idx = Math.floor(Math.random() * matches.length);
-        return matches[idx];
+        const v = Math.max(0, Math.min(0.999, this.steering[stem].y));
+        const idx = Math.floor(v * matches.length) % matches.length;
+        const pat = { ...matches[idx] };
+        return this.applyPatternMutation(stem, pat);
       }
     }
 
@@ -2318,6 +2587,8 @@ export class ClientGrooveboxConductor {
       isFill: isFill,
       chord_name: chord.name,
       chordName: chord.name,
+      camelot_code: this.currentCamelotCode,
+      camelotCode: this.currentCamelotCode,
       cycle_mode: this.cycleMode,
       cycleMode: this.cycleMode,
       pattern_in_cycle: patternInCycle + 1,

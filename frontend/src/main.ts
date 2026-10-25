@@ -41,6 +41,8 @@ export interface GrooveboxMeta {
   totalBars?: number;
   isFill: boolean;
   key?: string;
+  camelotCode?: string;
+  chordName?: string;
   energy?: number;
   sectionBarsElapsed?: number;
   sectionTotalBars?: number;
@@ -200,8 +202,8 @@ class WubApp {
     this.masterCtx = master;
 
     this.nebula = new NebulaRenderer(el<HTMLCanvasElement>("nebula-canvas"), {
-      onReticleMove: (_stem, _x, _y) => {
-        // Local direct positioning in standalone mode
+      onReticleMove: (stem, x, y) => {
+        this.clientConductor?.setReticleSteering(stem, x, y);
       },
     });
     this.nebula.setPoints(demoPoints());
@@ -230,6 +232,10 @@ class WubApp {
     // Initialize Autonomous In-Browser ML Sequencer
     try {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
+      for (const stem of STEMS) {
+        const r = this.nebula.getReticle(stem);
+        this.clientConductor.setReticleSteering(stem, r.x, r.y);
+      }
       void this.clientConductor.loadStaticBundle("data");
       this.clientConductor.setMetaCallback((meta, atAudioSec, step, totalSteps) => {
         this.enqueueUIEvent({
@@ -725,9 +731,13 @@ class WubApp {
     }
 
     // 6. Song Structure & Arrangement Timeline
-    if (gb.key) {
+    const camelotKey = gb.camelotCode ?? gb.key;
+    if (camelotKey) {
       const camelotEl = document.getElementById("struct-camelot");
-      if (camelotEl) camelotEl.textContent = gb.key;
+      if (camelotEl) {
+        const chord = gb.chordName ? ` (${gb.chordName})` : "";
+        camelotEl.textContent = `${camelotKey}${chord}`;
+      }
     }
     const barCounterEl = document.getElementById("struct-bar-counter");
     if (barCounterEl && gb.totalBars !== undefined) {

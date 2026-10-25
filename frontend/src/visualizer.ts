@@ -662,6 +662,22 @@ export class NebulaRenderer {
     vocals: { ...DEFAULT_RETICLES.vocals },
     other: { ...DEFAULT_RETICLES.other },
   };
+  private basePositions: Record<StemName, { x: number; y: number }> = {
+    drums: { ...DEFAULT_RETICLES.drums },
+    bass: { ...DEFAULT_RETICLES.bass },
+    vocals: { ...DEFAULT_RETICLES.vocals },
+    other: { ...DEFAULT_RETICLES.other },
+  };
+  private lastDriftNotifySec: number = 0;
+
+  // Autonomous Lissajous drift profiles with unique incommensurate frequencies
+  private static readonly DRIFT_PROFILES: Record<StemName, { sx: number; sy: number; px: number; py: number; r: number }> = {
+    drums:  { sx: 0.048, sy: 0.035, px: 0.0, py: 1.4, r: 0.075 },
+    bass:   { sx: 0.032, sy: 0.046, px: 2.2, py: 0.7, r: 0.080 },
+    vocals: { sx: 0.039, sy: 0.028, px: 4.1, py: 3.3, r: 0.070 },
+    other:  { sx: 0.044, sy: 0.039, px: 1.6, py: 5.2, r: 0.075 },
+  };
+
   private onReticleMove?: ReticleMoveHandler;
   private dragStem: StemName | null = null;
   private activeSliceMarkers: Partial<Record<StemName, { x: number; y: number; timeSec: number }>> = {};
@@ -766,7 +782,9 @@ export class NebulaRenderer {
 
   /** Programmatic move (no callback, so server echoes cannot loop). */
   setReticle(stem: StemName, x: number, y: number): void {
-    this.reticleMap[stem] = { x: clamp01(x), y: clamp01(y) };
+    const p = { x: clamp01(x), y: clamp01(y) };
+    this.reticleMap[stem] = p;
+    this.basePositions[stem] = { ...p };
   }
 
   render(frame: NebulaFrame): void {
@@ -782,6 +800,28 @@ export class NebulaRenderer {
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = "#0b0b14";
     ctx.fillRect(0, 0, w, h);
+
+    // Apply autonomous organic Lissajous drift when stems are not manually dragged
+    const t = frame.timeSec;
+    const shouldNotify = (t - this.lastDriftNotifySec) > 0.08;
+    if (shouldNotify) {
+      this.lastDriftNotifySec = t;
+    }
+
+    for (const stem of RETICLE_STEMS) {
+      if (this.dragStem !== stem) {
+        const prof = NebulaRenderer.DRIFT_PROFILES[stem];
+        const base = this.basePositions[stem];
+        const dx = Math.sin(t * prof.sx * 2 * Math.PI + prof.px) * prof.r;
+        const dy = Math.cos(t * prof.sy * 2 * Math.PI + prof.py) * prof.r;
+        const driftedX = clamp01(base.x + dx);
+        const driftedY = clamp01(base.y + dy);
+        this.reticleMap[stem] = { x: driftedX, y: driftedY };
+        if (shouldNotify && this.onReticleMove) {
+          this.onReticleMove(stem, driftedX, driftedY);
+        }
+      }
+    }
 
     // Faint grid.
     ctx.strokeStyle = "rgba(255,255,255,0.05)";
@@ -820,6 +860,19 @@ export class NebulaRenderer {
       const radius = 12 + 4 * pulse + 12 * Math.min(1, Math.max(0, level));
       const color = STEM_COLORS[stem];
 
+      // Subtle drift orbit guide ring
+      const prof = NebulaRenderer.DRIFT_PROFILES[stem];
+      const base = this.basePositions[stem];
+      ctx.beginPath();
+      ctx.ellipse(base.x * w, base.y * h, prof.r * w, prof.r * h, 0, 0, 2 * Math.PI);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 4]);
+      ctx.globalAlpha = 0.18;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
       // Outer glow pulse
       ctx.beginPath();
       ctx.arc(px, py, radius + 4, 0, 2 * Math.PI);
@@ -846,11 +899,18 @@ export class NebulaRenderer {
       ctx.stroke();
       ctx.globalAlpha = 1;
 
-      // Stem label badge
+      // Stem label and real-time parameter feedback
       ctx.fillStyle = color;
       ctx.font = "bold 11px system-ui, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(`${stem} (drag)`, px, py - radius - 8);
+      const isDragging = (this.dragStem === stem);
+      const dragTag = isDragging ? "holding" : "drifting";
+      ctx.fillText(`${stem.toUpperCase()} [${dragTag}]`, px, py - radius - 8);
+
+      // Timbre & Groove parameter readout
+      ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+      ctx.font = "9px monospace";
+      ctx.fillText(`X:${Math.round(r.x * 100)}% Y:${Math.round(r.y * 100)}%`, px, py + radius + 13);
     }
 
     // Active playing slice highlights with white pixel and expanding ping ring
@@ -917,6 +977,7 @@ export class NebulaRenderer {
   private moveReticleFromEvent(stem: StemName, e: PointerEvent): void {
     const p = this.toNormalized(e);
     this.reticleMap[stem] = p;
+    this.basePositions[stem] = { ...p };
     if (this.onReticleMove !== undefined) {
       this.onReticleMove(stem, p.x, p.y);
     }

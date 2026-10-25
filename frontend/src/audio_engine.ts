@@ -253,6 +253,31 @@ export class AudioEngine {
     }
   }
 
+  /** Real-time reticule timbre filter steering for an individual stem bus. */
+  setStemFilter(stem: StemName, freqHz: number, q?: number): void {
+    if (this.ctx_ === null || this.buses_ === null) return;
+    const bus = this.buses_[stem];
+    if (!bus) return;
+    const clampedFreq = Math.max(20, Math.min(22000, freqHz));
+    const t = this.ctx_.currentTime;
+    bus.filter.frequency.setTargetAtTime(clampedFreq, t, 0.04);
+    if (q !== undefined && Number.isFinite(q)) {
+      const clampedQ = Math.max(0.1, Math.min(20, q));
+      bus.filter.Q.setTargetAtTime(clampedQ, t, 0.04);
+    }
+  }
+
+  /** Retrieve the live stem filter parameters. */
+  getStemFilter(stem: StemName): { frequency: number; q: number } | null {
+    if (this.ctx_ === null || this.buses_ === null) return null;
+    const bus = this.buses_[stem];
+    if (!bus) return null;
+    return {
+      frequency: bus.filter.frequency.value,
+      q: bus.filter.Q.value,
+    };
+  }
+
   getMasterAnalyser(): AnalyserNode {
     this.ensureCtx();
     if (this.masterAnalyser_ === null) throw new Error("AudioEngine master analyser not initialised");
