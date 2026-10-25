@@ -24358,7 +24358,7 @@
         "total_tatums_count": 128,
         "core_pattern_count": 1,
         "total_bars_count": 8,
-        "evaluated_at": 1792966652.6782715
+        "evaluated_at": 1792967821.6140683
       }
     }
   },
@@ -71741,20 +71741,5 @@
       "segment_id": "seg_vocals_0065",
       "vowel": "EE"
     }
-  ],
-  "song_composition_scores": {
-    "tr_001": {
-      "track_id": "tr_001",
-      "track_title": "Deep Electronic",
-      "slice_compression_ratio": 1.0,
-      "pattern_subset_economy": 0.875,
-      "acoustic_fidelity": 0.8,
-      "composite_song_score": 0.8888,
-      "unique_slices_count": 1,
-      "total_tatums_count": 128,
-      "core_pattern_count": 1,
-      "total_bars_count": 8,
-      "evaluated_at": 1792966652.6782715
-    }
-  }
+  ]
 }
