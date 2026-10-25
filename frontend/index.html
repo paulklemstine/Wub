@@ -872,19 +872,11 @@
       pointer-events: none;
       z-index: 0;
     }
-    @keyframes rainbow-shimmer {
-      0% {
-        background-position: 0% 50%;
-        filter: drop-shadow(0 0 10px rgba(255, 0, 128, 0.75));
-      }
-      50% {
-        background-position: 100% 50%;
-        filter: drop-shadow(0 0 18px rgba(0, 255, 255, 0.95)) drop-shadow(0 0 28px rgba(255, 215, 0, 0.75));
-      }
-      100% {
-        background-position: 0% 50%;
-        filter: drop-shadow(0 0 10px rgba(255, 0, 128, 0.75));
-      }
+    @keyframes rainbow-glow {
+      0% { filter: drop-shadow(0 0 10px rgba(255, 0, 128, 0.75)); }
+      33% { filter: drop-shadow(0 0 16px rgba(0, 255, 255, 0.85)) drop-shadow(0 0 24px rgba(255, 215, 0, 0.65)); }
+      66% { filter: drop-shadow(0 0 16px rgba(0, 255, 128, 0.85)) drop-shadow(0 0 24px rgba(255, 0, 200, 0.65)); }
+      100% { filter: drop-shadow(0 0 10px rgba(255, 0, 128, 0.75)); }
     }
     .tamagotchi-ascii {
       position: relative;
@@ -895,21 +887,8 @@
       font-size: 0.88rem;
       font-weight: 900;
       line-height: 1.25;
-      background: linear-gradient(
-        90deg,
-        #ff007f,
-        #ff7700,
-        #ffea00,
-        #00ff66,
-        #00e5ff,
-        #9d4edd,
-        #ff00c8,
-        #ff007f
-      );
-      background-size: 300% 300%;
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      animation: rainbow-shimmer 3.5s ease infinite;
+      color: #ff77e9;
+      animation: rainbow-glow 4s ease infinite;
       white-space: pre;
       margin: 0;
       padding: 8px 6px;
@@ -920,82 +899,47 @@
       transform: scale(calc(1.0 + 0.04 * var(--audio-lvl, 0)));
     }
     .tamagotchi-ascii.singing {
-      animation: rainbow-shimmer 0.9s ease infinite;
-      filter: drop-shadow(0 0 16px #ff00ff) drop-shadow(0 0 32px #00ffff) drop-shadow(0 0 45px #ffff00) !important;
+      animation: rainbow-glow 0.8s ease infinite;
+      filter: drop-shadow(0 0 16px #ff00ff) drop-shadow(0 0 28px #00ffff) drop-shadow(0 0 40px #ffff00) !important;
       transform: scale(calc(1.03 + 0.06 * var(--vocal-lvl, 0)));
     }
 
-    /* Trippy Rave Mock ASCII Neon Layers */
+    /* Trippy Rave Mock ASCII Neon Layers (Pure Inline, Zero Stacking Ghost Artifacts) */
     .rave-horn {
-      display: inline-block;
       color: #ffea00;
-      -webkit-text-fill-color: #ffea00;
       font-weight: 900;
       filter: drop-shadow(0 0 8px #ffea00) drop-shadow(0 0 18px #ff007f);
-      animation: horn-sparkle 0.8s ease-in-out infinite alternate;
-    }
-    @keyframes horn-sparkle {
-      from { filter: drop-shadow(0 0 6px #ffea00) drop-shadow(0 0 12px #ff007f); transform: translateY(0); }
-      to { filter: drop-shadow(0 0 14px #00ffff) drop-shadow(0 0 24px #ffea00); transform: translateY(-1px); }
     }
     .rave-eyes {
-      display: inline-block;
       color: #00ffff;
-      -webkit-text-fill-color: #00ffff;
       font-weight: 900;
       filter: drop-shadow(0 0 8px #00ffff) drop-shadow(0 0 20px #0088ff);
     }
     .rave-mouth {
-      display: inline-block;
       color: #00ff66;
-      -webkit-text-fill-color: #00ff66;
       font-weight: 900;
       filter: drop-shadow(0 0 8px #00ff66) drop-shadow(0 0 16px #ffea00);
       letter-spacing: 0.5px;
     }
     .tamagotchi-ascii.singing .rave-mouth {
       color: #ffff00;
-      -webkit-text-fill-color: #ffff00;
-      filter: drop-shadow(0 0 12px #ffff00) drop-shadow(0 0 24px #ff00c8) drop-shadow(0 0 36px #00ffff) !important;
-      animation: mouth-rave 0.22s infinite alternate;
-    }
-    @keyframes mouth-rave {
-      from { filter: brightness(1.2); transform: scaleY(1.0); }
-      to { filter: brightness(1.7); transform: scaleY(1.2); }
+      filter: drop-shadow(0 0 14px #ffff00) drop-shadow(0 0 26px #ff00c8) drop-shadow(0 0 38px #00ffff) !important;
     }
     .rave-wings {
       color: #9d4edd;
-      -webkit-text-fill-color: #9d4edd;
       filter: drop-shadow(0 0 6px #9d4edd) drop-shadow(0 0 14px #00e5ff);
     }
     .rave-body {
       color: #ff00c8;
-      -webkit-text-fill-color: #ff00c8;
       filter: drop-shadow(0 0 6px #ff00c8) drop-shadow(0 0 14px #7928ca);
     }
     .rave-spark {
-      display: inline-block;
       color: #ffea00;
-      -webkit-text-fill-color: #ffea00;
       filter: drop-shadow(0 0 10px #ffffff) drop-shadow(0 0 20px #ffea00);
-      animation: spark-float 1.2s ease-in-out infinite alternate;
-    }
-    @keyframes spark-float {
-      from { transform: translateY(0) rotate(-6deg); }
-      to { transform: translateY(-2px) rotate(6deg); }
-    }
-    .rave-speech {
-      display: block;
-      color: #ff77e9;
-      -webkit-text-fill-color: #ff77e9;
-      font-weight: bold;
-      filter: drop-shadow(0 0 8px rgba(255, 119, 233, 0.95)) drop-shadow(0 0 18px rgba(0, 255, 255, 0.7));
-      letter-spacing: 0.8px;
     }
     .rave-note {
       display: block;
       color: #00ffaa;
-      -webkit-text-fill-color: #00ffaa;
       font-weight: bold;
       filter: drop-shadow(0 0 8px rgba(0, 255, 170, 0.95)) drop-shadow(0 0 18px rgba(255, 234, 0, 0.7));
       letter-spacing: 0.8px;
@@ -1550,7 +1494,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.62 <span class="mc-build-num">#62</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.63 <span class="mc-build-num">#63</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -1952,7 +1896,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.62 (Build #62 • rev ecfe521)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.63 (Build #63 • rev 7b4f10b)</span>
     </div>
   </div>
 
