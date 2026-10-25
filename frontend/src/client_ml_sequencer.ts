@@ -1626,6 +1626,7 @@ export class ClientGrooveboxConductor {
   private activeSongKit: CuratedSongKit | null = null;
   private kitKeyRoot: number = -1;
   private kitTerritory: StyleTerritory | null = null;
+  private recentPhraseBlocks: string[] = [];
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -1842,46 +1843,79 @@ export class ClientGrooveboxConductor {
 
   private async preloadPhraseBlocks(basePath: string): Promise<void> {
     if (!this.manifest || !this.manifest.phrase_blocks) return;
-    for (const item of this.manifest.phrase_blocks) {
+    const blocks = this.manifest.phrase_blocks;
+
+    const loadBlock = async (item: CohesivePhraseManifestItem): Promise<void> => {
       const buffers: Partial<Record<StemName, AudioBuffer>> = {};
-      for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
-        const urlStr = item.stems[stem];
-        if (!urlStr) continue;
-        try {
-          const url = urlStr.startsWith("http") ? urlStr : `${basePath}/${urlStr.replace(/^data\//, "")}`;
-          const res = await fetch(url);
-          if (res.ok) {
-            const bytes = await res.arrayBuffer();
-            const decoded = await this.engine.decodeWav(bytes);
-            buffers[stem] = decoded;
+      const stemEntries = Object.entries(item.stems) as Array<[StemName, string]>;
+      await Promise.all(
+        stemEntries.map(async ([stem, urlStr]) => {
+          if (!urlStr) return;
+          try {
+            const url = urlStr.startsWith("http") ? urlStr : `${basePath}/${urlStr.replace(/^data\//, "")}`;
+            const res = await fetch(url);
+            if (res.ok) {
+              const bytes = await res.arrayBuffer();
+              const decoded = await this.engine.decodeWav(bytes);
+              buffers[stem] = decoded;
+            }
+          } catch {
+            // Graceful fallback
           }
-        } catch {
-          // Graceful fallback
-        }
-      }
+        })
+      );
       if (Object.keys(buffers).length > 0) {
         const sec = item.section;
         const list = this.phraseBlockRegistry.get(sec) || [];
         list.push({ meta: item, buffers });
         this.phraseBlockRegistry.set(sec, list);
       }
+    };
+
+    // Priority Tier: Load first 6 phrase blocks in parallel for immediate audio playback
+    const priorityBlocks = blocks.slice(0, 6);
+    await Promise.all(priorityBlocks.map(loadBlock));
+    console.info(`[Client ML] Ready: ${priorityBlocks.length} priority studio 4-bar phrase blocks loaded in parallel.`);
+
+    // Background Tier: Stream the rest asynchronously
+    const remainingBlocks = blocks.slice(6);
+    for (const item of remainingBlocks) {
+      await loadBlock(item);
     }
     const totalBlocks = Array.from(this.phraseBlockRegistry.values()).reduce((sum, l) => sum + l.length, 0);
     console.info(`[Client ML] Preloaded ${totalBlocks} studio 4-bar cohesive multi-stem phrase blocks across ${this.phraseBlockRegistry.size} sections.`);
   }
 
   public getBestPhraseBlock(section: string): LoadedPhraseBlock | null {
-    const list = this.phraseBlockRegistry.get(section);
+    let list = this.phraseBlockRegistry.get(section);
     if (!list || list.length === 0) {
       for (const fallbackSec of ["GROOVE_A", "DROP", "BUILDUP", "BREAKDOWN", "INTRO"]) {
         const fbList = this.phraseBlockRegistry.get(fallbackSec);
         if (fbList && fbList.length > 0) {
-          return fbList[Math.floor(Math.random() * fbList.length)];
+          list = fbList;
+          break;
         }
       }
-      return null;
     }
-    return list[Math.floor(Math.random() * list.length)];
+    if (!list || list.length === 0) return null;
+
+    // Harmonic Affinity: Prefer phrase blocks in the active Camelot key or adjacent Camelot keys
+    const activeKey = CAMELOT_KEYS[this.currentCamelotCode]?.name?.toLowerCase();
+    let candidates = list;
+    if (activeKey) {
+      const harmonicMatches = list.filter((p) => p.meta.key.toLowerCase().includes(activeKey));
+      if (harmonicMatches.length > 0) {
+        candidates = harmonicMatches;
+      }
+    }
+
+    // High variety: avoid recently played phrase blocks
+    const freshCandidates = candidates.filter((p) => !this.recentPhraseBlocks.includes(p.meta.id));
+    const pool = freshCandidates.length > 0 ? freshCandidates : candidates;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+
+    this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-6);
+    return pick;
   }
 
   public getBestLoop(
@@ -1924,53 +1958,32 @@ export class ClientGrooveboxConductor {
     }
 
     // Same-Track Co-Stem Affinity Prior (Authentic Studio Session Glue)
-    // When drums is playing from a specific track, strongly prioritize bass & synths from that SAME track
+    // When drums is playing from a specific track, strictly prioritize bass & synths from that SAME track
     const activeDrumTrack = this.activeLoops.drums?.meta.track_id;
     if (activeDrumTrack && stem !== "drums") {
       const sameTrackMatches = candidates.filter((l) => l.meta.track_id === activeDrumTrack);
-      if (sameTrackMatches.length > 0 && Math.random() < 0.85) {
+      if (sameTrackMatches.length > 0) {
         candidates = sameTrackMatches;
+      } else {
+        const drumKey = this.activeLoops.drums?.meta.key;
+        if (drumKey) {
+          const sameKeyMatches = candidates.filter((l) => l.meta.key === drumKey);
+          if (sameKeyMatches.length > 0) {
+            candidates = sameKeyMatches;
+          }
+        }
       }
     }
 
     const recents = this.recentLoops[stem] || [];
+    const freshPool = candidates.filter((l) => !recents.slice(-4).includes(l.meta.id));
+    const pool = freshPool.length > 0 ? freshPool : candidates;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
 
-    if (stem === "drums" || targetPitch === undefined) {
-      // High-variety rotation: prefer loops that haven't played recently
-      const freshPool = candidates.filter((l) => !recents.slice(-4).includes(l.meta.id));
-      const pool = freshPool.length > 0 ? freshPool : candidates;
-      const pick = pool[Math.floor(Math.random() * pool.length)];
-
-      this.recentLoops[stem] = [...recents, pick.meta.id].slice(-6);
-      const rate = this.currentBpm / pick.meta.source_bpm;
-      return { loop: pick, rate };
-    }
-
-    // For pitched stems (bass, other, vocals):
-    // Collect all candidates ranked by chromatic pitch distance
-    const scored: Array<{ loop: LoadedLoop; shift: number; absShift: number }> = [];
-    for (const c of candidates) {
-      let shift = (targetPitch - c.meta.dominant_pitch) % 12;
-      if (shift > 6) shift -= 12;
-      if (shift < -6) shift += 12;
-      scored.push({ loop: c, shift, absShift: Math.abs(shift) });
-    }
-
-    scored.sort((a, b) => a.absShift - b.absShift);
-    const minDiff = scored[0].absShift;
-    // Keep all candidates within 2 semitones of minimal shift
-    const nearBest = scored.filter((s) => s.absShift <= minDiff + 2);
-
-    // Prefer fresh loops to completely eliminate repetitive monotony
-    const freshNearBest = nearBest.filter((s) => !recents.slice(-4).includes(s.loop.meta.id));
-    const finalPool = freshNearBest.length > 0 ? freshNearBest : nearBest;
-
-    const chosen = finalPool[Math.floor(Math.random() * finalPool.length)];
-    this.recentLoops[stem] = [...recents, chosen.loop.meta.id].slice(-6);
-
-    const pitchFactor = Math.pow(2, chosen.shift / 12);
-    const rate = (this.currentBpm / chosen.loop.meta.source_bpm) * pitchFactor;
-    return { loop: chosen.loop, rate };
+    this.recentLoops[stem] = [...recents, pick.meta.id].slice(-6);
+    // Tempo-only playback rate: NEVER warp pitch with playbackRate to avoid tempo destruction!
+    const rate = this.currentBpm / pick.meta.source_bpm;
+    return { loop: pick, rate };
   }
 
   private getBestSlice(
@@ -2605,9 +2618,9 @@ export class ClientGrooveboxConductor {
     const vTerr = this.getStemTerritory("vocals");
 
     // 0. Downbeat handling: phrase blocks mode vs jukebox studio loops mode vs live slice mode
-    if (this.playbackMode === "phrase_blocks") {
+    if (this.playbackMode === "phrase_blocks" || this.playbackMode === "jukebox") {
       if (step % 16 === 0) {
-        if (this.phraseBarCount === 0 || !this.activePhraseBlock) {
+        if (this.phraseBarCount % 4 === 0 || !this.activePhraseBlock) {
           this.activePhraseBlock = this.getBestPhraseBlock(sec);
           if (this.activePhraseBlock) {
             this.schedulePhraseBlock(this.activePhraseBlock, when, sec, barInSec);
@@ -2616,11 +2629,6 @@ export class ClientGrooveboxConductor {
         if (!this.activePhraseBlock) {
           this.scheduleBarLoops(when, sec, phraseBar, chord);
         }
-      }
-    } else if (this.playbackMode === "jukebox") {
-      if (step % 16 === 0) {
-        this.activePhraseBlock = null;
-        this.scheduleBarLoops(when, sec, phraseBar, chord);
       }
     } else {
       this.activePhraseBlock = null;
@@ -3129,13 +3137,8 @@ export class ClientGrooveboxConductor {
         }
       }
 
-      let rate = this.currentBpm / loop.meta.source_bpm;
-      if (stem !== "drums") {
-        let shift = (chord.rootPitch - loop.meta.dominant_pitch) % 12;
-        if (shift > 6) shift -= 12;
-        if (shift < -6) shift += 12;
-        rate *= Math.pow(2, shift / 12);
-      }
+      // Tempo-only rate matching without pitch warping to preserve perfect rhythm pocket
+      const rate = this.currentBpm / loop.meta.source_bpm;
 
       this.engine.scheduleSlice(stem, loop.buffer, when, {
         rate,
