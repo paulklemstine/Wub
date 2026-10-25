@@ -19,13 +19,13 @@ export interface TamagotchiStats {
 }
 
 const STAGE_CONFIGS: Record<TamagotchiStage, { name: string; minXp: number }> = {
-  1: { name: "BABY UNICORN", minXp: 0 },
-  2: { name: "DISCO UNICORN", minXp: 250 },
-  3: { name: "CYBER PEGASUS", minXp: 750 },
-  4: { name: "ASTRAL GODDESS", minXp: 1800 },
+  1: { name: "RAVE KITTEN", minXp: 0 },
+  2: { name: "DISCO CAT", minXp: 250 },
+  3: { name: "CYBER NEKO", minXp: 750 },
+  4: { name: "ASTRAL NEKO", minXp: 1800 },
 };
 
-const MUSIC_NOTES = ["✨", "💖", "🦄", "🌈", "✦", "✧", "💫", "♬", "⭐", "♡"];
+const MUSIC_NOTES = ["✨", "💖", "🐾", "🌈", "✦", "✧", "💫", "♬", "⭐", "♡"];
 
 export class TamagotchiAvatar {
   private containerEl: HTMLElement | null = null;
@@ -469,65 +469,61 @@ export class TamagotchiAvatar {
     // Determine Live Animated Waveform Singing Mouth!
     const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap, dt, bpm, vocalsLevel);
 
-    // Render Unicorn Stages without shifting borders
+    // Render Neko / Cat Stages without shifting borders
     let faceLines: string[] = [];
     const noteChar = this.noteFloating.length > 0 ? this.noteFloating[0].char : "✨";
 
     if (this.stage === 1) {
-      // Stage 1: Baby Unicorn (spiral horn, sparkly star gaze, sweet smile)
+      // Stage 1: Rave Kitten (cat ears, sparkly star gaze, sweet smile)
       faceLines = bob ? [
-        `       . <span class="rave-horn">\\▲/</span> .       `,
-        `      (\\_/)   <span class="rave-spark">${noteChar}</span>    `,
-        `     ( <span class="rave-eyes">${eyes}</span> )     `,
-        `     ( <span class="rave-mouth">${mouth}</span> )  <span class="rave-spark">~♡</span> `,
-        `      <span class="rave-body">/     \\</span>       `,
+        `       <span class="rave-ears">/\\___/\\</span>       `,
+        `      (  <span class="rave-eyes">${eyes}</span>  )   <span class="rave-spark">${noteChar}</span>  `,
+        `     (  <span class="rave-mouth">${mouth}</span>  )  <span class="rave-spark">~♡</span> `,
+        `      <span class="rave-body">/     \\</span>        `,
       ] : [
-        `       . <span class="rave-horn">\\▲/</span> .       `,
-        `      (\\_/)   <span class="rave-spark">${noteChar}</span>    `,
-        `     ( <span class="rave-eyes">${eyes}</span> )     `,
-        `     ( <span class="rave-mouth">${mouth}</span> ) <span class="rave-spark">~~*</span> `,
-        `      <span class="rave-body">|     |</span>       `,
+        `       <span class="rave-ears">/\\___/\\</span>       `,
+        `      (  <span class="rave-eyes">${eyes}</span>  )   <span class="rave-spark">${noteChar}</span>  `,
+        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~~*</span> `,
+        `      <span class="rave-body">|     |</span>        `,
       ];
     } else if (this.stage === 2) {
-      // Stage 2: Disco Unicorn (rave shades/headphones, glitter horn, rainbow mane)
+      // Stage 2: Disco Cat (rave shades/headphones, perky cat ears, rainbow vibes)
       faceLines = bob ? [
-        `      . : <span class="rave-horn">\\▲/</span> : .     `,
-        `     (\\\\___/)   <span class="rave-spark">${noteChar}</span>  `,
-        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>    `,
-        `     ( <span class="rave-mouth">${mouth}</span> )  <span class="rave-spark">~🌈</span> `,
-        `      <span class="rave-body">/| WUB |\\</span>     `,
+        `       <span class="rave-ears">/\\___/\\</span>       `,
+        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
+        `     (  <span class="rave-mouth">${mouth}</span>  )  <span class="rave-spark">~🌈</span> `,
+        `      <span class="rave-body">/| WUB |\\</span>      `,
       ] : [
-        `      . : <span class="rave-horn">\\▲/</span> : .     `,
-        `     (\\\\___/)   <span class="rave-spark">${noteChar}</span>  `,
-        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>    `,
-        `     ( <span class="rave-mouth">${mouth}</span> ) <span class="rave-spark">~~✨</span> `,
-        `      <span class="rave-body">\\| WUB |/</span>     `,
+        `       <span class="rave-ears">/\\___/\\</span>       `,
+        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
+        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~~✨</span> `,
+        `      <span class="rave-body">\\| WUB |/</span>      `,
       ];
     } else if (this.stage === 3) {
-      // Stage 3: Cyber Pegasus (sleek cyber horn, electric wings, star gaze)
+      // Stage 3: Cyber Neko (sleek cyber lightning ears, electric wings, star gaze)
       faceLines = bob ? [
-        `      *   <span class="rave-horn">\\⚡/</span>   *     `,
+        `       <span class="rave-ears">/\\_⚡_/\\</span>       `,
         `    <span class="rave-wings">~/(\\</span> (<span class="rave-eyes">★   ★</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-body">&lt;[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]&gt;</span>   `,
         `      <span class="rave-body">/  | WUB |  \\</span>    `,
         `     <span class="rave-body">(____/   \\____)</span>   `,
       ] : [
-        `      *   <span class="rave-horn">\\⚡/</span>   *     `,
+        `       <span class="rave-ears">/\\_⚡_/\\</span>       `,
         `    <span class="rave-wings">~/\\(</span> (<span class="rave-eyes">★   ★</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-body">\\[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]/</span>   `,
         `      <span class="rave-body">|  | WUB |  |</span>    `,
         `     <span class="rave-body">(____/   \\____)</span>   `,
       ];
     } else {
-      // Stage 4: Astral Goddess (celestial glowing horn, nebula wings, divine sparkle)
+      // Stage 4: Astral Neko (celestial glowing ears, nebula wings, divine sparkle)
       faceLines = bob ? [
-        `     . : * <span class="rave-horn">\\✦/</span> * : .   `,
+        `      . <span class="rave-ears">/\\✦/\\</span> .       `,
         `   <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">♥   ♥</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
         `    <span class="rave-body">&lt;[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]&gt;</span>   `,
         `     <span class="rave-body">/    | 505 |    \\</span>   `,
         `    <span class="rave-body">(____/       \\____)</span>  `,
       ] : [
-        `     . : * <span class="rave-horn">\\✦/</span> * : .   `,
+        `      . <span class="rave-ears">/\\✦/\\</span> .       `,
         `   <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">♥   ♥</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
         `    <span class="rave-body">\\[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]/</span>   `,
         `     <span class="rave-body">|    | 505 |    |</span>   `,
@@ -628,7 +624,7 @@ export class TamagotchiAvatar {
     }
 
     // -------------------------------------------------------------------------
-    // 1. THE AUDIO REACTIVE SINGLE LINE LOOP (CREATURE HEAD & HORN SILHOUETTE)
+    // 1. THE AUDIO REACTIVE SINGLE LINE LOOP (CREATURE HEAD & CAT EARS SILHOUETTE)
     // -------------------------------------------------------------------------
     const N = 180;
     const baseR = 44 + 4 * this.stage;
@@ -640,21 +636,30 @@ export class TamagotchiAvatar {
 
     ctx.beginPath();
     for (let i = 0; i <= N; i++) {
-      const theta = (i / N) * Math.PI * 2 - Math.PI / 2; // -pi/2 is top/horn
+      const theta = (i / N) * Math.PI * 2 - Math.PI / 2; // -pi/2 is top center (vertical axis)
 
       // Cute pear/kawaii head outline
       const headProfile = 1.0 + 0.12 * Math.sin(theta);
 
-      // Symmetrical ears at left (-0.72 pi) and right (-0.28 pi)
-      const dEar1 = Math.abs(theta - (-0.72 * Math.PI));
-      const dEar2 = Math.abs(theta - (-0.28 * Math.PI));
-      const earPeak = 0.44 * (Math.exp(-Math.pow(dEar1 / 0.15, 2)) + Math.exp(-Math.pow(dEar2 / 0.15, 2)));
+      // Mirrored Cat Ears across the vertical axis (-0.5 * Math.PI)
+      // Mirror the horn bump across the vertical axis with symmetrical offsets
+      const earOffset = 0.20 * Math.PI; // ~36 degrees offset each side
+      const leftEarAngle = -0.5 * Math.PI - earOffset;  // ~ -0.70 * PI (left cat ear)
+      const rightEarAngle = -0.5 * Math.PI + earOffset; // ~ -0.30 * PI (right cat ear)
 
-      // Horn at top (-0.5 pi)
-      const dHorn = Math.abs(theta - (-0.5 * Math.PI));
-      const hornLength = 0.85 + 0.22 * this.stage;
-      const hornPeak = hornLength * Math.exp(-Math.pow(dHorn / 0.075, 2));
-      const spiralRib = Math.cos(24 * theta + t * 5.0) * 0.05 * hornPeak;
+      const dLeftEar = Math.abs(theta - leftEarAngle);
+      const dRightEar = Math.abs(theta - rightEarAngle);
+
+      // Sharp pointed cat ear peaks
+      const earHeight = 0.85 + 0.20 * this.stage;
+      const earWidth = 0.082;
+      const leftEarPeak = earHeight * Math.exp(-Math.pow(dLeftEar / earWidth, 2));
+      const rightEarPeak = earHeight * Math.exp(-Math.pow(dRightEar / earWidth, 2));
+      const catEars = leftEarPeak + rightEarPeak;
+
+      // Forehead dip between the ears at the vertical axis
+      const dCenter = Math.abs(theta - (-0.5 * Math.PI));
+      const foreheadDip = -0.06 * Math.exp(-Math.pow(dCenter / 0.10, 2));
 
       // Audio reactive standing waves rippling around the perimeter
       const waveRipple = (
@@ -662,7 +667,7 @@ export class TamagotchiAvatar {
         Math.cos(9 * theta + t * 6.5) * 2.2
       ) * Math.min(1.0, rmsLevel * 2.0);
 
-      const r = (baseR * (headProfile + earPeak + hornPeak + spiralRib)) * audioExpansion + waveRipple;
+      const r = (baseR * (headProfile + catEars + foreheadDip)) * audioExpansion + waveRipple;
       const px = cx + r * Math.cos(theta);
       const py = cy + r * Math.sin(theta);
 
@@ -703,6 +708,54 @@ export class TamagotchiAvatar {
     ctx.arc(leftEyeX - 10, eyeY + 14, 6.5, 0, Math.PI * 2);
     ctx.arc(rightEyeX + 10, eyeY + 14, 6.5, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+
+    // Glowing Cyber Whiskers (Audio Reactive Twitching Whisker Vectors)
+    ctx.save();
+    ctx.strokeStyle = accentColor;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = accentColor;
+    ctx.lineWidth = 1.4;
+    ctx.globalAlpha = 0.65 + 0.35 * Math.min(1.0, rmsLevel);
+
+    const whiskerTwitch = Math.sin(t * 8.0) * (1.0 + drumLevel * 2.5);
+    const wSpan = 18 + 4 * this.stage;
+
+    // Left Whiskers (fanning outward left)
+    const lCheekX = leftEyeX - 12;
+    const lCheekY = eyeY + 14;
+    ctx.beginPath();
+    ctx.moveTo(lCheekX, lCheekY - 3);
+    ctx.lineTo(lCheekX - wSpan, lCheekY - 7 + whiskerTwitch);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(lCheekX - 2, lCheekY + 1);
+    ctx.lineTo(lCheekX - wSpan - 3, lCheekY + 1 + whiskerTwitch * 0.5);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(lCheekX, lCheekY + 5);
+    ctx.lineTo(lCheekX - wSpan, lCheekY + 8 - whiskerTwitch * 0.6);
+    ctx.stroke();
+
+    // Right Whiskers (fanning outward right, mirrored)
+    const rCheekX = rightEyeX + 12;
+    const rCheekY = eyeY + 14;
+    ctx.beginPath();
+    ctx.moveTo(rCheekX, rCheekY - 3);
+    ctx.lineTo(rCheekX + wSpan, rCheekY - 7 + whiskerTwitch);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(rCheekX + 2, rCheekY + 1);
+    ctx.lineTo(rCheekX + wSpan + 3, rCheekY + 1 + whiskerTwitch * 0.5);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(rCheekX, rCheekY + 5);
+    ctx.lineTo(rCheekX + wSpan, rCheekY + 8 - whiskerTwitch * 0.6);
+    ctx.stroke();
     ctx.restore();
 
     // Eyes rendering
