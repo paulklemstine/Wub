@@ -160,6 +160,13 @@ class WubApp {
     other: { stem: "other", mute: false, solo: false, volume: 1, chaos: 0.5, synthBlend: 0.0 },
   };
 
+  private currentDisplayVolumes: Record<StemName, number> = {
+    drums: 1.0,
+    bass: 1.0,
+    vocals: 1.0,
+    other: 1.0,
+  };
+
   private bpm: number = DEFAULT_BPM;
   private musicalKey: string = "C";
   private playing = false;
@@ -885,6 +892,24 @@ class WubApp {
       window.setTimeout(() => vocalSyllableEl.classList.remove("singing"), 150);
     }
 
+    // 9. Live Hardware Mixer Level Sliders Update
+    if (gb.stemMixLevels) {
+      for (const stem of STEMS) {
+        const lvl = gb.stemMixLevels[stem];
+        if (lvl !== undefined) {
+          const targetLvl = lvl * (this.states[stem]?.volume ?? 1.0);
+          const volSlider = document.getElementById(`${stem}-volume`) as HTMLInputElement | null;
+          const volVal = document.getElementById(`${stem}-vol-val`);
+          if (volSlider && document.activeElement !== volSlider) {
+            volSlider.value = targetLvl.toFixed(2);
+          }
+          if (volVal && document.activeElement !== volSlider) {
+            volVal.textContent = targetLvl.toFixed(2);
+          }
+        }
+      }
+    }
+
     this.lastGrooveboxMeta = gb;
   }
 
@@ -951,6 +976,27 @@ class WubApp {
       const stepElapsed = Math.max(0, audioNow - this.currentStepAudioTime);
       const frac = Math.min(1.0, stepElapsed / stepDur);
       playheadProgress = ((this.currentStepIndex + frac) % this.totalStepsInPattern) / this.totalStepsInPattern;
+    }
+
+    // Live Motorized Console Fader Tracking (60 FPS smooth interpolation)
+    if (this.playing) {
+      for (const stem of STEMS) {
+        const autoLvl = this.lastGrooveboxMeta?.stemMixLevels?.[stem] ?? this.engine.getStemMixLevel(stem);
+        const targetLvl = autoLvl * (this.states[stem]?.volume ?? 1.0);
+        this.currentDisplayVolumes[stem] += (targetLvl - this.currentDisplayVolumes[stem]) * 0.18;
+        if (Math.abs(targetLvl - this.currentDisplayVolumes[stem]) < 0.005) {
+          this.currentDisplayVolumes[stem] = targetLvl;
+        }
+
+        const volSlider = document.getElementById(`${stem}-volume`) as HTMLInputElement | null;
+        const volVal = document.getElementById(`${stem}-vol-val`);
+        if (volSlider && document.activeElement !== volSlider) {
+          volSlider.value = this.currentDisplayVolumes[stem].toFixed(2);
+        }
+        if (volVal && document.activeElement !== volSlider) {
+          volVal.textContent = this.currentDisplayVolumes[stem].toFixed(2);
+        }
+      }
     }
 
     // Prune stale ring events.
