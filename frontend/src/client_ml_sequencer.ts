@@ -2004,9 +2004,24 @@ export class ClientGrooveboxConductor {
     // 1. Same-Track Cohesive Match: Prioritize blocks from the same authentic track
     const targetTrack = preferredTrackId || this.activeTrackId;
     if (targetTrack) {
+      // First check exact section match
       const trackMatches = list.filter((p) => p.meta.track_id === targetTrack);
       if (trackMatches.length > 0) {
         return trackMatches[Math.floor(Math.random() * trackMatches.length)];
+      }
+
+      // Next check other sections from the SAME authentic track session:
+      // A song's GROOVE_A or DROP block can easily play BUILDUP (with snare acceleration & bass cutoff),
+      // or INTRO/BREAKDOWN (with bass & drum muting). This preserves 100% of the song's sonic DNA!
+      for (const altSec of ["DROP", "GROOVE_A", "BUILDUP", "BREAKDOWN", "INTRO"]) {
+        const altList = this.phraseBlockRegistry.get(altSec);
+        if (altList) {
+          const altMatches = altList.filter((p) => p.meta.track_id === targetTrack);
+          if (altMatches.length > 0) {
+            console.info(`[Client ML] Song Continuity: Kept active track ${altMatches[0].meta.track_title} for ${section} (adapted from ${altSec})`);
+            return altMatches[0];
+          }
+        }
       }
     }
 
@@ -2911,7 +2926,7 @@ export class ClientGrooveboxConductor {
       this.engine.scheduleSlice(stem, buffer, when, {
         rate,
         duration: dropGapBreathSec,
-        fadeMs: 8,
+        fadeMs: 24,
         voiceKey: `phrase_${stem}`,
       });
 

@@ -187,7 +187,11 @@ export class TamagotchiAvatar {
     stepIndex: number,
     bpm: number = 126,
     waveform?: Uint8Array | null,
-    vocalsLevel?: number
+    vocalsLevel?: number,
+    drumWaveform?: Uint8Array | null,
+    bassWaveform?: Uint8Array | null,
+    drumLevel?: number,
+    bassLevel?: number
   ): void {
     const dt = this.lastRenderSec > 0 ? Math.max(0.001, audioNow - this.lastRenderSec) : 0.016;
     this.lastRenderSec = audioNow;
@@ -289,7 +293,19 @@ export class TamagotchiAvatar {
       this.speechBubble = `"${meta.vocalLyric}"`;
     }
 
-    this.renderCanvas(meta, isDropGap, waveform, dt, bpm, vocalsLevel ?? 0, rmsLevel);
+    this.renderCanvas(
+      meta,
+      isDropGap,
+      waveform,
+      dt,
+      bpm,
+      vocalsLevel ?? 0,
+      rmsLevel,
+      drumWaveform,
+      bassWaveform,
+      drumLevel ?? 0,
+      bassLevel ?? 0
+    );
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel);
     this.updateDashboard();
   }
@@ -559,7 +575,11 @@ export class TamagotchiAvatar {
     dt: number = 0.016,
     bpm: number = 126,
     vocalsLevel: number = 0,
-    rmsLevel: number = 0
+    rmsLevel: number = 0,
+    drumWaveform?: Uint8Array | null,
+    bassWaveform?: Uint8Array | null,
+    drumLevel: number = 0,
+    bassLevel: number = 0
   ): void {
     if (!this.canvasEl) return;
     if (!this.ctx2d) {
@@ -694,31 +714,27 @@ export class TamagotchiAvatar {
     ctx.lineWidth = 2.2;
 
     if (this.isBlinking) {
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = accentColor;
+      ctx.strokeStyle = accentColor;
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
       ctx.arc(leftEyeX, eyeY, 6, 0.2 * Math.PI, 0.8 * Math.PI);
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(rightEyeX, eyeY, 6, 0.2 * Math.PI, 0.8 * Math.PI);
       ctx.stroke();
-    } else if (isDropGap) {
-      ctx.beginPath();
-      ctx.arc(leftEyeX, eyeY, 7.5, 0, Math.PI * 2);
-      ctx.arc(rightEyeX, eyeY, 7.5, 0, Math.PI * 2);
-      ctx.stroke();
     } else if (this.temporaryAction === "PET") {
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = "#ff69b4";
+      ctx.fillStyle = "#ff69b4";
       this.drawHeart(ctx, leftEyeX, eyeY, 6.5);
       this.drawHeart(ctx, rightEyeX, eyeY, 6.5);
-    } else if (sec === "DROP" || this.temporaryAction === "HYPE") {
-      this.drawStar(ctx, leftEyeX, eyeY, 7.5, 3.5);
-      this.drawStar(ctx, rightEyeX, eyeY, 7.5, 3.5);
-    } else if (sec === "BREAKDOWN") {
-      ctx.beginPath();
-      ctx.arc(leftEyeX, eyeY, 6, 0.1 * Math.PI, 0.9 * Math.PI);
-      ctx.arc(rightEyeX, eyeY, 6, 0.1 * Math.PI, 0.9 * Math.PI);
-      ctx.stroke();
     } else {
-      this.drawSparkleEye(ctx, leftEyeX, eyeY, 6.0);
-      this.drawSparkleEye(ctx, rightEyeX, eyeY, 6.0);
+      // Audio Reactive Dual Concentric Waveform Eyes:
+      // Inner Drum Pupil Ring vibrating inside Outer Bass Iris Ring!
+      this.drawWaveformEye(ctx, leftEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap);
+      this.drawWaveformEye(ctx, rightEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap);
     }
     ctx.restore();
 
@@ -852,6 +868,101 @@ export class TamagotchiAvatar {
     ctx.beginPath();
     ctx.arc(cx - r * 0.3, cy - r * 0.3, r * 0.35, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  private drawWaveformEye(
+    ctx: CanvasRenderingContext2D,
+    eyeX: number,
+    eyeY: number,
+    drumWaveform?: Uint8Array | null,
+    bassWaveform?: Uint8Array | null,
+    drumLevel: number = 0,
+    bassLevel: number = 0,
+    isDrop: boolean = false,
+    isDropGap: boolean = false
+  ): void {
+    const eyeSteps = 32;
+    const t = performance.now() / 1000;
+
+    // -------------------------------------------------------------------------
+    // 1. OUTER RING: BASS IRIS WAVEFORM
+    // -------------------------------------------------------------------------
+    const baseIrisR = (isDropGap ? 11.5 : (isDrop ? 9.5 : 8.2)) + Math.min(3.2, bassLevel * 4.5);
+    const bassWaveLen = bassWaveform ? bassWaveform.length : 0;
+    const irisStroke = isDrop ? "#00ffff" : "#00ffcc";
+    const irisGlow = isDrop ? "#00e5ff" : "#00ffaa";
+
+    ctx.save();
+    ctx.shadowBlur = isDrop ? 12 : 8;
+    ctx.shadowColor = irisGlow;
+    ctx.strokeStyle = irisStroke;
+    ctx.fillStyle = "rgba(0, 255, 204, 0.14)";
+    ctx.lineWidth = 1.9;
+
+    ctx.beginPath();
+    for (let j = 0; j <= eyeSteps; j++) {
+      const phi = (j / eyeSteps) * Math.PI * 2;
+      let bSample = 0;
+      if (bassWaveform && bassWaveLen > 0) {
+        const idx = Math.floor((j / eyeSteps) * (bassWaveLen - 1));
+        bSample = (bassWaveform[idx] - 128) / 128.0;
+      } else {
+        bSample = Math.sin(phi * 2.0 + t * 7.0) * 0.22;
+      }
+      const disp = bSample * (2.8 * Math.min(1.5, bassLevel * 2.5) + (isDropGap ? 1.5 : 0.7));
+      const r = Math.max(2.0, baseIrisR + disp);
+      const x = eyeX + r * Math.cos(phi);
+      const y = eyeY + r * Math.sin(phi);
+      if (j === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 2. INNER RING: DRUM PUPIL WAVEFORM OUTLINED INSIDE BASS IRIS
+    // -------------------------------------------------------------------------
+    const basePupilR = (isDropGap ? 6.5 : (isDrop ? 4.8 : 3.8)) + Math.min(2.5, drumLevel * 3.8);
+    const drumWaveLen = drumWaveform ? drumWaveform.length : 0;
+    const pupilStroke = isDrop ? "#ffffff" : "#ffe600";
+    const pupilGlow = isDrop ? "#ffffff" : "#ffbb00";
+
+    ctx.save();
+    ctx.shadowBlur = 7;
+    ctx.shadowColor = pupilGlow;
+    ctx.strokeStyle = pupilStroke;
+    ctx.fillStyle = "rgba(10, 10, 22, 0.88)";
+    ctx.lineWidth = 1.8;
+
+    ctx.beginPath();
+    for (let j = 0; j <= eyeSteps; j++) {
+      const phi = (j / eyeSteps) * Math.PI * 2;
+      let dSample = 0;
+      if (drumWaveform && drumWaveLen > 0) {
+        const idx = Math.floor((j / eyeSteps) * (drumWaveLen - 1));
+        dSample = (drumWaveform[idx] - 128) / 128.0;
+      } else {
+        dSample = Math.sin(phi * 3.0 + t * 11.0) * 0.22;
+      }
+      const disp = dSample * (2.2 * Math.min(1.5, drumLevel * 2.5) + (isDropGap ? 1.2 : 0.5));
+      const r = Math.max(1.2, basePupilR + disp);
+      const x = eyeX + r * Math.cos(phi);
+      const y = eyeY + r * Math.sin(phi);
+      if (j === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Sharp pinpoint glint highlight
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(eyeX - basePupilR * 0.35, eyeY - basePupilR * 0.35, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   public render(): void {

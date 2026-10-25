@@ -240,7 +240,7 @@ def harvest_cohesive_phrase_blocks(
     phrases_dir.mkdir(parents=True, exist_ok=True)
     manifest_phrases: List[dict] = []
 
-    targets = {"DROP": 8, "GROOVE_A": 8, "BUILDUP": 6, "BREAKDOWN": 6, "INTRO": 6}
+    targets = {"DROP": 14, "GROOVE_A": 14, "BUILDUP": 10, "BREAKDOWN": 10, "INTRO": 10}
     collected: Dict[str, List[dict]] = {sec: [] for sec in targets}
 
     fade_len = int(0.004 * 44100)  # 4ms cosine fade
@@ -264,6 +264,7 @@ def harvest_cohesive_phrase_blocks(
         if not all(p.exists() for p in stem_paths.values()):
             continue
 
+        track_collected_secs = set()
         for b in range(0, min(n_bars - 4, 120), 4):
             t0 = tatums[b * 16]
             t1 = tatums[(b + 4) * 16]
@@ -301,10 +302,7 @@ def harvest_cohesive_phrase_blocks(
             elif -22.0 <= d_loud < -14.0 and o_loud >= -18.0:
                 sec = "BUILDUP"
 
-            if not sec or len(collected[sec]) >= targets[sec]:
-                continue
-
-            if sum(1 for p in collected[sec] if p["track_id"] == tid) >= 2:
+            if not sec or sec in track_collected_secs or len(collected[sec]) >= targets[sec]:
                 continue
 
             f0 = int(round(start * 44100))
@@ -365,6 +363,7 @@ def harvest_cohesive_phrase_blocks(
                 "onset_grids": onset_grids,
             }
             collected[sec].append(phrase_item)
+            track_collected_secs.add(sec)
             manifest_phrases.append(phrase_item)
             print(f"   ✓ Extracted {sec} phrase: {clean_title} (bar {b}-{b+4}, {bpm} BPM, {key})", flush=True)
 
@@ -396,7 +395,7 @@ def export_bundle() -> None:
 
     # 2. Extract Multi-Stem Tracks & Patterns from Authentic Corpus
     store = CorpusStore(Path("data/processed"), stems_base=Path("data/stems"))
-    store.refresh(max_tracks=40)
+    store.refresh(max_tracks=50)
     multistem_tracks = [t for t in store.tracks if len(t.stems_available) == 4]
     if not multistem_tracks:
         multistem_tracks = store.tracks[:20]
