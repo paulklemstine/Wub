@@ -513,10 +513,12 @@ class PatternBank:
         min_energy: float = 0.0,
         max_energy: float = 1.0,
         preferred_track_id: Optional[str] = None,
+        target_key: Optional[str] = None,
+        feedback_weights: Optional[Dict[str, float]] = None,
         rng: Optional[np.random.Generator] = None,
         strict_groove: bool = False,
     ) -> Optional[SequencerPattern]:
-        """Pick a musically compatible pattern using RNG."""
+        """Pick a musically compatible pattern using RNG, Camelot key matching, and user feedback weighting."""
         if rng is None:
             rng = np.random.default_rng()
 
@@ -526,10 +528,37 @@ class PatternBank:
             synth_type = groove_type or ("four_on_floor_hats" if stem == "drums" else ("offbeat" if stem == "bass" else "chords"))
             return self.create_groove_pattern(stem, synth_type, preferred_track_id=preferred_track_id, rng=rng)
 
-        if preferred_track_id:
-            track_matches = [p for p in candidates if p.track_id == preferred_track_id]
-            if track_matches and rng.random() < 0.65:
-                return track_matches[int(rng.choice(len(track_matches)))]
+        # Camelot harmonic key matching for pitched stems (bass, vocals, other)
+        if target_key and stem in ("bass", "vocals", "other"):
+            try:
+                from wub_core.composer import camelot_distance
+                harmonic_candidates = [
+                    p for p in candidates
+                    if p.key and camelot_distance(target_key, p.key) <= 1.5
+                ]
+                if harmonic_candidates:
+                    candidates = harmonic_candidates
+            except Exception:
+                pass
+
+        if not candidates:
+            return None
+
+        # Feedback & preference weighting
+        weights = np.ones(len(candidates), dtype=float)
+        for i, p in enumerate(candidates):
+            w = 1.0
+            if feedback_weights and p.track_id in feedback_weights:
+                w *= float(feedback_weights[p.track_id])
+            if preferred_track_id and p.track_id == preferred_track_id:
+                w *= 2.0
+            weights[i] = max(0.01, w)
+
+        tot = float(np.sum(weights))
+        if tot > 0:
+            probs = weights / tot
+            idx = int(rng.choice(len(candidates), p=probs))
+            return candidates[idx]
 
         return candidates[int(rng.choice(len(candidates)))]
 

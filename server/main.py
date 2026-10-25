@@ -104,6 +104,19 @@ def mashup(body: dict) -> FileResponse:
     return FileResponse(str(tmp), media_type="audio/wav", filename="wub_mashup.wav")
 
 
+@app.post("/api/feedback")
+def submit_feedback(body: dict) -> dict:
+    stem = body.get("stem")
+    rating = int(body.get("rating", 0))
+    track_id = body.get("track_id")
+    pattern_id = body.get("pattern_id")
+    from server.stream_manager import get_cached_pattern_bank
+    from wub_core.groovebox import GrooveboxConductor
+    bank = get_cached_pattern_bank(STORE)
+    cond = GrooveboxConductor(bank)
+    return cond.record_feedback(stem=stem, rating=rating, track_id=track_id, pattern_id=pattern_id)
+
+
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket) -> None:
     await ws.accept()
@@ -136,6 +149,14 @@ async def ws_stream(ws: WebSocket) -> None:
                     stem = msg.get("stem")
                     if stem in ("drums", "bass", "vocals", "other"):
                         session.gravity[stem] = [msg.get("x"), msg.get("y")]
+                elif msg.get("type") == "feedback":
+                    res = session.record_feedback(
+                        stem=msg.get("stem"),
+                        rating=int(msg.get("rating", 0)),
+                        track_id=msg.get("track_id"),
+                        pattern_id=msg.get("pattern_id"),
+                    )
+                    await ws.send_json({"type": "feedback_ack", **res})
             except asyncio.TimeoutError:
                 pass
             ev = session.next_event()

@@ -197,3 +197,31 @@ def test_multistem_song_phrase_cohesion():
     # On Step 0 (beat 1), drums and other stems are triggered
     assert slices_0["drums"] is not None
     assert slices_0["drums"].track_id == "test_tr_cohesive"
+
+
+def test_user_feedback_and_cross_stem_reroll():
+    tr1 = _make_dance_track("test_tr_a", bpm=128.0, n_bars=8)
+    tr2 = _make_dance_track("test_tr_b", bpm=128.0, n_bars=8)
+    bank = PatternBank()
+    bank.load_from_tracks([tr1, tr2])
+
+    conductor = GrooveboxConductor(bank, seed=42, cross_stem_mashup=True)
+    assert conductor.active_patterns["drums"] is not None
+
+    # Test Thumbs Up
+    fb_up = conductor.record_feedback(stem="drums", rating=1, track_id="test_tr_a")
+    assert fb_up["status"] == "ok"
+    assert fb_up["action"] == "boosted"
+    assert conductor.stem_weights["drums"].get("test_tr_a", 1.0) > 1.0
+
+    # Test Thumbs Down and Immediate Reroll
+    fb_down = conductor.record_feedback(stem="drums", rating=-1, track_id="test_tr_b")
+    assert fb_down["status"] == "ok"
+    assert fb_down["action"] == "rerolled"
+    assert conductor.stem_weights["drums"].get("test_tr_b", 1.0) < 1.0
+
+    # Next step meta includes pattern_ratings and pattern_track_ids
+    _, meta = conductor.next_step()
+    assert "pattern_track_ids" in meta
+    assert "pattern_ratings" in meta
+    assert "drums" in meta["pattern_ratings"]

@@ -857,12 +857,73 @@
     }
     .matrix-row {
       display: grid;
-      grid-template-columns: 85px 1fr auto;
+      grid-template-columns: 85px 1fr auto auto;
       gap: 12px;
       align-items: center;
       padding: 6px 8px;
       background: #11141c;
       border-radius: 6px;
+      border: 1px solid #1c2230;
+    }
+    .matrix-feedback, .deck-feedback-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .thumb-btn {
+      background: #181d27;
+      border: 1px solid #333d52;
+      border-radius: 4px;
+      padding: 3px 6px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      line-height: 1;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .thumb-btn:hover {
+      background: #252e42;
+      transform: scale(1.12);
+    }
+    .thumb-btn.thumb-up:hover, .thumb-btn.thumb-up.active {
+      border-color: var(--neon-green);
+      box-shadow: 0 0 8px rgba(0, 255, 136, 0.7);
+      background: #143522;
+    }
+    .thumb-btn.thumb-down:hover, .thumb-btn.thumb-down.active {
+      border-color: var(--neon-red);
+      box-shadow: 0 0 8px rgba(255, 34, 85, 0.7);
+      background: #35141c;
+    }
+    .feedback-score {
+      font-family: monospace;
+      font-size: 0.75rem;
+      font-weight: 800;
+      min-width: 16px;
+      text-align: center;
+      color: #94a3b8;
+    }
+    .feedback-score.positive {
+      color: var(--neon-green);
+    }
+    .feedback-score.negative {
+      color: var(--neon-red);
+    }
+    .deck-feedback-row {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid #202737;
+      justify-content: space-between;
+    }
+    .deck-feedback-row .feedback-label {
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      color: #64748b;
+      text-transform: uppercase;
+    }
       border: 1px solid #1c2230;
     }
     .matrix-stem-label {
@@ -1291,6 +1352,11 @@
             <span class="matrix-title" id="matrix-title-drums">Drums Groove</span>
             <span class="matrix-badge" id="matrix-groove-drums" style="color: var(--neon-green); border-color: var(--neon-green);">FOUR-ON-FLOOR</span>
           </div>
+          <div class="matrix-feedback">
+            <button class="thumb-btn thumb-up" data-stem="drums" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
+            <span class="feedback-score" id="matrix-score-drums">0</span>
+            <button class="thumb-btn thumb-down" data-stem="drums" type="button" title="Thumbs Down — Skip & down-rank this groove">👎</button>
+          </div>
           <div class="matrix-grid-strip" id="matrix-grid-drums"></div>
         </div>
 
@@ -1302,6 +1368,11 @@
           <div class="matrix-track-info">
             <span class="matrix-title" id="matrix-title-bass">Bass Groove</span>
             <span class="matrix-badge" id="matrix-groove-bass" style="color: var(--neon-cyan); border-color: var(--neon-cyan);">OFFBEAT</span>
+          </div>
+          <div class="matrix-feedback">
+            <button class="thumb-btn thumb-up" data-stem="bass" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
+            <span class="feedback-score" id="matrix-score-bass">0</span>
+            <button class="thumb-btn thumb-down" data-stem="bass" type="button" title="Thumbs Down — Skip & down-rank this groove">👎</button>
           </div>
           <div class="matrix-grid-strip" id="matrix-grid-bass"></div>
         </div>
@@ -1315,6 +1386,11 @@
             <span class="matrix-title" id="matrix-title-vocals">Vocals Phrase</span>
             <span class="matrix-badge" id="matrix-groove-vocals" style="color: var(--neon-amber); border-color: var(--neon-amber);">PHRASE</span>
           </div>
+          <div class="matrix-feedback">
+            <button class="thumb-btn thumb-up" data-stem="vocals" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
+            <span class="feedback-score" id="matrix-score-vocals">0</span>
+            <button class="thumb-btn thumb-down" data-stem="vocals" type="button" title="Thumbs Down — Skip & down-rank this groove">👎</button>
+          </div>
           <div class="matrix-grid-strip" id="matrix-grid-vocals"></div>
         </div>
 
@@ -1326,6 +1402,11 @@
           <div class="matrix-track-info">
             <span class="matrix-title" id="matrix-title-other">Synths Hook</span>
             <span class="matrix-badge" id="matrix-groove-other" style="color: var(--neon-magenta); border-color: var(--neon-magenta);">HOOK</span>
+          </div>
+          <div class="matrix-feedback">
+            <button class="thumb-btn thumb-up" data-stem="other" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
+            <span class="feedback-score" id="matrix-score-other">0</span>
+            <button class="thumb-btn thumb-down" data-stem="other" type="button" title="Thumbs Down — Skip & down-rank this groove">👎</button>
           </div>
           <div class="matrix-grid-strip" id="matrix-grid-other"></div>
         </div>
@@ -1391,6 +1472,14 @@
         <div class="row"><label>Level <input id="drums-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="drums-vol-val">1.00</span></div>
         <div class="row"><label>Chaos <input id="drums-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="drums-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="drums-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="drums-synth-val">0.00</span></div>
+        <div class="deck-feedback-row">
+          <span class="feedback-label">Train Feedback:</span>
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <button class="thumb-btn thumb-up" data-stem="drums" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
+            <span class="feedback-score" id="deck-score-drums">0</span>
+            <button class="thumb-btn thumb-down" data-stem="drums" type="button" title="Thumbs Down — Skip & down-rank this groove">👎</button>
+          </div>
+        </div>
       </div>
       <div class="deck" id="deck-bass">
         <h2>Part 2: Bass</h2>
@@ -1401,6 +1490,14 @@
         <div class="row"><label>Level <input id="bass-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="bass-vol-val">1.00</span></div>
         <div class="row"><label>Chaos <input id="bass-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="bass-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="bass-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="bass-synth-val">0.00</span></div>
+        <div class="deck-feedback-row">
+          <span class="feedback-label">Train Feedback:</span>
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <button class="thumb-btn thumb-up" data-stem="bass" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
+            <span class="feedback-score" id="deck-score-bass">0</span>
+            <button class="thumb-btn thumb-down" data-stem="bass" type="button" title="Thumbs Down — Skip & down-rank this groove">👎</button>
+          </div>
+        </div>
       </div>
       <div class="deck" id="deck-vocals">
         <h2>Part 3: Vocals</h2>
@@ -1411,6 +1508,14 @@
         <div class="row"><label>Level <input id="vocals-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="vocals-vol-val">1.00</span></div>
         <div class="row"><label>Chaos <input id="vocals-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="vocals-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="vocals-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="vocals-synth-val">0.00</span></div>
+        <div class="deck-feedback-row">
+          <span class="feedback-label">Train Feedback:</span>
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <button class="thumb-btn thumb-up" data-stem="vocals" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
+            <span class="feedback-score" id="deck-score-vocals">0</span>
+            <button class="thumb-btn thumb-down" data-stem="vocals" type="button" title="Thumbs Down — Skip & down-rank this groove">👎</button>
+          </div>
+        </div>
       </div>
       <div class="deck" id="deck-other">
         <h2>Part 4: Other</h2>
@@ -1421,6 +1526,14 @@
         <div class="row"><label>Level <input id="other-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="other-vol-val">1.00</span></div>
         <div class="row"><label>Chaos <input id="other-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="other-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="other-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="other-synth-val">0.00</span></div>
+        <div class="deck-feedback-row">
+          <span class="feedback-label">Train Feedback:</span>
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <button class="thumb-btn thumb-up" data-stem="other" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
+            <span class="feedback-score" id="deck-score-other">0</span>
+            <button class="thumb-btn thumb-down" data-stem="other" type="button" title="Thumbs Down — Skip & down-rank this groove">👎</button>
+          </div>
+        </div>
       </div>
     </section>
 

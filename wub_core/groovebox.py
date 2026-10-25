@@ -6,7 +6,9 @@ and maintains a rock-solid, jitter-free groove locked to the beat grid.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -54,7 +56,7 @@ class GrooveboxState:
 class GrooveboxConductor:
     """Intelligent conductor that selects patterns and steps through the groovebox."""
 
-    def __init__(self, pattern_bank: PatternBank, seed: int = 42) -> None:
+    def __init__(self, pattern_bank: PatternBank, seed: int = 42, cross_stem_mashup: bool = True) -> None:
         self.bank = pattern_bank
         self.rng = np.random.default_rng(seed)
         self.arranger = SongArranger(pattern_bank, seed=seed)
@@ -67,7 +69,120 @@ class GrooveboxConductor:
         self.lead_track_id: Optional[str] = None
         self.lead_base_bar: int = 0
         self.active_slice_ids: Dict[str, Optional[str]] = {s: None for s in STEMS}
+        self.cross_stem_mashup = cross_stem_mashup
+        self.feedback_data: Dict[str, Dict[str, int]] = {s: {} for s in STEMS}
+        self.stem_weights: Dict[str, Dict[str, float]] = {s: {} for s in STEMS}
+        self._load_feedback()
         self._init_section_patterns()
+
+    def _load_feedback(self) -> None:
+        p = Path("data/user_feedback.json")
+        if p.exists():
+            try:
+                import json
+                self.feedback_data = json.loads(p.read_text())
+            except Exception:
+                self.feedback_data = {s: {} for s in STEMS}
+        else:
+            self.feedback_data = {s: {} for s in STEMS}
+        self._recompute_weights()
+
+    def _save_feedback(self) -> None:
+        p = Path("data/user_feedback.json")
+        try:
+            import json
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(self.feedback_data, indent=2))
+        except Exception:
+            pass
+
+    def _recompute_weights(self) -> None:
+        for s in STEMS:
+            scores = self.feedback_data.get(s, {})
+            weights = {}
+            for tid, sc in scores.items():
+                if sc > 0:
+                    weights[tid] = min(6.0, 1.0 + 0.6 * sc)
+                elif sc < 0:
+                    weights[tid] = max(0.05, 1.0 / (1.0 + 0.9 * abs(sc)))
+                else:
+                    weights[tid] = 1.0
+            self.stem_weights[s] = weights
+
+    def record_feedback(
+        self,
+        stem: str,
+        rating: int,
+        track_id: Optional[str] = None,
+        pattern_id: Optional[str] = None,
+    ) -> dict:
+        """Record user thumbs up/down, adapt selection weights, and trigger smart immediate response."""
+        if stem not in STEMS:
+            return {"status": "error", "message": f"invalid stem {stem}"}
+        
+        target_tid = track_id
+        if not target_tid and self.active_patterns.get(stem):
+            target_tid = self.active_patterns[stem].track_id
+
+        if target_tid:
+            cur = self.feedback_data.setdefault(stem, {}).get(target_tid, 0)
+            self.feedback_data[stem][target_tid] = cur + int(rating)
+            self._save_feedback()
+            self._recompute_weights()
+
+        action = "boosted" if rating > 0 else "rerolled"
+        new_pat = None
+        if rating < 0:
+            # Smart immediate response on thumbs down: reroll this stem immediately!
+            new_pat = self.reroll_stem(stem, exclude_track_id=target_tid)
+
+        return {
+            "status": "ok",
+            "action": action,
+            "stem": stem,
+            "track_id": target_tid,
+            "score": self.feedback_data.get(stem, {}).get(target_tid, 0) if target_tid else 0,
+            "new_pattern": new_pat.pattern_name if new_pat else None,
+        }
+
+    def reroll_stem(self, stem: str, exclude_track_id: Optional[str] = None) -> Optional[SequencerPattern]:
+        """Instantly switch a stem to a high-rated, musically compatible alternative across songs."""
+        sec = self.state.section
+        min_energy = 0.5 if sec == "DROP" else (0.35 if sec == "GROOVE_A" else 0.2)
+        cur_key = self.current_phrase.key if self.current_phrase else (self.current_pattern.key if self.current_pattern else "C major")
+        
+        weights = dict(self.stem_weights.get(stem, {}))
+        if exclude_track_id:
+            weights[exclude_track_id] = 0.001
+
+        if stem == "drums":
+            g_type = "fill" if self.state.is_fill_bar else ("four_on_floor_hats" if sec in ("DROP", "BUILDUP") else "breakbeat")
+            new_pat = self.bank.pick_pattern(
+                "drums", groove_type=g_type, min_energy=min_energy,
+                feedback_weights=weights, rng=self.rng
+            ) or self.bank.create_groove_pattern("drums", "four_on_floor_hats", rng=self.rng)
+        elif stem == "bass":
+            g_type = "rolling" if sec == "DROP" else "offbeat"
+            new_pat = self.bank.pick_pattern(
+                "bass", groove_type=g_type, min_energy=min_energy,
+                target_key=cur_key, feedback_weights=weights, rng=self.rng
+            ) or self.bank.create_groove_pattern("bass", "offbeat", rng=self.rng)
+        elif stem == "vocals":
+            new_pat = self.bank.pick_pattern(
+                "vocals", target_key=cur_key, min_energy=0.0,
+                feedback_weights=weights, rng=self.rng
+            ) or self.bank.create_groove_pattern("vocals", "chop", rng=self.rng)
+        else: # other
+            g_type = "riff" if sec == "DROP" else ("pad" if sec == "BREAKDOWN" else "hook")
+            new_pat = self.bank.pick_pattern(
+                "other", groove_type=g_type, min_energy=min_energy,
+                target_key=cur_key, feedback_weights=weights, rng=self.rng
+            ) or self.bank.create_groove_pattern("other", "chords", rng=self.rng)
+
+        if new_pat:
+            self.active_patterns[stem] = new_pat
+            self.active_slice_ids[stem] = None
+        return new_pat
 
     def _init_section_patterns(self) -> None:
         """Select a cohesive 8-bar SongPhrase or fallback patterns matching the active section."""
@@ -251,15 +366,14 @@ class GrooveboxConductor:
         slices: Dict[str, Optional[SliceRef]] = {}
 
         for stem in STEMS:
-            if self.current_pattern and stem in self.current_pattern.stems:
+            pat = self.active_patterns.get(stem)
+            if pat and pat.steps:
+                candidate_sref = pat.steps[step % len(pat.steps)]
+            elif self.current_pattern and stem in self.current_pattern.stems:
                 stem_steps = self.current_pattern.stems[stem]
                 candidate_sref = stem_steps[step] if step < len(stem_steps) else None
             else:
-                pat = self.active_patterns.get(stem)
-                if pat and pat.steps:
-                    candidate_sref = pat.steps[step % len(pat.steps)]
-                else:
-                    candidate_sref = None
+                candidate_sref = None
 
             # Onset vs sustain awareness: only re-trigger if segment changes or at start
             if candidate_sref is None:
@@ -289,22 +403,34 @@ class GrooveboxConductor:
         pattern_titles = {}
         pattern_grooves = {}
         pattern_grids = {}
+        pattern_track_ids = {}
+        pattern_ids = {}
+        pattern_ratings = {}
 
         for s in STEMS:
-            if self.current_pattern and s in self.current_pattern.stems:
+            pat = self.active_patterns.get(s)
+            if pat:
+                pattern_titles[s] = pat.pattern_name[:28]
+                pattern_grooves[s] = pat.groove_type
+                pattern_grids[s] = [1 if step_i < len(pat.steps) and pat.steps[step_i] is not None else 0 for step_i in range(16)]
+                pattern_track_ids[s] = pat.track_id
+                pattern_ids[s] = pat.id
+                pattern_ratings[s] = self.feedback_data.get(s, {}).get(pat.track_id, 0)
+            elif self.current_pattern and s in self.current_pattern.stems:
                 pattern_titles[s] = f"{self.current_pattern.track_title[:24]} Bar {self.current_pattern.bar_num}"
                 pattern_grooves[s] = self.current_pattern.groove_types.get(s, "groove")
                 stem_steps = self.current_pattern.stems[s]
                 pattern_grids[s] = [1 if step_i < len(stem_steps) and stem_steps[step_i] is not None else 0 for step_i in range(16)]
-            elif self.active_patterns.get(s):
-                pat = self.active_patterns[s]
-                pattern_titles[s] = pat.pattern_name[:28]
-                pattern_grooves[s] = pat.groove_type
-                pattern_grids[s] = [1 if step_i < len(pat.steps) and pat.steps[step_i] is not None else 0 for step_i in range(16)]
+                pattern_track_ids[s] = self.current_pattern.track_id
+                pattern_ids[s] = f"pat_{s}_{self.current_pattern.track_id[:6]}_{self.current_pattern.bar_num:03d}"
+                pattern_ratings[s] = self.feedback_data.get(s, {}).get(self.current_pattern.track_id, 0)
             else:
                 pattern_titles[s] = "Rest"
                 pattern_grooves[s] = "none"
                 pattern_grids[s] = [0] * 16
+                pattern_track_ids[s] = ""
+                pattern_ids[s] = ""
+                pattern_ratings[s] = 0
 
         meta = {
             "section": sec,
@@ -321,6 +447,9 @@ class GrooveboxConductor:
             "patterns": pattern_titles,
             "pattern_grooves": pattern_grooves,
             "pattern_grids": pattern_grids,
+            "pattern_track_ids": pattern_track_ids,
+            "pattern_ids": pattern_ids,
+            "pattern_ratings": pattern_ratings,
         }
 
         # Advance step counter

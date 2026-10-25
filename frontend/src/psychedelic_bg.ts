@@ -105,20 +105,35 @@ vec3 getPaletteColor(float t, int pal) {
 vec3 renderDMT(vec2 uv, float t) {
   // Self-reactive breathing + bass punch
   float bassPulse = u_bass * 0.45;
-  vec2 p = uv * (2.1 - bassPulse);
+  vec2 p = uv * (2.0 - bassPulse);
 
-  // 6-fold radial kaleidoscope folding
+  // Seamless borderless radial texture wrapping
   float r = length(p);
   float a = atan(p.y, p.x);
   float sectors = 6.0;
   float twist = t * 0.12 + u_mid * 0.3;
-  a = mod(a + twist, TAU / sectors) - (PI / sectors);
-  p = vec2(cos(a), sin(a)) * r;
+  float sectorAngle = TAU / sectors;
+  float na = (a + twist) / sectorAngle;
+  // Continuous triangle wave reflection ensures seamless borderless angular wrapping without discontinuities
+  float wrappedA = (abs(fract(na) - 0.5) * 2.0 - 0.5) * sectorAngle;
+  p = vec2(cos(wrappedA), sin(wrappedA)) * r;
+
+  // Multi-tier DMT liquid melting domain warping
+  vec2 meltWarp1 = vec2(
+    fbm(p * 1.4 + vec2(0.0, t * 0.32)),
+    fbm(p * 1.4 + vec2(4.6, -t * 0.28))
+  );
+  vec2 meltWarp2 = vec2(
+    fbm(p * 2.2 + 2.8 * meltWarp1 + vec2(1.8, -t * 0.22) + vec2(2.3, 7.5)),
+    fbm(p * 2.2 + 2.8 * meltWarp1 + vec2(8.1, 3.4))
+  );
+  p += meltWarp2 * (0.65 + 0.55 * u_bass);
 
   // Hyperbolic iterated folding (Mandelbox-style machine elf geometry)
   float glowAccum = 0.0;
   float foldScale = 1.0;
   for (int i = 0; i < 5; i++) {
+    // Seamless periodic folding
     p = abs(p) - vec2(0.42 + 0.12 * sin(t * 0.35), 0.32 + 0.08 * cos(t * 0.28));
     p *= rot(0.55 + t * 0.06 + u_treble * 0.25);
     float d = dot(p, p);
@@ -127,12 +142,13 @@ vec3 renderDMT(vec2 uv, float t) {
     glowAccum += exp(-abs(d - 0.48) * 4.2) / float(i + 1);
   }
 
-  float colorShift = t * 0.15 + length(p) * 0.08 + glowAccum * 0.25;
+  // Smooth borderless color cycling
+  float colorShift = t * 0.18 + length(p) * 0.08 + glowAccum * 0.28;
   vec3 baseCol = getPaletteColor(colorShift, u_palette);
   
-  // Neon edge luminescence
-  vec3 neonCol = baseCol * (glowAccum * 1.6 + 0.2);
-  neonCol += vec3(0.1, 0.4, 0.6) * (u_bass * 0.8);
+  // Neon edge luminescence & psychedelic melt glow
+  vec3 neonCol = baseCol * (glowAccum * 1.6 + 0.25);
+  neonCol += vec3(0.15, 0.45, 0.7) * (u_bass * 0.85);
   return neonCol;
 }
 

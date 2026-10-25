@@ -90,6 +90,9 @@ export interface GrooveboxMeta {
   patterns: Record<string, string>;
   patternGrooves?: Record<string, string>;
   patternGrids?: Record<string, number[]>;
+  patternTrackIds?: Record<string, string>;
+  patternIds?: Record<string, string>;
+  patternRatings?: Record<string, number>;
 }
 
 interface TatumMessage {
@@ -184,6 +187,9 @@ function parseServerMessage(raw: string): HelloMessage | TatumMessage | null {
         patterns: isRecord(gbRaw["patterns"]) ? (gbRaw["patterns"] as Record<string, string>) : {},
         patternGrooves: isRecord(gbRaw["pattern_grooves"]) ? (gbRaw["pattern_grooves"] as Record<string, string>) : {},
         patternGrids: isRecord(gbRaw["pattern_grids"]) ? (gbRaw["pattern_grids"] as Record<string, number[]>) : {},
+        patternTrackIds: isRecord(gbRaw["pattern_track_ids"]) ? (gbRaw["pattern_track_ids"] as Record<string, string>) : {},
+        patternIds: isRecord(gbRaw["pattern_ids"]) ? (gbRaw["pattern_ids"] as Record<string, string>) : {},
+        patternRatings: isRecord(gbRaw["pattern_ratings"]) ? (gbRaw["pattern_ratings"] as Record<string, number>) : {},
       };
     }
     return {
@@ -289,6 +295,7 @@ class WubApp {
   private ringEvents: SliceArcEvent[] = [];
   private analyserScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private statusEl!: HTMLElement;
+  private lastGrooveboxMeta: GrooveboxMeta | null = null;
 
   init(): void {
     this.statusEl = el<HTMLElement>("status-line");
@@ -322,6 +329,7 @@ class WubApp {
     this.bindBackendConfig();
     this.bindMaster();
     for (const stem of STEMS) this.bindStem(stem);
+    this.bindFeedbackControls();
 
     // Sticky BPM: load from localStorage if set, else default to 96 BPM
     const savedBpm = localStorage.getItem("wub_bpm");
@@ -739,6 +747,59 @@ class WubApp {
     }
   }
 
+  private bindFeedbackControls(): void {
+    const btns = document.querySelectorAll<HTMLButtonElement>(".thumb-btn");
+    btns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const stem = btn.dataset.stem as StemName;
+        if (!stem) return;
+        const isUp = btn.classList.contains("thumb-up");
+        const rating = isUp ? 1 : -1;
+
+        // Visual flash feedback
+        btn.classList.add("active");
+        setTimeout(() => btn.classList.remove("active"), 350);
+
+        this.sendFeedback(stem, rating);
+      });
+    });
+  }
+
+  private sendFeedback(stem: StemName, rating: 1 | -1): void {
+    const trackId = this.lastGrooveboxMeta?.patternTrackIds?.[stem] || this.activeSlices[stem]?.trackId || "";
+    const patternId = this.lastGrooveboxMeta?.patternIds?.[stem] || "";
+
+    // 1. Send via active WebSocket connection
+    this.send({
+      type: "feedback",
+      stem,
+      rating,
+      track_id: trackId,
+      pattern_id: patternId,
+    });
+
+    // 2. Fallback REST POST
+    const cfg = this.getBackendConfig();
+    fetch(`${cfg.httpBase}/api/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stem,
+        rating,
+        track_id: trackId,
+        pattern_id: patternId,
+      }),
+    }).catch(() => {});
+
+    // 3. User feedback message
+    const stemName = stem.toUpperCase();
+    if (rating > 0) {
+      this.setStatus(`👍 ${stemName} approved! Reinforced in training preference model.`);
+    } else {
+      this.setStatus(`👎 ${stemName} downvoted! Rerolling stem immediately to a fresh compatible pattern...`);
+    }
+  }
+
   private bindStem(stem: StemName): void {
     const st = this.states[stem];
     const muteBtn = el<HTMLButtonElement>(`${stem}-mute`);
@@ -1110,7 +1171,22 @@ class WubApp {
           else pip.classList.remove("playhead");
         }
       }
+
+      // Update feedback scores
+      const rating = gb.patternRatings?.[stem] ?? 0;
+      const mScore = document.getElementById(`matrix-score-${stem}`);
+      const dScore = document.getElementById(`deck-score-${stem}`);
+      const fmt = rating > 0 ? `+${rating}` : String(rating);
+      if (mScore) {
+        mScore.textContent = fmt;
+        mScore.className = rating > 0 ? "feedback-score positive" : (rating < 0 ? "feedback-score negative" : "feedback-score");
+      }
+      if (dScore) {
+        dScore.textContent = fmt;
+        dScore.className = rating > 0 ? "feedback-score positive" : (rating < 0 ? "feedback-score negative" : "feedback-score");
+      }
     }
+    this.lastGrooveboxMeta = gb;
   }
 
   private cacheGet(key: string): Promise<AudioBuffer> | undefined {

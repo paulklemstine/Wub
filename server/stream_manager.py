@@ -170,6 +170,21 @@ class StreamSession:
             self._conductor.arranger.train_on_corpus(target_tracks)
         return self._conductor
 
+    def record_feedback(
+        self,
+        stem: str,
+        rating: int,
+        track_id: Optional[str] = None,
+        pattern_id: Optional[str] = None,
+    ) -> dict:
+        conductor = self.get_conductor()
+        res = conductor.record_feedback(stem=stem, rating=rating, track_id=track_id, pattern_id=pattern_id)
+        if rating < 0:
+            # Truncate buffered future tatums so rerolled stem is heard immediately
+            if len(self._buffer) > 2:
+                self._buffer = self._buffer[:2]
+        return res
+
     def _get_track_center(self, stem: str, track_id: str) -> Optional[Tuple[float, float]]:
         if not self._track_centers:
             idx_dir = Path("data/indices")
