@@ -53,6 +53,15 @@ export interface SliceManifestItem {
   segment_id: string;
 }
 
+export interface SliceAsset {
+  buffer: AudioBuffer;
+  pitch: number;
+  centroid: number;
+  duration: number;
+  loudness: number;
+  name: string;
+}
+
 export interface StandaloneManifest {
   version: number;
   default_bpm: number;
@@ -674,6 +683,7 @@ export class ClientGrooveboxConductor {
     other: 0,
   };
 
+  private sliceRegistry: Map<string, SliceAsset[]> = new Map();
   private isRunning: boolean = false;
   private timer: number | null = null;
   private nextStepTime: number = 0;
@@ -758,7 +768,8 @@ export class ClientGrooveboxConductor {
       const stemSlices = this.manifest.slices[stem];
       if (!stemSlices) continue;
       for (const [cat, list] of Object.entries(stemSlices)) {
-        for (let i = 0; i < Math.min(2, list.length); i++) {
+        const assets: SliceAsset[] = [];
+        for (let i = 0; i < Math.min(4, list.length); i++) {
           const item = list[i];
           try {
             const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
@@ -766,6 +777,15 @@ export class ClientGrooveboxConductor {
             if (res.ok) {
               const bytes = await res.arrayBuffer();
               const decoded = await this.engine.decodeWav(bytes);
+              const asset: SliceAsset = {
+                buffer: decoded,
+                pitch: typeof item.pitch === "number" ? item.pitch : 0,
+                centroid: typeof item.centroid === "number" ? item.centroid : 0,
+                duration: typeof item.duration === "number" ? item.duration : decoded.duration,
+                loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
+                name: item.name,
+              };
+              assets.push(asset);
               this.synth.registerSliceBuffer(`${stem}:${cat}_${i}`, decoded);
               if (i === 0) {
                 this.synth.registerSliceBuffer(`${stem}:${cat}`, decoded);
@@ -775,8 +795,45 @@ export class ClientGrooveboxConductor {
             // Silently fall back to algorithmic synth
           }
         }
+        if (assets.length > 0) {
+          this.sliceRegistry.set(`${stem}:${cat}`, assets);
+        }
       }
     }
+  }
+
+  private getBestSlice(stemCategory: string, targetPitch?: number): { buffer: AudioBuffer; rate: number } | null {
+    const list = this.sliceRegistry.get(stemCategory);
+    if (!list || list.length === 0) {
+      const fallbackBuf = this.synth.getSliceBuffer(stemCategory);
+      return fallbackBuf ? { buffer: fallbackBuf, rate: 1.0 } : null;
+    }
+
+    if (targetPitch === undefined) {
+      // Pick with slight variation across available slices
+      const idx = Math.floor(Math.random() * list.length);
+      return { buffer: list[idx].buffer, rate: 1.0 };
+    }
+
+    // For pitched stems (bass, other, vocals): find slice closest to target pitch
+    let best = list[0];
+    let bestDiff = 999;
+    let bestShift = 0;
+
+    for (const item of list) {
+      let diff = (targetPitch - item.pitch) % 12;
+      if (diff > 6) diff -= 12;
+      if (diff < -6) diff += 12;
+      if (Math.abs(diff) < bestDiff) {
+        bestDiff = Math.abs(diff);
+        bestShift = diff;
+        best = item;
+      }
+    }
+
+    // Shift rate by semitones: 2^(shift / 12)
+    const rate = Math.pow(2, bestShift / 12);
+    return { buffer: best.buffer, rate };
   }
 
   public setCycleMode(mode: string): boolean {
@@ -984,34 +1041,43 @@ export class ClientGrooveboxConductor {
         // Kick triggers: 0, 4, 8, 12 (or syncopations)
         const isKickStep = ([0, 4, 8, 12].includes(step % 16)) || ((step % 16) === 10 && dPat.groove_type.includes("syncopated"));
         if (isKickStep && hasHit) {
-          const kickBuf = this.synth.getSliceBuffer("drums:kick");
-          if (kickBuf) this.engine.scheduleSlice("drums", kickBuf, when, { rate: 1.0, fadeMs: 2 });
-          else this.synth.playKick(when, vel, dInput);
+          const kickSlice = this.getBestSlice("drums:kick");
+          if (kickSlice) this.engine.scheduleSlice("drums", kickSlice.buffer, when, { rate: kickSlice.rate, fadeMs: 2 });
+          this.synth.playKick(when, vel, dInput);
           this.applySidechainDucking(when);
         }
 
         // Snare / Clap triggers: 4 and 12 (+ fill roll on bar 7)
         const isSnareStep = ((step % 16) === 4 || (step % 16) === 12) || (phraseBar === 7 && (step % 16) >= 8 && (step % 16) !== 15);
         if (isSnareStep) {
-          const snareBuf = this.synth.getSliceBuffer("drums:snare");
-          if (snareBuf) this.engine.scheduleSlice("drums", snareBuf, when, { rate: 1.0, fadeMs: 2 });
-          else this.synth.playSnare(when, vel, dInput);
+          const snareSlice = this.getBestSlice("drums:snare");
+          if (snareSlice) this.engine.scheduleSlice("drums", snareSlice.buffer, when, { rate: snareSlice.rate, fadeMs: 2 });
+          this.synth.playSnare(when, vel, dInput);
         }
 
         // Hi-Hats: Open hat on upbeats (2, 6, 10, 14) + closed 16th hats
         if ([2, 6, 10, 14].includes(step % 16)) {
-          const hatBuf = this.synth.getSliceBuffer("drums:hat_open");
-          if (hatBuf) this.engine.scheduleSlice("drums", hatBuf, when, { rate: 1.0, fadeMs: 2 });
+          const hatSlice = this.getBestSlice("drums:hat_open");
+          if (hatSlice) this.engine.scheduleSlice("drums", hatSlice.buffer, when, { rate: hatSlice.rate, fadeMs: 2 });
           else this.synth.playHat(when, 0.90, true, dInput);
         } else if (step % 2 === 1 && sec !== "INTRO") {
-          const hatBuf = this.synth.getSliceBuffer("drums:hat_closed");
-          if (hatBuf) this.engine.scheduleSlice("drums", hatBuf, when, { rate: 1.0, fadeMs: 2 });
-          else this.synth.playHat(when, 0.60, false, dInput);
+          const hatSlice = this.getBestSlice("drums:hat_closed");
+          const hatVel = (step % 4 === 1 || step % 4 === 3) ? 0.72 : 0.58;
+          if (hatSlice) this.engine.scheduleSlice("drums", hatSlice.buffer, when, { rate: hatSlice.rate, fadeMs: 2 });
+          else this.synth.playHat(when, hatVel, false, dInput);
         }
 
         // Syncopated Perc on 3, 7, 11
         if ([3, 7, 11].includes(step % 16) && (sec === "DROP" || sec === "GROOVE_A")) {
-          this.synth.playPerc(when, 0.70, 420.0, dInput);
+          const percSlice = this.getBestSlice("drums:percussion");
+          if (percSlice) this.engine.scheduleSlice("drums", percSlice.buffer, when, { rate: percSlice.rate, fadeMs: 2 });
+          else this.synth.playPerc(when, 0.70, 420.0, dInput);
+        }
+
+        // Dramatic Turnaround Fill on Bar 7
+        if (phraseBar === 7 && step === 14) {
+          const fillSlice = this.getBestSlice("drums:fill");
+          if (fillSlice) this.engine.scheduleSlice("drums", fillSlice.buffer, when, { rate: fillSlice.rate, fadeMs: 2 });
         }
       }
     }
@@ -1023,18 +1089,12 @@ export class ClientGrooveboxConductor {
     if (bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
       if (bPat.onset_grid.includes(step)) {
         let vel = bPat.velocities ? bPat.velocities[step] : 0.90;
-        // Playing root pitch from chord progression!
-        const pitchHz = chord.bassHz;
-
-        // Try playing real pitch-tagged slice if available
-        const subBuf = this.synth.getSliceBuffer("bass:sub");
-        if (subBuf) {
-          this.engine.scheduleSlice("bass", subBuf, when, { rate: 1.0, fadeMs: 4 });
-        } else {
-          // Play fat resonant tuned sub bass
-          const dur = (bPat.groove_type === "rolling") ? 0.14 : 0.22;
-          this.synth.playSub(when, vel, pitchHz, dur, bDest);
+        const dur = (bPat.groove_type === "rolling") ? 0.14 : 0.22;
+        const subSlice = this.getBestSlice(bPat.groove_type === "rolling" ? "bass:rolling" : "bass:sub", chord.rootPitch);
+        if (subSlice) {
+          this.engine.scheduleSlice("bass", subSlice.buffer, when, { rate: subSlice.rate, fadeMs: 4 });
         }
+        this.synth.playSub(when, vel, chord.bassHz, dur, bDest);
       }
     }
 
@@ -1047,22 +1107,36 @@ export class ClientGrooveboxConductor {
         const vel = oPat.velocities ? oPat.velocities[step] : 0.85;
 
         if (oPat.groove_type === "riff" || sec === "DROP") {
-          // Driving 16th Arpeggio dancing across the notes of the chord
+          // Melodic phrase contour across the 8-bar musical arc
           const thirdMult = chord.isMinor ? Math.pow(2, 3 / 12) : Math.pow(2, 4 / 12);
           const fifthMult = Math.pow(2, 7 / 12);
           const octMult = 2.0;
-          const arpNotes = [chord.chordHz, chord.chordHz * thirdMult, chord.chordHz * fifthMult, chord.chordHz * octMult];
-          const arpFreq = arpNotes[step % arpNotes.length];
+          const ninthMult = 2.0 * Math.pow(2, 2 / 12);
+
+          let arpPool = [chord.chordHz, chord.chordHz * thirdMult, chord.chordHz * fifthMult, chord.chordHz * octMult];
+          if (phraseBar === 2 || phraseBar === 3) {
+            arpPool = [chord.chordHz * thirdMult, chord.chordHz * fifthMult, chord.chordHz * ninthMult, chord.chordHz * octMult];
+          } else if (phraseBar === 4 || phraseBar === 5) {
+            arpPool = [chord.chordHz * fifthMult, chord.chordHz * octMult, chord.chordHz * octMult * thirdMult, chord.chordHz * ninthMult];
+          } else if (phraseBar >= 6) {
+            arpPool = [chord.chordHz * octMult, chord.chordHz * fifthMult, chord.chordHz * thirdMult, chord.chordHz];
+          }
+
+          const arpFreq = arpPool[step % arpPool.length];
           this.synth.playArp(when, vel, arpFreq, oDest);
+
+          if (step % 4 === 0) {
+            const arpSlice = this.getBestSlice("other:arp", chord.rootPitch);
+            if (arpSlice) this.engine.scheduleSlice("other", arpSlice.buffer, when, { rate: arpSlice.rate, fadeMs: 4 });
+          }
         } else {
           // Polyphonic Synth Chord on upbeats (2, 6, 10, 14)
-          const chordBuf = this.synth.getSliceBuffer("other:chord");
-          if (chordBuf) {
-            this.engine.scheduleSlice("other", chordBuf, when, { rate: 1.0, fadeMs: 4 });
-          } else {
-            const dur = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.45 : 0.28;
-            this.synth.playChord(when, vel, chord.chordHz, chord.isMinor, dur, oDest);
+          const dur = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.45 : 0.28;
+          const chordSlice = this.getBestSlice("other:chord", chord.rootPitch);
+          if (chordSlice) {
+            this.engine.scheduleSlice("other", chordSlice.buffer, when, { rate: chordSlice.rate, fadeMs: 4 });
           }
+          this.synth.playChord(when, vel, chord.chordHz, chord.isMinor, dur, oDest);
         }
       }
     }
@@ -1072,13 +1146,15 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const vPat = this.activePatterns.vocals;
     if (vPat && (sec === "DROP" || sec === "GROOVE_A" || sec === "BREAKDOWN")) {
-      if (vPat.onset_grid.includes(step)) {
+      if (sec === "BREAKDOWN" && step === 0 && (phraseBar === 0 || phraseBar === 4)) {
+        const phraseSlice = this.getBestSlice("vocals:phrase", chord.rootPitch);
+        if (phraseSlice) this.engine.scheduleSlice("vocals", phraseSlice.buffer, when, { rate: phraseSlice.rate, fadeMs: 6 });
+      } else if (vPat.onset_grid.includes(step)) {
         const vel = vPat.velocities ? vPat.velocities[step] : 0.90;
-        const chopBuf = this.synth.getSliceBuffer("vocals:chop");
-        if (chopBuf) {
-          this.engine.scheduleSlice("vocals", chopBuf, when, { rate: 1.0, fadeMs: 3 });
+        const chopSlice = this.getBestSlice("vocals:chop", chord.rootPitch);
+        if (chopSlice) {
+          this.engine.scheduleSlice("vocals", chopSlice.buffer, when, { rate: chopSlice.rate, fadeMs: 3 });
         } else {
-          // Formant vocal sweep tuned to root
           const formant = 700 + (chord.rootPitch * 30);
           this.synth.playVocalChop(when, vel, formant, vInput);
         }
