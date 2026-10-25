@@ -2,16 +2,16 @@
   "version": 1,
   "phrase_transitions": {
     "0:drums:four_on_floor": {
-      "four_on_floor": 2028.0,
-      "fill": 91.0,
-      "four_on_floor_hats": 126.0,
-      "breakbeat": 27.0
+      "four_on_floor": 2113.0,
+      "fill": 95.0,
+      "four_on_floor_hats": 132.0,
+      "breakbeat": 28.0
     },
     "0:bass:offbeat": {
-      "offbeat": 6207.0,
-      "sustained": 2990.0,
-      "stabs": 242.0,
-      "rolling": 15.0
+      "offbeat": 6431.0,
+      "sustained": 3098.0,
+      "stabs": 251.0,
+      "rolling": 16.0
     },
     "0:vocals:phrase": {
       "phrase": 281.0,
@@ -19,42 +19,42 @@
       "hook": 21.0
     },
     "0:other:riff": {
-      "riff": 1438.0,
+      "riff": 1499.0,
       "pad": 42.0,
-      "hook": 302.0
+      "hook": 315.0
     },
     "1:drums:four_on_floor": {
-      "four_on_floor": 2458.0,
-      "four_on_floor_hats": 263.0,
-      "fill": 90.0,
-      "breakbeat": 61.0
+      "four_on_floor": 2561.0,
+      "four_on_floor_hats": 279.0,
+      "fill": 94.0,
+      "breakbeat": 64.0
     },
     "1:bass:offbeat": {
-      "offbeat": 6140.0,
-      "sustained": 2555.0,
-      "stabs": 220.0,
-      "rolling": 10.0
+      "offbeat": 6364.0,
+      "sustained": 2653.0,
+      "stabs": 227.0,
+      "rolling": 11.0
     },
     "1:vocals:phrase": {
       "phrase": 281.0,
       "hook": 19.0
     },
     "1:other:riff": {
-      "riff": 1392.0,
-      "hook": 467.0,
-      "pad": 27.0
+      "riff": 1447.0,
+      "hook": 488.0,
+      "pad": 29.0
     },
     "2:drums:four_on_floor": {
-      "four_on_floor": 2481.0,
-      "four_on_floor_hats": 162.0,
-      "minimal": 29.0,
-      "fill": 126.0,
+      "four_on_floor": 2581.0,
+      "four_on_floor_hats": 170.0,
+      "minimal": 31.0,
+      "fill": 132.0,
       "breakbeat": 9.0
     },
     "2:bass:offbeat": {
-      "offbeat": 6388.0,
-      "sustained": 2579.1827934158996,
-      "stabs": 177.0,
+      "offbeat": 6619.0,
+      "sustained": 2668.1827934158996,
+      "stabs": 183.0,
       "rolling": 7.0
     },
     "2:vocals:phrase": {
@@ -62,21 +62,21 @@
       "hook": 2.0
     },
     "2:other:riff": {
-      "riff": 1207.0,
-      "hook": 544.0,
-      "pad": 22.0
+      "riff": 1256.0,
+      "hook": 569.0,
+      "pad": 24.0
     },
     "3:drums:four_on_floor": {
-      "four_on_floor": 2243.0,
-      "four_on_floor_hats": 324.0,
-      "minimal": 34.0,
-      "fill": 104.0,
-      "breakbeat": 17.0
+      "four_on_floor": 2334.0,
+      "four_on_floor_hats": 334.0,
+      "minimal": 36.0,
+      "fill": 107.0,
+      "breakbeat": 18.0
     },
     "3:bass:offbeat": {
-      "offbeat": 6463.0,
-      "sustained": 2617.0,
-      "stabs": 306.0,
+      "offbeat": 6699.0,
+      "sustained": 2715.0,
+      "stabs": 322.0,
       "rolling": 2.0
     },
     "3:vocals:phrase": {
@@ -84,21 +84,21 @@
       "hook": 39.0
     },
     "3:other:riff": {
-      "riff": 1147.0,
-      "pad": 57.0,
-      "hook": 443.0
+      "riff": 1195.0,
+      "pad": 60.0,
+      "hook": 463.0
     },
     "4:drums:four_on_floor": {
-      "four_on_floor": 2213.0,
-      "four_on_floor_hats": 87.0,
-      "minimal": 27.0,
-      "fill": 131.0,
-      "breakbeat": 14.0
+      "four_on_floor": 2305.0,
+      "four_on_floor_hats": 89.0,
+      "minimal": 28.0,
+      "fill": 137.0,
+      "breakbeat": 15.0
     },
     "4:bass:offbeat": {
-      "offbeat": 6635.0,
-      "sustained": 2852.2639759853887,
-      "stabs": 90.0,
+      "offbeat": 6876.0,
+      "sustained": 2950.2639759853887,
+      "stabs": 95.0,
       "rolling": 8.0
     },
     "4:vocals:phrase": {
@@ -107,44 +107,44 @@
       "chop": 2.0
     },
     "4:other:riff": {
-      "riff": 1261.0,
-      "hook": 258.0,
+      "riff": 1313.0,
+      "hook": 273.0,
       "pad": 10.0
     },
     "5:drums:four_on_floor": {
-      "four_on_floor": 2158.0,
-      "fill": 229.0,
-      "minimal": 31.0,
-      "breakbeat": 76.0,
-      "four_on_floor_hats": 99.0
+      "four_on_floor": 2247.0,
+      "fill": 238.0,
+      "minimal": 32.0,
+      "breakbeat": 81.0,
+      "four_on_floor_hats": 110.0
     },
     "5:bass:offbeat": {
-      "offbeat": 6222.0,
-      "sustained": 2767.0,
-      "stabs": 140.0,
-      "rolling": 10.0
+      "offbeat": 6451.0,
+      "sustained": 2873.0,
+      "stabs": 147.0,
+      "rolling": 11.0
     },
     "5:vocals:phrase": {
       "phrase": 257.0,
       "hook": 34.0
     },
     "5:other:riff": {
-      "riff": 1308.0,
-      "hook": 543.0,
-      "pad": 15.0
+      "riff": 1365.0,
+      "hook": 561.0,
+      "pad": 16.0
     },
     "6:drums:four_on_floor": {
-      "four_on_floor": 1851.0,
-      "four_on_floor_hats": 255.0,
-      "fill": 283.0,
-      "minimal": 100.0,
-      "breakbeat": 58.0
+      "four_on_floor": 1930.0,
+      "four_on_floor_hats": 264.0,
+      "fill": 296.0,
+      "minimal": 104.0,
+      "breakbeat": 60.0
     },
     "6:bass:offbeat": {
-      "offbeat": 6042.0,
-      "sustained": 2791.0,
-      "stabs": 154.0,
-      "rolling": 10.0
+      "offbeat": 6265.0,
+      "sustained": 2893.0,
+      "stabs": 160.0,
+      "rolling": 11.0
     },
     "6:vocals:phrase": {
       "phrase": 240.0,
@@ -152,22 +152,22 @@
       "chop": 8.0
     },
     "6:other:riff": {
-      "riff": 1313.0,
-      "hook": 383.0,
+      "riff": 1369.0,
+      "hook": 404.0,
       "pad": 9.0
     },
     "7:drums:four_on_floor": {
-      "four_on_floor": 1053.0,
-      "four_on_floor_hats": 199.0,
-      "fill": 234.0,
-      "minimal": 32.0,
+      "four_on_floor": 1099.0,
+      "four_on_floor_hats": 208.0,
+      "fill": 248.0,
+      "minimal": 33.0,
       "breakbeat": 1.0
     },
     "7:bass:offbeat": {
-      "offbeat": 5210.0,
-      "sustained": 2897.0,
-      "stabs": 124.0,
-      "rolling": 12.0
+      "offbeat": 5398.0,
+      "sustained": 3003.0,
+      "stabs": 130.0,
+      "rolling": 13.0
     },
     "7:vocals:phrase": {
       "phrase": 58.0,
@@ -175,280 +175,280 @@
       "hook": 24.0
     },
     "7:other:riff": {
-      "riff": 733.0,
-      "pad": 67.0,
-      "hook": 281.0
+      "riff": 761.0,
+      "pad": 71.0,
+      "hook": 293.0
     },
     "0:drums:minimal": {
-      "four_on_floor_hats": 193.8001507875994,
-      "breakbeat": 164.0,
-      "four_on_floor": 119.0,
-      "fill": 193.0,
+      "four_on_floor_hats": 203.8001507875994,
+      "breakbeat": 167.0,
+      "four_on_floor": 123.0,
+      "fill": 198.0,
       "minimal": 39.0
     },
     "0:bass:sustained": {
-      "sustained": 11560.17638668822,
-      "offbeat": 2685.0,
-      "stabs": 455.0
+      "sustained": 11939.17638668822,
+      "offbeat": 2790.0,
+      "stabs": 474.0
     },
     "0:vocals:chop": {
-      "chop": 13106.134395097371,
+      "chop": 13392.134395097371,
       "hook": 726.0,
-      "vocal_sustained": 1931.0,
-      "vocal_hook": 137.0,
-      "vocal_call_response": 86.0,
+      "vocal_sustained": 2056.0,
+      "vocal_hook": 147.0,
+      "vocal_call_response": 91.0,
       "vocal_syncopated_chop": 17.0
     },
     "0:other:pad": {
-      "pad": 15324.291568765846,
-      "hook": 1784.0,
-      "riff": 75.0
+      "pad": 15795.291568765846,
+      "hook": 1859.0,
+      "riff": 79.0
     },
     "1:drums:four_on_floor_hats": {
-      "four_on_floor_hats": 6743.824699115874,
-      "breakbeat": 425.0,
-      "four_on_floor": 281.0,
-      "fill": 88.0,
-      "minimal": 15.0
+      "four_on_floor_hats": 7030.824699115874,
+      "breakbeat": 439.0,
+      "four_on_floor": 291.0,
+      "fill": 92.0,
+      "minimal": 16.0
     },
     "1:bass:sustained": {
-      "sustained": 11668.746514372056,
-      "offbeat": 2839.3732318102743,
-      "stabs": 110.0
+      "sustained": 12059.746514372056,
+      "offbeat": 2933.3732318102743,
+      "stabs": 115.0
     },
     "1:vocals:chop": {
-      "chop": 12903.064657095993,
+      "chop": 13181.064657095993,
       "hook": 559.0,
-      "vocal_sustained": 2010.0,
-      "vocal_hook": 176.0,
-      "vocal_syncopated_chop": 65.0,
-      "vocal_call_response": 71.0,
+      "vocal_sustained": 2134.0,
+      "vocal_hook": 188.0,
+      "vocal_syncopated_chop": 69.0,
+      "vocal_call_response": 74.0,
       "vocal_stutter": 9.0
     },
     "1:other:pad": {
-      "pad": 14988.616852617382,
-      "hook": 1614.0,
+      "pad": 15444.616852617382,
+      "hook": 1684.0,
       "riff": 18.0
     },
     "2:drums:four_on_floor_hats": {
-      "four_on_floor_hats": 6883.555092139979,
-      "breakbeat": 445.0,
-      "four_on_floor": 162.0,
-      "fill": 228.0,
-      "minimal": 74.0
+      "four_on_floor_hats": 7175.555092139979,
+      "breakbeat": 460.0,
+      "four_on_floor": 168.0,
+      "fill": 238.0,
+      "minimal": 77.0
     },
     "2:bass:sustained": {
-      "sustained": 11578.336200831214,
-      "offbeat": 2830.0,
-      "stabs": 204.0,
+      "sustained": 11966.336200831214,
+      "offbeat": 2940.0,
+      "stabs": 212.0,
       "rolling": 1.0
     },
     "2:vocals:chop": {
-      "chop": 12845.470393888107,
+      "chop": 13126.470393888107,
       "hook": 701.0,
       "phrase": 13.0,
-      "vocal_sustained": 2165.0,
-      "vocal_hook": 191.0,
-      "vocal_call_response": 82.0,
+      "vocal_sustained": 2302.0,
+      "vocal_hook": 204.0,
+      "vocal_call_response": 88.0,
       "vocal_syncopated_chop": 32.0
     },
     "2:other:pad": {
-      "pad": 14489.432212058508,
-      "hook": 1672.0,
-      "riff": 59.0
-    },
-    "3:drums:four_on_floor_hats": {
-      "breakbeat": 586.2434108564646,
-      "minimal": 129.0,
-      "four_on_floor_hats": 6709.0,
-      "fill": 255.0,
-      "four_on_floor": 134.0
-    },
-    "3:bass:sustained": {
-      "offbeat": 3010.772024559613,
-      "sustained": 10897.0,
-      "stabs": 185.0
-    },
-    "3:vocals:chop": {
-      "chop": 12867.700687199322,
-      "hook": 584.0,
-      "vocal_sustained": 2119.0,
-      "vocal_syncopated_chop": 33.0,
-      "vocal_hook": 163.0,
-      "vocal_call_response": 52.0,
-      "vocal_stutter": 14.0
-    },
-    "3:other:pad": {
-      "pad": 14452.159595261204,
-      "hook": 1255.0,
+      "pad": 14935.432212058508,
+      "hook": 1727.0,
       "riff": 62.0
     },
+    "3:drums:four_on_floor_hats": {
+      "breakbeat": 611.2434108564646,
+      "minimal": 131.0,
+      "four_on_floor_hats": 6994.0,
+      "fill": 263.0,
+      "four_on_floor": 140.0
+    },
+    "3:bass:sustained": {
+      "offbeat": 3113.772024559613,
+      "sustained": 11257.0,
+      "stabs": 197.0
+    },
+    "3:vocals:chop": {
+      "chop": 13156.700687199322,
+      "hook": 584.0,
+      "vocal_sustained": 2242.0,
+      "vocal_syncopated_chop": 36.0,
+      "vocal_hook": 173.0,
+      "vocal_call_response": 55.0,
+      "vocal_stutter": 16.0
+    },
+    "3:other:pad": {
+      "pad": 14907.159595261204,
+      "hook": 1304.0,
+      "riff": 66.0
+    },
     "4:drums:breakbeat": {
-      "four_on_floor_hats": 554.9034106653849,
-      "fill": 620.0,
-      "breakbeat": 1132.0,
-      "minimal": 76.0,
-      "four_on_floor": 48.0
+      "four_on_floor_hats": 578.9034106653849,
+      "fill": 637.0,
+      "breakbeat": 1168.0,
+      "minimal": 77.0,
+      "four_on_floor": 54.0
     },
     "4:vocals:chop": {
-      "chop": 12698.268952147815,
+      "chop": 12972.268952147815,
       "hook": 631.0,
       "phrase": 1.0,
-      "vocal_sustained": 2084.0,
-      "vocal_hook": 235.0,
-      "vocal_call_response": 62.0,
+      "vocal_sustained": 2219.0,
+      "vocal_hook": 250.0,
+      "vocal_call_response": 66.0,
       "vocal_syncopated_chop": 33.0
     },
     "4:other:pad": {
-      "pad": 14644.501384514802,
-      "hook": 1511.0,
-      "riff": 47.0
+      "pad": 15104.501384514802,
+      "hook": 1567.0,
+      "riff": 48.0
     },
     "5:drums:four_on_floor_hats": {
-      "four_on_floor_hats": 6775.772674793661,
-      "four_on_floor": 196.0,
-      "breakbeat": 449.0,
-      "fill": 116.0,
-      "minimal": 41.0
+      "four_on_floor_hats": 7052.772674793661,
+      "four_on_floor": 206.0,
+      "breakbeat": 469.0,
+      "fill": 119.0,
+      "minimal": 42.0
     },
     "5:bass:sustained": {
-      "sustained": 11294.787720377997,
-      "offbeat": 2690.0,
-      "stabs": 98.0
+      "sustained": 11658.787720377997,
+      "offbeat": 2789.0,
+      "stabs": 103.0
     },
     "5:vocals:chop": {
-      "chop": 12689.882774054342,
+      "chop": 12958.882774054342,
       "hook": 548.0,
       "phrase": 13.0,
-      "vocal_sustained": 2244.0,
-      "vocal_hook": 257.0,
-      "vocal_call_response": 41.0,
-      "vocal_syncopated_chop": 47.0
+      "vocal_sustained": 2377.0,
+      "vocal_hook": 273.0,
+      "vocal_call_response": 45.0,
+      "vocal_syncopated_chop": 49.0
     },
     "5:other:pad": {
-      "pad": 14765.775718366713,
-      "hook": 1334.0,
-      "riff": 91.0
+      "pad": 15226.775718366713,
+      "hook": 1385.0,
+      "riff": 95.0
     },
     "6:drums:four_on_floor_hats": {
-      "four_on_floor_hats": 6249.876941510136,
-      "fill": 391.0,
-      "breakbeat": 734.0,
-      "four_on_floor": 168.0,
+      "four_on_floor_hats": 6510.876941510136,
+      "fill": 407.0,
+      "breakbeat": 758.0,
+      "four_on_floor": 177.0,
       "minimal": 27.0
     },
     "6:bass:sustained": {
-      "sustained": 11216.016366871867,
-      "offbeat": 2742.0,
-      "stabs": 171.0
+      "sustained": 11588.016366871867,
+      "offbeat": 2840.0,
+      "stabs": 179.0
     },
     "6:vocals:chop": {
-      "chop": 12523.999889207156,
+      "chop": 12794.999889207156,
       "hook": 785.0,
-      "vocal_sustained": 1951.0,
-      "vocal_hook": 190.0,
-      "vocal_call_response": 43.0,
+      "vocal_sustained": 2077.0,
+      "vocal_hook": 197.0,
+      "vocal_call_response": 47.0,
       "vocal_syncopated_chop": 35.0,
-      "vocal_stutter": 13.0
+      "vocal_stutter": 14.0
     },
     "6:other:pad": {
-      "pad": 14504.853098932428,
-      "riff": 30.0,
-      "hook": 1585.0
+      "pad": 14952.853098932428,
+      "riff": 31.0,
+      "hook": 1655.0
     },
     "7:drums:four_on_floor_hats": {
-      "breakbeat": 1049.1132214780741,
-      "minimal": 151.0,
-      "fill": 399.0,
-      "four_on_floor_hats": 5320.0,
-      "four_on_floor": 115.0
+      "breakbeat": 1096.1132214780741,
+      "minimal": 158.0,
+      "fill": 411.0,
+      "four_on_floor_hats": 5539.0,
+      "four_on_floor": 122.0
     },
     "7:bass:sustained": {
-      "sustained": 11025.317199696827,
-      "offbeat": 2752.0,
-      "stabs": 127.0,
+      "sustained": 11389.317199696827,
+      "offbeat": 2854.0,
+      "stabs": 131.0,
       "rolling": 3.0
     },
     "7:vocals:chop": {
-      "chop": 12087.338334477417,
+      "chop": 12349.338334477417,
       "hook": 606.0,
-      "vocal_sustained": 2250.0,
-      "vocal_hook": 206.0,
-      "vocal_call_response": 62.0,
-      "vocal_syncopated_chop": 25.0,
+      "vocal_sustained": 2379.0,
+      "vocal_hook": 218.0,
+      "vocal_call_response": 66.0,
+      "vocal_syncopated_chop": 27.0,
       "vocal_stutter": 9.0
     },
     "7:other:pad": {
-      "pad": 14117.069702571116,
-      "hook": 1747.0,
+      "pad": 14548.069702571116,
+      "hook": 1821.0,
       "riff": 27.0
     },
     "0:drums:breakbeat": {
-      "four_on_floor_hats": 1054.7661280666632,
-      "breakbeat": 1201.0,
-      "fill": 663.0,
-      "four_on_floor": 41.0,
-      "minimal": 156.0
+      "four_on_floor_hats": 1097.7661280666632,
+      "breakbeat": 1241.0,
+      "fill": 683.0,
+      "four_on_floor": 46.0,
+      "minimal": 160.0
     },
     "4:bass:sustained": {
-      "sustained": 11128.0,
-      "offbeat": 2236.0,
-      "stabs": 332.0
+      "sustained": 11494.0,
+      "offbeat": 2324.0,
+      "stabs": 344.0
     },
     "2:drums:breakbeat": {
-      "four_on_floor_hats": 514.0,
-      "breakbeat": 1376.0,
-      "fill": 762.0,
-      "four_on_floor": 41.0,
-      "minimal": 156.0
+      "four_on_floor_hats": 532.0,
+      "breakbeat": 1424.0,
+      "fill": 782.0,
+      "four_on_floor": 42.0,
+      "minimal": 162.0
     },
     "4:drums:minimal": {
-      "four_on_floor_hats": 97.0,
-      "breakbeat": 164.0,
-      "fill": 124.0,
-      "minimal": 51.0,
-      "four_on_floor": 8.0
+      "four_on_floor_hats": 100.0,
+      "breakbeat": 169.0,
+      "fill": 126.0,
+      "minimal": 52.0,
+      "four_on_floor": 9.0
     },
     "1:drums:breakbeat": {
-      "breakbeat": 1441.0,
-      "fill": 495.0,
-      "four_on_floor_hats": 536.0,
-      "minimal": 67.0
+      "breakbeat": 1490.0,
+      "fill": 505.0,
+      "four_on_floor_hats": 549.0,
+      "minimal": 68.0
     },
     "4:drums:four_on_floor_hats": {
-      "four_on_floor_hats": 6806.0,
-      "breakbeat": 549.0,
-      "four_on_floor": 199.0,
-      "minimal": 79.0,
-      "fill": 168.0
+      "four_on_floor_hats": 7089.0,
+      "breakbeat": 567.0,
+      "four_on_floor": 211.0,
+      "minimal": 82.0,
+      "fill": 172.0
     },
     "6:drums:breakbeat": {
-      "fill": 743.0,
-      "breakbeat": 1111.0,
-      "four_on_floor_hats": 466.0,
-      "minimal": 52.0,
-      "four_on_floor": 22.0
+      "fill": 767.0,
+      "breakbeat": 1151.0,
+      "four_on_floor_hats": 486.0,
+      "minimal": 53.0,
+      "four_on_floor": 23.0
     },
     "7:drums:fill": {
-      "fill": 9416.0,
-      "breakbeat": 964.0,
-      "minimal": 326.0,
-      "four_on_floor_hats": 409.0,
-      "four_on_floor": 217.0
+      "fill": 9699.0,
+      "breakbeat": 991.0,
+      "minimal": 333.0,
+      "four_on_floor_hats": 428.0,
+      "four_on_floor": 225.0
     },
     "0:drums:fill": {
-      "four_on_floor": 400.0,
-      "fill": 9835.0,
-      "minimal": 444.0,
-      "breakbeat": 804.0,
-      "four_on_floor_hats": 503.0
+      "four_on_floor": 420.0,
+      "fill": 10126.0,
+      "minimal": 456.0,
+      "breakbeat": 823.0,
+      "four_on_floor_hats": 523.0
     },
     "6:drums:fill": {
-      "fill": 9791.0,
-      "four_on_floor_hats": 210.0,
-      "breakbeat": 529.0,
-      "minimal": 176.0,
-      "four_on_floor": 137.0
+      "fill": 10084.0,
+      "four_on_floor_hats": 218.0,
+      "breakbeat": 542.0,
+      "minimal": 181.0,
+      "four_on_floor": 143.0
     },
     "7:vocals:hook": {
       "chop": 839.0,
@@ -456,100 +456,100 @@
       "phrase": 45.0
     },
     "1:drums:fill": {
-      "fill": 9643.0,
-      "breakbeat": 748.0,
-      "four_on_floor_hats": 231.0,
+      "fill": 9933.0,
+      "breakbeat": 769.0,
+      "four_on_floor_hats": 240.0,
       "minimal": 100.0,
-      "four_on_floor": 95.0
+      "four_on_floor": 99.0
     },
     "2:drums:fill": {
-      "fill": 9658.0,
-      "minimal": 230.0,
-      "breakbeat": 424.0,
-      "four_on_floor": 110.0,
-      "four_on_floor_hats": 222.0
+      "fill": 9944.0,
+      "minimal": 237.0,
+      "breakbeat": 436.0,
+      "four_on_floor": 114.0,
+      "four_on_floor_hats": 229.0
     },
     "3:drums:fill": {
-      "fill": 9713.0,
-      "breakbeat": 629.0,
-      "four_on_floor": 52.0,
-      "four_on_floor_hats": 253.0,
-      "minimal": 153.0
+      "fill": 10002.0,
+      "breakbeat": 647.0,
+      "four_on_floor": 54.0,
+      "four_on_floor_hats": 263.0,
+      "minimal": 155.0
     },
     "4:drums:fill": {
-      "fill": 9782.0,
-      "breakbeat": 510.0,
-      "minimal": 409.0,
-      "four_on_floor_hats": 107.0,
-      "four_on_floor": 125.0
+      "fill": 10080.0,
+      "breakbeat": 522.0,
+      "minimal": 419.0,
+      "four_on_floor_hats": 110.0,
+      "four_on_floor": 129.0
     },
     "5:drums:fill": {
-      "fill": 9882.0,
-      "minimal": 187.0,
-      "four_on_floor_hats": 155.0,
-      "breakbeat": 465.0,
-      "four_on_floor": 126.0
+      "fill": 10178.0,
+      "minimal": 190.0,
+      "four_on_floor_hats": 160.0,
+      "breakbeat": 481.0,
+      "four_on_floor": 132.0
     },
     "1:drums:minimal": {
-      "minimal": 91.0,
-      "fill": 342.0,
-      "breakbeat": 174.0,
-      "four_on_floor_hats": 66.0
+      "minimal": 92.0,
+      "fill": 350.0,
+      "breakbeat": 180.0,
+      "four_on_floor_hats": 68.0
     },
     "2:drums:minimal": {
-      "fill": 105.0,
-      "four_on_floor": 49.0,
+      "fill": 106.0,
+      "four_on_floor": 50.0,
       "minimal": 70.0,
       "breakbeat": 18.0,
-      "four_on_floor_hats": 31.0
+      "four_on_floor_hats": 32.0
     },
     "5:drums:breakbeat": {
-      "fill": 452.0,
-      "four_on_floor_hats": 442.0,
-      "breakbeat": 1366.0,
-      "minimal": 99.0,
+      "fill": 463.0,
+      "four_on_floor_hats": 456.0,
+      "breakbeat": 1411.0,
+      "minimal": 101.0,
       "four_on_floor": 10.0
     },
     "7:drums:breakbeat": {
-      "fill": 914.0,
-      "breakbeat": 1050.0,
-      "four_on_floor_hats": 381.0,
-      "minimal": 57.0,
-      "four_on_floor": 38.0
+      "fill": 938.0,
+      "breakbeat": 1087.0,
+      "four_on_floor_hats": 394.0,
+      "minimal": 60.0,
+      "four_on_floor": 40.0
     },
     "3:drums:minimal": {
-      "fill": 379.0,
-      "four_on_floor": 39.0,
-      "breakbeat": 91.0,
-      "minimal": 27.0,
-      "four_on_floor_hats": 23.0
+      "fill": 390.0,
+      "four_on_floor": 42.0,
+      "breakbeat": 93.0,
+      "minimal": 28.0,
+      "four_on_floor_hats": 24.0
     },
     "3:drums:breakbeat": {
-      "fill": 500.0,
-      "four_on_floor_hats": 549.0,
-      "breakbeat": 1108.0,
-      "minimal": 101.0,
+      "fill": 516.0,
+      "four_on_floor_hats": 565.0,
+      "breakbeat": 1146.0,
+      "minimal": 106.0,
       "four_on_floor": 4.0
     },
     "7:drums:minimal": {
-      "fill": 254.0,
-      "minimal": 61.0,
-      "four_on_floor": 70.0,
+      "fill": 260.0,
+      "minimal": 63.0,
+      "four_on_floor": 72.0,
       "breakbeat": 40.0,
-      "four_on_floor_hats": 12.0
+      "four_on_floor_hats": 13.0
     },
     "6:drums:minimal": {
-      "minimal": 82.0,
-      "breakbeat": 32.0,
-      "fill": 262.0,
-      "four_on_floor_hats": 45.0
+      "minimal": 83.0,
+      "breakbeat": 33.0,
+      "fill": 266.0,
+      "four_on_floor_hats": 46.0
     },
     "0:drums:four_on_floor_hats": {
-      "breakbeat": 370.0,
-      "four_on_floor": 284.0,
-      "four_on_floor_hats": 5706.0,
-      "fill": 85.0,
-      "minimal": 56.0
+      "breakbeat": 381.0,
+      "four_on_floor": 296.0,
+      "four_on_floor_hats": 5945.0,
+      "fill": 89.0,
+      "minimal": 58.0
     },
     "0:vocals:hook": {
       "chop": 514.0,
@@ -557,44 +557,44 @@
       "hook": 437.0
     },
     "0:other:hook": {
-      "hook": 3943.0,
-      "pad": 1306.0,
-      "riff": 373.0
+      "hook": 4111.0,
+      "pad": 1361.0,
+      "riff": 386.0
     },
     "1:other:hook": {
-      "hook": 4309.0,
-      "pad": 1278.0,
-      "riff": 363.0
+      "hook": 4492.0,
+      "pad": 1326.0,
+      "riff": 384.0
     },
     "2:other:hook": {
-      "hook": 4577.0,
-      "pad": 1316.0,
-      "riff": 483.0
+      "hook": 4767.0,
+      "pad": 1377.0,
+      "riff": 506.0
     },
     "3:other:hook": {
-      "hook": 4680.0,
-      "pad": 1742.0,
-      "riff": 320.0
+      "hook": 4873.0,
+      "pad": 1802.0,
+      "riff": 335.0
     },
     "4:other:hook": {
-      "hook": 4207.0,
-      "pad": 1550.0,
-      "riff": 594.0
+      "hook": 4386.0,
+      "pad": 1608.0,
+      "riff": 618.0
     },
     "5:other:hook": {
-      "hook": 4090.0,
-      "pad": 1516.0,
-      "riff": 336.0
+      "hook": 4260.0,
+      "pad": 1576.0,
+      "riff": 354.0
     },
     "6:other:hook": {
-      "hook": 3989.0,
-      "pad": 1607.0,
-      "riff": 356.0
+      "hook": 4151.0,
+      "pad": 1672.0,
+      "riff": 368.0
     },
     "7:other:hook": {
-      "pad": 2203.0,
-      "hook": 3312.0,
-      "riff": 276.0
+      "pad": 2292.0,
+      "hook": 3453.0,
+      "riff": 293.0
     },
     "2:vocals:hook": {
       "hook": 579.0,
@@ -627,79 +627,79 @@
       "phrase": 8.0
     },
     "5:drums:minimal": {
-      "four_on_floor": 57.0,
-      "fill": 291.0,
-      "four_on_floor_hats": 145.0,
+      "four_on_floor": 59.0,
+      "fill": 298.0,
+      "four_on_floor_hats": 150.0,
       "minimal": 63.0,
-      "breakbeat": 86.0
+      "breakbeat": 88.0
     },
     "6:bass:stabs": {
-      "sustained": 104.0,
-      "offbeat": 229.0,
-      "stabs": 269.0,
+      "sustained": 108.0,
+      "offbeat": 239.0,
+      "stabs": 279.0,
       "rolling": 18.0
     },
     "2:bass:stabs": {
-      "offbeat": 266.0,
-      "stabs": 260.0,
-      "sustained": 31.0
+      "offbeat": 277.0,
+      "stabs": 267.0,
+      "sustained": 32.0
     },
     "1:bass:stabs": {
-      "offbeat": 177.0,
-      "sustained": 456.0,
-      "stabs": 225.0
+      "offbeat": 184.0,
+      "sustained": 475.0,
+      "stabs": 232.0
     },
     "7:bass:stabs": {
-      "sustained": 278.0,
-      "offbeat": 172.0,
-      "stabs": 135.0
+      "sustained": 292.0,
+      "offbeat": 179.0,
+      "stabs": 138.0
     },
     "3:bass:stabs": {
-      "sustained": 257.0,
-      "stabs": 280.0,
-      "offbeat": 104.0
+      "sustained": 267.0,
+      "stabs": 286.0,
+      "offbeat": 109.0
     },
     "5:bass:stabs": {
-      "sustained": 248.0,
-      "offbeat": 120.0,
-      "stabs": 381.0,
+      "sustained": 260.0,
+      "offbeat": 125.0,
+      "stabs": 393.0,
       "rolling": 1.0
     },
     "4:bass:stabs": {
-      "offbeat": 297.0,
-      "stabs": 337.0,
-      "sustained": 138.0
+      "offbeat": 312.0,
+      "stabs": 349.0,
+      "sustained": 145.0
     },
     "0:bass:stabs": {
-      "offbeat": 123.0,
-      "sustained": 108.0,
-      "stabs": 160.0
+      "offbeat": 127.0,
+      "sustained": 112.0,
+      "stabs": 165.0
     },
     "7:bass:rolling": {
-      "rolling": 28.0
+      "rolling": 29.0
     },
     "0:bass:rolling": {
-      "rolling": 41.0,
+      "rolling": 43.0,
       "stabs": 1.0,
       "offbeat": 1.0
     },
     "1:bass:rolling": {
-      "rolling": 39.0,
-      "offbeat": 15.0,
+      "rolling": 41.0,
+      "offbeat": 16.0,
       "stabs": 2.0
     },
     "2:bass:rolling": {
-      "rolling": 28.0,
-      "offbeat": 21.0
+      "rolling": 29.0,
+      "offbeat": 23.0
     },
     "3:bass:rolling": {
-      "rolling": 28.0,
+      "rolling": 29.0,
       "offbeat": 7.0,
       "stabs": 1.0
     },
     "4:bass:rolling": {
       "rolling": 19.0,
-      "offbeat": 11.0
+      "offbeat": 12.0
     },
     "5:bass:rolling": {
       "rolling": 20.0,
@@ -707,256 +707,256 @@
       "stabs": 1.0
     },
     "6:bass:rolling": {
-      "stabs": 28.0,
+      "stabs": 29.0,
       "sustained": 2.0,
       "offbeat": 1.0
     },
     "0:vocals:vocal_sustained": {
-      "vocal_sustained": 2822.0,
-      "chop": 2148.0,
-      "vocal_hook": 392.0,
-      "vocal_call_response": 93.0,
+      "vocal_sustained": 2987.0,
+      "chop": 2278.0,
+      "vocal_hook": 419.0,
+      "vocal_call_response": 97.0,
       "vocal_syncopated_chop": 10.0
     },
     "1:vocals:vocal_sustained": {
-      "chop": 2326.0,
-      "vocal_sustained": 2383.0,
-      "vocal_hook": 319.0,
-      "vocal_syncopated_chop": 60.0,
-      "vocal_call_response": 67.0,
-      "vocal_stutter": 9.0
+      "chop": 2472.0,
+      "vocal_sustained": 2525.0,
+      "vocal_hook": 341.0,
+      "vocal_syncopated_chop": 61.0,
+      "vocal_call_response": 72.0,
+      "vocal_stutter": 10.0
     },
     "3:vocals:vocal_sustained": {
-      "chop": 2070.0,
-      "vocal_sustained": 2311.0,
-      "vocal_hook": 323.0,
-      "vocal_call_response": 64.0,
+      "chop": 2202.0,
+      "vocal_sustained": 2445.0,
+      "vocal_hook": 349.0,
+      "vocal_call_response": 71.0,
       "vocal_syncopated_chop": 16.0
     },
     "5:vocals:vocal_sustained": {
-      "chop": 2063.0,
-      "vocal_sustained": 2254.0,
-      "vocal_syncopated_chop": 41.0,
-      "vocal_hook": 207.0,
-      "vocal_call_response": 45.0
+      "chop": 2197.0,
+      "vocal_sustained": 2393.0,
+      "vocal_syncopated_chop": 42.0,
+      "vocal_hook": 222.0,
+      "vocal_call_response": 50.0
     },
     "7:vocals:vocal_sustained": {
-      "chop": 1894.0,
-      "vocal_sustained": 2432.0,
-      "vocal_hook": 230.0,
-      "vocal_call_response": 112.0,
-      "vocal_syncopated_chop": 64.0,
+      "chop": 2016.0,
+      "vocal_sustained": 2580.0,
+      "vocal_hook": 247.0,
+      "vocal_call_response": 116.0,
+      "vocal_syncopated_chop": 66.0,
       "vocal_stutter": 12.0
     },
     "4:vocals:vocal_sustained": {
-      "chop": 2307.0,
-      "vocal_sustained": 2175.0,
-      "vocal_hook": 391.0,
-      "vocal_call_response": 38.0,
-      "vocal_stutter": 13.0,
-      "vocal_syncopated_chop": 4.0
+      "chop": 2437.0,
+      "vocal_sustained": 2310.0,
+      "vocal_hook": 414.0,
+      "vocal_call_response": 42.0,
+      "vocal_stutter": 14.0,
+      "vocal_syncopated_chop": 5.0
     },
     "6:vocals:vocal_sustained": {
-      "chop": 2214.0,
-      "vocal_sustained": 2367.0,
-      "vocal_hook": 356.0,
-      "vocal_call_response": 108.0,
+      "chop": 2345.0,
+      "vocal_sustained": 2507.0,
+      "vocal_hook": 383.0,
+      "vocal_call_response": 120.0,
       "vocal_syncopated_chop": 33.0
     },
     "2:vocals:vocal_sustained": {
-      "chop": 2260.0,
-      "vocal_sustained": 2228.0,
-      "vocal_hook": 314.0,
-      "vocal_call_response": 84.0,
+      "chop": 2394.0,
+      "vocal_sustained": 2366.0,
+      "vocal_hook": 333.0,
+      "vocal_call_response": 91.0,
       "vocal_syncopated_chop": 5.0
     },
     "7:vocals:vocal_hook": {
-      "vocal_sustained": 453.0,
-      "chop": 174.0,
-      "vocal_call_response": 49.0,
-      "vocal_hook": 75.0,
-      "vocal_syncopated_chop": 36.0,
-      "vocal_stutter": 10.0
+      "vocal_sustained": 481.0,
+      "chop": 185.0,
+      "vocal_call_response": 54.0,
+      "vocal_hook": 79.0,
+      "vocal_syncopated_chop": 39.0,
+      "vocal_stutter": 11.0
     },
     "1:vocals:vocal_hook": {
-      "vocal_hook": 170.0,
-      "vocal_sustained": 403.0,
-      "chop": 159.0,
-      "vocal_call_response": 98.0,
+      "vocal_hook": 179.0,
+      "vocal_sustained": 430.0,
+      "chop": 170.0,
+      "vocal_call_response": 104.0,
       "vocal_syncopated_chop": 11.0,
       "vocal_stutter": 2.0
     },
     "2:vocals:vocal_hook": {
-      "vocal_hook": 132.0,
-      "vocal_sustained": 295.0,
-      "vocal_syncopated_chop": 42.0,
-      "chop": 148.0,
-      "vocal_call_response": 99.0,
-      "vocal_stutter": 29.0
+      "vocal_hook": 142.0,
+      "vocal_sustained": 315.0,
+      "vocal_syncopated_chop": 44.0,
+      "chop": 157.0,
+      "vocal_call_response": 105.0,
+      "vocal_stutter": 31.0
     },
     "3:vocals:vocal_hook": {
-      "vocal_sustained": 374.0,
-      "vocal_hook": 187.0,
-      "vocal_call_response": 62.0,
-      "chop": 97.0,
-      "vocal_stutter": 26.0,
+      "vocal_sustained": 401.0,
+      "vocal_hook": 195.0,
+      "vocal_call_response": 66.0,
+      "chop": 103.0,
+      "vocal_stutter": 28.0,
       "vocal_syncopated_chop": 12.0
     },
     "5:vocals:vocal_hook": {
-      "vocal_sustained": 517.0,
-      "vocal_syncopated_chop": 32.0,
-      "chop": 141.0,
-      "vocal_hook": 220.0,
-      "vocal_call_response": 50.0
+      "vocal_sustained": 550.0,
+      "vocal_syncopated_chop": 36.0,
+      "chop": 146.0,
+      "vocal_hook": 234.0,
+      "vocal_call_response": 53.0
     },
     "0:vocals:vocal_stutter": {
-      "vocal_sustained": 43.0,
-      "vocal_hook": 23.0,
-      "vocal_stutter": 660.0,
+      "vocal_sustained": 45.0,
+      "vocal_hook": 25.0,
+      "vocal_stutter": 697.0,
       "chop": 9.0,
       "vocal_syncopated_chop": 18.0
     },
     "0:vocals:vocal_hook": {
-      "vocal_call_response": 78.0,
-      "chop": 79.0,
-      "vocal_sustained": 258.0,
-      "vocal_hook": 133.0,
+      "vocal_call_response": 83.0,
+      "chop": 84.0,
+      "vocal_sustained": 277.0,
+      "vocal_hook": 140.0,
       "vocal_syncopated_chop": 14.0
     },
     "1:vocals:vocal_call_response": {
-      "vocal_call_response": 158.0,
-      "chop": 43.0,
-      "vocal_sustained": 97.0,
-      "vocal_hook": 81.0
+      "vocal_call_response": 168.0,
+      "chop": 45.0,
+      "vocal_sustained": 103.0,
+      "vocal_hook": 86.0
     },
     "2:vocals:vocal_call_response": {
-      "vocal_hook": 94.0,
-      "vocal_stutter": 23.0,
-      "vocal_sustained": 83.0,
-      "vocal_call_response": 181.0,
-      "chop": 33.0
+      "vocal_hook": 100.0,
+      "vocal_stutter": 25.0,
+      "vocal_sustained": 87.0,
+      "vocal_call_response": 192.0,
+      "chop": 36.0
     },
     "4:vocals:vocal_hook": {
-      "vocal_call_response": 58.0,
-      "chop": 235.0,
-      "vocal_hook": 210.0,
-      "vocal_sustained": 289.0,
-      "vocal_syncopated_chop": 31.0
+      "vocal_call_response": 61.0,
+      "chop": 254.0,
+      "vocal_hook": 221.0,
+      "vocal_sustained": 308.0,
+      "vocal_syncopated_chop": 32.0
     },
     "5:vocals:vocal_call_response": {
-      "vocal_call_response": 142.0,
-      "chop": 28.0,
-      "vocal_hook": 68.0,
+      "vocal_call_response": 151.0,
+      "chop": 31.0,
+      "vocal_hook": 72.0,
       "vocal_stutter": 12.0,
-      "vocal_sustained": 82.0,
-      "vocal_syncopated_chop": 13.0
+      "vocal_sustained": 89.0,
+      "vocal_syncopated_chop": 14.0
     },
     "6:vocals:vocal_call_response": {
-      "vocal_hook": 38.0,
-      "vocal_stutter": 33.0,
-      "vocal_call_response": 137.0,
-      "vocal_sustained": 73.0,
+      "vocal_hook": 43.0,
+      "vocal_stutter": 36.0,
+      "vocal_call_response": 147.0,
+      "vocal_sustained": 77.0,
       "vocal_syncopated_chop": 4.0,
-      "chop": 20.0
+      "chop": 21.0
     },
     "0:vocals:vocal_call_response": {
-      "vocal_sustained": 90.0,
-      "vocal_call_response": 121.0,
-      "vocal_hook": 126.0,
-      "chop": 13.0,
-      "vocal_stutter": 17.0,
-      "vocal_syncopated_chop": 1.0
+      "vocal_sustained": 94.0,
+      "vocal_call_response": 129.0,
+      "vocal_hook": 133.0,
+      "chop": 15.0,
+      "vocal_stutter": 18.0,
+      "vocal_syncopated_chop": 2.0
     },
     "6:vocals:vocal_syncopated_chop": {
-      "vocal_sustained": 39.0,
-      "chop": 57.0,
-      "vocal_hook": 30.0,
-      "vocal_syncopated_chop": 25.0,
+      "vocal_sustained": 41.0,
+      "chop": 60.0,
+      "vocal_hook": 33.0,
+      "vocal_syncopated_chop": 26.0,
       "vocal_call_response": 4.0,
       "vocal_stutter": 11.0
     },
     "3:vocals:vocal_syncopated_chop": {
-      "vocal_syncopated_chop": 38.0,
+      "vocal_syncopated_chop": 40.0,
       "chop": 32.0,
-      "vocal_hook": 32.0,
+      "vocal_hook": 33.0,
       "vocal_sustained": 14.0,
       "vocal_stutter": 11.0
     },
     "4:vocals:vocal_syncopated_chop": {
-      "vocal_hook": 25.0,
-      "chop": 20.0,
+      "vocal_hook": 28.0,
+      "chop": 21.0,
       "vocal_sustained": 13.0,
-      "vocal_syncopated_chop": 49.0
+      "vocal_syncopated_chop": 50.0
     },
     "2:vocals:vocal_syncopated_chop": {
-      "chop": 89.0,
-      "vocal_sustained": 34.0,
-      "vocal_syncopated_chop": 39.0,
+      "chop": 93.0,
+      "vocal_sustained": 35.0,
+      "vocal_syncopated_chop": 40.0,
       "vocal_hook": 39.0,
       "vocal_stutter": 2.0
     },
     "6:vocals:vocal_hook": {
-      "chop": 133.0,
-      "vocal_sustained": 394.0,
-      "vocal_call_response": 43.0,
-      "vocal_hook": 181.0,
-      "vocal_syncopated_chop": 27.0,
-      "vocal_stutter": 13.0
+      "chop": 144.0,
+      "vocal_sustained": 420.0,
+      "vocal_call_response": 45.0,
+      "vocal_hook": 191.0,
+      "vocal_syncopated_chop": 28.0,
+      "vocal_stutter": 14.0
     },
     "3:vocals:vocal_stutter": {
-      "vocal_call_response": 23.0,
-      "vocal_hook": 6.0,
-      "vocal_stutter": 601.0,
+      "vocal_call_response": 24.0,
+      "vocal_hook": 7.0,
+      "vocal_stutter": 635.0,
       "vocal_syncopated_chop": 2.0
     },
     "4:vocals:vocal_call_response": {
-      "vocal_hook": 99.0,
-      "vocal_sustained": 58.0,
-      "vocal_call_response": 152.0,
-      "chop": 23.0,
-      "vocal_stutter": 27.0
+      "vocal_hook": 106.0,
+      "vocal_sustained": 64.0,
+      "vocal_call_response": 162.0,
+      "chop": 25.0,
+      "vocal_stutter": 29.0
     },
     "3:vocals:vocal_call_response": {
-      "vocal_hook": 112.0,
-      "vocal_call_response": 158.0,
-      "chop": 74.0,
+      "vocal_hook": 119.0,
+      "vocal_call_response": 170.0,
+      "chop": 77.0,
       "vocal_syncopated_chop": 6.0,
-      "vocal_sustained": 110.0,
+      "vocal_sustained": 120.0,
       "vocal_stutter": 4.0
     },
     "7:vocals:vocal_call_response": {
-      "vocal_call_response": 114.0,
-      "vocal_sustained": 103.0,
-      "vocal_hook": 23.0,
-      "chop": 57.0,
-      "vocal_stutter": 26.0,
-      "vocal_verse": 13.0
+      "vocal_call_response": 121.0,
+      "vocal_sustained": 113.0,
+      "vocal_hook": 25.0,
+      "chop": 63.0,
+      "vocal_stutter": 28.0,
+      "vocal_verse": 14.0
     },
     "7:vocals:vocal_stutter": {
-      "vocal_sustained": 15.0,
-      "vocal_stutter": 167.0,
-      "vocal_call_response": 18.0,
-      "vocal_hook": 13.0,
+      "vocal_sustained": 16.0,
+      "vocal_stutter": 176.0,
+      "vocal_call_response": 20.0,
+      "vocal_hook": 14.0,
       "vocal_syncopated_chop": 3.0
     },
     "6:vocals:vocal_stutter": {
       "vocal_sustained": 4.0,
-      "vocal_call_response": 19.0,
-      "vocal_stutter": 579.0,
+      "vocal_call_response": 20.0,
+      "vocal_stutter": 611.0,
       "vocal_hook": 2.0,
       "vocal_syncopated_chop": 2.0
     },
     "1:vocals:vocal_syncopated_chop": {
-      "vocal_syncopated_chop": 65.0,
+      "vocal_syncopated_chop": 66.0,
       "chop": 10.0,
       "vocal_sustained": 11.0,
-      "vocal_call_response": 13.0,
-      "vocal_hook": 4.0
+      "vocal_call_response": 14.0,
+      "vocal_hook": 5.0
     },
     "4:vocals:vocal_stutter": {
-      "vocal_call_response": 48.0,
-      "vocal_sustained": 5.0,
-      "vocal_stutter": 602.0,
+      "vocal_call_response": 52.0,
+      "vocal_sustained": 6.0,
+      "vocal_stutter": 635.0,
       "vocal_syncopated_chop": 1.0
     },
     "7:vocals:vocal_syncopated_chop": {
@@ -964,73 +964,73 @@
       "chop": 34.0,
       "vocal_sustained": 30.0,
       "vocal_syncopated_chop": 11.0,
-      "vocal_call_response": 13.0,
+      "vocal_call_response": 14.0,
       "vocal_stutter": 10.0
     },
     "0:vocals:vocal_syncopated_chop": {
-      "chop": 29.0,
-      "vocal_syncopated_chop": 52.0,
+      "chop": 31.0,
+      "vocal_syncopated_chop": 54.0,
       "vocal_hook": 32.0,
-      "vocal_sustained": 24.0,
+      "vocal_sustained": 26.0,
       "vocal_stutter": 1.0,
-      "vocal_call_response": 1.0
+      "vocal_call_response": 2.0
     },
     "5:vocals:vocal_syncopated_chop": {
-      "vocal_syncopated_chop": 32.0,
-      "chop": 41.0,
-      "vocal_hook": 34.0,
+      "vocal_syncopated_chop": 33.0,
+      "chop": 42.0,
+      "vocal_hook": 35.0,
       "vocal_sustained": 9.0,
       "vocal_stutter": 2.0
     },
     "0:vocals:vocal_verse": {
-      "vocal_stutter": 13.0
+      "vocal_stutter": 14.0
     },
     "1:vocals:vocal_stutter": {
-      "vocal_stutter": 667.0,
-      "vocal_hook": 13.0,
-      "vocal_call_response": 9.0,
+      "vocal_stutter": 704.0,
+      "vocal_hook": 14.0,
+      "vocal_call_response": 10.0,
       "vocal_syncopated_chop": 2.0
     },
     "2:vocals:vocal_stutter": {
-      "vocal_call_response": 22.0,
-      "vocal_stutter": 650.0,
+      "vocal_call_response": 24.0,
+      "vocal_stutter": 686.0,
       "vocal_hook": 2.0,
       "vocal_syncopated_chop": 9.0,
       "chop": 4.0
     },
     "5:vocals:vocal_stutter": {
-      "vocal_call_response": 27.0,
-      "vocal_stutter": 592.0,
-      "vocal_hook": 13.0,
+      "vocal_call_response": 29.0,
+      "vocal_stutter": 625.0,
+      "vocal_hook": 14.0,
       "vocal_syncopated_chop": 1.0,
       "vocal_sustained": 9.0
     }
   },
   "energy_by_bar": {
-    "0": 0.835,
-    "1": 0.836,
-    "2": 0.832,
-    "3": 0.833,
-    "4": 0.834,
-    "5": 0.834,
-    "6": 0.837,
-    "7": 0.838
+    "0": 0.833,
+    "1": 0.833,
+    "2": 0.829,
+    "3": 0.828,
+    "4": 0.829,
+    "5": 0.83,
+    "6": 0.832,
+    "7": 0.835
   },
   "section_transitions": {
     "DROP": {
-      "DROP": 12839.351432747057,
-      "GROOVE_A": 3245.140026504145
+      "DROP": 13193.81181162063,
+      "GROOVE_A": 3367.0992056717428
     },
     "GROOVE_A": {
-      "GROOVE_A": 24514.9130895336,
-      "DROP": 3072.7235303761313
+      "GROOVE_A": 25334.163037736675,
+      "DROP": 3197.0264685371376
     }
   },
   "section_energy_targets": {
     "INTRO": 0.25,
-    "GROOVE_A": 0.8342509683004607,
+    "GROOVE_A": 0.8321272521464409,
     "BUILDUP": 0.65,
-    "DROP": 0.8376131190126122,
+    "DROP": 0.8320899289979817,
     "BREAKDOWN": 0.2
   },
   "stem_cohesion_weights": {
@@ -1038,93 +1038,93 @@
       "drums_bass": {
         "four_on_floor": {
           "sustained": 0.8539,
-          "offbeat": 0.6333
+          "offbeat": 0.6325
         },
         "fill": {
-          "sustained": 0.5985,
-          "offbeat": 0.7347,
-          "stabs": 0.8101
+          "sustained": 0.6001,
+          "offbeat": 0.7626,
+          "stabs": 0.8174
         },
         "minimal": {
-          "sustained": 0.6331,
+          "sustained": 0.6329,
           "offbeat": 0.7463
         },
         "four_on_floor_hats": {
-          "sustained": 0.7287,
-          "offbeat": 0.8606,
+          "sustained": 0.7332,
+          "offbeat": 0.8558,
           "stabs": 0.8191
         },
         "breakbeat": {
-          "offbeat": 0.8135,
-          "sustained": 0.6161,
-          "stabs": 0.8028
+          "offbeat": 0.8122,
+          "sustained": 0.6248,
+          "stabs": 0.8052
         }
       },
       "other_vocals": {
         "hook": {
-          "vocal_sustained": 0.8603,
-          "vocal_hook": 0.8336,
-          "chop": 0.8838,
-          "vocal_syncopated_chop": 0.798
+          "vocal_sustained": 0.8636,
+          "vocal_hook": 0.8495,
+          "chop": 0.8839,
+          "vocal_syncopated_chop": 0.7963
         },
         "pad": {
-          "vocal_sustained": 0.6005,
-          "chop": 0.6277,
-          "vocal_hook": 0.7987,
-          "vocal_call_response": 0.8553
+          "vocal_sustained": 0.6009,
+          "chop": 0.6303,
+          "vocal_hook": 0.829,
+          "vocal_call_response": 0.8704
         },
         "chords": {
-          "vocal_verse": 0.8634
+          "vocal_verse": 0.8461
         },
         "riff": {
-          "vocal_sustained": 0.7693,
-          "vocal_call_response": 0.8032
+          "vocal_sustained": 0.7744,
+          "vocal_call_response": 0.8036
         }
       },
       "drums_vocals": {
         "four_on_floor": {
-          "vocal_sustained": 0.6904,
+          "vocal_sustained": 0.6903,
           "chop": 0.8069,
           "vocal_hook": 0.7966
         },
         "fill": {
-          "chop": 0.6376,
-          "vocal_sustained": 0.6069,
-          "vocal_hook": 0.7786,
-          "vocal_call_response": 0.8428
+          "chop": 0.6424,
+          "vocal_sustained": 0.6137,
+          "vocal_hook": 0.8291,
+          "vocal_call_response": 0.859
         },
         "minimal": {
-          "chop": 0.8108,
-          "vocal_sustained": 0.5998
+          "chop": 0.821,
+          "vocal_sustained": 0.5993
         },
         "four_on_floor_hats": {
-          "vocal_sustained": 0.7145,
-          "vocal_hook": 0.84,
-          "chop": 0.8919,
-          "vocal_call_response": 0.8156,
-          "vocal_verse": 0.8634
+          "vocal_sustained": 0.7168,
+          "vocal_hook": 0.8426,
+          "chop": 0.8851,
+          "vocal_call_response": 0.8341,
+          "vocal_verse": 0.8461
         },
         "breakbeat": {
-          "vocal_syncopated_chop": 0.798,
-          "chop": 0.7031,
-          "vocal_sustained": 0.6545,
+          "vocal_syncopated_chop": 0.7963,
+          "chop": 0.7178,
+          "vocal_sustained": 0.651,
           "vocal_hook": 0.8007
         }
       },
       "bass_other": {
         "sustained": {
-          "hook": 0.8806,
-          "pad": 0.5953
+          "hook": 0.881,
+          "pad": 0.5955
         },
         "offbeat": {
-          "pad": 0.6759,
-          "hook": 0.8668,
-          "chords": 0.8634,
-          "riff": 0.7816
+          "pad": 0.692,
+          "hook": 0.8735,
+          "chords": 0.8461,
+          "riff": 0.7872
         },
         "stabs": {
-          "hook": 0.8213,
-          "pad": 0.8095
+          "hook": 0.8207,
+          "pad": 0.8163
         }
       }
     },
@@ -1139,110 +1139,110 @@
     },
     "grooves": {
       "drums": {
-        "minimal": 0.6162,
-        "four_on_floor_hats": 0.5405,
-        "breakbeat": 0.5759,
-        "fill": 0.597,
-        "four_on_floor": 0.6295
+        "minimal": 0.613,
+        "four_on_floor_hats": 0.5402,
+        "breakbeat": 0.5797,
+        "fill": 0.5974,
+        "four_on_floor": 0.6311
       },
       "bass": {
         "sustained": 0.5983,
-        "offbeat": 0.6577,
-        "rolling": 0.5915,
-        "stabs": 0.5949
+        "offbeat": 0.6518,
+        "rolling": 0.6079,
+        "stabs": 0.6153
       },
       "vocals": {
-        "chop": 0.6328,
+        "chop": 0.63,
         "phrase": 0.53,
         "vocal_sustained": 0.6048
       },
       "other": {
         "pad": 0.5997,
-        "chords": 0.5186,
-        "riff": 0.5286
+        "chords": 0.5376,
+        "riff": 0.5601
       }
     },
     "trained_slice_scores": {
       "seg_drums_0001": 0.5978,
       "seg_drums_0002": 0.5945,
-      "seg_drums_0003": 0.5979,
-      "seg_drums_0004": 0.6149,
-      "seg_drums_0005": 0.587,
-      "seg_drums_0006": 0.5736,
-      "seg_drums_0007": 0.5743,
-      "seg_drums_0008": 0.5744,
-      "seg_drums_0009": 0.5736,
-      "seg_drums_0010": 0.532,
-      "seg_drums_0011": 0.4821,
-      "seg_drums_0012": 0.5156,
-      "seg_drums_0013": 0.4927,
-      "seg_drums_0014": 0.5062,
-      "seg_drums_0015": 0.4652,
-      "seg_drums_0016": 0.4688,
-      "seg_drums_0017": 0.4947,
-      "seg_drums_0018": 0.4708,
-      "seg_drums_0019": 0.5761,
-      "seg_drums_0020": 0.592,
-      "seg_drums_0021": 0.592,
-      "seg_drums_0022": 0.592,
-      "seg_drums_0023": 0.592,
-      "seg_drums_0024": 0.592,
-      "seg_drums_0025": 0.478,
-      "seg_drums_0026": 0.4847,
-      "seg_drums_0027": 0.478,
-      "seg_drums_0028": 0.478,
-      "seg_drums_0029": 0.478,
-      "seg_drums_0030": 0.4462,
-      "seg_drums_0031": 0.4535,
-      "seg_drums_0032": 0.4462,
-      "seg_drums_0033": 0.4773,
-      "seg_drums_0034": 0.4552,
-      "seg_drums_0035": 0.4716,
-      "seg_drums_0036": 0.477,
-      "seg_drums_0037": 0.4716,
-      "seg_drums_0038": 0.4716,
-      "seg_drums_0039": 0.4716,
-      "seg_drums_0040": 0.4851,
-      "seg_drums_0041": 0.5238,
-      "seg_drums_0042": 0.5245,
-      "seg_drums_0043": 0.5791,
-      "seg_drums_0044": 0.5245,
-      "seg_drums_0045": 0.5371,
-      "seg_drums_0046": 0.4444,
-      "seg_drums_0047": 0.4444,
-      "seg_drums_0048": 0.4444,
-      "seg_drums_0049": 0.4444,
-      "seg_drums_0050": 0.4624,
-      "seg_drums_0051": 0.4889,
-      "seg_drums_0052": 0.4834,
-      "seg_drums_0053": 0.5016,
-      "seg_drums_0054": 0.4889,
-      "seg_drums_0055": 0.4834,
-      "seg_drums_0056": 0.4288,
-      "seg_drums_0057": 0.4288,
-      "seg_drums_0058": 0.4288,
-      "seg_drums_0059": 0.4288,
-      "seg_drums_0060": 0.4776,
+      "seg_drums_0003": 0.5978,
+      "seg_drums_0004": 0.6117,
+      "seg_drums_0005": 0.5892,
+      "seg_drums_0006": 0.579,
+      "seg_drums_0007": 0.5848,
+      "seg_drums_0008": 0.5824,
+      "seg_drums_0009": 0.579,
+      "seg_drums_0010": 0.5239,
+      "seg_drums_0011": 0.4804,
+      "seg_drums_0012": 0.5072,
+      "seg_drums_0013": 0.4889,
+      "seg_drums_0014": 0.4997,
+      "seg_drums_0015": 0.4644,
+      "seg_drums_0016": 0.4917,
+      "seg_drums_0017": 0.488,
+      "seg_drums_0018": 0.4688,
+      "seg_drums_0019": 0.5873,
+      "seg_drums_0020": 0.5934,
+      "seg_drums_0021": 0.5934,
+      "seg_drums_0022": 0.5934,
+      "seg_drums_0023": 0.5934,
+      "seg_drums_0024": 0.5934,
+      "seg_drums_0025": 0.4775,
+      "seg_drums_0026": 0.4828,
+      "seg_drums_0027": 0.4775,
+      "seg_drums_0028": 0.4775,
+      "seg_drums_0029": 0.4775,
+      "seg_drums_0030": 0.4449,
+      "seg_drums_0031": 0.4507,
+      "seg_drums_0032": 0.4449,
+      "seg_drums_0033": 0.4698,
+      "seg_drums_0034": 0.4521,
+      "seg_drums_0035": 0.4843,
+      "seg_drums_0036": 0.4752,
+      "seg_drums_0037": 0.4709,
+      "seg_drums_0038": 0.4709,
+      "seg_drums_0039": 0.4709,
+      "seg_drums_0040": 0.4817,
+      "seg_drums_0041": 0.5245,
+      "seg_drums_0042": 0.5276,
+      "seg_drums_0043": 0.5688,
+      "seg_drums_0044": 0.5251,
+      "seg_drums_0045": 0.5352,
+      "seg_drums_0046": 0.4431,
+      "seg_drums_0047": 0.4725,
+      "seg_drums_0048": 0.4431,
+      "seg_drums_0049": 0.4431,
+      "seg_drums_0050": 0.4623,
+      "seg_drums_0051": 0.4874,
+      "seg_drums_0052": 0.483,
+      "seg_drums_0053": 0.4976,
+      "seg_drums_0054": 0.4874,
+      "seg_drums_0055": 0.483,
+      "seg_drums_0056": 0.4271,
+      "seg_drums_0057": 0.4271,
+      "seg_drums_0058": 0.4271,
+      "seg_drums_0059": 0.4271,
+      "seg_drums_0060": 0.4661,
       "seg_bass_0000": 0.5953,
-      "seg_bass_0001": 0.6676,
-      "seg_bass_0002": 0.6675,
-      "seg_bass_0003": 0.8014,
-      "seg_bass_0004": 0.7922,
-      "seg_bass_0005": 0.8175,
+      "seg_bass_0001": 0.6573,
+      "seg_bass_0002": 0.6628,
+      "seg_bass_0003": 0.8016,
+      "seg_bass_0004": 0.7924,
+      "seg_bass_0005": 0.8188,
       "seg_vocals_0000": 0.5981,
-      "seg_vocals_0001": 0.6208,
-      "seg_vocals_0002": 0.8406,
-      "seg_vocals_0003": 0.8053,
-      "seg_vocals_0004": 0.7869,
-      "seg_vocals_0005": 0.8141,
+      "seg_vocals_0001": 0.6193,
+      "seg_vocals_0002": 0.8407,
+      "seg_vocals_0003": 0.8055,
+      "seg_vocals_0004": 0.7871,
+      "seg_vocals_0005": 0.8154,
       "seg_other_0000": 0.5981,
       "seg_other_0001": 0.5981,
-      "seg_other_0002": 0.8259,
-      "seg_other_0003": 0.8176,
-      "seg_other_0004": 0.7783,
-      "seg_other_0005": 0.7684,
-      "seg_other_0006": 0.7643,
-      "seg_other_0007": 0.739,
+      "seg_other_0002": 0.826,
+      "seg_other_0003": 0.8178,
+      "seg_other_0004": 0.7784,
+      "seg_other_0005": 0.7687,
+      "seg_other_0006": 0.7654,
+      "seg_other_0007": 0.7448,
       "seg_drums_0305": 0.54,
       "seg_drums_0542": 0.54,
       "seg_drums_0218": 0.54,
@@ -1255,7 +1255,7 @@
       "seg_drums_0299": 0.54,
       "seg_drums_0338": 0.5296,
       "seg_drums_0483": 0.54,
-      "seg_drums_0179": 0.5377,
+      "seg_drums_0179": 0.5481,
       "seg_drums_0987": 0.54,
       "seg_drums_0209": 0.54,
       "seg_drums_0743": 0.54,
@@ -1289,7 +1289,7 @@
       "seg_drums_0206": 0.4976,
       "seg_drums_0508": 0.5139,
       "seg_drums_0380": 0.4976,
-      "seg_drums_0075": 0.6315,
+      "seg_drums_0075": 0.632,
       "seg_bass_0176": 0.6372,
       "seg_bass_0460": 0.5465,
       "seg_bass_0236": 0.5465,
@@ -1302,7 +1302,7 @@
       "seg_bass_0257": 0.548,
       "seg_bass_0390": 0.6171,
       "seg_bass_0141": 0.6171,
-      "seg_bass_0217": 0.548,
+      "seg_bass_0217": 0.6561,
       "seg_other_0103": 0.5028,
       "seg_other_0338": 0.5028,
       "seg_other_1188": 0.5028,
@@ -1320,16 +1320,16 @@
       "seg_other_0105": 0.5114,
       "seg_drums_0462": 0.5239,
       "seg_drums_0359": 0.5133,
-      "seg_drums_0000": 0.5736,
+      "seg_drums_0000": 0.5792,
       "seg_drums_1680": 0.5133,
       "seg_drums_0499": 0.5133,
       "seg_drums_0507": 0.5133,
       "seg_drums_1176": 0.5133,
-      "seg_drums_0311": 0.5133,
+      "seg_drums_0311": 0.5182,
       "seg_drums_0374": 0.5133,
       "seg_drums_0803": 0.5133,
       "seg_drums_0414": 0.5133,
-      "seg_drums_0071": 0.6316,
+      "seg_drums_0071": 0.632,
       "seg_drums_0254": 0.5091,
       "seg_drums_0304": 0.5091,
       "seg_drums_0410": 0.5141,
@@ -1389,11 +1389,11 @@
       "seg_vocals_0098": 0.54,
       "seg_vocals_0054": 0.54,
       "seg_vocals_0123": 0.54,
-      "seg_drums_0160": 0.5978,
+      "seg_drums_0160": 0.5976,
       "seg_drums_0161": 0.5976,
-      "seg_drums_0072": 0.6315,
-      "seg_drums_0073": 0.6317,
-      "seg_drums_0074": 0.6315,
+      "seg_drums_0072": 0.632,
+      "seg_drums_0073": 0.6321,
+      "seg_drums_0074": 0.632,
       "seg_drums_0300": 0.5091,
       "seg_drums_1074": 0.5091,
       "seg_drums_1147": 0.5091,
@@ -1404,11 +1404,11 @@
       "seg_drums_0829": 0.5091,
       "seg_drums_0450": 0.5091,
       "seg_drums_0208": 0.5091,
-      "seg_drums_1368": 0.5141,
+      "seg_drums_1368": 0.5293,
       "seg_drums_0217": 0.5091,
       "seg_drums_0198": 0.5065,
       "seg_drums_0169": 0.5429,
-      "seg_drums_0178": 0.5065,
+      "seg_drums_0178": 0.5326,
       "seg_drums_0847": 0.5065,
       "seg_drums_0126": 0.5065,
       "seg_drums_1440": 0.5065,
@@ -1426,7 +1426,7 @@
       "seg_drums_0079": 0.5069,
       "seg_drums_0568": 0.5069,
       "seg_bass_0078": 0.532,
-      "seg_bass_0009": 0.532,
+      "seg_bass_0009": 0.5718,
       "seg_bass_0084": 0.5781,
       "seg_bass_0319": 0.5664,
       "seg_bass_0242": 0.532,
@@ -1463,7 +1463,7 @@
       "seg_drums_0501": 0.5271,
       "seg_drums_0319": 0.5293,
       "seg_drums_0663": 0.5293,
-      "seg_drums_0381": 0.5293,
+      "seg_drums_0381": 0.5508,
       "seg_drums_0457": 0.5293,
       "seg_drums_1073": 0.5293,
       "seg_drums_0490": 0.5293,
@@ -1495,7 +1495,7 @@
       "seg_drums_1061": 0.5155,
       "seg_drums_1194": 0.5155,
       "seg_drums_0382": 0.5155,
-      "seg_drums_0134": 0.5155,
+      "seg_drums_0134": 0.5304,
       "seg_drums_0772": 0.5155,
       "seg_drums_0928": 0.5155,
       "seg_drums_0779": 0.5155,
@@ -1513,7 +1513,7 @@
       "seg_drums_0263": 0.5387,
       "seg_drums_0614": 0.5387,
       "seg_bass_0014": 0.5882,
-      "seg_bass_0618": 0.5882,
+      "seg_bass_0618": 0.6083,
       "seg_bass_0022": 0.5882,
       "seg_bass_0144": 0.6447,
       "seg_drums_1127": 0.5592,
@@ -1533,7 +1533,7 @@
       "seg_drums_1386": 0.4939,
       "seg_drums_1063": 0.4939,
       "seg_drums_0464": 0.4939,
-      "seg_drums_1562": 0.4939,
+      "seg_drums_1562": 0.5027,
       "seg_drums_1134": 0.4939,
       "seg_drums_0419": 0.4939,
       "seg_drums_0768": 0.4939,
@@ -1584,17 +1584,62 @@
       "seg_drums_1001": 0.5078,
       "seg_drums_0694": 0.5078,
       "seg_drums_0147": 0.5078,
-      "seg_drums_0171": 0.5078,
+      "seg_drums_0171": 0.5138,
       "seg_drums_0471": 0.5078,
       "seg_drums_0312": 0.5078,
       "seg_bass_0133": 0.5425,
       "seg_bass_0106": 0.5425,
       "seg_bass_0117": 0.6037,
       "seg_bass_0075": 0.5425,
-      "seg_bass_0008": 0.5425
+      "seg_bass_0008": 0.5425,
+      "seg_drums_0243": 0.5274,
+      "seg_drums_1288": 0.5274,
+      "seg_drums_0807": 0.5274,
+      "seg_drums_0132": 0.5274,
+      "seg_drums_0223": 0.5274,
+      "seg_drums_0346": 0.5274,
+      "seg_drums_0116": 0.5274,
+      "seg_drums_0105": 0.5274,
+      "seg_drums_0313": 0.5274,
+      "seg_drums_0827": 0.5274,
+      "seg_drums_1782": 0.5076,
+      "seg_drums_1075": 0.5076,
+      "seg_drums_0503": 0.5076,
+      "seg_drums_0119": 0.5076,
+      "seg_drums_0808": 0.5076,
+      "seg_drums_0782": 0.5076,
+      "seg_drums_0102": 0.5076,
+      "seg_drums_0622": 0.5076,
+      "seg_drums_0257": 0.518,
+      "seg_drums_0095": 0.518,
+      "seg_drums_1241": 0.518,
+      "seg_drums_0701": 0.518,
+      "seg_drums_0113": 0.518,
+      "seg_drums_0230": 0.518,
+      "seg_drums_1077": 0.518,
+      "seg_bass_0086": 0.5377,
+      "seg_bass_0523": 0.5377,
+      "seg_bass_0181": 0.5377,
+      "seg_bass_0558": 0.5377,
+      "seg_bass_0137": 0.5377,
+      "seg_bass_0095": 0.5722,
+      "seg_bass_0411": 0.5722,
+      "seg_bass_0147": 0.5401,
+      "seg_bass_0293": 0.5401,
+      "seg_bass_0107": 0.5401,
+      "seg_bass_0124": 0.5401,
+      "seg_bass_0263": 0.5462,
+      "seg_bass_0055": 0.5462,
+      "seg_bass_0092": 0.5462,
+      "seg_other_0672": 0.529,
+      "seg_other_0860": 0.5857,
+      "seg_other_1032": 0.5708,
+      "seg_other_0137": 0.6408,
+      "seg_other_0161": 0.6164,
+      "seg_other_0134": 0.5477
     }
   },
-  "updated_at": 1792957341.322839,
+  "updated_at": 1792961161.696774,
   "vocal_vowel_transitions": {
     "AH": {
       "AH": 0.4293,
