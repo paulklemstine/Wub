@@ -165,7 +165,7 @@ def harvest_whole_pattern_loops(
                 if item["tid"] not in seen_tids or len(curated) < 2:
                     seen_tids.add(item["tid"])
                     curated.append(item)
-                if len(curated) >= 3:
+                if len(curated) >= 8:
                     break
 
             for idx, item in enumerate(curated):
@@ -240,7 +240,7 @@ def harvest_cohesive_phrase_blocks(
     phrases_dir.mkdir(parents=True, exist_ok=True)
     manifest_phrases: List[dict] = []
 
-    targets = {"DROP": 4, "GROOVE_A": 4, "BUILDUP": 3, "BREAKDOWN": 3, "INTRO": 3}
+    targets = {"DROP": 8, "GROOVE_A": 8, "BUILDUP": 6, "BREAKDOWN": 6, "INTRO": 6}
     collected: Dict[str, List[dict]] = {sec: [] for sec in targets}
 
     fade_len = int(0.004 * 44100)  # 4ms cosine fade
@@ -257,7 +257,7 @@ def harvest_cohesive_phrase_blocks(
         key = str(getattr(tr, "key", "A minor"))
         clean_title = getattr(tr, "filename", "").replace(".mp3", "")
 
-        if not (118.0 <= bpm <= 132.0):
+        if not (85.0 <= bpm <= 165.0):
             continue
 
         stem_paths = {s: Path("data/stems") / tid / f"{s}.wav" for s in STEMS}
@@ -270,7 +270,7 @@ def harvest_cohesive_phrase_blocks(
             start = float(getattr(t0, "start", t0["start"] if isinstance(t0, dict) else 0.0))
             end = float(getattr(t1, "start", t1["start"] if isinstance(t1, dict) else 0.0))
             dur = end - start
-            if dur < 6.8 or dur > 8.4:
+            if dur < 5.0 or dur > 13.0:
                 continue
 
             bar_segs = [
@@ -537,6 +537,22 @@ def export_bundle() -> None:
         try:
             w_data = json.loads(dst_weights.read_text())
             stem_cohesion_weights = w_data.get("stem_cohesion_weights", {})
+            vocal_json = public_dir / "vocal_patterns.json"
+            if vocal_json.exists():
+                vd = json.loads(vocal_json.read_text())
+                cstats = vd.get("corpus_stats", {})
+                w_data.setdefault("vocal_vowel_transitions", cstats.get("vowel_transitions", {}))
+                w_data.setdefault("vocal_pitch_transitions", cstats.get("pitch_contour_transitions", {}))
+                w_data.setdefault("vocal_step_onset_priors", cstats.get("step_onset_priors", []))
+                dst_weights.write_text(json.dumps(w_data, indent=2))
+        except Exception:
+            pass
+
+    dst_patterns = public_dir / "standalone_patterns.json"
+    existing_manifest = {}
+    if dst_patterns.exists():
+        try:
+            existing_manifest = json.loads(dst_patterns.read_text())
         except Exception:
             pass
 
@@ -553,7 +569,19 @@ def export_bundle() -> None:
         "stem_cohesion_weights": stem_cohesion_weights,
     }
 
-    dst_patterns = public_dir / "standalone_patterns.json"
+    # Preserve rich style_kits and vocal corpora
+    for key in ("style_kits", "patterns_by_style", "vocal_patterns", "vocal_themes", "vocal_corpus"):
+        if key in existing_manifest:
+            standalone_manifest[key] = existing_manifest[key]
+
+    vocal_json = public_dir / "vocal_patterns.json"
+    if "vocal_patterns" not in standalone_manifest and vocal_json.exists():
+        try:
+            standalone_manifest["vocal_patterns"] = json.loads(vocal_json.read_text())
+            standalone_manifest["vocal_themes"] = standalone_manifest["vocal_patterns"].get("themes", [])
+        except Exception:
+            pass
+
     dst_patterns.write_text(json.dumps(standalone_manifest, indent=2))
     print(f"✓ Exported {dst_patterns} ({dst_patterns.stat().st_size} bytes)", flush=True)
 

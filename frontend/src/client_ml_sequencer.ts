@@ -600,6 +600,12 @@ export class VocalSongArranger {
     this.currentThemeIndex = (this.currentThemeIndex + 1) % this.themes.length;
   }
 
+  public randomizeSong(): void {
+    if (this.themes.length > 0) {
+      this.currentThemeIndex = Math.floor(Math.random() * this.themes.length);
+    }
+  }
+
   public getSyllableForStep(section: string, phraseBar: number, step: number, territory?: StyleTerritory): VocalSyllable | undefined {
     const theme = territory ? this.getPersonaForTerritory(territory) : this.themes[this.currentThemeIndex];
     let list: VocalSyllable[] = [];
@@ -1211,6 +1217,101 @@ export class WebAudioSliceSynthesizer {
     osc.start(t);
     osc.stop(t + durationSec + 0.06);
   }
+
+  // Shimmering Stereo Crash Cymbal Splash for Drop Step 0 & Climaxes
+  public playCrashCymbal(when: number, velocity: number = 1.0, destNode?: AudioNode): void {
+    const t = Math.max(this.ctx.currentTime, when);
+    const dest = destNode || this.ctx.destination;
+    const v = Math.max(0.1, Math.min(1.0, velocity));
+
+    if (this.noiseBuffer) {
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = this.noiseBuffer;
+
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.setValueAtTime(4500, t);
+      hp.frequency.exponentialRampToValueAtTime(7000, t + 1.8);
+
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(v * 0.95, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 2.2);
+
+      noise.connect(hp);
+      hp.connect(gain);
+      gain.connect(dest);
+
+      noise.start(t);
+      noise.stop(t + 2.3);
+    }
+
+    // Metallic square overtone cluster for acoustic crash brightness
+    const freqs = [587, 845, 1200, 3100];
+    for (const f of freqs) {
+      const osc = this.ctx.createOscillator();
+      const oscGain = this.ctx.createGain();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(f, t);
+
+      oscGain.gain.setValueAtTime(v * 0.12, t);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+
+      osc.connect(oscGain);
+      oscGain.connect(dest);
+      osc.start(t);
+      osc.stop(t + 1.25);
+    }
+  }
+
+  // Physical 30Hz Sub Impact Boom on Drop Landings
+  public playSubDropImpact(when: number, velocity: number = 1.0, destNode?: AudioNode): void {
+    const t = Math.max(this.ctx.currentTime, when);
+    const dest = destNode || this.ctx.destination;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(75, t);
+    osc.frequency.exponentialRampToValueAtTime(28, t + 0.55);
+
+    const v = Math.max(0.1, Math.min(1.0, velocity));
+    gain.gain.setValueAtTime(v * 1.35, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.70);
+
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start(t);
+    osc.stop(t + 0.75);
+  }
+
+  // Reverse Cymbal Swell into Downbeats & Drop Steps
+  public playReverseCymbalSwell(when: number, durationSec: number = 1.2, destNode?: AudioNode): void {
+    const t = Math.max(this.ctx.currentTime, when);
+    const dest = destNode || this.ctx.destination;
+
+    if (this.noiseBuffer) {
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = this.noiseBuffer;
+
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.setValueAtTime(1200, t);
+      bp.frequency.exponentialRampToValueAtTime(8000, t + durationSec);
+      bp.Q.value = 2.0;
+
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.exponentialRampToValueAtTime(0.85, t + durationSec);
+      gain.gain.setValueAtTime(0.0001, t + durationSec + 0.02);
+
+      noise.connect(bp);
+      bp.connect(gain);
+      gain.connect(dest);
+
+      noise.start(t);
+      noise.stop(t + durationSec + 0.03);
+    }
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1386,6 +1487,19 @@ export class ClientSongArranger {
     this.barInSection = 0;
     this.sectionDuration = (section === "BUILDUP" || section === "INTRO" || section === "BREAKDOWN") ? 8 : 16;
   }
+
+  public resetToSection(section: string): void {
+    this.currentSection = section;
+    this.barInSection = 0;
+    this.sectionDuration = (section === "BUILDUP" || section === "INTRO" || section === "BREAKDOWN") ? 8 : 16;
+  }
+
+  public randomizeStartingSection(): string {
+    const choices = ["INTRO", "INTRO", "GROOVE_A", "GROOVE_A", "BUILDUP"];
+    const pick = choices[Math.floor(Math.random() * choices.length)];
+    this.resetToSection(pick);
+    return pick;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1450,6 +1564,13 @@ export class ClientGrooveboxConductor {
   private phraseBlockRegistry: Map<string, LoadedPhraseBlock[]> = new Map();
   private activePhraseBlock: LoadedPhraseBlock | null = null;
   private phraseBarCount: number = 0;
+  private totalBarsPlayed: number = 0;
+  private recentLoops: Record<StemName, string[]> = {
+    drums: [],
+    bass: [],
+    vocals: [],
+    other: [],
+  };
   private vocalSongArranger: VocalSongArranger = new VocalSongArranger();
   private currentVocalMeta = {
     lyric: "",
@@ -1577,22 +1698,9 @@ export class ClientGrooveboxConductor {
         );
         // Load corpus-learned chord progressions if available
         if (this.manifest.chord_progressions && this.manifest.chord_progressions.length > 0) {
-          const p = this.manifest.chord_progressions[0];
-          const steps: ChordStep[] = [];
-          for (let i = 0; i < 8; i++) {
-            const root = p.roots[i % p.roots.length];
-            const isMinor = p.key.toLowerCase().includes("min");
-            const bassHz = 440 * Math.pow(2, (root - 9 - 24) / 12);
-            const chordHz = 440 * Math.pow(2, (root - 9 - 12) / 12);
-            steps.push({
-              rootPitch: root,
-              isMinor,
-              bassHz,
-              chordHz,
-              name: `${ROOT_NAMES[root]}${isMinor ? "m" : ""}`,
-            });
-          }
-          this.activeProgression = steps;
+          const randProg = Math.floor(Math.random() * this.manifest.chord_progressions.length);
+          this.progressionIndex = randProg;
+          this.loadProgressionFromManifest(randProg);
         }
         // Load corpus-trained dynamic vocal song themes if available
         const vThemes = this.manifest.vocal_themes || (this.manifest.vocal_patterns?.themes as VocalSongTheme[]);
@@ -1773,40 +1881,53 @@ export class ClientGrooveboxConductor {
     }
 
     // Same-Track Co-Stem Affinity Prior (Authentic Studio Session Glue)
-    // When drums is playing from a specific track, heavily prioritize bass & synths from that SAME track!
+    // When drums is playing from a specific track, prioritize bass & synths from that SAME track for 2-4 bars
     const activeDrumTrack = this.activeLoops.drums?.meta.track_id;
-    if (activeDrumTrack && stem !== "drums") {
+    if (activeDrumTrack && stem !== "drums" && (phraseBar % 4 < 3)) {
       const sameTrackMatches = candidates.filter((l) => l.meta.track_id === activeDrumTrack);
-      if (sameTrackMatches.length > 0 && Math.random() < 0.75) {
+      if (sameTrackMatches.length > 0 && Math.random() < 0.70) {
         candidates = sameTrackMatches;
       }
     }
 
+    const recents = this.recentLoops[stem] || [];
+
     if (stem === "drums" || targetPitch === undefined) {
-      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      // High-variety rotation: prefer loops that haven't played recently
+      const freshPool = candidates.filter((l) => !recents.slice(-4).includes(l.meta.id));
+      const pool = freshPool.length > 0 ? freshPool : candidates;
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+
+      this.recentLoops[stem] = [...recents, pick.meta.id].slice(-6);
       const rate = this.currentBpm / pick.meta.source_bpm;
       return { loop: pick, rate };
     }
 
-    let best = candidates[0];
-    let bestDist = 999;
-    let bestShift = 0;
-
+    // For pitched stems (bass, other, vocals):
+    // Collect all candidates ranked by chromatic pitch distance
+    const scored: Array<{ loop: LoadedLoop; shift: number; absShift: number }> = [];
     for (const c of candidates) {
       let shift = (targetPitch - c.meta.dominant_pitch) % 12;
       if (shift > 6) shift -= 12;
       if (shift < -6) shift += 12;
-      const absShift = Math.abs(shift);
-      if (absShift < bestDist) {
-        bestDist = absShift;
-        bestShift = shift;
-        best = c;
-      }
+      scored.push({ loop: c, shift, absShift: Math.abs(shift) });
     }
 
-    const pitchFactor = Math.pow(2, bestShift / 12);
-    const rate = (this.currentBpm / best.meta.source_bpm) * pitchFactor;
-    return { loop: best, rate };
+    scored.sort((a, b) => a.absShift - b.absShift);
+    const minDiff = scored[0].absShift;
+    // Keep all candidates within 2 semitones of minimal shift
+    const nearBest = scored.filter((s) => s.absShift <= minDiff + 2);
+
+    // Prefer fresh loops to completely eliminate repetitive monotony
+    const freshNearBest = nearBest.filter((s) => !recents.slice(-4).includes(s.loop.meta.id));
+    const finalPool = freshNearBest.length > 0 ? freshNearBest : nearBest;
+
+    const chosen = finalPool[Math.floor(Math.random() * finalPool.length)];
+    this.recentLoops[stem] = [...recents, chosen.loop.meta.id].slice(-6);
+
+    const pitchFactor = Math.pow(2, chosen.shift / 12);
+    const rate = (this.currentBpm / chosen.loop.meta.source_bpm) * pitchFactor;
+    return { loop: chosen.loop, rate };
   }
 
   private getBestSlice(
@@ -1907,8 +2028,8 @@ export class ClientGrooveboxConductor {
       }
     }
 
-    // If multiple candidates have closest pitch, rank by trained feedback scores then slide
-    if (candidates.length > 0 && variationFraction !== undefined) {
+    // High-variety slice selection across qualified candidates
+    if (candidates.length > 0) {
       const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
       if (trainedScores) {
         candidates.sort((a, b) => {
@@ -1917,7 +2038,7 @@ export class ClientGrooveboxConductor {
           return sB - sA;
         });
       }
-      const v = Math.max(0, Math.min(0.999, variationFraction));
+      const v = variationFraction !== undefined ? Math.max(0, Math.min(0.999, variationFraction)) : Math.random();
       const cIdx = Math.floor(v * candidates.length) % candidates.length;
       best = candidates[cIdx].item;
       bestShift = candidates[cIdx].shift;
@@ -2021,16 +2142,72 @@ export class ClientGrooveboxConductor {
     this.activePatterns[stem] = this.synthesizePattern(stem, targetGroove);
   }
 
-  public start(bpm: number): void {
+  public shiftToNextProgression(): void {
+    if (this.manifest?.chord_progressions && this.manifest.chord_progressions.length > 0) {
+      this.progressionIndex = (this.progressionIndex + 1) % this.manifest.chord_progressions.length;
+      this.loadProgressionFromManifest(this.progressionIndex);
+    } else {
+      this.progressionIndex = (this.progressionIndex + 1) % DEFAULT_PROGRESSIONS.length;
+      this.activeProgression = DEFAULT_PROGRESSIONS[this.progressionIndex];
+    }
+  }
+
+  public loadProgressionFromManifest(index: number): void {
+    if (!this.manifest?.chord_progressions || this.manifest.chord_progressions.length === 0) return;
+    const p = this.manifest.chord_progressions[index % this.manifest.chord_progressions.length];
+    const steps: ChordStep[] = [];
+    for (let i = 0; i < 8; i++) {
+      const root = p.roots[i % p.roots.length];
+      const isMinor = p.key.toLowerCase().includes("min");
+      const bassHz = 440 * Math.pow(2, (root - 9 - 24) / 12);
+      const chordHz = 440 * Math.pow(2, (root - 9 - 12) / 12);
+      steps.push({
+        rootPitch: root,
+        isMinor,
+        bassHz,
+        chordHz,
+        name: `${ROOT_NAMES[root]}${isMinor ? "m" : ""}`,
+      });
+    }
+    this.activeProgression = steps;
+  }
+
+  public start(bpm?: number): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    this.currentBpm = Math.max(60, Math.min(200, bpm));
+    if (bpm) {
+      this.currentBpm = Math.max(60, Math.min(200, bpm));
+    }
     this.nextStepTime = this.engine.now() + 0.05;
     this.tatumIndex = 0;
+    this.totalBarsPlayed = 0;
+    this.recentLoops = { drums: [], bass: [], vocals: [], other: [] };
 
-    // Pick a progression
-    this.progressionIndex = (this.progressionIndex + 1) % DEFAULT_PROGRESSIONS.length;
-    this.activeProgression = DEFAULT_PROGRESSIONS[this.progressionIndex];
+    // 1. Randomize starting section for rich variety (atmospheric INTRO, punchy GROOVE_A, or rising BUILDUP)
+    const startingSec = this.arranger.randomizeStartingSection();
+
+    // 2. Randomize starting chord progression from corpus or defaults
+    if (this.manifest?.chord_progressions && this.manifest.chord_progressions.length > 0) {
+      this.progressionIndex = Math.floor(Math.random() * this.manifest.chord_progressions.length);
+      this.loadProgressionFromManifest(this.progressionIndex);
+    } else {
+      this.progressionIndex = Math.floor(Math.random() * DEFAULT_PROGRESSIONS.length);
+      this.activeProgression = DEFAULT_PROGRESSIONS[this.progressionIndex];
+    }
+
+    // 3. Randomize initial vocal persona/song theme
+    this.vocalSongArranger.randomizeSong();
+
+    // 4. Initial filter staging for starting section
+    if (startingSec === "INTRO") {
+      this.engine.setStemFilter("drums", 2800, 1.0);
+      this.engine.setStemFilter("other", 3600, 1.0);
+    } else if (startingSec === "BUILDUP") {
+      this.engine.setStemFilter("drums", 12000, 0.7);
+    } else {
+      this.engine.setStemFilter("drums", 18000, 0.7);
+      this.engine.setStemFilter("other", 16000, 0.7);
+    }
 
     this.composeBarPatterns(0);
 
@@ -2090,11 +2267,29 @@ export class ClientGrooveboxConductor {
 
   private onBarStart(): void {
     const { isSectionChange, section } = this.arranger.advanceBar();
+    this.totalBarsPlayed++;
     this.barsInCurrentKey++;
+
+    if (isSectionChange) {
+      // Dynamic section transition filter staging
+      if (section === "DROP") {
+        this.engine.setStemFilter("drums", 20000, 0.7);
+        this.engine.setStemFilter("other", 18000, 1.2);
+        this.engine.setStemFilter("bass", 800, 1.5);
+      } else if (section === "BREAKDOWN") {
+        this.engine.setStemFilter("drums", 2200, 0.7);
+        this.engine.setStemFilter("other", 3600, 1.0);
+      } else if (section === "INTRO") {
+        this.engine.setStemFilter("drums", 2800, 1.0);
+        this.engine.setStemFilter("other", 4000, 1.0);
+      } else if (section === "BUILDUP") {
+        this.engine.setStemFilter("drums", 14000, 0.7);
+      }
+    }
 
     if (isSectionChange || this.barsInCurrentKey >= 32) {
       // Modulate key on Camelot wheel for continuous infinite harmonic drift!
-      const shouldModulate = isSectionChange ? (Math.random() < 0.50) : (this.barsInCurrentKey >= 32);
+      const shouldModulate = isSectionChange ? (Math.random() < 0.60) : (this.barsInCurrentKey >= 32);
       if (shouldModulate) {
         this.currentCamelotCode = getAdjacentCamelotKey(this.currentCamelotCode);
         this.currentTemplateIndex = (this.currentTemplateIndex + 1) % HARMONIC_TEMPLATES.length;
@@ -2103,10 +2298,8 @@ export class ClientGrooveboxConductor {
         this.activeProgression = buildProgressionFromKey(keyInfo, this.currentTemplateIndex);
         console.info(`[KG-505 Harmonic Drift] Key shifted to ${keyInfo.code} (${keyInfo.name}) • Template #${this.currentTemplateIndex + 1}`);
       } else {
-        // Switch progression template within current key
-        this.currentTemplateIndex = (this.currentTemplateIndex + 1) % HARMONIC_TEMPLATES.length;
-        const keyInfo = CAMELOT_KEYS[this.currentCamelotCode] || CAMELOT_KEYS["8A"];
-        this.activeProgression = buildProgressionFromKey(keyInfo, this.currentTemplateIndex);
+        // Switch progression from manifest or key templates
+        this.shiftToNextProgression();
       }
 
       this.phraseBarCount = 0;
@@ -2251,6 +2444,20 @@ export class ClientGrooveboxConductor {
     } else {
       this.activePhraseBlock = null;
       this.activeLoops = {};
+    }
+
+    // =========================================================================
+    // Master Section Transition Sound Effects ("Moments of Audio Pleasures")
+    // =========================================================================
+    // 1. DROP Explosive Impact on Step 0 (Crash Cymbal + Sub Boom)
+    if (sec === "DROP" && barInSec === 0 && (step % 16) === 0) {
+      this.synth.playCrashCymbal(when, 1.0, dInput);
+      this.synth.playSubDropImpact(when, 1.0, bDest);
+    }
+    // 2. Reverse Cymbal Swell on Bar 7 Step 11 of BUILDUP leading into Drop Gap Breath
+    if (sec === "BUILDUP" && barInSec === 7 && (step % 16) === 11) {
+      const stepDur = (60 / this.currentBpm / 4);
+      this.synth.playReverseCymbalSwell(when, stepDur * 3.8, dInput);
     }
 
     // -------------------------------------------------------------------------
@@ -2716,26 +2923,8 @@ export class ClientGrooveboxConductor {
     const isTurnaround = (phraseBar === 7);
 
     // Dynamic progression shift across 8-bar musical phrase cycles
-    if (phraseBar === 0 && this.manifest?.chord_progressions && this.manifest.chord_progressions.length > 1) {
-      if (this.phraseBarCount > 0 && this.phraseBarCount % 8 === 0) {
-        this.progressionIndex = (this.progressionIndex + 1) % this.manifest.chord_progressions.length;
-        const p = this.manifest.chord_progressions[this.progressionIndex];
-        const steps: ChordStep[] = [];
-        for (let i = 0; i < 8; i++) {
-          const root = p.roots[i % p.roots.length];
-          const isMinor = p.key.toLowerCase().includes("min");
-          const bassHz = 440 * Math.pow(2, (root - 9 - 24) / 12);
-          const chordHz = 440 * Math.pow(2, (root - 9 - 12) / 12);
-          steps.push({
-            rootPitch: root,
-            isMinor,
-            bassHz,
-            chordHz,
-            name: `${ROOT_NAMES[root]}${isMinor ? "m" : ""}`,
-          });
-        }
-        this.activeProgression = steps;
-      }
+    if (phraseBar === 0 && this.totalBarsPlayed > 0 && (this.totalBarsPlayed % 8 === 0)) {
+      this.shiftToNextProgression();
     }
 
     const chord = this.activeProgression[phraseBar % this.activeProgression.length];
