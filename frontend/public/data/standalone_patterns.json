@@ -17,20 +17,6 @@
       ]
     },
     {
-      "track_id": "7297404c9f856016",
-      "key": "A# major",
-      "roots": [
-        10,
-        5,
-        3,
-        2,
-        2,
-        5,
-        5,
-        5
-      ]
-    },
-    {
       "track_id": "a477184977e06b44",
       "key": "F minor",
       "roots": [
@@ -297,34 +283,6 @@
       ]
     },
     {
-      "track_id": "691b8c497497df52",
-      "key": "B minor",
-      "roots": [
-        0,
-        0,
-        2,
-        2,
-        2,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "track_id": "716681f0fd4e9d74",
-      "key": "E major",
-      "roots": [
-        1,
-        1,
-        11,
-        11,
-        11,
-        11,
-        1,
-        1
-      ]
-    },
-    {
       "track_id": "d156468dee365e27",
       "key": "G# minor",
       "roots": [
@@ -421,8 +379,1254 @@
         0,
         2
       ]
+    },
+    {
+      "track_id": "251a19572d1736ce",
+      "key": "C# minor",
+      "roots": [
+        8,
+        8,
+        5,
+        5,
+        5,
+        0,
+        7,
+        3
+      ]
+    },
+    {
+      "track_id": "ab0d3398caabbcf3",
+      "key": "D# minor",
+      "roots": [
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        10,
+        10
+      ]
+    },
+    {
+      "track_id": "0e295da84cf85a4c",
+      "key": "C minor",
+      "roots": [
+        2,
+        10,
+        7,
+        7,
+        2,
+        2,
+        7,
+        7
+      ]
     }
   ],
+  "groove_templates": {
+    "drums": {
+      "four_on_floor_hats": {
+        "name": "four_on_floor_hats",
+        "stem": "drums",
+        "length": 16,
+        "energy": 0.85,
+        "steps": [
+          {
+            "step": 0,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "snare",
+            "velocity": 0.96,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "snare",
+            "velocity": 0.96,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 2,
+            "category": "hat_open",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "hat_open",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "hat_open",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "hat_open",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 1,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 3,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 5,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 7,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 9,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 11,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 13,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 15,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          }
+        ]
+      },
+      "four_on_floor_syncopated": {
+        "name": "four_on_floor_syncopated",
+        "stem": "drums",
+        "length": 16,
+        "energy": 0.9,
+        "steps": [
+          {
+            "step": 0,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "snare",
+            "velocity": 0.96,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "snare",
+            "velocity": 0.96,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 2,
+            "category": "hat_open",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "hat_open",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "hat_open",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "hat_open",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 1,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 3,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 5,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 7,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 9,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 11,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 13,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 15,
+            "category": "hat_closed",
+            "velocity": 0.62,
+            "duration_scale": 0.7
+          },
+          {
+            "step": 10,
+            "category": "kick",
+            "velocity": 0.72,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "percussion",
+            "velocity": 0.68,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "breakbeat": {
+        "name": "breakbeat",
+        "stem": "drums",
+        "length": 16,
+        "energy": 0.8,
+        "steps": [
+          {
+            "step": 0,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "snare",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "kick",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "kick",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "snare",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 15,
+            "category": "snare",
+            "velocity": 0.55,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 2,
+            "category": "hat_open",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "hat_open",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "hat_open",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "hat_open",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 1,
+            "category": "hat_closed",
+            "velocity": 0.6,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 3,
+            "category": "hat_closed",
+            "velocity": 0.6,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 5,
+            "category": "hat_closed",
+            "velocity": 0.6,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 7,
+            "category": "hat_closed",
+            "velocity": 0.6,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 9,
+            "category": "hat_closed",
+            "velocity": 0.6,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 11,
+            "category": "hat_closed",
+            "velocity": 0.6,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 13,
+            "category": "hat_closed",
+            "velocity": 0.6,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "turnaround_fill": {
+        "name": "turnaround_fill",
+        "stem": "drums",
+        "length": 16,
+        "energy": 0.95,
+        "steps": [
+          {
+            "step": 0,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "kick",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "kick",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "snare",
+            "velocity": 0.7,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 9,
+            "category": "snare",
+            "velocity": 0.75,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "snare",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 11,
+            "category": "snare",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "snare",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 13,
+            "category": "snare",
+            "velocity": 0.98,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "fill",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "mini_turnaround": {
+        "name": "mini_turnaround",
+        "stem": "drums",
+        "length": 16,
+        "energy": 0.82,
+        "steps": [
+          {
+            "step": 0,
+            "category": "kick",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "snare",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "kick",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "snare",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 13,
+            "category": "snare",
+            "velocity": 0.8,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "percussion",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 2,
+            "category": "hat_open",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "hat_open",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "hat_open",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          }
+        ]
+      }
+    },
+    "bass": {
+      "offbeat": {
+        "name": "offbeat",
+        "stem": "bass",
+        "length": 16,
+        "energy": 0.85,
+        "steps": [
+          {
+            "step": 2,
+            "category": "sub",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "sub",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "sub",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "sub",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 3,
+            "category": "stab",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 7,
+            "category": "stab",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 11,
+            "category": "stab",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 15,
+            "category": "stab",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "rolling": {
+        "name": "rolling",
+        "stem": "bass",
+        "length": 16,
+        "energy": 0.92,
+        "steps": [
+          {
+            "step": 0,
+            "category": "sub",
+            "velocity": 0.7,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 1,
+            "category": "rolling",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 2,
+            "category": "rolling",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 3,
+            "category": "rolling",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "sub",
+            "velocity": 0.7,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 5,
+            "category": "rolling",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "rolling",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 7,
+            "category": "rolling",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "sub",
+            "velocity": 0.7,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 9,
+            "category": "rolling",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "rolling",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 11,
+            "category": "rolling",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "sub",
+            "velocity": 0.7,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 13,
+            "category": "rolling",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "rolling",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 15,
+            "category": "rolling",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "stabs": {
+        "name": "stabs",
+        "stem": "bass",
+        "length": 16,
+        "energy": 0.78,
+        "steps": [
+          {
+            "step": 0,
+            "category": "sub",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 3,
+            "category": "stab",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "stab",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "stab",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "sub",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "sustained": {
+        "name": "sustained",
+        "stem": "bass",
+        "length": 16,
+        "energy": 0.6,
+        "steps": [
+          {
+            "step": 0,
+            "category": "sub",
+            "velocity": 1.0,
+            "duration_scale": 1.5
+          },
+          {
+            "step": 8,
+            "category": "sub",
+            "velocity": 0.9,
+            "duration_scale": 1.5
+          }
+        ]
+      }
+    },
+    "vocals": {
+      "vocal_hook": {
+        "name": "vocal_hook",
+        "stem": "vocals",
+        "length": 16,
+        "energy": 0.9,
+        "steps": [
+          {
+            "step": 0,
+            "category": "chop",
+            "velocity": 0.98,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 3,
+            "category": "chop",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "chop",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "chop",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "chop",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "chop",
+            "velocity": 0.96,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "chop",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "vocal_call_response": {
+        "name": "vocal_call_response",
+        "stem": "vocals",
+        "length": 16,
+        "energy": 0.78,
+        "steps": [
+          {
+            "step": 2,
+            "category": "chop",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "chop",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 7,
+            "category": "chop",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "chop",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "chop",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "chop",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "vocal_syncopated_chop": {
+        "name": "vocal_syncopated_chop",
+        "stem": "vocals",
+        "length": 16,
+        "energy": 0.82,
+        "steps": [
+          {
+            "step": 1,
+            "category": "chop",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "chop",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 7,
+            "category": "chop",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "chop",
+            "velocity": 0.94,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 13,
+            "category": "chop",
+            "velocity": 0.96,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "vocal_stutter": {
+        "name": "vocal_stutter",
+        "stem": "vocals",
+        "length": 16,
+        "energy": 0.88,
+        "steps": [
+          {
+            "step": 0,
+            "category": "chop",
+            "velocity": 0.8,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 2,
+            "category": "chop",
+            "velocity": 0.82,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "chop",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "chop",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "chop",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "chop",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "chop",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "chop",
+            "velocity": 1.0,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "vocal_sustained": {
+        "name": "vocal_sustained",
+        "stem": "vocals",
+        "length": 16,
+        "energy": 0.6,
+        "steps": [
+          {
+            "step": 0,
+            "category": "phrase",
+            "velocity": 0.95,
+            "duration_scale": 2.0
+          },
+          {
+            "step": 8,
+            "category": "phrase",
+            "velocity": 0.9,
+            "duration_scale": 2.0
+          }
+        ]
+      },
+      "vocal_verse": {
+        "name": "vocal_verse",
+        "stem": "vocals",
+        "length": 16,
+        "energy": 0.72,
+        "steps": [
+          {
+            "step": 0,
+            "category": "phrase",
+            "velocity": 0.9,
+            "duration_scale": 1.2
+          },
+          {
+            "step": 3,
+            "category": "chop",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "chop",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 11,
+            "category": "phrase",
+            "velocity": 0.92,
+            "duration_scale": 1.4
+          }
+        ]
+      },
+      "chop": {
+        "name": "vocal_call_response",
+        "stem": "vocals",
+        "length": 16,
+        "energy": 0.78,
+        "steps": [
+          {
+            "step": 2,
+            "category": "chop",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "chop",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 7,
+            "category": "chop",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "chop",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "chop",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "chop",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "phrase": {
+        "name": "vocal_sustained",
+        "stem": "vocals",
+        "length": 16,
+        "energy": 0.6,
+        "steps": [
+          {
+            "step": 0,
+            "category": "phrase",
+            "velocity": 0.95,
+            "duration_scale": 2.0
+          },
+          {
+            "step": 8,
+            "category": "phrase",
+            "velocity": 0.9,
+            "duration_scale": 2.0
+          }
+        ]
+      }
+    },
+    "other": {
+      "chords": {
+        "name": "chords",
+        "stem": "other",
+        "length": 16,
+        "energy": 0.75,
+        "steps": [
+          {
+            "step": 2,
+            "category": "chord",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "chord",
+            "velocity": 0.9,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "chord",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "chord",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "riff": {
+        "name": "riff",
+        "stem": "other",
+        "length": 16,
+        "energy": 0.88,
+        "steps": [
+          {
+            "step": 0,
+            "category": "arp",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 1,
+            "category": "arp",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 2,
+            "category": "arp",
+            "velocity": 0.8,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 3,
+            "category": "arp",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 4,
+            "category": "arp",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 5,
+            "category": "arp",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 6,
+            "category": "arp",
+            "velocity": 0.8,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 7,
+            "category": "arp",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 8,
+            "category": "arp",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 9,
+            "category": "arp",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 10,
+            "category": "arp",
+            "velocity": 0.8,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 11,
+            "category": "arp",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 12,
+            "category": "arp",
+            "velocity": 0.95,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 13,
+            "category": "arp",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "arp",
+            "velocity": 0.8,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 15,
+            "category": "arp",
+            "velocity": 0.65,
+            "duration_scale": 1.0
+          }
+        ]
+      },
+      "pad": {
+        "name": "pad",
+        "stem": "other",
+        "length": 16,
+        "energy": 0.5,
+        "steps": [
+          {
+            "step": 0,
+            "category": "pad",
+            "velocity": 0.85,
+            "duration_scale": 2.0
+          },
+          {
+            "step": 8,
+            "category": "pad",
+            "velocity": 0.8,
+            "duration_scale": 2.0
+          }
+        ]
+      },
+      "hook": {
+        "name": "hook",
+        "stem": "other",
+        "length": 16,
+        "energy": 0.72,
+        "steps": [
+          {
+            "step": 3,
+            "category": "stab",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 7,
+            "category": "stab",
+            "velocity": 0.88,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 11,
+            "category": "stab",
+            "velocity": 0.92,
+            "duration_scale": 1.0
+          },
+          {
+            "step": 14,
+            "category": "stab",
+            "velocity": 0.85,
+            "duration_scale": 1.0
+          }
+        ]
+      }
+    }
+  },
   "patterns": {
     "drums": [
       {

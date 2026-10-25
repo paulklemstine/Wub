@@ -201,10 +201,28 @@ def export_bundle() -> None:
             "bars": bar_list,
         })
 
+    # Curate all physical acoustic groove templates
+    from wub_core.groovy_pattern_assembler import GLOBAL_GROOVE_TEMPLATES
+    groove_templates: Dict[str, Dict[str, dict]] = {s: {} for s in STEMS}
+    for stem, tmpl_dict in GLOBAL_GROOVE_TEMPLATES.items():
+        for g_name, tmpl in tmpl_dict.items():
+            steps = [
+                {"step": s.step_index, "category": s.category, "velocity": s.velocity, "duration_scale": s.duration_scale}
+                for s in tmpl.steps
+            ]
+            groove_templates[stem][g_name] = {
+                "name": tmpl.name,
+                "stem": tmpl.stem,
+                "length": tmpl.length,
+                "energy": tmpl.energy,
+                "steps": steps,
+            }
+
     standalone_manifest = {
         "version": 1,
         "default_bpm": 126.0,
         "chord_progressions": chord_progressions,
+        "groove_templates": groove_templates,
         "patterns": serialized_patterns,
         "phrases": serialized_phrases,
         "slices": extracted_slices_manifest,

@@ -236,3 +236,26 @@ def test_hihat_envelope():
     assert np.isclose(shaped[0], 1.0, atol=1e-3)
     # End of 200ms slice should be heavily attenuated
     assert shaped[-1] < 0.05
+
+
+def test_vocal_groove_templates():
+    v_templates = GLOBAL_GROOVE_TEMPLATES.get("vocals", {})
+    assert "vocal_hook" in v_templates
+    assert "vocal_call_response" in v_templates
+    assert "vocal_syncopated_chop" in v_templates
+    assert "vocal_stutter" in v_templates
+    assert "vocal_sustained" in v_templates
+    assert "vocal_verse" in v_templates
+
+    hook = v_templates["vocal_hook"]
+    assert hook.energy >= 0.85
+    # Hook should trigger syncopated downbeat and offbeats
+    hook_steps = [s.step_index for s in hook.steps]
+    assert 0 in hook_steps and 14 in hook_steps
+
+    stutter = v_templates["vocal_stutter"]
+    assert len(stutter.steps) >= 8  # Rapid rhythmic chant
+
+    sustained = v_templates["vocal_sustained"]
+    assert sustained.steps[0].duration_scale >= 1.5
+

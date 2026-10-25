@@ -158,11 +158,11 @@ When adjusting groove templates or generating patterns:
 
 | Section | Duration | Energy | Kick Pattern | Bass Behavior | Synths & Leads | Vocals |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`INTRO`** | 8 bars | 0.25 | Downbeats only (0, 4, 8, 12), filtered | Completely muted | Ethereal floating chord pads | Muted |
-| **`GROOVE_A`** | 16 bars | 0.83 | 4-on-the-floor + ghost on step 10 | Pumping offbeat sub bass | Call-and-response chord stabs | Chops on 2, 6, 11 |
-| **`BUILDUP`** | 8 bars | 0.65 | Pulse on 0, 4, 8, 12 (bars 1–5 only) | Cuts out on bar 7 | Rising saw riser on bar 6 | Filtered sweep |
-| **`DROP`** | 16 bars | 0.90 | Full driving 4/4 with sidechain ducking | Rolling 16th sub bassline | 8-bar melodic arpeggio arc | Full rhythmic chops |
-| **`BREAKDOWN`**| 8 bars | 0.20 | Completely muted (0 kicks) | Completely muted | Lush polyphonic chord triads | Extended phrase |
+| **`INTRO`** | 8 bars | 0.25 | Downbeats only (0, 4, 8, 12), filtered | Completely muted | Ethereal floating chord pads | Ambient vocal calls ("Ooh..."), sustained pads on bars 0 & 4 |
+| **`GROOVE_A`** | 16 bars | 0.83 | 4-on-the-floor + ghost on step 10 | Pumping offbeat sub bass | Call-and-response chord stabs | Lyrical narrative verses with Call & Response phrasing |
+| **`BUILDUP`** | 8 bars | 0.65 | Pulse on 0, 4, 8, 12 (bars 1–5 only) | Cuts out on bar 7 | Rising saw riser on bar 6 | Rising vocal chants ("Higher..."), stutter rolls, silent breath on step 15 |
+| **`DROP`** | 16 bars | 0.90 | Full driving 4/4 with sidechain ducking | Rolling 16th sub bassline | 8-bar melodic arpeggio arc | Anthemic vocal chorus hook singing full melody over driving beats |
+| **`BREAKDOWN`**| 8 bars | 0.20 | Completely muted (0 kicks) | Completely muted | Lush polyphonic chord triads | Soulful solo singing melody with rich vowel formants & vibrato |
 
 > [!IMPORTANT]
 > On **Bar 7, Step 15** of a `BUILDUP`, step 15 **MUST BE SILENT**. This 1/16th-note breath (the drop gap) creates the critical acoustic contrast that makes the drop hit with maximum impact.

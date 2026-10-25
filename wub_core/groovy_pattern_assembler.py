@@ -420,23 +420,74 @@ def build_other_templates() -> Dict[str, GrooveTemplate]:
 
 
 def build_vocal_templates() -> Dict[str, GrooveTemplate]:
-    """Predefined vocal groove templates."""
+    """Predefined vocal groove templates for singing song lines, hooks, chops, and chants."""
     templates = {}
 
-    # 1. Rhythmic Vocal Chops
-    steps_chops = [
+    # 1. Anthemic Vocal Hook (Chorus singing lead, syncopated driving melody)
+    steps_hook = [
+        GrooveStep(0, "chop", velocity=0.98),
+        GrooveStep(3, "chop", velocity=0.92),
+        GrooveStep(6, "chop", velocity=0.95),
+        GrooveStep(8, "chop", velocity=0.90),
+        GrooveStep(10, "chop", velocity=0.92),
+        GrooveStep(12, "chop", velocity=0.96),
+        GrooveStep(14, "chop", velocity=1.0),
+    ]
+    templates["vocal_hook"] = GrooveTemplate("vocal_hook", "vocals", 16, steps_hook, energy=0.90)
+
+    # 2. Vocal Call & Response (Conversational vocal phrasing)
+    steps_call = [
         GrooveStep(2, "chop", velocity=0.90),
-        GrooveStep(6, "chop", velocity=0.85),
+        GrooveStep(4, "chop", velocity=0.85),
+        GrooveStep(7, "chop", velocity=0.92),
+        GrooveStep(10, "chop", velocity=0.90),
+        GrooveStep(12, "chop", velocity=0.88),
         GrooveStep(14, "chop", velocity=0.95),
     ]
-    templates["chop"] = GrooveTemplate("chop", "vocals", 16, steps_chops, energy=0.70)
+    templates["vocal_call_response"] = GrooveTemplate("vocal_call_response", "vocals", 16, steps_call, energy=0.78)
 
-    # 2. Vocal Lead Phrase
-    steps_phrase = [
-        GrooveStep(0, "phrase", velocity=0.95, duration_scale=1.5),
-        GrooveStep(8, "phrase", velocity=0.90, duration_scale=1.5),
+    # 3. UK Garage / French Touch Syncopated Chops (Offbeat vocal groove)
+    steps_sync = [
+        GrooveStep(1, "chop", velocity=0.88),
+        GrooveStep(4, "chop", velocity=0.92),
+        GrooveStep(7, "chop", velocity=0.90),
+        GrooveStep(10, "chop", velocity=0.94),
+        GrooveStep(13, "chop", velocity=0.96),
     ]
-    templates["phrase"] = GrooveTemplate("phrase", "vocals", 16, steps_phrase, energy=0.75)
+    templates["vocal_syncopated_chop"] = GrooveTemplate("vocal_syncopated_chop", "vocals", 16, steps_sync, energy=0.82)
+
+    # 4. Vocal Stutter Tension (Rising 8th/16th vocal chants for buildups)
+    steps_stutter = [
+        GrooveStep(0, "chop", velocity=0.80),
+        GrooveStep(2, "chop", velocity=0.82),
+        GrooveStep(4, "chop", velocity=0.85),
+        GrooveStep(6, "chop", velocity=0.88),
+        GrooveStep(8, "chop", velocity=0.90),
+        GrooveStep(10, "chop", velocity=0.92),
+        GrooveStep(12, "chop", velocity=0.95),
+        GrooveStep(14, "chop", velocity=1.0),
+    ]
+    templates["vocal_stutter"] = GrooveTemplate("vocal_stutter", "vocals", 16, steps_stutter, energy=0.88)
+
+    # 5. Soulful Sustained Singing Phrase (Long-form vocal lead for breakdowns and pads)
+    steps_sustained = [
+        GrooveStep(0, "phrase", velocity=0.95, duration_scale=2.0),
+        GrooveStep(8, "phrase", velocity=0.90, duration_scale=2.0),
+    ]
+    templates["vocal_sustained"] = GrooveTemplate("vocal_sustained", "vocals", 16, steps_sustained, energy=0.60)
+
+    # 6. Narrative Verse Singing Pattern (Storytelling phrasing)
+    steps_verse = [
+        GrooveStep(0, "phrase", velocity=0.90, duration_scale=1.2),
+        GrooveStep(3, "chop", velocity=0.85),
+        GrooveStep(6, "chop", velocity=0.88),
+        GrooveStep(11, "phrase", velocity=0.92, duration_scale=1.4),
+    ]
+    templates["vocal_verse"] = GrooveTemplate("vocal_verse", "vocals", 16, steps_verse, energy=0.72)
+
+    # 7. Legacy aliases for backwards compatibility
+    templates["chop"] = templates["vocal_call_response"]
+    templates["phrase"] = templates["vocal_sustained"]
 
     return templates
 
@@ -606,44 +657,49 @@ def assemble_evolving_phrase(
     drum_template = "four_on_floor_hats"
     bass_template = "offbeat"
     other_template = "chords"
-    vocal_template = "chop"
+    vocal_template = "vocal_hook" if section == "DROP" else ("vocal_sustained" if section in ("BREAKDOWN", "INTRO") else "vocal_verse")
 
     if phrase_bar == 0:
         drum_template = "four_on_floor_hats"
         bass_template = "offbeat"
         other_template = "chords"
+        vocal_template = "vocal_sustained" if section in ("BREAKDOWN", "INTRO") else ("vocal_hook" if section == "DROP" else "vocal_verse")
     elif phrase_bar == 1:
         drum_template = "four_on_floor_hats"
         bass_template = "rolling" if section in ("DROP", "GROOVE_A") else "offbeat"
         other_template = "chords"
+        vocal_template = "vocal_call_response" if section in ("GROOVE_A", "BUILDUP") else ("vocal_syncopated_chop" if section == "DROP" else "vocal_sustained")
     elif phrase_bar == 2:
         drum_template = "four_on_floor_syncopated"
         bass_template = "stabs"
         other_template = "hook"
-        vocal_template = "chop"
+        vocal_template = "vocal_hook" if section == "DROP" else "vocal_call_response"
     elif phrase_bar == 3:
         drum_template = "mini_turnaround"
         bass_template = "stabs"
         other_template = "chords"
+        vocal_template = "vocal_call_response" if section != "DROP" else "vocal_syncopated_chop"
     elif phrase_bar == 4:
         drum_template = "four_on_floor_syncopated"
         bass_template = "rolling"
         other_template = "riff"
-        vocal_template = "chop"
+        vocal_template = "vocal_hook" if section == "DROP" else "vocal_verse"
     elif phrase_bar == 5:
         drum_template = "four_on_floor_hats"
         bass_template = "rolling"
         other_template = "riff"
+        vocal_template = "vocal_syncopated_chop" if section == "DROP" else "vocal_call_response"
     elif phrase_bar == 6:
         drum_template = "four_on_floor_syncopated"
         bass_template = "stabs"
         other_template = "hook"
+        vocal_template = "vocal_stutter" if section == "BUILDUP" else ("vocal_hook" if section == "DROP" else "vocal_call_response")
     elif phrase_bar == 7:
         # Full climactic turnaround fill
         drum_template = "turnaround_fill"
         bass_template = "sustained"  # Deep sustained sub or cut
         other_template = "pad"
-        vocal_template = "chop"
+        vocal_template = "vocal_stutter" if section == "BUILDUP" else "vocal_hook"
 
     patterns: Dict[str, Optional[SequencerPattern]] = {}
     patterns["drums"] = assemble_groovy_pattern(

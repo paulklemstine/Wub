@@ -131,6 +131,215 @@ const DEFAULT_PROGRESSIONS: ChordStep[][] = [
 ];
 
 // -----------------------------------------------------------------------------
+// Vocal Song Lyrics & Melodic Formant Engine
+// -----------------------------------------------------------------------------
+
+export interface VowelFormant {
+  f1: number;
+  f2: number;
+  f3: number;
+}
+
+export const VOWEL_FORMANTS: Record<string, VowelFormant> = {
+  AH: { f1: 820, f2: 1240, f3: 2500 }, // open back ("ah", "god", "father")
+  EE: { f1: 280, f2: 2280, f3: 2950 }, // close front ("feel", "see", "beat")
+  OH: { f1: 520, f2: 950, f3: 2400 },  // close-mid back ("hold", "go", "so")
+  OO: { f1: 320, f2: 850, f3: 2200 },  // close back ("wub", "ooh", "move")
+  AY: { f1: 540, f2: 1850, f3: 2550 }, // close-mid front ("yeah", "say", "baby")
+};
+
+export interface VocalSyllable {
+  text: string;
+  vowel: "AH" | "EE" | "OH" | "OO" | "AY";
+  semitoneOffset: number; // relative to chord root (0=root, 3=m3, 5=4th, 7=5th, 10=m7, 12=octave)
+  step: number;           // 0..15 in pattern
+  durationSteps: number;  // 1, 2, 4
+  velocity: number;
+}
+
+export interface VocalSongTheme {
+  title: string;
+  chorusHook: VocalSyllable[];
+  verseLineA: VocalSyllable[];
+  verseLineB: VocalSyllable[];
+  buildupChant: VocalSyllable[];
+  breakdownSolo: VocalSyllable[];
+}
+
+export class VocalSongArranger {
+  private currentThemeIndex: number = 0;
+  private themes: VocalSongTheme[] = [
+    {
+      title: "FEEL THE BEAT",
+      chorusHook: [
+        { text: "FEEL", vowel: "EE", semitoneOffset: 12, step: 0, durationSteps: 2, velocity: 1.0 },
+        { text: "THE", vowel: "OH", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.92 },
+        { text: "BEAT", vowel: "EE", semitoneOffset: 12, step: 6, durationSteps: 2, velocity: 0.98 },
+        { text: "FEEL", vowel: "EE", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.90 },
+        { text: "THE", vowel: "OH", semitoneOffset: 5, step: 10, durationSteps: 2, velocity: 0.92 },
+        { text: "GROOVE", vowel: "OO", semitoneOffset: 7, step: 12, durationSteps: 2, velocity: 0.96 },
+        { text: "NOW", vowel: "AH", semitoneOffset: 3, step: 14, durationSteps: 2, velocity: 1.0 },
+      ],
+      verseLineA: [
+        { text: "NIGHT", vowel: "AY", semitoneOffset: 0, step: 0, durationSteps: 3, velocity: 0.92 },
+        { text: "IS", vowel: "EE", semitoneOffset: 2, step: 3, durationSteps: 2, velocity: 0.85 },
+        { text: "DEEP", vowel: "EE", semitoneOffset: 3, step: 6, durationSteps: 3, velocity: 0.90 },
+        { text: "LOW", vowel: "OH", semitoneOffset: 0, step: 11, durationSteps: 4, velocity: 0.95 },
+      ],
+      verseLineB: [
+        { text: "HEAT", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 3, velocity: 0.92 },
+        { text: "OF", vowel: "OH", semitoneOffset: 5, step: 3, durationSteps: 2, velocity: 0.85 },
+        { text: "SOUND", vowel: "AH", semitoneOffset: 7, step: 6, durationSteps: 3, velocity: 0.92 },
+        { text: "GO", vowel: "OH", semitoneOffset: 3, step: 11, durationSteps: 4, velocity: 0.95 },
+      ],
+      buildupChant: [
+        { text: "HIGH", vowel: "AY", semitoneOffset: 5, step: 0, durationSteps: 2, velocity: 0.82 },
+        { text: "ER", vowel: "AH", semitoneOffset: 7, step: 2, durationSteps: 2, velocity: 0.85 },
+        { text: "TAKE", vowel: "AY", semitoneOffset: 8, step: 4, durationSteps: 2, velocity: 0.88 },
+        { text: "ME", vowel: "EE", semitoneOffset: 10, step: 6, durationSteps: 2, velocity: 0.90 },
+        { text: "HIGH", vowel: "AY", semitoneOffset: 12, step: 8, durationSteps: 2, velocity: 0.94 },
+        { text: "ER", vowel: "AH", semitoneOffset: 12, step: 10, durationSteps: 2, velocity: 0.96 },
+        { text: "NOW", vowel: "AH", semitoneOffset: 14, step: 12, durationSteps: 2, velocity: 0.98 },
+        { text: "FEEL", vowel: "EE", semitoneOffset: 15, step: 14, durationSteps: 1, velocity: 1.0 },
+      ],
+      breakdownSolo: [
+        { text: "OOH", vowel: "OO", semitoneOffset: 7, step: 0, durationSteps: 5, velocity: 0.95 },
+        { text: "HOLD", vowel: "OH", semitoneOffset: 5, step: 6, durationSteps: 2, velocity: 0.88 },
+        { text: "ON", vowel: "AH", semitoneOffset: 3, step: 8, durationSteps: 4, velocity: 0.92 },
+        { text: "YEAH", vowel: "AY", semitoneOffset: 0, step: 12, durationSteps: 4, velocity: 0.96 },
+      ],
+    },
+    {
+      title: "INFINITE WUB",
+      chorusHook: [
+        { text: "WUB", vowel: "OO", semitoneOffset: 0, step: 0, durationSteps: 2, velocity: 1.0 },
+        { text: "THAT", vowel: "AH", semitoneOffset: 3, step: 3, durationSteps: 2, velocity: 0.92 },
+        { text: "SOUND", vowel: "AH", semitoneOffset: 5, step: 6, durationSteps: 2, velocity: 0.98 },
+        { text: "DEEP", vowel: "EE", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.90 },
+        { text: "IN", vowel: "EE", semitoneOffset: 10, step: 10, durationSteps: 2, velocity: 0.94 },
+        { text: "SIDE", vowel: "AY", semitoneOffset: 12, step: 12, durationSteps: 2, velocity: 0.96 },
+        { text: "YEAH", vowel: "AY", semitoneOffset: 7, step: 14, durationSteps: 2, velocity: 1.0 },
+      ],
+      verseLineA: [
+        { text: "BASS", vowel: "AY", semitoneOffset: 0, step: 0, durationSteps: 3, velocity: 0.92 },
+        { text: "LINE", vowel: "AY", semitoneOffset: 3, step: 4, durationSteps: 3, velocity: 0.88 },
+        { text: "PUMPS", vowel: "AH", semitoneOffset: 5, step: 8, durationSteps: 3, velocity: 0.92 },
+        { text: "DOWN", vowel: "AH", semitoneOffset: 0, step: 12, durationSteps: 4, velocity: 0.95 },
+      ],
+      verseLineB: [
+        { text: "MOVE", vowel: "OO", semitoneOffset: 7, step: 0, durationSteps: 3, velocity: 0.92 },
+        { text: "YOUR", vowel: "OH", semitoneOffset: 5, step: 4, durationSteps: 3, velocity: 0.88 },
+        { text: "FEET", vowel: "EE", semitoneOffset: 7, step: 8, durationSteps: 3, velocity: 0.92 },
+        { text: "NOW", vowel: "AH", semitoneOffset: 3, step: 12, durationSteps: 4, velocity: 0.95 },
+      ],
+      buildupChant: [
+        { text: "WUB", vowel: "OO", semitoneOffset: 0, step: 0, durationSteps: 2, velocity: 0.82 },
+        { text: "WUB", vowel: "OO", semitoneOffset: 3, step: 2, durationSteps: 2, velocity: 0.85 },
+        { text: "WUB", vowel: "OO", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.88 },
+        { text: "WUB", vowel: "OO", semitoneOffset: 7, step: 6, durationSteps: 2, velocity: 0.90 },
+        { text: "BASS", vowel: "AY", semitoneOffset: 10, step: 8, durationSteps: 2, velocity: 0.94 },
+        { text: "DROP", vowel: "OH", semitoneOffset: 12, step: 10, durationSteps: 2, velocity: 0.96 },
+        { text: "IT", vowel: "EE", semitoneOffset: 14, step: 12, durationSteps: 2, velocity: 0.98 },
+        { text: "HARD", vowel: "AH", semitoneOffset: 15, step: 14, durationSteps: 1, velocity: 1.0 },
+      ],
+      breakdownSolo: [
+        { text: "LOST", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 5, velocity: 0.95 },
+        { text: "IN", vowel: "EE", semitoneOffset: 8, step: 6, durationSteps: 2, velocity: 0.88 },
+        { text: "ECHO", vowel: "OH", semitoneOffset: 5, step: 8, durationSteps: 4, velocity: 0.92 },
+        { text: "SOUND", vowel: "AH", semitoneOffset: 0, step: 12, durationSteps: 4, velocity: 0.96 },
+      ],
+    },
+    {
+      title: "ELECTRIC NIGHT",
+      chorusHook: [
+        { text: "LIGHT", vowel: "AY", semitoneOffset: 12, step: 0, durationSteps: 2, velocity: 1.0 },
+        { text: "THE", vowel: "OH", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.92 },
+        { text: "SKY", vowel: "AY", semitoneOffset: 12, step: 6, durationSteps: 2, velocity: 0.98 },
+        { text: "YOU", vowel: "OO", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.90 },
+        { text: "AND", vowel: "AH", semitoneOffset: 8, step: 10, durationSteps: 2, velocity: 0.94 },
+        { text: "I", vowel: "AY", semitoneOffset: 10, step: 12, durationSteps: 2, velocity: 0.96 },
+        { text: "FLY", vowel: "AY", semitoneOffset: 12, step: 14, durationSteps: 2, velocity: 1.0 },
+      ],
+      verseLineA: [
+        { text: "STROBE", vowel: "OH", semitoneOffset: 0, step: 0, durationSteps: 3, velocity: 0.92 },
+        { text: "LIGHT", vowel: "AY", semitoneOffset: 3, step: 4, durationSteps: 3, velocity: 0.88 },
+        { text: "GLOW", vowel: "OH", semitoneOffset: 5, step: 8, durationSteps: 3, velocity: 0.92 },
+        { text: "BRIGHT", vowel: "AY", semitoneOffset: 7, step: 12, durationSteps: 4, velocity: 0.95 },
+      ],
+      verseLineB: [
+        { text: "WE", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 3, velocity: 0.92 },
+        { text: "ARE", vowel: "AH", semitoneOffset: 5, step: 4, durationSteps: 3, velocity: 0.88 },
+        { text: "ONE", vowel: "AH", semitoneOffset: 3, step: 8, durationSteps: 3, velocity: 0.92 },
+        { text: "TONIGHT", vowel: "AY", semitoneOffset: 0, step: 12, durationSteps: 4, velocity: 0.95 },
+      ],
+      buildupChant: [
+        { text: "RISE", vowel: "AY", semitoneOffset: 5, step: 0, durationSteps: 3, velocity: 0.85 },
+        { text: "UP", vowel: "AH", semitoneOffset: 7, step: 4, durationSteps: 3, velocity: 0.88 },
+        { text: "FEEL", vowel: "EE", semitoneOffset: 10, step: 8, durationSteps: 3, velocity: 0.92 },
+        { text: "IT", vowel: "EE", semitoneOffset: 12, step: 12, durationSteps: 2, velocity: 0.96 },
+        { text: "NOW", vowel: "AH", semitoneOffset: 14, step: 14, durationSteps: 1, velocity: 1.0 },
+      ],
+      breakdownSolo: [
+        { text: "HOLD", vowel: "OH", semitoneOffset: 12, step: 0, durationSteps: 5, velocity: 0.95 },
+        { text: "MY", vowel: "AY", semitoneOffset: 10, step: 6, durationSteps: 2, velocity: 0.88 },
+        { text: "HAND", vowel: "AH", semitoneOffset: 7, step: 8, durationSteps: 4, velocity: 0.92 },
+        { text: "SHINE", vowel: "AY", semitoneOffset: 0, step: 12, durationSteps: 4, velocity: 0.96 },
+      ],
+    },
+  ];
+
+  public getSongTitle(): string {
+    return this.themes[this.currentThemeIndex].title;
+  }
+
+  public nextSong(): void {
+    this.currentThemeIndex = (this.currentThemeIndex + 1) % this.themes.length;
+  }
+
+  public getSyllableForStep(section: string, phraseBar: number, step: number): VocalSyllable | undefined {
+    const theme = this.themes[this.currentThemeIndex];
+    let list: VocalSyllable[] = [];
+
+    if (section === "DROP") {
+      list = theme.chorusHook;
+    } else if (section === "GROOVE_A") {
+      list = (phraseBar % 2 === 0) ? theme.verseLineA : theme.verseLineB;
+    } else if (section === "BUILDUP") {
+      list = theme.buildupChant;
+    } else if (section === "BREAKDOWN") {
+      list = theme.breakdownSolo;
+    } else if (section === "INTRO") {
+      if (phraseBar === 0 || phraseBar === 4) {
+        if (step === 0) {
+          return { text: "OOH", vowel: "OO", semitoneOffset: 7, step: 0, durationSteps: 6, velocity: 0.90 };
+        }
+      }
+      return undefined;
+    }
+
+    return list.find((s) => s.step === step);
+  }
+
+  public getCurrentLyricLine(section: string, phraseBar: number): string {
+    const theme = this.themes[this.currentThemeIndex];
+    if (section === "DROP") {
+      return theme.chorusHook.map((s) => s.text).join(" ");
+    }
+    if (section === "GROOVE_A") {
+      const list = (phraseBar % 2 === 0) ? theme.verseLineA : theme.verseLineB;
+      return list.map((s) => s.text).join(" ");
+    }
+    if (section === "BUILDUP") {
+      return theme.buildupChant.map((s) => s.text).join(" ");
+    }
+    if (section === "BREAKDOWN") {
+      return theme.breakdownSolo.map((s) => s.text).join(" ");
+    }
+    return "OOH... (AMBIENT VOCAL CALL)";
+  }
+}
+
+// -----------------------------------------------------------------------------
 // 1. Client-Side Web Audio Algorithmic Slice Synthesizer
 // -----------------------------------------------------------------------------
 
@@ -454,6 +663,128 @@ export class WebAudioSliceSynthesizer {
     osc.stop(t + 0.20);
   }
 
+  // Human Singing Voice Synthesizer with Formant Resonators, Pitch Scoop, Vibrato & Breathiness
+  public playSingingVoice(
+    when: number,
+    noteHz: number = 261.6,
+    vowel: "AH" | "EE" | "OH" | "OO" | "AY" = "AH",
+    durationSec: number = 0.28,
+    velocity: number = 0.90,
+    destNode?: AudioNode
+  ): void {
+    const t = Math.max(this.ctx.currentTime, when);
+    const dest = destNode || this.ctx.destination;
+
+    const formants = VOWEL_FORMANTS[vowel] || VOWEL_FORMANTS.AH;
+
+    // 1. Dual Oscillators: Glottal wave + detuned harmonic body
+    const osc1 = this.ctx.createOscillator();
+    const osc2 = this.ctx.createOscillator();
+    osc1.type = "sawtooth";
+    osc2.type = "sawtooth";
+
+    // Natural vocal pitch scoop (scoops up ~1.5 semitones into target note)
+    const scoopStartHz = noteHz * Math.pow(2, -1.5 / 12);
+    osc1.frequency.setValueAtTime(scoopStartHz, t);
+    osc1.frequency.exponentialRampToValueAtTime(noteHz, t + 0.04);
+    osc2.frequency.setValueAtTime(scoopStartHz * 1.002, t);
+    osc2.frequency.exponentialRampToValueAtTime(noteHz * 1.002, t + 0.04);
+
+    // Human Vibrato LFO (~5.2 Hz, fades in after 60ms)
+    const vibratoOsc = this.ctx.createOscillator();
+    const vibratoGain = this.ctx.createGain();
+    vibratoOsc.frequency.setValueAtTime(5.2, t);
+    vibratoGain.gain.setValueAtTime(0.0001, t);
+    vibratoGain.gain.setValueAtTime(0.0001, t + 0.06);
+    vibratoGain.gain.linearRampToValueAtTime(noteHz * 0.015, t + 0.18); // ~25 cents vibrato depth
+    vibratoOsc.connect(vibratoGain);
+    vibratoGain.connect(osc1.frequency);
+    vibratoGain.connect(osc2.frequency);
+
+    // 2. Breath Transient (Filtered noise attack for consonant definition)
+    let breathNode: AudioNode | null = null;
+    if (this.noiseBuffer) {
+      const breathSrc = this.ctx.createBufferSource();
+      breathSrc.buffer = this.noiseBuffer;
+      const breathFilter = this.ctx.createBiquadFilter();
+      breathFilter.type = "highpass";
+      breathFilter.frequency.setValueAtTime(3200, t);
+      const breathGain = this.ctx.createGain();
+      breathGain.gain.setValueAtTime(velocity * 0.15, t);
+      breathGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.025);
+      breathSrc.connect(breathFilter);
+      breathFilter.connect(breathGain);
+      breathNode = breathGain;
+      breathSrc.start(t);
+      breathSrc.stop(t + 0.03);
+    }
+
+    // 3. Parallel Triple-Formant Vocal Tract Filter Bank
+    const oscMix = this.ctx.createGain();
+    oscMix.gain.setValueAtTime(0.5, t);
+    osc1.connect(oscMix);
+    osc2.connect(oscMix);
+
+    const f1 = this.ctx.createBiquadFilter();
+    f1.type = "bandpass";
+    f1.frequency.setValueAtTime(formants.f1, t);
+    f1.Q.setValueAtTime(5.5, t);
+
+    const f2 = this.ctx.createBiquadFilter();
+    f2.type = "bandpass";
+    f2.frequency.setValueAtTime(formants.f2, t);
+    f2.Q.setValueAtTime(6.0, t);
+
+    const f3 = this.ctx.createBiquadFilter();
+    f3.type = "bandpass";
+    f3.frequency.setValueAtTime(formants.f3, t);
+    f3.Q.setValueAtTime(4.5, t);
+
+    const g1 = this.ctx.createGain();
+    g1.gain.setValueAtTime(1.0, t);
+    const g2 = this.ctx.createGain();
+    g2.gain.setValueAtTime(0.70, t);
+    const g3 = this.ctx.createGain();
+    g3.gain.setValueAtTime(0.35, t);
+
+    oscMix.connect(f1);
+    f1.connect(g1);
+    oscMix.connect(f2);
+    f2.connect(g2);
+    oscMix.connect(f3);
+    f3.connect(g3);
+
+    // Sum formants
+    const vocalSum = this.ctx.createGain();
+    g1.connect(vocalSum);
+    g2.connect(vocalSum);
+    g3.connect(vocalSum);
+    if (breathNode) breathNode.connect(vocalSum);
+
+    // Vocal Master Envelope (Soft attack, warm sustain, natural release)
+    const masterGain = this.ctx.createGain();
+    const v = Math.max(0.1, Math.min(1.0, velocity));
+    const attackTime = 0.020;
+    const holdTime = Math.max(0.06, durationSec - 0.06);
+
+    masterGain.gain.setValueAtTime(0.0001, t);
+    masterGain.gain.linearRampToValueAtTime(v * 0.85, t + attackTime);
+    masterGain.gain.setValueAtTime(v * 0.80, t + holdTime);
+    masterGain.gain.exponentialRampToValueAtTime(0.0001, t + durationSec + 0.07);
+
+    vocalSum.connect(masterGain);
+    masterGain.connect(dest);
+
+    osc1.start(t);
+    osc2.start(t);
+    vibratoOsc.start(t);
+
+    const stopTime = t + durationSec + 0.08;
+    osc1.stop(stopTime);
+    osc2.stop(stopTime);
+    vibratoOsc.stop(stopTime);
+  }
+
   // Buildup Pitch Riser
   public playRiser(when: number, durationSec: number = 2.0, destNode?: AudioNode): void {
     const t = Math.max(this.ctx.currentTime, when);
@@ -511,7 +842,11 @@ export class ClientMarkovPhraseModel {
       if (phraseBar === 7 && stem === "drums") return "turnaround_fill";
       if (stem === "drums") return "four_on_floor_hats";
       if (stem === "bass") return "offbeat";
-      if (stem === "vocals") return "chop";
+      if (stem === "vocals") {
+        if (phraseBar === 7) return "vocal_stutter";
+        if (phraseBar === 2 || phraseBar === 4 || phraseBar === 6) return "vocal_hook";
+        return "vocal_verse";
+      }
       return "chords";
     }
 
@@ -540,6 +875,13 @@ export class ClientMarkovPhraseModel {
       "1:bass:offbeat": { rolling: 6.0, offbeat: 6.0 },
       "2:bass:rolling": { stabs: 6.0, rolling: 5.0 },
       "7:bass:rolling": { sustained: 8.0, stabs: 4.0 },
+      "0:vocals:vocal_verse": { vocal_verse: 7.0, vocal_call_response: 5.0, vocal_hook: 3.0 },
+      "1:vocals:vocal_call_response": { vocal_call_response: 8.0, vocal_syncopated_chop: 4.0 },
+      "2:vocals:vocal_hook": { vocal_hook: 8.0, vocal_syncopated_chop: 6.0 },
+      "3:vocals:vocal_call_response": { vocal_call_response: 7.0, vocal_verse: 4.0 },
+      "4:vocals:vocal_hook": { vocal_hook: 8.0, vocal_syncopated_chop: 5.0 },
+      "6:vocals:vocal_stutter": { vocal_stutter: 9.0, vocal_hook: 4.0 },
+      "7:vocals:vocal_stutter": { vocal_stutter: 9.0, vocal_hook: 5.0 },
     };
   }
 }
@@ -684,6 +1026,15 @@ export class ClientGrooveboxConductor {
   };
 
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
+  private vocalSongArranger: VocalSongArranger = new VocalSongArranger();
+  private currentVocalMeta = {
+    lyric: "",
+    songTitle: "",
+    syllable: "",
+    vowel: "",
+    note: "",
+    sectionName: "",
+  };
   private isRunning: boolean = false;
   private timer: number | null = null;
   private nextStepTime: number = 0;
@@ -957,6 +1308,10 @@ export class ClientGrooveboxConductor {
       // Pick next harmonic chord progression for fresh section
       this.progressionIndex = (this.progressionIndex + 1) % DEFAULT_PROGRESSIONS.length;
       this.activeProgression = DEFAULT_PROGRESSIONS[this.progressionIndex];
+      // Progress to next song composition when cycling into a new verse/song cycle
+      if (section === "GROOVE_A" || section === "INTRO") {
+        this.vocalSongArranger.nextSong();
+      }
     }
   }
 
@@ -1142,21 +1497,59 @@ export class ClientGrooveboxConductor {
     }
 
     // -------------------------------------------------------------------------
-    // 4. VOCALS (Rhythmic Chops & Phrases)
+    // 4. VOCALS (Singing Melodic Song Engine & Rhythmic Chops)
     // -------------------------------------------------------------------------
     const vPat = this.activePatterns.vocals;
-    if (vPat && (sec === "DROP" || sec === "GROOVE_A" || sec === "BREAKDOWN")) {
-      if (sec === "BREAKDOWN" && step === 0 && (phraseBar === 0 || phraseBar === 4)) {
-        const phraseSlice = this.getBestSlice("vocals:phrase", chord.rootPitch);
-        if (phraseSlice) this.engine.scheduleSlice("vocals", phraseSlice.buffer, when, { rate: phraseSlice.rate, fadeMs: 6 });
-      } else if (vPat.onset_grid.includes(step)) {
-        const vel = vPat.velocities ? vPat.velocities[step] : 0.90;
-        const chopSlice = this.getBestSlice("vocals:chop", chord.rootPitch);
-        if (chopSlice) {
-          this.engine.scheduleSlice("vocals", chopSlice.buffer, when, { rate: chopSlice.rate, fadeMs: 3 });
+    const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
+
+    if (!isDropGap && vPat) {
+      // 1. Check if the song engine has a lyrical singing syllable on this step
+      const syllable = this.vocalSongArranger.getSyllableForStep(sec, phraseBar, step % 16);
+
+      if (syllable || vPat.onset_grid.includes(step % 16)) {
+        // Fallback syllable if triggered by pattern onset
+        const syl: VocalSyllable = syllable || {
+          text: (sec === "DROP") ? "FEEL" : "YEAH",
+          vowel: "EE",
+          semitoneOffset: (step % 4 === 0) ? 12 : 7,
+          step: step % 16,
+          durationSteps: (sec === "BREAKDOWN" || sec === "INTRO") ? 4 : 2,
+          velocity: vPat.velocities ? (vPat.velocities[step % 16] || 0.90) : 0.90,
+        };
+
+        const vel = syl.velocity;
+        const melodyPitch = (chord.rootPitch + syl.semitoneOffset) % 12;
+        const noteName = `${ROOT_NAMES[melodyPitch]}4`;
+        const noteHz = 440 * Math.pow(2, (chord.rootPitch + syl.semitoneOffset - 9 - 12) / 12);
+        const durSec = (syl.durationSteps * 60) / (this.currentBpm * 4);
+
+        // Store live vocal metadata for UI
+        this.currentVocalMeta = {
+          lyric: this.vocalSongArranger.getCurrentLyricLine(sec, phraseBar),
+          syllable: syl.text,
+          vowel: syl.vowel,
+          note: noteName,
+          songTitle: this.vocalSongArranger.getSongTitle(),
+          sectionName: sec,
+        };
+
+        // Try acoustic slice sample first (phrase for long, chop for short)
+        const isLong = syl.durationSteps >= 4 || sec === "BREAKDOWN" || sec === "INTRO";
+        const slice = isLong
+          ? (this.getBestSlice("vocals:phrase", melodyPitch) || this.getBestSlice("vocals:chop", melodyPitch))
+          : (this.getBestSlice("vocals:chop", melodyPitch) || this.getBestSlice("vocals:phrase", melodyPitch));
+
+        if (slice) {
+          // Schedule real slice repitched to the singing melody note
+          this.engine.scheduleSlice("vocals", slice.buffer, when, {
+            rate: slice.rate,
+            fadeMs: isLong ? 8 : 4,
+          });
+          // Also softly layer the singing formant body for authentic vocal formant clarity
+          this.synth.playSingingVoice(when, noteHz, syl.vowel, Math.min(0.4, durSec), vel * 0.45, vInput);
         } else {
-          const formant = 700 + (chord.rootPitch * 30);
-          this.synth.playVocalChop(when, vel, formant, vInput);
+          // Autonomous singing formant synthesizer
+          this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vel, vInput);
         }
       }
     }
@@ -1245,10 +1638,43 @@ export class ClientGrooveboxConductor {
         }
       }
     } else {
-      // vocals
-      for (const s of [2, 6, 14]) {
-        onset_grid.push(s);
-        velocities[s] = 0.92;
+      // vocals: multi-template dynamic patterns
+      if (grooveType === "vocal_hook") {
+        for (const s of [0, 3, 6, 8, 10, 12, 14]) {
+          onset_grid.push(s);
+          velocities[s] = (s === 0 || s === 14) ? 1.0 : 0.92;
+        }
+      } else if (grooveType === "vocal_call_response") {
+        for (const s of [2, 4, 7, 10, 12, 14]) {
+          onset_grid.push(s);
+          velocities[s] = (s % 2 === 0) ? 0.92 : 0.85;
+        }
+      } else if (grooveType === "vocal_syncopated_chop") {
+        for (const s of [1, 4, 7, 10, 13]) {
+          onset_grid.push(s);
+          velocities[s] = 0.92;
+        }
+      } else if (grooveType === "vocal_stutter") {
+        for (let s = 0; s < 16; s += 2) {
+          onset_grid.push(s);
+          velocities[s] = 0.80 + (s / 16) * 0.20;
+        }
+      } else if (grooveType === "vocal_sustained" || grooveType === "phrase") {
+        for (const s of [0, 8]) {
+          onset_grid.push(s);
+          velocities[s] = 0.95;
+        }
+      } else if (grooveType === "vocal_verse") {
+        for (const s of [0, 3, 6, 11]) {
+          onset_grid.push(s);
+          velocities[s] = 0.90;
+        }
+      } else {
+        // legacy chop
+        for (const s of [2, 6, 14]) {
+          onset_grid.push(s);
+          velocities[s] = 0.92;
+        }
       }
     }
 
@@ -1269,7 +1695,7 @@ export class ClientGrooveboxConductor {
     this.activePatterns.drums = this.synthesizePattern("drums", "four_on_floor_hats");
     this.activePatterns.bass = this.synthesizePattern("bass", "offbeat");
     this.activePatterns.other = this.synthesizePattern("other", "chords");
-    this.activePatterns.vocals = this.synthesizePattern("vocals", "chop");
+    this.activePatterns.vocals = this.synthesizePattern("vocals", "vocal_verse");
   }
 
   private buildMeta(stepInPattern: number, patternInCycle: number, phraseBar: number): any {
@@ -1342,6 +1768,16 @@ export class ClientGrooveboxConductor {
       patternRatings: this.stemRatings,
       pattern_audio_scores: patternAudioScores,
       patternAudioScores,
+      vocal_lyric: this.currentVocalMeta.lyric,
+      vocalLyric: this.currentVocalMeta.lyric,
+      vocal_song_title: this.currentVocalMeta.songTitle,
+      vocalSongTitle: this.currentVocalMeta.songTitle,
+      vocal_syllable: this.currentVocalMeta.syllable,
+      vocalSyllable: this.currentVocalMeta.syllable,
+      vocal_vowel: this.currentVocalMeta.vowel,
+      vocalVowel: this.currentVocalMeta.vowel,
+      vocal_note: this.currentVocalMeta.note,
+      vocalNote: this.currentVocalMeta.note,
       direct_ml_engine: true,
     };
   }

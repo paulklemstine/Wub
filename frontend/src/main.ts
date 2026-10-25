@@ -103,6 +103,11 @@ export interface GrooveboxMeta {
   patternIds?: Record<string, string>;
   patternRatings?: Record<string, number>;
   patternAudioScores?: Record<string, number>;
+  vocalLyric?: string;
+  vocalSongTitle?: string;
+  vocalSyllable?: string;
+  vocalVowel?: string;
+  vocalNote?: string;
 }
 
 interface UIEvent {
@@ -215,6 +220,11 @@ function parseServerMessage(raw: string): HelloMessage | TatumMessage | null {
         patternIds: isRecord(gbRaw["pattern_ids"]) ? (gbRaw["pattern_ids"] as Record<string, string>) : {},
         patternRatings: isRecord(gbRaw["pattern_ratings"]) ? (gbRaw["pattern_ratings"] as Record<string, number>) : {},
         patternAudioScores: isRecord(gbRaw["pattern_audio_scores"]) ? (gbRaw["pattern_audio_scores"] as Record<string, number>) : {},
+        vocalLyric: asString(gbRaw["vocal_lyric"] || gbRaw["vocalLyric"], ""),
+        vocalSongTitle: asString(gbRaw["vocal_song_title"] || gbRaw["vocalSongTitle"], ""),
+        vocalSyllable: asString(gbRaw["vocal_syllable"] || gbRaw["vocalSyllable"], ""),
+        vocalVowel: asString(gbRaw["vocal_vowel"] || gbRaw["vocalVowel"], ""),
+        vocalNote: asString(gbRaw["vocal_note"] || gbRaw["vocalNote"], ""),
       };
     }
     return {
@@ -1400,6 +1410,31 @@ class WubApp {
         dScore.className = rating > 0 ? "feedback-score positive" : (rating < 0 ? "feedback-score negative" : "feedback-score");
       }
     }
+
+    // 8. Vocal Singing Status Readout
+    const vocalLyricEl = document.getElementById("gb-vocal-lyric");
+    if (vocalLyricEl && gb.vocalLyric) {
+      vocalLyricEl.textContent = `"${gb.vocalLyric}"`;
+    }
+    const vocalSongTitleEl = document.getElementById("gb-vocal-song-title");
+    if (vocalSongTitleEl && gb.vocalSongTitle) {
+      vocalSongTitleEl.textContent = gb.vocalSongTitle;
+    }
+    const vocalNoteEl = document.getElementById("gb-vocal-note");
+    if (vocalNoteEl && gb.vocalNote) {
+      vocalNoteEl.textContent = `NOTE: ${gb.vocalNote}`;
+    }
+    const vocalVowelEl = document.getElementById("gb-vocal-vowel");
+    if (vocalVowelEl && gb.vocalVowel) {
+      vocalVowelEl.textContent = `[${gb.vocalVowel}]`;
+    }
+    const vocalSyllableEl = document.getElementById("gb-vocal-syllable");
+    if (vocalSyllableEl && gb.vocalSyllable) {
+      vocalSyllableEl.textContent = gb.vocalSyllable;
+      vocalSyllableEl.classList.add("singing");
+      window.setTimeout(() => vocalSyllableEl.classList.remove("singing"), 150);
+    }
+
     this.lastGrooveboxMeta = gb;
   }
 

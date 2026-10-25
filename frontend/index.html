@@ -589,6 +589,70 @@
       box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
     }
 
+    /* Vocal Singing Lead Bar */
+    #gb-vocal-singing-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: linear-gradient(90deg, rgba(245, 158, 11, 0.12) 0%, rgba(239, 68, 68, 0.08) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      flex-wrap: wrap;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+    .vocal-sing-badge {
+      background: linear-gradient(180deg, #f59e0b 0%, #b45309 100%);
+      color: #000;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-weight: 900;
+      font-size: 0.70rem;
+      letter-spacing: 0.08em;
+      box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+    }
+    .vocal-song-title {
+      color: #fde68a;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .vocal-song-lyric {
+      color: #fef08a;
+      font-style: italic;
+      font-weight: 700;
+    }
+    .vocal-song-syllable {
+      background: #78350f;
+      color: #fff;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-weight: 900;
+      border: 1px solid #f59e0b;
+      transition: all 0.1s ease;
+    }
+    .vocal-song-syllable.singing {
+      background: #f59e0b;
+      color: #000;
+      transform: scale(1.15);
+      box-shadow: 0 0 12px #f59e0b;
+    }
+    .vocal-song-vowel {
+      color: #fdba74;
+      font-family: monospace;
+      font-weight: 800;
+    }
+    .vocal-song-note {
+      color: #38bdf8;
+      font-family: monospace;
+      font-weight: 800;
+      margin-left: auto;
+    }
+
     /* --- 4-STEM HARDWARE MIXER DECKS --- */
     #decks {
       display: grid;
@@ -1297,7 +1361,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.46 <span class="mc-build-num">#46</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.47 <span class="mc-build-num">#47</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -1412,6 +1476,16 @@
         <span>PART 2 BASS: <span id="gb-pat-bass" style="color: var(--neon-cyan);">Offbeat</span></span>
         <span>PART 3 VOCALS: <span id="gb-pat-vocals" style="color: var(--neon-amber);">Phrase</span></span>
         <span>PART 4 SYNTHS: <span id="gb-pat-other" style="color: var(--neon-magenta);">Hook</span></span>
+      </div>
+
+      <!-- Vocal Singing Lead Bar -->
+      <div id="gb-vocal-singing-bar">
+        <span class="vocal-sing-badge">🎤 SINGING LEAD</span>
+        <span id="gb-vocal-song-title" class="vocal-song-title">FEEL THE BEAT</span>
+        <span id="gb-vocal-lyric" class="vocal-song-lyric">"FEEL THE BEAT, FEEL THE GROOVE"</span>
+        <span id="gb-vocal-syllable" class="vocal-song-syllable">FEEL</span>
+        <span id="gb-vocal-vowel" class="vocal-song-vowel">[EE]</span>
+        <span id="gb-vocal-note" class="vocal-song-note">NOTE: A4</span>
       </div>
     </section>
 
@@ -1686,7 +1760,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.46 (Build #46 • rev 56edcde)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.47 (Build #47 • rev 1169b76)</span>
     </div>
   </div>
 
