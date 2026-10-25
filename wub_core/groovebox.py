@@ -120,6 +120,11 @@ class GrooveboxConductor:
                     # Fall back to 16-step pattern
                     self.active_patterns[s] = self.bank.pick_pattern(s, preferred_track_id=self.lead_track_id, rng=self.rng)
 
+        # Densify all active patterns to guarantee driving rhythm at all times
+        for s in STEMS:
+            if self.active_patterns.get(s):
+                self.active_patterns[s] = self.bank.densify_pattern(self.active_patterns[s], rng=self.rng)
+
     def _load_feedback(self) -> None:
         p = Path("data/user_feedback.json")
         if p.exists():
@@ -225,9 +230,9 @@ class GrooveboxConductor:
             ) or self.bank.create_groove_pattern("other", "chords", rng=self.rng)
 
         if new_pat:
-            self.active_patterns[stem] = new_pat
+            self.active_patterns[stem] = self.bank.densify_pattern(new_pat, rng=self.rng)
             self.active_slice_ids[stem] = None
-        return new_pat
+        return self.active_patterns.get(stem)
 
     def _init_section_patterns(self) -> None:
         """Select a cohesive 8-bar SongPhrase or fallback patterns matching the active section."""
@@ -245,9 +250,11 @@ class GrooveboxConductor:
             self.current_pattern = phrase.bars[0]
             self.lead_base_bar = self.current_pattern.bar_num
             for s in STEMS:
-                self.active_patterns[s] = self.bank.get_track_pattern(
+                pat = self.bank.get_track_pattern(
                     self.current_pattern.track_id, s, self.current_pattern.bar_num
                 ) or self.bank.pick_pattern(s, preferred_track_id=self.lead_track_id, rng=self.rng)
+                if pat:
+                    self.active_patterns[s] = self.bank.densify_pattern(pat, rng=self.rng)
             return
 
         # Fallback to single-stem patterns if no cohesive multi-stem phrase is available
@@ -298,6 +305,11 @@ class GrooveboxConductor:
             "vocals", min_energy=0.0,
             preferred_track_id=self.lead_track_id, rng=self.rng
         ) or self.bank.create_groove_pattern("vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng)
+
+        # Infill and densify all fallback section patterns
+        for s in STEMS:
+            if self.active_patterns.get(s):
+                self.active_patterns[s] = self.bank.densify_pattern(self.active_patterns[s], rng=self.rng)
 
     def _on_pattern_start(self, pattern_in_cycle: int) -> None:
         """Triggered on Step 0 of each pattern in the cycle."""
@@ -370,9 +382,11 @@ class GrooveboxConductor:
             self.current_pattern = self.current_phrase.bars[phrase_bar]
             self.lead_track_id = self.current_phrase.track_id
             for s in STEMS:
-                self.active_patterns[s] = self.bank.get_track_pattern(
+                pat = self.bank.get_track_pattern(
                     self.current_pattern.track_id, s, self.current_pattern.bar_num
                 ) or self.active_patterns.get(s)
+                if pat:
+                    self.active_patterns[s] = self.bank.densify_pattern(pat, rng=self.rng)
 
             if is_turnaround:
                 fill_drums = (
@@ -428,6 +442,11 @@ class GrooveboxConductor:
         if self.active_patterns.get("vocals") is None:
             self.active_patterns["vocals"] = self.bank.create_groove_pattern("vocals", "chop", rng=self.rng)
 
+        # Infill and densify all active patterns to guarantee full driving rhythm
+        for s in STEMS:
+            if self.active_patterns.get(s):
+                self.active_patterns[s] = self.bank.densify_pattern(self.active_patterns[s], rng=self.rng)
+
     def _on_bar_start(self, pattern_in_cycle: int, step_in_pattern: int) -> None:
         """Triggered on Step 0 of each bar (every 16 tatums)."""
         self.state.bar_in_section += 1
@@ -464,17 +483,12 @@ class GrooveboxConductor:
             else:
                 candidate_sref = None
 
-            # Onset vs sustain awareness: only re-trigger if segment changes or at start
-            if candidate_sref is None:
-                slices[stem] = None
-                self.active_slice_ids[stem] = None
+            # Step Sequencer trigger: every programmed slice step strikes cleanly
+            slices[stem] = candidate_sref
+            if candidate_sref is not None:
+                self.active_slice_ids[stem] = candidate_sref.segment_id
             else:
-                seg_id = candidate_sref.segment_id
-                if seg_id != self.active_slice_ids.get(stem) or self.state.total_steps == 0:
-                    slices[stem] = candidate_sref
-                    self.active_slice_ids[stem] = seg_id
-                else:
-                    slices[stem] = None
+                self.active_slice_ids[stem] = None
 
         sec_bars_elapsed = self.state.bar_in_section
         sec_total_bars = SECTION_DURATIONS.get(sec, 16)

@@ -276,3 +276,33 @@ def test_dynamic_cycle_modes_and_32_step_compound():
 
     # 4. Invalid cycle mode fails safely
     assert conductor.set_cycle_mode("invalid_mode") is False
+
+
+def test_dense_pattern_infill_and_nonstop_beats():
+    """Verify that sparse patterns are automatically infilled to ensure continuous driving beats."""
+    tr = _make_dance_track("test_tr_dense", bpm=128.0, n_bars=8)
+    bank = PatternBank()
+    bank.load_from_tracks([tr])
+
+    conductor = GrooveboxConductor(bank, seed=42)
+
+    # 1. Verify that active drum patterns have high onset density (16 active steps)
+    active_drums = conductor.active_patterns["drums"]
+    assert active_drums is not None
+    assert len(active_drums.onset_grid) == 16
+    assert active_drums.density == 1.0
+
+    # 2. Verify that active bass patterns have rich pocket density (at least 8 onsets)
+    active_bass = conductor.active_patterns["bass"]
+    assert active_bass is not None
+    assert len(active_bass.onset_grid) >= 8
+
+    # 3. Verify step sequencer trigger: drums fire non-stop across full 16-step bar
+    drum_slices_fired = 0
+    for step_i in range(16):
+        slices, meta = conductor.next_step()
+        if slices["drums"] is not None:
+            drum_slices_fired += 1
+
+    # Every step of the bar has a driving drum slice!
+    assert drum_slices_fired == 16
