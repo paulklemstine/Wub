@@ -7,6 +7,7 @@ Run:  uvicorn server.main:app --host 0.0.0.0 --port 8000
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -39,19 +40,19 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _startup() -> None:
-    n = STORE.refresh()
+    n = STORE.refresh(max_tracks=300)
     print(f"Wub store: {len(STORE.analyses)} tracks ({n} loaded at startup)")
 
 
 @app.get("/health")
 def health() -> dict:
-    STORE.refresh()
+    STORE.refresh(min_interval=10.0, max_tracks=300)
     return {"status": "ok", **STORE.summary()}
 
 
 @app.get("/api/stats")
 def stats() -> dict:
-    STORE.refresh()
+    STORE.refresh(min_interval=10.0, max_tracks=300)
     return STORE.summary()
 
 

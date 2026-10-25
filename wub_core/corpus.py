@@ -38,7 +38,7 @@ class CorpusStore:
 
     # ---- refresh ----
 
-    def refresh(self, force: bool = False, min_interval: float = 5.0) -> int:
+    def refresh(self, force: bool = False, min_interval: float = 5.0, max_tracks: Optional[int] = None) -> int:
         """Load new/changed analyses. Returns number of (re)loaded tracks."""
         from wub_core.schema import TrackAnalysis as TA
 
@@ -50,9 +50,19 @@ class CorpusStore:
         if not self.processed_dir.exists():
             return 0
 
-        for jf in self.processed_dir.glob("*.json"):
-            if jf.name.startswith(("_", "meta_")):
-                continue
+        # Prioritize files whose stems exist
+        stem_tids = set()
+        if self.stems_base.exists():
+            stem_tids = {d.name for d in self.stems_base.iterdir() if d.is_dir() and not d.name.startswith("_")}
+
+        all_files = [p for p in self.processed_dir.glob("*.json") if not p.name.startswith(("_", "meta_"))]
+        # Sort so multi-stem tracks come first (instantaneous string comparison)
+        all_files.sort(key=lambda p: 0 if p.stem in stem_tids else 1)
+
+        if max_tracks and max_tracks > 0:
+            all_files = all_files[:max_tracks]
+
+        for jf in all_files:
             try:
                 mt = jf.stat().st_mtime
             except OSError:

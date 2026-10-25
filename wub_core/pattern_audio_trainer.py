@@ -24,8 +24,9 @@ from wub_core.model_markov import SliceRef
 from wub_core.patterns import MultiStemPattern, PatternBank, SequencerPattern
 from wub_core.schema import STEMS, TrackAnalysis
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_SR = 22050
-FEEDBACK_FILE = Path("data/pattern_audio_feedback.json")
+FEEDBACK_FILE = ROOT_DIR / "data" / "pattern_audio_feedback.json"
 
 
 @dataclass
