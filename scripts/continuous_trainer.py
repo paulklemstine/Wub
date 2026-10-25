@@ -77,10 +77,10 @@ def find_unstemmed_candidates(
 def main() -> None:
     ap = argparse.ArgumentParser(description="Continuous GPU Training Worker")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--min-bpm", type=float, default=116.0)
-    ap.add_argument("--max-bpm", type=float, default=140.0)
-    ap.add_argument("--max-tracks", type=int, default=100)
-    ap.add_argument("--train-interval", type=int, default=5, help="train WubGPT after every N separated tracks")
+    ap.add_argument("--min-bpm", type=float, default=75.0)
+    ap.add_argument("--max-bpm", type=float, default=180.0)
+    ap.add_argument("--max-tracks", type=int, default=0, help="0 = continuous non-stop daemon")
+    ap.add_argument("--train-interval", type=int, default=5, help="train WubGPT and export bundle after every N separated tracks")
     args = ap.parse_args()
 
     stems_dir = Path("data/stems")
@@ -115,7 +115,12 @@ def main() -> None:
 
         t0 = time.time()
         try:
-            _, sdir = separate_track(p, stems_dir, device=args.device, fast_cpu=False)
+            use_fast_cpu = True
+            if torch.cuda.is_available() and hasattr(torch.cuda, "mem_get_info"):
+                free_vram = torch.cuda.mem_get_info()[0]
+                if free_vram > int(1.8 * (1 << 30)):
+                    use_fast_cpu = False
+            _, sdir = separate_track(p, stems_dir, device=args.device, fast_cpu=use_fast_cpu)
             out_json = proc_dir / f"{tid}.json"
             tr = analyze_track(p, sdir, out_json, track_id=tid, filename=p.name)
 
@@ -184,6 +189,11 @@ def main() -> None:
                 log("Updating FAISS indices and UMAP...")
                 subprocess.run([sys.executable, "scripts/build_umap.py"], check=False)
                 log("FAISS & UMAP updated.")
+
+                # Refresh standalone client bundle
+                log("Exporting updated standalone client bundle...")
+                subprocess.run([sys.executable, "scripts/export_standalone_client_bundle.py"], check=False)
+                log("Standalone client bundle refreshed.")
 
         except Exception as e:
             log(f"Error processing {p.name}: {e}")

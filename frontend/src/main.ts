@@ -228,6 +228,7 @@ class WubApp {
     for (const stem of STEMS) this.bindStem(stem);
     this.bindFeedbackControls();
     this.bindGrooveboxCycleControls();
+    this.bindPlaybackModeControls();
 
     // Initialize Autonomous In-Browser ML Sequencer
     try {
@@ -549,6 +550,28 @@ class WubApp {
         cycleBtns.forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         this.setStatus(`Sequencer cycle set to ${mode.replace("x", " × ")} architecture`);
+      });
+    });
+  }
+
+  private bindPlaybackModeControls(): void {
+    const modeBtns = document.querySelectorAll<HTMLButtonElement>("[data-playback]");
+    modeBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = btn.dataset.playback as "jukebox" | "slices" | "phrase_blocks" | undefined;
+        if (!mode) return;
+        if (this.clientConductor) {
+          this.clientConductor.setPlaybackMode(mode);
+        }
+        modeBtns.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const label =
+          mode === "jukebox"
+            ? "Jukebox Groove (Studio Loops + Groovy Slices & Vocal Chops)"
+            : mode === "phrase_blocks"
+            ? "Master Phrases (4-Bar Cohesive Studio Blocks)"
+            : "Live Slices (16th-Step Micro-Slice Re-sequencer)";
+        this.setStatus(`Engine Mode: ${label}`);
       });
     });
   }

@@ -1443,7 +1443,7 @@ export class ClientGrooveboxConductor {
     other: 0,
   };
 
-  public playbackMode: "slices" | "phrase_blocks" = "slices";
+  public playbackMode: "jukebox" | "slices" | "phrase_blocks" = "jukebox";
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
   private loopRegistry: Map<StemName, LoadedLoop[]> = new Map();
   private activeLoops: Partial<Record<StemName, LoadedLoop>> = {};
@@ -1772,6 +1772,16 @@ export class ClientGrooveboxConductor {
       if (grooveCandidates.length > 0) candidates = grooveCandidates;
     }
 
+    // Same-Track Co-Stem Affinity Prior (Authentic Studio Session Glue)
+    // When drums is playing from a specific track, heavily prioritize bass & synths from that SAME track!
+    const activeDrumTrack = this.activeLoops.drums?.meta.track_id;
+    if (activeDrumTrack && stem !== "drums") {
+      const sameTrackMatches = candidates.filter((l) => l.meta.track_id === activeDrumTrack);
+      if (sameTrackMatches.length > 0 && Math.random() < 0.75) {
+        candidates = sameTrackMatches;
+      }
+    }
+
     if (stem === "drums" || targetPitch === undefined) {
       const pick = candidates[Math.floor(Math.random() * candidates.length)];
       const rate = this.currentBpm / pick.meta.source_bpm;
@@ -1920,6 +1930,17 @@ export class ClientGrooveboxConductor {
     const clampedShift = Math.max(-maxShift, Math.min(maxShift, bestShift));
     const rate = Math.pow(2, clampedShift / 12);
     return { buffer: best.buffer, rate, asset: best };
+  }
+
+  public setPlaybackMode(mode: "jukebox" | "slices" | "phrase_blocks"): void {
+    this.playbackMode = mode;
+    this.activePhraseBlock = null;
+    this.activeLoops = {};
+    console.info(`[Client ML] Jukebox playback mode set to: ${mode}`);
+  }
+
+  public getPlaybackMode(): "jukebox" | "slices" | "phrase_blocks" {
+    return this.playbackMode;
   }
 
   public setCycleMode(mode: string): boolean {
@@ -2209,7 +2230,7 @@ export class ClientGrooveboxConductor {
     const oTerr = this.getStemTerritory("other");
     const vTerr = this.getStemTerritory("vocals");
 
-    // 0. Downbeat handling: phrase blocks mode vs authentic learned slice mode
+    // 0. Downbeat handling: phrase blocks mode vs jukebox studio loops mode vs live slice mode
     if (this.playbackMode === "phrase_blocks") {
       if (step % 16 === 0) {
         if (this.phraseBarCount === 0 || !this.activePhraseBlock) {
@@ -2222,6 +2243,11 @@ export class ClientGrooveboxConductor {
           this.scheduleBarLoops(when, sec, phraseBar, chord);
         }
       }
+    } else if (this.playbackMode === "jukebox") {
+      if (step % 16 === 0) {
+        this.activePhraseBlock = null;
+        this.scheduleBarLoops(when, sec, phraseBar, chord);
+      }
     } else {
       this.activePhraseBlock = null;
       this.activeLoops = {};
@@ -2232,7 +2258,8 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const dPat = this.activePatterns.drums;
     const dSteer = this.steering.drums;
-    if (this.playbackMode === "phrase_blocks" && (this.activePhraseBlock || this.activeLoops.drums)) {
+    const isLoopDrumActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activePhraseBlock || this.activeLoops.drums));
+    if (isLoopDrumActive) {
       // Continuous studio drum phrase or loop is active: dynamic sidechain ducking on downbeats
       if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
         this.applySidechainDucking(when);
@@ -2240,6 +2267,30 @@ export class ClientGrooveboxConductor {
       // Trigger Pitch Riser on bar 6 step 0 of BUILDUP
       if (sec === "BUILDUP" && barInSec === 6 && step === 0) {
         this.synth.playRiser(when, (60 / this.currentBpm) * 8, dInput);
+      }
+      // Groovy Slicer Turnaround on Bar 7 Step 14
+      if (phraseBar === 7 && (step % 16) === 14) {
+        const fillSlice = this.getBestSlice("drums:fill", undefined, dSteer.y, dTerr);
+        if (fillSlice) {
+          this.engine.scheduleSlice("drums", fillSlice.buffer, when, {
+            rate: 1.0,
+            fadeMs: 2.0,
+            gain: 1.0,
+            voiceKey: "drums:fill",
+          });
+        }
+      }
+      // Groovy Ghost Perc on Step 10 if energy / steer Y is high
+      if (dSteer.y > 0.70 && (step % 16) === 10) {
+        const percSlice = this.getBestSlice("drums:percussion", undefined, dSteer.y, dTerr);
+        if (percSlice) {
+          this.engine.scheduleSlice("drums", percSlice.buffer, when, {
+            rate: 1.0,
+            fadeMs: 1.5,
+            gain: 0.65,
+            voiceKey: "drums:percussion",
+          });
+        }
       }
     } else if (dPat) {
       const isBuildup = (sec === "BUILDUP");
@@ -2439,7 +2490,8 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const bPat = this.activePatterns.bass;
     const bSteer = this.steering.bass;
-    if (bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
+    const isLoopBassActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.bass || this.activePhraseBlock));
+    if (bPat && !isLoopBassActive && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
       const bassCat = bSteer.x < 0.38 ? "bass:sub" : (bSteer.x < 0.72 ? "bass:rolling" : "bass:stab");
       const isSparseBass = (bSteer.y < 0.35 && bTerr !== "cyber");
       const isDenseBass = (bSteer.y > 0.70 || bTerr === "cyber");
@@ -2475,7 +2527,8 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const oPat = this.activePatterns.other;
     const oSteer = this.steering.other;
-    if (oPat) {
+    const isLoopOtherActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.other || this.activePhraseBlock));
+    if (oPat && !isLoopOtherActive) {
       const otherCat = oSteer.x < 0.40 ? "other:pad" : (oSteer.x < 0.75 ? "other:chord" : "other:arp");
       const isArpMode = (otherCat === "other:arp" || sec === "DROP" || oSteer.y > 0.72 || oTerr === "cyber");
       const isSparsePad = ((otherCat === "other:pad" || oSteer.y < 0.35) && oTerr !== "cyber" && oTerr !== "breaks");
@@ -2538,9 +2591,10 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const vPat = this.activePatterns.vocals;
     const vSteer = this.steering.vocals;
+    const isLoopVocalActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.vocals || this.activePhraseBlock));
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
-    if (!isDropGap && vPat) {
+    if (!isDropGap && !isLoopVocalActive && vPat) {
       const vocalCat = vSteer.x < 0.38 ? "vocals:call" : (vSteer.x < 0.72 ? "vocals:hook" : "vocals:chop");
       const isDenseChop = (vocalCat === "vocals:chop" || vSteer.y > 0.72 || vTerr === "breaks");
       const isSparseVocal = (vSteer.y < 0.35 && vTerr !== "breaks" && vTerr !== "cyber");
@@ -2660,10 +2714,34 @@ export class ClientGrooveboxConductor {
   private composeBarPatterns(phraseBar: number): void {
     const sec = this.arranger.getSection();
     const isTurnaround = (phraseBar === 7);
+
+    // Dynamic progression shift across 8-bar musical phrase cycles
+    if (phraseBar === 0 && this.manifest?.chord_progressions && this.manifest.chord_progressions.length > 1) {
+      if (this.phraseBarCount > 0 && this.phraseBarCount % 8 === 0) {
+        this.progressionIndex = (this.progressionIndex + 1) % this.manifest.chord_progressions.length;
+        const p = this.manifest.chord_progressions[this.progressionIndex];
+        const steps: ChordStep[] = [];
+        for (let i = 0; i < 8; i++) {
+          const root = p.roots[i % p.roots.length];
+          const isMinor = p.key.toLowerCase().includes("min");
+          const bassHz = 440 * Math.pow(2, (root - 9 - 24) / 12);
+          const chordHz = 440 * Math.pow(2, (root - 9 - 12) / 12);
+          steps.push({
+            rootPitch: root,
+            isMinor,
+            bassHz,
+            chordHz,
+            name: `${ROOT_NAMES[root]}${isMinor ? "m" : ""}`,
+          });
+        }
+        this.activeProgression = steps;
+      }
+    }
+
     const chord = this.activeProgression[phraseBar % this.activeProgression.length];
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
-      if (this.playbackMode === "phrase_blocks") {
+      if (this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") {
         // 1. Try to select matching 1-bar studio loop from the authentic training corpus
         const loopMatch = this.getBestLoop(stem, sec, phraseBar, stem === "drums" ? undefined : chord.rootPitch);
         if (loopMatch) {

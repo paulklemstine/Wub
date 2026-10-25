@@ -1,9 +1,9 @@
 {
   "major": 0,
   "minor": 2,
-  "patch": 64,
-  "build": 64,
-  "version": "0.2.64",
-  "commit": "c33f321",
-  "timestamp": "2026-10-25T18:44:24Z"
+  "patch": 65,
+  "build": 65,
+  "version": "0.2.65",
+  "commit": "567ed67",
+  "timestamp": "2026-10-25T19:10:06Z"
 }
