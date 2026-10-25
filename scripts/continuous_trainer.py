@@ -52,19 +52,24 @@ def find_unstemmed_candidates(
             manifest = {}
 
     candidates = []
+    from wub_core.separator import compute_track_id
+
     # Prioritize pandora/good first, then general pandora
     for lib_dir in library_dirs:
         if not lib_dir.exists():
             continue
         for p in sorted(lib_dir.rglob("*.mp3")):
-            meta = manifest.get(str(p), {})
+            # Check relative and absolute paths in manifest
+            rel_str = str(p.relative_to(Path.cwd())) if p.is_relative_to(Path.cwd()) else str(p)
+            meta = manifest.get(str(p)) or manifest.get(rel_str) or {}
             tid = meta.get("track_id")
+            if not tid:
+                tid = compute_track_id(p)
             bpm = meta.get("bpm", 126.0)
             key = meta.get("key", "unknown")
-            if tid:
-                sdir = stems_dir / tid
-                if not stems_exist(sdir) and (min_bpm <= bpm <= max_bpm or bpm <= 0):
-                    candidates.append((p, tid, bpm, key))
+            sdir = stems_dir / tid
+            if not stems_exist(sdir) and (min_bpm <= bpm <= max_bpm or bpm <= 0):
+                candidates.append((p, tid, bpm, key))
 
     return candidates
 
