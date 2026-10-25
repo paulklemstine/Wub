@@ -120,6 +120,7 @@ export interface StandaloneManifest {
     roots: number[];
   }>;
   patterns: Record<StemName, SerializedPattern[]>;
+  patterns_by_style?: Record<string, Record<string, SerializedPattern[]>>;
   phrases: SerializedPhrase[];
   slices: Record<StemName, Record<string, SliceManifestItem[]>>;
   loops?: Record<StemName, LoopManifestItem[]>;
@@ -1609,6 +1610,7 @@ export class ClientGrooveboxConductor {
   public playbackMode: "jukebox" | "slices" | "phrase_blocks" = "jukebox";
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
   private segmentPositions: Map<string, { x: number; y: number }> = new Map();
+  private trackStemPositions: Map<string, { x: number; y: number }> = new Map();
   private loopRegistry: Map<StemName, LoadedLoop[]> = new Map();
   private activeLoops: Partial<Record<StemName, LoadedLoop>> = {};
   private phraseBlockRegistry: Map<string, LoadedPhraseBlock[]> = new Map();
@@ -1702,12 +1704,24 @@ export class ClientGrooveboxConductor {
     this.updateStemSlicesForReticle(stem, { x: cx, y: cy });
   }
 
+  public setTrackStemPositions(positions: Map<string, { x: number; y: number }>): void {
+    this.trackStemPositions = positions;
+  }
+
   public setSegmentPositions(positions: Map<string, { x: number; y: number }>): void {
     this.segmentPositions = positions;
     for (const [, assets] of this.sliceRegistry) {
       for (const asset of assets) {
         if (asset.segmentId) {
-          const pos = positions.get(asset.segmentId) ?? (asset.trackId ? positions.get(`${asset.trackId}:${asset.segmentId}`) : undefined);
+          let pos = positions.get(asset.segmentId) ?? (asset.trackId ? positions.get(`${asset.trackId}:${asset.segmentId}`) : undefined);
+          if (!pos && asset.trackId) {
+            for (const [key, tPos] of this.trackStemPositions) {
+              if (key.startsWith(asset.trackId)) {
+                pos = tPos;
+                break;
+              }
+            }
+          }
           if (pos) {
             asset.x = pos.x;
             asset.y = pos.y;
@@ -1785,6 +1799,8 @@ export class ClientGrooveboxConductor {
           this.vocalSongArranger.addThemes(vThemes);
           console.info(`[Client ML] Loaded ${vThemes.length} corpus-trained vocal themes.`);
         }
+        // Initialize default active patterns with the nearest real patterns from the authentic manifest
+        this.initDefaultPatterns();
         // Pre-decode high-priority static audio slice WAVs
         void this.preloadAudioSlices(basePath);
         // Preload authentic 1-bar studio whole-pattern stem loops
@@ -1811,14 +1827,43 @@ export class ClientGrooveboxConductor {
         for (let i = 0; i < Math.min(maxSlices, list.length); i++) {
           const item = list[i];
           try {
-            const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
-            const res = await fetch(url);
-            if (res.ok) {
-              const bytes = await res.arrayBuffer();
+            let bytes: ArrayBuffer | null = null;
+            try {
+              const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
+              const res = await fetch(url);
+              if (res.ok) {
+                bytes = await res.arrayBuffer();
+              }
+            } catch {
+              // Fetch failed, try b64 fallback below
+            }
+            if (!bytes && item.b64) {
+              try {
+                const base64Data = item.b64.split(",")[1] || item.b64;
+                const binaryStr = atob(base64Data);
+                const len = binaryStr.length;
+                const u8 = new Uint8Array(len);
+                for (let b = 0; b < len; b++) {
+                  u8[b] = binaryStr.charCodeAt(b);
+                }
+                bytes = u8.buffer;
+              } catch {
+                // Ignore base64 decode failure
+              }
+            }
+            if (bytes) {
               const decoded = await this.engine.decodeWav(bytes);
-              const segPos = item.segment_id
+              let segPos = item.segment_id
                 ? (this.segmentPositions.get(item.segment_id) ?? (item.track_id ? this.segmentPositions.get(`${item.track_id}:${item.segment_id}`) : undefined))
                 : undefined;
+              if (!segPos && item.track_id) {
+                for (const [key, tPos] of this.trackStemPositions) {
+                  if (key.startsWith(item.track_id)) {
+                    segPos = tPos;
+                    break;
+                  }
+                }
+              }
               let x = segPos?.x;
               let y = segPos?.y;
               if (x === undefined || y === undefined) {
@@ -1863,6 +1908,9 @@ export class ClientGrooveboxConductor {
     }
     // Initialize default curated song kit with preloaded slices
     this.initSongKit("house", 0);
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      this.updateStemSlicesForReticle(stem, this.steering[stem]);
+    }
   }
 
   private async preloadPatternLoops(basePath: string): Promise<void> {
@@ -2240,19 +2288,19 @@ export class ClientGrooveboxConductor {
     let bestScore = -99999;
 
     for (const item of list) {
-      let score = (trainedScores && trainedScores[item.name]) ? trainedScores[item.name] : 0.8;
+      let score = (trainedScores && trainedScores[item.name]) ? (trainedScores[item.name] * 2.0) : 1.6;
       // Reticule Distance Steering: heavily favor slices physically closest to the reticule on the map
       if (targetCoord && typeof item.x === "number" && typeof item.y === "number") {
         const dx = item.x - targetCoord.x;
         const dy = item.y - targetCoord.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        score -= dist * 6.5;
+        const dist = Math.hypot(dx, dy);
+        score -= dist * 10.0;
       }
       if (targetPitch !== undefined) {
         let diff = (targetPitch - item.pitch) % 12;
         if (diff > 6) diff -= 12;
         if (diff < -6) diff += 12;
-        score -= Math.abs(diff) * 0.08;
+        score -= Math.abs(diff) * 0.35;
       }
       if (score > bestScore) {
         bestScore = score;
@@ -2260,6 +2308,122 @@ export class ClientGrooveboxConductor {
       }
     }
     return bestAsset;
+  }
+
+  /**
+   * Snaps reticule coordinates to the nearest real authentic pattern extracted
+   * from the dance music corpus (manifest.patterns or manifest.patterns_by_style).
+   */
+  public selectNearestRealPattern(stem: StemName, coord: { x: number; y: number }): SerializedPattern | null {
+    if (!this.manifest) return null;
+
+    const candidatePatterns: Array<{ pat: SerializedPattern; px: number; py: number; style: StyleTerritory }> = [];
+    const seen = new Set<string>();
+
+    const terr = getStyleTerritory(coord.x, coord.y);
+    const quadrants: Record<StyleTerritory, [number, number, number, number]> = {
+      wave: [0.05, 0.45, 0.05, 0.45],
+      cyber: [0.55, 0.95, 0.05, 0.45],
+      house: [0.05, 0.45, 0.55, 0.95],
+      breaks: [0.55, 0.95, 0.55, 0.95],
+    };
+
+    if (this.manifest.patterns_by_style) {
+      for (const [st, stems] of Object.entries(this.manifest.patterns_by_style)) {
+        const styleName = st as StyleTerritory;
+        const pats = (stems as Record<string, SerializedPattern[]>)?.[stem] || [];
+        const q = quadrants[styleName] || quadrants.house;
+        for (const p of pats) {
+          if (seen.has(p.id)) continue;
+          seen.add(p.id);
+          const trackPos = this.getTrackCoordForPattern(p.id, stem);
+          let px = trackPos?.x;
+          let py = trackPos?.y;
+          if (px === undefined || py === undefined) {
+            const e = typeof p.energy === "number" ? p.energy : 0.75;
+            const d = typeof p.density === "number" ? p.density : 0.5;
+            px = q[0] + (q[1] - q[0]) * Math.min(1.0, Math.max(0.0, (e - 0.5) / 0.5));
+            py = q[2] + (q[3] - q[2]) * Math.min(1.0, Math.max(0.0, d));
+          }
+          candidatePatterns.push({ pat: p, px, py, style: styleName });
+        }
+      }
+    }
+
+    if (this.manifest.patterns?.[stem]) {
+      for (const p of this.manifest.patterns[stem]) {
+        if (seen.has(p.id)) continue;
+        seen.add(p.id);
+        const styleName = this.inferPatternStyle(p);
+        const q = quadrants[styleName] || quadrants.house;
+        const trackPos = this.getTrackCoordForPattern(p.id, stem);
+        let px = trackPos?.x;
+        let py = trackPos?.y;
+        if (px === undefined || py === undefined) {
+          const e = typeof p.energy === "number" ? p.energy : 0.75;
+          const d = typeof p.density === "number" ? p.density : 0.5;
+          px = q[0] + (q[1] - q[0]) * Math.min(1.0, Math.max(0.0, (e - 0.5) / 0.5));
+          py = q[2] + (q[3] - q[2]) * Math.min(1.0, Math.max(0.0, d));
+        }
+        candidatePatterns.push({ pat: p, px, py, style: styleName });
+      }
+    }
+
+    if (candidatePatterns.length === 0) return null;
+
+    let bestPat: SerializedPattern | null = null;
+    let bestScore = -Infinity;
+
+    for (const item of candidatePatterns) {
+      const dx = item.px - coord.x;
+      const dy = item.py - coord.y;
+      const dist = Math.hypot(dx, dy);
+
+      const sim = item.pat.audio_similarity_score ?? 0.85;
+      const coh = item.pat.cohesion_score ?? sim;
+      const isMatchingTerr = (item.style === terr) ? 0.40 : 0.0;
+
+      const score = -12.0 * dist + 1.2 * sim + 0.8 * coh + isMatchingTerr;
+      if (score > bestScore) {
+        bestScore = score;
+        bestPat = item.pat;
+      }
+    }
+
+    return bestPat;
+  }
+
+  private getTrackCoordForPattern(patternId: string, stem: StemName): { x: number; y: number } | null {
+    const parts = patternId.split("_");
+    if (parts.length < 3) return null;
+    const prefix = parts[2];
+    for (const [key, pos] of this.trackStemPositions) {
+      if (key.startsWith(prefix) && key.endsWith(stem)) {
+        return pos;
+      }
+    }
+    for (const [key, pos] of this.trackStemPositions) {
+      if (key.startsWith(prefix)) {
+        return pos;
+      }
+    }
+    return null;
+  }
+
+  private inferPatternStyle(pat: SerializedPattern): StyleTerritory {
+    const gt = (pat.groove_type || "").toLowerCase();
+    if (gt.includes("wave") || gt.includes("ambient") || gt.includes("chill")) return "wave";
+    if (gt.includes("cyber") || gt.includes("phonk") || gt.includes("acid")) return "cyber";
+    if (gt.includes("break") || gt.includes("jungle") || gt.includes("2step")) return "breaks";
+    if (gt.includes("house") || gt.includes("four_on_floor") || gt.includes("disco")) return "house";
+
+    const e = typeof pat.energy === "number" ? pat.energy : 0.75;
+    const d = typeof pat.density === "number" ? pat.density : 0.5;
+
+    if (e < 0.72 && d < 0.35) return "wave";
+    if (e >= 0.85 && d < 0.50) return "cyber";
+    if (d >= 0.60) return "breaks";
+    return "house";
   }
 
   public initSongKit(territory: StyleTerritory, keyRoot: number, coord?: { x: number; y: number }): void {
@@ -2318,6 +2482,17 @@ export class ClientGrooveboxConductor {
     const chordIndex = Math.floor(this.phraseBar / 2) % this.activeProgression.length;
     const chord = this.activeProgression[chordIndex] || this.activeProgression[0];
     const keyRoot = chord ? chord.rootPitch : 0;
+
+    // 1. Immediately snap active pattern for this stem to nearest REAL extracted pattern from training data!
+    const realPat = this.selectNearestRealPattern(stem, coord);
+    if (realPat) {
+      this.activePatterns[stem] = {
+        ...realPat,
+        onset_grid: [...realPat.onset_grid],
+        velocities: realPat.velocities ? [...realPat.velocities] : new Array(16).fill(0.9),
+      };
+      console.info(`[Client ML] Reticule locked nearest real pattern for ${stem}: ${realPat.name || realPat.id} (${realPat.groove_type})`);
+    }
 
     if (!this.activeSongKit) {
       this.initSongKit(terr, keyRoot, coord);
@@ -2383,7 +2558,7 @@ export class ClientGrooveboxConductor {
   private getPitchedSliceFromAsset(
     asset: SliceAsset | null | undefined,
     targetPitch: number,
-    maxShift: number = 3
+    maxShift: number = 6
   ): { buffer: AudioBuffer; rate: number; asset: SliceAsset } | null {
     if (!asset || !asset.buffer) return null;
     let diff = (targetPitch - asset.pitch) % 12;
@@ -3010,7 +3185,9 @@ export class ClientGrooveboxConductor {
           isKickStep = [0, 4, 8, 12].includes(step % 16) || ((step % 16 === 10) && (dSteer.y > 0.65 || dPat.groove_type.includes("syncopated")));
         }
 
-        if (isKickStep && (hasHit || isKickStep)) {
+        // If the authentic pattern has an onset here and it's not a snare step, treat it as a kick
+        const isSnareTiming = (step % 16 === 4 || step % 16 === 12);
+        if (isKickStep || (hasHit && !isSnareTiming)) {
           const kickSlice = this.activeSongKit?.kick || this.getBestSlice("drums:kick", undefined, 0, dTerr);
           if (kickSlice) {
             this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
@@ -3265,19 +3442,15 @@ export class ClientGrooveboxConductor {
           sectionName: sec,
         };
 
-        // Wub sings the current melody in voices from good slices most of the time (~75%),
-        // with synthesized vocaloid vocalizations on turnaround accent steps or breakdown solos (~25%)
-        const preferVocaloid = (step % 8 === 6 || (sec === "BREAKDOWN" && phraseBar % 2 === 1) || (sec === "BUILDUP" && phraseBar === 6));
+        // Sings melody using authentic acoustic vocal slices whenever available
         const lockedVocalAsset = (vocalCat === "vocals:chop")
           ? (this.activeSongKit?.vocalChopAsset || this.activeSongKit?.vocalHookAsset)
           : (this.activeSongKit?.vocalHookAsset || this.activeSongKit?.vocalCallAsset);
-        const slice = (!preferVocaloid)
-          ? (this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
-             this.getBestSlice(vocalCat, melodyPitch, 0, vTerr) ||
-             this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr) ||
-             this.getBestSlice("vocals:call", melodyPitch, 0, vTerr) ||
-             this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr))
-          : null;
+        const slice = this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
+          this.getBestSlice(vocalCat, melodyPitch, 0, vTerr) ||
+          this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr) ||
+          this.getBestSlice("vocals:call", melodyPitch, 0, vTerr) ||
+          this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr);
 
         if (slice) {
           if (slice.asset?.trackTitle) {
@@ -3595,6 +3768,12 @@ export class ClientGrooveboxConductor {
         const pat = { ...matches[chosenIdx] };
         return this.applyPatternMutation(stem, pat);
       }
+
+      // Fallback: select nearest real pattern from the authentic corpus
+      const nearestReal = this.selectNearestRealPattern(stem, this.steering[stem]);
+      if (nearestReal) {
+        return this.applyPatternMutation(stem, { ...nearestReal });
+      }
     }
 
     // 2. Synthesize dynamic groove pattern based on style territory
@@ -3745,10 +3924,24 @@ export class ClientGrooveboxConductor {
   }
 
   private initDefaultPatterns(): void {
-    this.activePatterns.drums = this.synthesizePattern("drums", "four_on_floor_hats", this.getStemTerritory("drums"));
-    this.activePatterns.bass = this.synthesizePattern("bass", "offbeat", this.getStemTerritory("bass"));
-    this.activePatterns.other = this.synthesizePattern("other", "chords", this.getStemTerritory("other"));
-    this.activePatterns.vocals = this.synthesizePattern("vocals", "vocal_verse", this.getStemTerritory("vocals"));
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const nearest = this.selectNearestRealPattern(stem, this.steering[stem]);
+      if (nearest) {
+        this.activePatterns[stem] = {
+          ...nearest,
+          onset_grid: [...nearest.onset_grid],
+          velocities: nearest.velocities ? [...nearest.velocities] : new Array(16).fill(0.9),
+        };
+      } else {
+        const defaultGrooves: Record<StemName, string> = {
+          drums: "four_on_floor_hats",
+          bass: "offbeat",
+          other: "chords",
+          vocals: "vocal_verse",
+        };
+        this.activePatterns[stem] = this.synthesizePattern(stem, defaultGrooves[stem], this.getStemTerritory(stem));
+      }
+    }
   }
 
   private buildMeta(stepInPattern: number, patternInCycle: number, phraseBar: number): any {

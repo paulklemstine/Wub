@@ -329,6 +329,7 @@ class WubApp {
         this.nebula.setPoints(pts);
         if (this.clientConductor) {
           this.clientConductor.setSegmentPositions(this.segmentPositions);
+          this.clientConductor.setTrackStemPositions(this.trackStemPositions);
         }
       }
     } catch {

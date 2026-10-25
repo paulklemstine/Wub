@@ -996,8 +996,27 @@ export class NebulaRenderer {
 
   private moveReticleFromEvent(stem: StemName, e: PointerEvent): void {
     const p = this.toNormalized(e);
-    const targetX = clamp01(p.x + this.dragOffset.x);
-    const targetY = clamp01(p.y + this.dragOffset.y);
+    const rawTargetX = clamp01(p.x + this.dragOffset.x);
+    const rawTargetY = clamp01(p.y + this.dragOffset.y);
+
+    // Magnetic snapping to nearest real corpus point for this stem
+    let targetX = rawTargetX;
+    let targetY = rawTargetY;
+    let minSnapDist = 0.055;
+    for (const pt of this.points) {
+      if (pt.stem === stem) {
+        const d = Math.hypot(pt.x - rawTargetX, pt.y - rawTargetY);
+        if (d < minSnapDist) {
+          minSnapDist = d;
+          const pull = 1.0 - (d / 0.055);
+          targetX = rawTargetX + (pt.x - rawTargetX) * pull * 0.75;
+          targetY = rawTargetY + (pt.y - rawTargetY) * pull * 0.75;
+        }
+      }
+    }
+    targetX = clamp01(targetX);
+    targetY = clamp01(targetY);
+
     this.reticleMap[stem] = { x: targetX, y: targetY };
 
     // Align base position with drift equation so at release time t: base + drift(t) == target
