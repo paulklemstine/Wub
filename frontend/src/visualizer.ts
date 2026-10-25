@@ -903,9 +903,13 @@ export class NebulaRenderer {
       ctx.fillStyle = color;
       ctx.font = "bold 11px system-ui, sans-serif";
       ctx.textAlign = "center";
-      const isDragging = (this.dragStem === stem);
-      const dragTag = isDragging ? "holding" : "drifting";
-      ctx.fillText(`${stem.toUpperCase()} [${dragTag}]`, px, py - radius - 8);
+      const stemLabels: Record<string, string> = {
+        drums: "Drum",
+        bass: "Bass",
+        other: "Other",
+        vocals: "Vocal",
+      };
+      ctx.fillText(stemLabels[stem] || stem, px, py - radius - 8);
 
       // Timbre & Groove parameter readout
       ctx.fillStyle = "rgba(255, 255, 255, 0.75)";

@@ -308,9 +308,10 @@ export class TamagotchiAvatar {
       if (val > maxAmp) maxAmp = val;
     }
 
-    // If completely quiet / resting
-    if (maxAmp < 0.030) {
-      return isSinging ? " ‿ " : " · ";
+    // Mouth animation strictly active for the voice instrument only
+    const voiceActive = isSinging || maxAmp >= 0.035;
+    if (!voiceActive) {
+      return " ‿ ";
     }
 
     // Boost sensitivity for animated singing visibility
