@@ -876,19 +876,57 @@
       pointer-events: none;
       z-index: 2;
     }
+    @keyframes rainbow-shimmer {
+      0% {
+        background-position: 0% 50%;
+        filter: drop-shadow(0 0 10px rgba(255, 0, 128, 0.75));
+      }
+      50% {
+        background-position: 100% 50%;
+        filter: drop-shadow(0 0 18px rgba(0, 255, 255, 0.95)) drop-shadow(0 0 28px rgba(255, 215, 0, 0.75));
+      }
+      100% {
+        background-position: 0% 50%;
+        filter: drop-shadow(0 0 10px rgba(255, 0, 128, 0.75));
+      }
+    }
+    .tamagotchi-screen {
+      background: radial-gradient(circle at center, #1b0c26 0%, #0a0612 100%);
+      border: 1px solid rgba(255, 119, 233, 0.3);
+      box-shadow: inset 0 0 20px rgba(255, 0, 128, 0.15), 0 0 15px rgba(255, 119, 233, 0.2);
+    }
     .tamagotchi-ascii {
       font-family: "Courier New", Courier, monospace;
-      font-size: 0.85rem;
+      font-size: 0.86rem;
       font-weight: 900;
       line-height: 1.25;
-      color: #39ff14;
-      text-shadow: 0 0 8px rgba(57, 255, 20, 0.8);
+      background: linear-gradient(
+        90deg,
+        #ff007f,
+        #ff7700,
+        #ffea00,
+        #00ff66,
+        #00e5ff,
+        #9d4edd,
+        #ff00c8,
+        #ff007f
+      );
+      background-size: 300% 300%;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: rainbow-shimmer 4s ease infinite;
       white-space: pre;
       margin: 0;
-      padding: 0;
+      padding: 6px 4px;
       user-select: none;
       z-index: 1;
       text-align: center;
+      transition: filter 0.2s ease, transform 0.1s ease;
+    }
+    .tamagotchi-ascii.singing {
+      animation: rainbow-shimmer 1.2s ease infinite;
+      filter: drop-shadow(0 0 16px #ff00ff) drop-shadow(0 0 30px #00ffff) drop-shadow(0 0 40px #ffff00) !important;
+      transform: scale(1.02);
     }
     .tamagotchi-dashboard {
       background: #101520;
@@ -1440,7 +1478,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.54 <span class="mc-build-num">#54</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.55 <span class="mc-build-num">#55</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -1809,8 +1847,8 @@
       <!-- Panel 3: Neural ASCII Tamagotchi Avatar ("WubGotchi") -->
       <div class="stage-card tamagotchi-card">
         <div class="stage-header">
-          <span style="color: var(--neon-amber);">WubGotchi • Neural Music Pet</span>
-          <span id="tamagotchi-stage-badge">LVL 1 • BABY BLOB</span>
+          <span style="color: #ff77e9;">🦄 Wub • Psychedelic Unicorn Pet</span>
+          <span id="tamagotchi-stage-badge">LVL 1 • BABY UNICORN</span>
         </div>
         <div class="tamagotchi-container">
           <div class="tamagotchi-screen">
@@ -1842,7 +1880,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.54 (Build #54 • rev 6d495c3)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.55 (Build #55 • rev f5d0297)</span>
     </div>
   </div>
 

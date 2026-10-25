@@ -19,13 +19,13 @@ export interface TamagotchiStats {
 }
 
 const STAGE_CONFIGS: Record<TamagotchiStage, { name: string; minXp: number }> = {
-  1: { name: "BABY BLOB", minXp: 0 },
-  2: { name: "BEAT KID", minXp: 250 },
-  3: { name: "CYBER RAVER", minXp: 750 },
-  4: { name: "SYNTH DEITY", minXp: 1800 },
+  1: { name: "BABY UNICORN", minXp: 0 },
+  2: { name: "DISCO UNICORN", minXp: 250 },
+  3: { name: "CYBER PEGASUS", minXp: 750 },
+  4: { name: "ASTRAL GODDESS", minXp: 1800 },
 };
 
-const MUSIC_NOTES = ["♪", "♫", "♩", "♬", "♭", "♯"];
+const MUSIC_NOTES = ["✨", "💖", "🦄", "🌈", "✦", "✧", "💫", "♬", "⭐", "♡"];
 
 export class TamagotchiAvatar {
   private containerEl: HTMLElement | null = null;
@@ -97,7 +97,7 @@ export class TamagotchiAvatar {
     this.affection = Math.min(10, this.affection + 1);
     this.temporaryAction = "PET";
     this.actionTimer = 2.0;
-    this.speechBubble = "♥ PURR! I LOVE THIS GROOVE ♥";
+    this.speechBubble = "💖 NEIGH! LOVE THIS GROOVE ✨";
     this.speechTimer = 2.5;
     this.saveState();
   }
@@ -107,7 +107,7 @@ export class TamagotchiAvatar {
     this.vibe = Math.min(100, this.vibe + 15);
     this.temporaryAction = "EAT";
     this.actionTimer = 2.2;
-    this.speechBubble = "NOM NOM! TASTY AUDIO SLICE!";
+    this.speechBubble = "🦄 NOM NOM! SPARKLE AUDIO SLICE!";
     this.speechTimer = 2.5;
     this.saveState();
   }
@@ -117,7 +117,7 @@ export class TamagotchiAvatar {
     this.vibe = 100;
     this.temporaryAction = "HYPE";
     this.actionTimer = 3.0;
-    this.speechBubble = "⚡ LET'S DROP THE BASS! ⚡";
+    this.speechBubble = "⚡ PSYCHEDELIC BASS DROP! 🌈";
     this.speechTimer = 3.0;
     this.saveState();
   }
@@ -157,7 +157,7 @@ export class TamagotchiAvatar {
       this.vibe = 100;
       this.temporaryAction = "EVOLVE";
       this.actionTimer = 3.5;
-      this.speechBubble = `✨ EVOLVED TO ${STAGE_CONFIGS[this.stage].name}! ✨`;
+      this.speechBubble = `✨ EVOLVED TO ${STAGE_CONFIGS[this.stage].name}! 🦄🌈`;
       this.speechTimer = 3.5;
       this.saveState();
     }
@@ -341,105 +341,112 @@ export class TamagotchiAvatar {
     const isSinging = Boolean(meta?.vocalSyllable);
     const bob = this.isHeadBobbed;
 
-    // Determine Eyes
-    let eyes = "o   o";
+    // Toggle glowing psychedelic singing shimmer
+    if (isSinging) {
+      this.asciiEl.classList.add("singing");
+    } else {
+      this.asciiEl.classList.remove("singing");
+    }
+
+    // Determine Eyes (seductive starry unicorn expressions)
+    let eyes = "✧   ✧";
     if (this.isBlinking) {
-      eyes = "-   -";
+      eyes = "˘   ˘";
     } else if (isDropGap) {
-      eyes = "O _ O";
+      eyes = "O   O";
     } else if (this.temporaryAction === "PET") {
-      eyes = "> ‿ <";
+      eyes = "♥   ♥";
     } else if (sec === "DROP" || this.temporaryAction === "HYPE") {
       eyes = "★   ★";
     } else if (sec === "BUILDUP") {
-      eyes = "⊙   ⊙";
+      eyes = "✧   ✧";
     } else if (sec === "BREAKDOWN") {
       eyes = "˘   ˘";
     } else if (this.stage >= 3) {
-      eyes = "■   ■"; // Cyber shades
+      eyes = "◕   ◕";
     }
 
     // Determine Live Animated Waveform Mouth!
     const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap);
 
-    // Render by Stage
+    // Render Unicorn Stages without shifting borders
     let faceLines: string[] = [];
-    const noteChar = this.noteFloating.length > 0 ? this.noteFloating[0].char : " ";
+    const noteChar = this.noteFloating.length > 0 ? this.noteFloating[0].char : "✨";
 
     if (this.stage === 1) {
-      // Stage 1: Baby Blob (live singing mouth)
+      // Stage 1: Baby Unicorn (spiral horn, sparkly star gaze, sweet smile)
       faceLines = bob ? [
-        `       .---.       `,
-        `      /     \\      `,
-        `     (${eyes[0]}${mouth}${eyes[eyes.length - 1]})    ${noteChar}`,
-        `      \\  w  /      `,
-        `       \`---\`       `,
+        `       . \\▲/ .       `,
+        `      (\\_/)   ${noteChar}    `,
+        `     ( ${eyes} )     `,
+        `     (  ${mouth}  ) ~♡  `,
+        `      /     \\       `,
       ] : [
-        `      .-----.      `,
-        `     /       \\     `,
-        `    ( ${eyes[0]}${mouth}${eyes[eyes.length - 1]} )   ${noteChar}`,
-        `     \\   w   /     `,
-        `      \`-----\`      `,
+        `       . \\▲/ .       `,
+        `      (\\_/)   ${noteChar}    `,
+        `     ( ${eyes} )     `,
+        `     (  ${mouth}  ) ~~* `,
+        `      |     |       `,
       ];
     } else if (this.stage === 2) {
-      // Stage 2: Beat Kid (DJ Headphones + live waveform mouth)
+      // Stage 2: Disco Unicorn (rave shades/headphones, glitter horn, rainbow mane)
       faceLines = bob ? [
-        `      .-------.    `,
-        `   [o(${eyes[0]}${mouth}${eyes[eyes.length - 1]})o]  ${noteChar}`,
-        `     <)  WUB  (>   `,
-        `       /     \\     `,
-        `      '--' '--'    `,
+        `      . : \\▲/ : .     `,
+        `     (\\\\___/)   ${noteChar}  `,
+        `    [o( ⌐■_■ )o]    `,
+        `     (  ${mouth}  ) ~🌈 `,
+        `      /| WUB |\\     `,
       ] : [
-        `      .-------.    `,
-        `   [o(${eyes[0]}${mouth}${eyes[eyes.length - 1]})o]  ${noteChar}`,
-        `     \\)  WUB  (/   `,
-        `       |     |     `,
-        `      '--' '--'    `,
+        `      . : \\▲/ : .     `,
+        `     (\\\\___/)   ${noteChar}  `,
+        `    [o( ⌐■_■ )o]    `,
+        `     (  ${mouth}  ) ~~✨`,
+        `      \\| WUB |/     `,
       ];
     } else if (this.stage === 3) {
-      // Stage 3: Cyber Raver (Antenna + Rave Shades + Live Waveform Singing Mouth)
+      // Stage 3: Cyber Pegasus (sleek cyber horn, electric wings, star gaze)
       faceLines = bob ? [
-        `       ~|^|~       `,
-        `    / (⌐${eyes[0]}_${eyes[eyes.length - 1]}■) \\    ${noteChar}`,
-        `   <[~ ${mouth} ~]>   `,
-        `     /   WUB   \\   `,
-        `    /___/ \\___\\    `,
+        `      *   \\⚡/   *     `,
+        `    ~/(\\ (★   ★) /\\)~ ${noteChar}`,
+        `     <[~  ${mouth}  ~]>   `,
+        `      /  | WUB |  \\    `,
+        `     (____/   \\____)   `,
       ] : [
-        `       ~|^|~       `,
-        `   \\  (⌐${eyes[0]}_${eyes[eyes.length - 1]}■)  /   ${noteChar}`,
-        `    \\[~ ${mouth} ~]/    `,
-        `      |  WUB  |    `,
-        `     /___/ \\___\\   `,
+        `      *   \\⚡/   *     `,
+        `    ~/\\( (★   ★) /\\)~ ${noteChar}`,
+        `     \\[~  ${mouth}  ~]/   `,
+        `      |  | WUB |  |    `,
+        `     (____/   \\____)   `,
       ];
     } else {
-      // Stage 4: Synth Deity (Quantum Halo + Angel Wings + Live Formant Mouth)
+      // Stage 4: Astral Goddess (celestial glowing horn, nebula wings, divine sparkle)
       faceLines = bob ? [
-        `  . : * { 505 } * : .  `,
-        `   {\\(  ${eyes[0]}   ${eyes[eyes.length - 1]}  )/}  ${noteChar}`,
-        `  <[~ ✦${mouth}✦ ~]>  `,
-        `     /     |     \\     `,
-        `    (____/   \\____)    `,
+        `     . : * \\✦/ * : .   `,
+        `   ~/{\\( (♥   ♥) /\\}~ ${noteChar}`,
+        `    <[~ ✧${mouth}✧ ~]>   `,
+        `     /    | 505 |    \\   `,
+        `    (____/       \\____)  `,
       ] : [
-        `  . : * { 505 } * : .  `,
-        `   {/(  ${eyes[0]}   ${eyes[eyes.length - 1]}  )\\}  ${noteChar}`,
-        `  \\[~ ✦${mouth}✦ ~]/  `,
-        `     |     |     |     `,
-        `    (____/   \\____)    `,
+        `     . : * \\✦/ * : .   `,
+        `   ~/{\\( (♥   ♥) /\\}~ ${noteChar}`,
+        `    \\[~ ✧${mouth}✧ ~]/   `,
+        `     |    | 505 |    |   `,
+        `    (____/       \\____)  `,
       ];
     }
 
-    // Build complete ASCII LCD screen output
-    const speech = this.speechBubble ? `🗨 ${this.truncate(this.speechBubble, 24)}` : " ";
-    const songNote = meta?.vocalNote ? `SING: ${meta.vocalNote} [${vowel || "--"}]` : `BEAT: ${sec}`;
+    // Build borderless psychedelic LCD output
+    const speech = this.speechBubble ? `🗨 ${this.truncate(this.speechBubble, 30)}` : "✨ WUB UNICORN ✨";
+    const songNote = meta?.vocalNote
+      ? `♪ SING: ${meta.vocalNote} [${vowel || "--"}] ♪`
+      : `♫ BEAT: ${sec} ♫`;
 
     const screenText = [
-      `┌──────────────────────────┐`,
-      `│ ${this.padCenter(speech, 24)} │`,
-      `├──────────────────────────┤`,
-      ...faceLines.map((line) => `│ ${this.padCenter(line, 24)} │`),
-      `├──────────────────────────┤`,
-      `│ ${this.padCenter(songNote, 24)} │`,
-      `└──────────────────────────┘`,
+      speech,
+      "",
+      ...faceLines,
+      "",
+      songNote,
     ].join("\n");
 
     this.asciiEl.textContent = screenText;
