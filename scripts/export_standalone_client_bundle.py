@@ -1,9 +1,10 @@
-"""Export Standalone Client-Side ML Models, Pattern Bank, and Audio Slices.
+"""Export Standalone Client-Side ML Models, Pattern Bank, Whole-Pattern Loops, and Audio Slices.
 
 Packages:
 1. data/composing_ml_weights.json -> frontend/public/data/composing_ml_weights.json
 2. Curated standalone patterns & phrases -> frontend/public/data/standalone_patterns.json
-3. Clean authentic audio slice WAVs -> frontend/public/data/slices/
+3. 1-bar studio-grade whole pattern stem loops -> frontend/public/data/loops/
+4. Clean authentic audio slice WAVs -> frontend/public/data/slices/
 """
 
 from __future__ import annotations
@@ -22,13 +23,223 @@ from wub_core.patterns import PatternBank, STEMS
 from wub_core.groovy_pattern_assembler import AcousticSliceClassifier
 
 
+def harvest_whole_pattern_loops(
+    multistem_tracks: List,
+    loops_dir: Path,
+) -> Dict[str, List[dict]]:
+    """Extract continuous 1-bar studio-grade whole pattern stem loops across iconic tracks."""
+    print("=== Harvesting 1-Bar Whole Pattern Stem Loops ===", flush=True)
+    loops_dir.mkdir(parents=True, exist_ok=True)
+    manifest: Dict[str, List[dict]] = {s: [] for s in STEMS}
+
+    # Desired loop roles per stem
+    targets: Dict[str, List[str]] = {
+        "drums": ["drop", "groove_a", "breakbeat", "turnaround", "buildup", "minimal"],
+        "bass": ["rolling", "sub_pump", "stabs", "sustained"],
+        "other": ["riff", "chords", "pad", "arp"],
+        "vocals": ["hook", "verse", "call", "stutter", "ambient"],
+    }
+
+    pool: Dict[str, Dict[str, List[dict]]] = {s: {c: [] for c in targets[s]} for s in targets}
+
+    for tr in multistem_tracks:
+        tid = tr.track_id
+        tatums = getattr(tr, "tatums", [])
+        n_bars = len(tatums) // 16
+        bpm = float(getattr(tr, "bpm", 126.0))
+        key = str(getattr(tr, "key", "C major"))
+        clean_title = getattr(tr, "filename", "").replace(".mp3", "")
+
+        for b in range(min(n_bars - 1, 140)):
+            t0 = tatums[b * 16]
+            t1 = tatums[(b + 1) * 16]
+            start = float(getattr(t0, "start", t0["start"] if isinstance(t0, dict) else 0.0))
+            end = float(getattr(t1, "start", t1["start"] if isinstance(t1, dict) else 0.0))
+            dur = end - start
+            if dur < 1.4 or dur > 2.6:
+                continue
+
+            for stem in STEMS:
+                stem_path = Path("data/stems") / tid / f"{stem}.wav"
+                if not stem_path.exists():
+                    continue
+
+                segs = [
+                    s for s in getattr(tr, "segments", [])
+                    if getattr(s, "stem", s.get("stem", "") if isinstance(s, dict) else "") == stem
+                    and not getattr(s, "is_silent", s.get("is_silent", False) if isinstance(s, dict) else False)
+                    and float(getattr(s, "start", s["start"] if isinstance(s, dict) else 0.0)) >= start - 0.05
+                    and float(getattr(s, "start", s["start"] if isinstance(s, dict) else 0.0)) < end
+                ]
+                if not segs:
+                    continue
+
+                louds = [
+                    float(getattr(s, "loudness_max", getattr(s, "loud_max", s.get("loudness_max", -99.0) if isinstance(s, dict) else -99.0)))
+                    for s in segs
+                ]
+                max_loud = max(louds)
+                if max_loud < -28.0:
+                    continue
+
+                onsets: List[int] = []
+                for s in segs:
+                    s_start = float(getattr(s, "start", s["start"] if isinstance(s, dict) else 0.0))
+                    step_idx = int(round((s_start - start) / (dur / 16.0)))
+                    if 0 <= step_idx < 16 and step_idx not in onsets:
+                        onsets.append(step_idx)
+                onsets.sort()
+
+                pitch_sum = np.zeros(12)
+                for s in segs:
+                    pitches = getattr(s, "pitches", None)
+                    if pitches and len(pitches) == 12:
+                        pitch_sum += np.array(pitches)
+                dom_pitch = int(np.argmax(pitch_sum)) if np.sum(pitch_sum) > 0.01 else 0
+
+                # Musical role classification
+                cat = None
+                if stem == "drums":
+                    if any(s in onsets for s in (11, 12, 13, 14, 15)) and len(onsets) >= 10:
+                        cat = "turnaround"
+                    elif len(onsets) >= 8 and any(s in onsets for s in (0, 4, 8, 12)):
+                        cat = "drop" if max_loud > -8.0 else "groove_a"
+                    elif any(s in onsets for s in (2, 6, 10, 14)) and len(onsets) >= 6:
+                        cat = "breakbeat"
+                    elif len(onsets) in (4, 5, 6):
+                        cat = "buildup"
+                    elif len(onsets) in (1, 2, 3):
+                        cat = "minimal"
+                elif stem == "bass":
+                    if len(onsets) >= 8:
+                        cat = "rolling"
+                    elif any(s in onsets for s in (2, 6, 10, 14)):
+                        cat = "sub_pump"
+                    elif len(onsets) in (3, 4, 5):
+                        cat = "stabs"
+                    else:
+                        cat = "sustained"
+                elif stem == "other":
+                    if len(onsets) >= 8:
+                        cat = "arp"
+                    elif any(s in onsets for s in (2, 6, 10, 14)) and len(onsets) in (3, 4, 5, 6):
+                        cat = "chords"
+                    elif len(onsets) in (4, 5, 6, 7):
+                        cat = "riff"
+                    else:
+                        cat = "pad"
+                elif stem == "vocals":
+                    if max_loud > -14.0 and len(onsets) >= 4:
+                        cat = "hook"
+                    elif len(onsets) >= 6:
+                        cat = "stutter"
+                    elif len(onsets) in (3, 4, 5):
+                        cat = "verse"
+                    elif any(s in onsets for s in (0, 2, 8, 10)):
+                        cat = "call"
+                    else:
+                        cat = "ambient"
+
+                if cat and cat in pool[stem]:
+                    pool[stem][cat].append({
+                        "tid": tid,
+                        "title": clean_title,
+                        "bar": b,
+                        "start": start,
+                        "dur": dur,
+                        "bpm": bpm,
+                        "key": key,
+                        "pitch": dom_pitch,
+                        "onsets": onsets,
+                        "max_loud": max_loud,
+                    })
+
+    # Pick top 2-3 per category across diverse tracks and render 16-bit WAVs
+    total_rendered = 0
+    for stem, cat_dict in pool.items():
+        for cat, cand_list in cat_dict.items():
+            cand_list.sort(key=lambda x: x["max_loud"], reverse=True)
+            seen_tids: Set[str] = set()
+            curated = []
+            for item in cand_list:
+                if item["tid"] not in seen_tids or len(curated) < 2:
+                    seen_tids.add(item["tid"])
+                    curated.append(item)
+                if len(curated) >= 3:
+                    break
+
+            for idx, item in enumerate(curated):
+                stem_path = Path("data/stems") / item["tid"] / f"{stem}.wav"
+                try:
+                    info = sf.info(str(stem_path))
+                    s_frame = max(0, int(item["start"] * info.samplerate))
+                    n_frames = min(int(item["dur"] * info.samplerate), info.frames - s_frame)
+                    if n_frames <= 1000:
+                        continue
+                    audio, sr = sf.read(str(stem_path), start=s_frame, frames=n_frames, always_2d=True)
+                    mono = audio.mean(axis=1)
+
+                    # Peak normalize to -1.0 dBFS (0.88 factor)
+                    peak = float(np.max(np.abs(mono)))
+                    if peak > 0.001:
+                        mono = mono * (0.88 / peak)
+
+                    # Apply 4ms cosine fade in/out to guarantee seamless pop-free looping
+                    fade_len = int(sr * 0.004)
+                    if len(mono) > fade_len * 2:
+                        fade_in = 0.5 * (1 - np.cos(np.linspace(0, np.pi, fade_len)))
+                        fade_out = 0.5 * (1 + np.cos(np.linspace(0, np.pi, fade_len)))
+                        mono[:fade_len] *= fade_in
+                        mono[-fade_len:] *= fade_out
+
+                    loop_fname = f"{stem}_{cat}_{idx+1}.wav"
+                    sf.write(str(loops_dir / loop_fname), mono, sr, subtype="PCM_16")
+
+                    grid = [1 if i in item["onsets"] else 0 for i in range(16)]
+
+                    # Map suggested song sections
+                    suggested: List[str] = []
+                    if cat in ("drop", "rolling", "riff", "hook"):
+                        suggested = ["DROP", "GROOVE_A"]
+                    elif cat in ("groove_a", "breakbeat", "sub_pump", "chords", "verse", "call"):
+                        suggested = ["GROOVE_A"]
+                    elif cat in ("buildup", "turnaround", "stutter", "arp"):
+                        suggested = ["BUILDUP"]
+                    elif cat in ("minimal", "sustained", "pad", "ambient"):
+                        suggested = ["INTRO", "BREAKDOWN"]
+
+                    manifest[stem].append({
+                        "id": f"loop_{stem}_{cat}_{idx+1}",
+                        "name": f"{item['title']} Bar {item['bar']} ({cat})",
+                        "stem": stem,
+                        "category": cat,
+                        "url": f"data/loops/{loop_fname}",
+                        "source_bpm": round(item["bpm"], 2),
+                        "key": item["key"],
+                        "dominant_pitch": item["pitch"],
+                        "duration": round(item["dur"], 3),
+                        "onset_grid": grid,
+                        "track_id": item["tid"],
+                        "track_title": item["title"],
+                        "suggested_sections": suggested,
+                    })
+                    total_rendered += 1
+                except Exception:
+                    continue
+
+    print(f"✓ Exported {total_rendered} continuous 1-bar studio stem loops to {loops_dir}", flush=True)
+    return manifest
+
+
 def export_bundle() -> None:
     print("=== Exporting Standalone In-Browser ML & Pattern Assets ===", flush=True)
 
     public_dir = Path("frontend/public/data")
     slices_dir = public_dir / "slices"
+    loops_dir = public_dir / "loops"
     public_dir.mkdir(parents=True, exist_ok=True)
     slices_dir.mkdir(parents=True, exist_ok=True)
+    loops_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Copy Composing ML Weights
     src_weights = Path("data/composing_ml_weights.json")
@@ -51,7 +262,10 @@ def export_bundle() -> None:
     n_pats = bank.load_from_tracks(multistem_tracks)
     print(f"✓ Extracted {n_pats} patterns and {len(bank.phrases)} phrases across {len(multistem_tracks)} tracks into memory bank", flush=True)
 
-    # 3. Harvest Clean Audio Slices per Acoustic Category
+    # 3. Harvest Whole 1-Bar Pattern Loops Across Stems
+    extracted_loops_manifest = harvest_whole_pattern_loops(multistem_tracks, loops_dir)
+
+    # 4. Harvest Clean Audio Slices per Acoustic Category
     extracted_slices_manifest: Dict[str, Dict[str, List[dict]]] = {
         s: {} for s in STEMS
     }
@@ -64,10 +278,9 @@ def export_bundle() -> None:
         "vocals": ["hook", "phrase", "call", "chop"],
     }
 
-    target_sr = 44100
     slice_count = 0
 
-    # Pre-gather high-energy vocal slices directly from multistem tracks to guarantee loud, authentic singing
+    # Pre-gather high-energy vocal slices directly from multistem tracks
     vocal_candidates_by_cat: Dict[str, List] = {
         "hook": [],
         "phrase": [],
@@ -90,7 +303,6 @@ def export_bundle() -> None:
                     elif dur <= 4.0:
                         vocal_candidates_by_cat["phrase"].append((s, tr))
 
-    # Sort vocal candidates by loudness (clearest & loudest singing first)
     for cat in vocal_candidates_by_cat:
         vocal_candidates_by_cat[cat].sort(key=lambda item: getattr(item[0], "loudness_max", -99.0), reverse=True)
 
@@ -99,7 +311,6 @@ def export_bundle() -> None:
         for cat in cat_list:
             extracted_slices_manifest[stem][cat] = []
 
-            # Determine candidates
             if stem == "vocals":
                 raw_candidates = vocal_candidates_by_cat.get(cat, [])
                 candidates = [s for s, _tr in raw_candidates]
@@ -109,17 +320,14 @@ def export_bundle() -> None:
                     candidates = pal.get("hat", [])
                 if not candidates:
                     candidates = [s for bucket in pal.values() for s in bucket]
-                # Filter out near-silent slices and sort by loudness
                 candidates = [s for s in candidates if getattr(s, "loud_max", -99.0) > -32.0]
                 candidates.sort(key=lambda s: getattr(s, "loud_max", -99.0), reverse=True)
 
-            # Pick top distinct slices across different pitch classes & different tracks
             taken = 0
             seen_pitches: Set[int] = set()
             seen_tracks: Set[str] = set()
             max_take = 6 if stem == "vocals" else 4
 
-            # First pass: try diverse pitches & tracks
             for s in candidates:
                 if taken >= max_take:
                     break
@@ -146,7 +354,6 @@ def export_bundle() -> None:
                     data, sr = sf.read(str(stem_path), start=start_frame, frames=frame_len, always_2d=True, dtype="float32")
                     mono = data.mean(axis=1)
 
-                    # Normalize peak amplitude to -1.0 dBFS (0.89) to eliminate quiet bleed
                     peak = float(np.max(np.abs(mono)))
                     if peak > 0.001:
                         mono = mono * (0.89 / peak)
@@ -155,7 +362,6 @@ def export_bundle() -> None:
                     out_wav = slices_dir / out_name
                     sf.write(str(out_wav), mono, sr, subtype="PCM_16")
 
-                    # Also encode small base64 data URI fallback
                     data_bytes = out_wav.read_bytes()
                     b64_uri = f"data:audio/wav;base64,{base64.b64encode(data_bytes).decode('ascii')}"
 
@@ -177,62 +383,9 @@ def export_bundle() -> None:
                 except Exception:
                     continue
 
-            # Second pass fallback if fewer than desired were taken
-            if taken < max_take:
-                for s in candidates:
-                    if taken >= max_take:
-                        break
-                    out_name = f"{stem}_{cat}_{taken+1}.wav"
-                    out_wav = slices_dir / out_name
-                    if out_wav.exists():
-                        continue
-
-                    stem_path = Path("data/stems") / s.track_id / f"{stem}.wav"
-                    if not stem_path.exists():
-                        stem_path = Path("data/stems") / s.track_id / f"{stem}.mp3"
-                    if not stem_path.exists():
-                        continue
-
-                    try:
-                        info = sf.info(str(stem_path))
-                        start_frame = max(0, int(s.start * info.samplerate))
-                        frame_len = min(info.frames - start_frame, int(s.duration * info.samplerate))
-                        if frame_len <= 100:
-                            continue
-
-                        data, sr = sf.read(str(stem_path), start=start_frame, frames=frame_len, always_2d=True, dtype="float32")
-                        mono = data.mean(axis=1)
-                        peak = float(np.max(np.abs(mono)))
-                        if peak > 0.001:
-                            mono = mono * (0.89 / peak)
-
-                        sf.write(str(out_wav), mono, sr, subtype="PCM_16")
-                        data_bytes = out_wav.read_bytes()
-                        b64_uri = f"data:audio/wav;base64,{base64.b64encode(data_bytes).decode('ascii')}"
-
-                        pitch = int(np.argmax(s.pitches)) if hasattr(s, "pitches") and s.pitches else (
-                            int(np.argmax(s.chroma)) if hasattr(s, "chroma") and s.chroma is not None and len(s.chroma) == 12 else 0
-                        )
-
-                        extracted_slices_manifest[stem][cat].append({
-                            "name": out_name,
-                            "url": f"data/slices/{out_name}",
-                            "b64": b64_uri if len(b64_uri) < 65000 else None,
-                            "duration": float(s.duration),
-                            "centroid": float(getattr(s, "spectral_centroid", 0.0)),
-                            "pitch": pitch,
-                            "loudness": float(getattr(s, "loud_max", getattr(s, "loudness_max", -12.0))),
-                            "track_id": s.track_id,
-                            "segment_id": getattr(s, "segment_id", getattr(s, "id", "")),
-                        })
-                        taken += 1
-                        slice_count += 1
-                    except Exception:
-                        continue
-
     print(f"✓ Exported {slice_count} clean acoustic slice WAVs to {slices_dir}", flush=True)
 
-    # 4. Extract authentic harmonic chord progressions from real tracks
+    # 5. Extract authentic harmonic chord progressions from real tracks
     chord_progressions: List[dict] = []
     for tr in multistem_tracks[:35]:
         tatums = getattr(tr, "tatums", [])
@@ -253,7 +406,6 @@ def export_bundle() -> None:
             else:
                 bar_roots.append(bar_roots[-1] if bar_roots else 0)
         if len(bar_roots) >= 4:
-            # Pad to 8 bars if needed
             while len(bar_roots) < 8:
                 bar_roots.append(bar_roots[-1])
             chord_progressions.append({
@@ -263,16 +415,14 @@ def export_bundle() -> None:
             })
     print(f"✓ Extracted {len(chord_progressions)} authentic chord progressions from corpus", flush=True)
 
-    # 5. Serialize Curated Pattern Bank for In-Browser ML Sequencing
+    # 6. Serialize Curated Pattern Bank for In-Browser ML Sequencing
     serialized_patterns: Dict[str, List[dict]] = {s: [] for s in STEMS}
 
     for stem, pats in bank.patterns_by_stem.items():
-        # Group by groove_type
         by_groove: Dict[str, List] = {}
         for p in pats:
             by_groove.setdefault(p.groove_type, []).append(p)
 
-        # For each groove type, sort by similarity + energy and pick diverse tracks
         for gt, g_pats in by_groove.items():
             valid_pats = [p for p in g_pats if p.density > 0.0]
             if not valid_pats:
@@ -286,7 +436,6 @@ def export_bundle() -> None:
             seen_tracks = set()
             curated_for_gt = []
             for p in valid_pats:
-                # Encourage diverse tracks while ensuring top patterns are kept
                 if p.track_id not in seen_tracks or len(curated_for_gt) < 4:
                     seen_tracks.add(p.track_id)
                     curated_for_gt.append(p)
@@ -306,14 +455,6 @@ def export_bundle() -> None:
                     "key": p.key,
                     "audio_similarity_score": round(float(getattr(p, "audio_similarity_score", 0.95)), 3),
                 })
-
-    # Summary of curated patterns
-    print("✓ Curated patterns across stems and groove types:", flush=True)
-    for stem, pats in serialized_patterns.items():
-        groove_counts: Dict[str, int] = {}
-        for p in pats:
-            groove_counts[p["groove_type"]] = groove_counts.get(p["groove_type"], 0) + 1
-        print(f"   {stem.upper()}: {len(pats)} total patterns {groove_counts}", flush=True)
 
     # Curate authentic multi-stem phrases
     serialized_phrases: List[dict] = []
@@ -356,13 +497,14 @@ def export_bundle() -> None:
             }
 
     standalone_manifest = {
-        "version": 1,
+        "version": 2,
         "default_bpm": 126.0,
         "chord_progressions": chord_progressions,
         "groove_templates": groove_templates,
         "patterns": serialized_patterns,
         "phrases": serialized_phrases,
         "slices": extracted_slices_manifest,
+        "loops": extracted_loops_manifest,
     }
 
     dst_patterns = public_dir / "standalone_patterns.json"

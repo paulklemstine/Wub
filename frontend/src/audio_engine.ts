@@ -27,6 +27,8 @@ export interface SliceScheduleOptions {
   detuneCents?: number;
   /** Equal-power fade length in ms (default 3). */
   fadeMs?: number;
+  /** Optional playback duration clamp in seconds (fades out at end of duration). */
+  duration?: number;
 }
 
 interface StemFilterSpec {
@@ -230,6 +232,21 @@ export class AudioEngine {
     return buses[stem].input;
   }
 
+  /** Dynamic sidechain ducking on a stem bus (e.g. ducking bass on kick transients). */
+  duckStem(stem: StemName, when: number, duckGain: number = 0.35, releaseSec: number = 0.075): void {
+    if (this.ctx_ === null || this.buses_ === null) return;
+    const bus = this.buses_[stem];
+    const targetVol = this.volumes_[stem];
+    const t = Math.max(this.ctx_.currentTime, when);
+    try {
+      bus.input.gain.cancelScheduledValues(t);
+      bus.input.gain.setValueAtTime(targetVol * duckGain, t);
+      bus.input.gain.exponentialRampToValueAtTime(Math.max(0.001, targetVol), t + releaseSec);
+    } catch {
+      // Safe fallback
+    }
+  }
+
   getMasterAnalyser(): AnalyserNode {
     this.ensureCtx();
     if (this.masterAnalyser_ === null) throw new Error("AudioEngine master analyser not initialised");
@@ -272,7 +289,11 @@ export class AudioEngine {
       typeof opts.fadeMs === "number" && Number.isFinite(opts.fadeMs) ? Math.max(0, opts.fadeMs) : DEFAULT_FADE_MS;
 
     const startAt = Math.max(when, ctx.currentTime + 0.005);
-    const durSec = buffer.duration / rate;
+    const naturalDurSec = buffer.duration / rate;
+    const durSec =
+      typeof opts.duration === "number" && Number.isFinite(opts.duration) && opts.duration > 0 && opts.duration < naturalDurSec
+        ? opts.duration
+        : naturalDurSec;
 
     // Crossfade out previous voice on this stem so voices never pile up into noise
     const prev = this.activeVoices_[stem];

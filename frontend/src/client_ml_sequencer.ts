@@ -62,6 +62,27 @@ export interface SliceAsset {
   name: string;
 }
 
+export interface LoopManifestItem {
+  id: string;
+  name: string;
+  stem: StemName;
+  category: string;
+  url: string;
+  source_bpm: number;
+  key: string;
+  dominant_pitch: number;
+  duration: number;
+  onset_grid: number[];
+  track_id: string;
+  track_title: string;
+  suggested_sections: string[];
+}
+
+export interface LoadedLoop {
+  meta: LoopManifestItem;
+  buffer: AudioBuffer;
+}
+
 export interface StandaloneManifest {
   version: number;
   default_bpm: number;
@@ -73,6 +94,7 @@ export interface StandaloneManifest {
   patterns: Record<StemName, SerializedPattern[]>;
   phrases: SerializedPhrase[];
   slices: Record<StemName, Record<string, SliceManifestItem[]>>;
+  loops?: Record<StemName, LoopManifestItem[]>;
 }
 
 export interface ComposingMLWeights {
@@ -1026,6 +1048,8 @@ export class ClientGrooveboxConductor {
   };
 
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
+  private loopRegistry: Map<StemName, LoadedLoop[]> = new Map();
+  private activeLoops: Partial<Record<StemName, LoadedLoop>> = {};
   private vocalSongArranger: VocalSongArranger = new VocalSongArranger();
   private currentVocalMeta = {
     lyric: "",
@@ -1105,6 +1129,8 @@ export class ClientGrooveboxConductor {
         }
         // Pre-decode high-priority static audio slice WAVs
         void this.preloadAudioSlices(basePath);
+        // Preload authentic 1-bar studio whole-pattern stem loops
+        void this.preloadPatternLoops(basePath);
       }
       return true;
     } catch (err) {
@@ -1151,6 +1177,99 @@ export class ClientGrooveboxConductor {
         }
       }
     }
+  }
+
+  private async preloadPatternLoops(basePath: string): Promise<void> {
+    if (!this.manifest || !this.manifest.loops) return;
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const list = this.manifest.loops[stem];
+      if (!list || list.length === 0) continue;
+      const loaded: LoadedLoop[] = [];
+      for (const item of list) {
+        try {
+          const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const bytes = await res.arrayBuffer();
+            const decoded = await this.engine.decodeWav(bytes);
+            loaded.push({ meta: item, buffer: decoded });
+          }
+        } catch {
+          // Graceful fallback
+        }
+      }
+      if (loaded.length > 0) {
+        this.loopRegistry.set(stem, loaded);
+      }
+    }
+    const totalLoops = Array.from(this.loopRegistry.values()).reduce((sum, l) => sum + l.length, 0);
+    console.info(`[Client ML] Preloaded ${totalLoops} studio 1-bar whole-pattern stem loops across ${this.loopRegistry.size} stems.`);
+  }
+
+  public getBestLoop(
+    stem: StemName,
+    section: string,
+    phraseBar: number,
+    targetPitch?: number
+  ): { loop: LoadedLoop; rate: number } | null {
+    const list = this.loopRegistry.get(stem);
+    if (!list || list.length === 0) return null;
+
+    let candidates = list;
+
+    if (section === "DROP") {
+      const dropCandidates = list.filter((l) =>
+        l.meta.suggested_sections?.includes("DROP") ||
+        ["drop", "rolling", "riff", "hook"].includes(l.meta.category)
+      );
+      if (dropCandidates.length > 0) candidates = dropCandidates;
+    } else if (section === "BUILDUP") {
+      const buildupCandidates = list.filter((l) =>
+        l.meta.suggested_sections?.includes("BUILDUP") ||
+        ["buildup", "turnaround", "stutter", "call"].includes(l.meta.category)
+      );
+      if (buildupCandidates.length > 0) candidates = buildupCandidates;
+    } else if (section === "BREAKDOWN" || section === "INTRO") {
+      const calmCandidates = list.filter((l) =>
+        l.meta.suggested_sections?.includes("BREAKDOWN") ||
+        l.meta.suggested_sections?.includes("INTRO") ||
+        ["ambient", "verse", "pad", "chords", "minimal"].includes(l.meta.category)
+      );
+      if (calmCandidates.length > 0) candidates = calmCandidates;
+    } else {
+      // GROOVE_A
+      const grooveCandidates = list.filter((l) =>
+        l.meta.suggested_sections?.includes("GROOVE_A") ||
+        ["groove_a", "sub_pump", "chords", "verse"].includes(l.meta.category)
+      );
+      if (grooveCandidates.length > 0) candidates = grooveCandidates;
+    }
+
+    if (stem === "drums" || targetPitch === undefined) {
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      const rate = this.currentBpm / pick.meta.source_bpm;
+      return { loop: pick, rate };
+    }
+
+    let best = candidates[0];
+    let bestDist = 999;
+    let bestShift = 0;
+
+    for (const c of candidates) {
+      let shift = (targetPitch - c.meta.dominant_pitch) % 12;
+      if (shift > 6) shift -= 12;
+      if (shift < -6) shift += 12;
+      const absShift = Math.abs(shift);
+      if (absShift < bestDist) {
+        bestDist = absShift;
+        bestShift = shift;
+        best = c;
+      }
+    }
+
+    const pitchFactor = Math.pow(2, bestShift / 12);
+    const rate = (this.currentBpm / best.meta.source_bpm) * pitchFactor;
+    return { loop: best, rate };
   }
 
   private getBestSlice(stemCategory: string, targetPitch?: number): { buffer: AudioBuffer; rate: number } | null {
@@ -1238,6 +1357,33 @@ export class ClientGrooveboxConductor {
 
   public rerollStem(stem: StemName): void {
     const sec = this.arranger.getSection();
+    const chord = this.activeProgression[this.phraseBar % this.activeProgression.length];
+    const loopMatch = this.getBestLoop(stem, sec, this.phraseBar, stem === "drums" ? undefined : chord.rootPitch);
+    if (loopMatch) {
+      this.activeLoops[stem] = loopMatch.loop;
+      const grid = loopMatch.loop.meta.onset_grid;
+      const onsetIndices: number[] = [];
+      const vels: number[] = new Array(16).fill(0.0);
+      for (let i = 0; i < 16; i++) {
+        if (grid[i] === 1) {
+          onsetIndices.push(i);
+          vels[i] = 0.95;
+        }
+      }
+      this.activePatterns[stem] = {
+        id: loopMatch.loop.meta.id,
+        name: loopMatch.loop.meta.name,
+        groove_type: loopMatch.loop.meta.category,
+        energy: sec === "DROP" ? 0.95 : (sec === "BUILDUP" ? 0.80 : 0.70),
+        density: onsetIndices.length / 16,
+        onset_grid: onsetIndices,
+        velocities: vels,
+        length: 16,
+        key: loopMatch.loop.meta.key,
+      };
+      return;
+    }
+
     let targetGroove = "four_on_floor_hats";
     if (stem === "drums") {
       targetGroove = sec === "BUILDUP" ? "turnaround_fill" : (sec === "DROP" ? "four_on_floor_syncopated" : "breakbeat");
@@ -1358,11 +1504,25 @@ export class ClientGrooveboxConductor {
     const oDest = this.synthSidechainGain || this.engine.getStemInput("other");
     const vInput = this.engine.getStemInput("vocals");
 
+    // 0. Trigger 1-bar studio whole-pattern loops on bar downbeat
+    if (step % 16 === 0) {
+      this.scheduleBarLoops(when, sec, phraseBar, chord);
+    }
+
     // -------------------------------------------------------------------------
     // 1. DRUMS (Section-Aware Arrangement)
     // -------------------------------------------------------------------------
     const dPat = this.activePatterns.drums;
-    if (dPat) {
+    if (this.activeLoops.drums) {
+      // Continuous studio drum loop is active: dynamic sidechain ducking on downbeats
+      if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
+        this.applySidechainDucking(when);
+      }
+      // Trigger Pitch Riser on bar 6 step 0 of BUILDUP
+      if (sec === "BUILDUP" && barInSec === 6 && step === 0) {
+        this.synth.playRiser(when, (60 / this.currentBpm) * 8, dInput);
+      }
+    } else if (dPat) {
       const isBuildup = (sec === "BUILDUP");
       const isBreakdown = (sec === "BREAKDOWN");
 
@@ -1457,7 +1617,7 @@ export class ClientGrooveboxConductor {
     // 2. BASS (Harmonically Locked to Chord Progression Root)
     // -------------------------------------------------------------------------
     const bPat = this.activePatterns.bass;
-    if (bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
+    if (!this.activeLoops.bass && bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
       if (bPat.onset_grid.includes(step)) {
         let vel = bPat.velocities ? bPat.velocities[step] : 0.90;
         const dur = (bPat.groove_type === "rolling") ? 0.14 : 0.22;
@@ -1473,7 +1633,7 @@ export class ClientGrooveboxConductor {
     // 3. SYNTHS / OTHER (Full Harmonic Triads & Arpeggios)
     // -------------------------------------------------------------------------
     const oPat = this.activePatterns.other;
-    if (oPat) {
+    if (!this.activeLoops.other && oPat) {
       if (oPat.onset_grid.includes(step)) {
         const vel = oPat.velocities ? oPat.velocities[step] : 0.85;
 
@@ -1518,7 +1678,7 @@ export class ClientGrooveboxConductor {
     const vPat = this.activePatterns.vocals;
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
-    if (!isDropGap && vPat) {
+    if (!isDropGap && !this.activeLoops.vocals && vPat) {
       // 1. Check if the song engine has a lyrical singing syllable on this step
       const syllable = this.vocalSongArranger.getSyllableForStep(sec, phraseBar, step % 16);
 
@@ -1592,11 +1752,86 @@ export class ClientGrooveboxConductor {
     }
   }
 
+  private scheduleBarLoops(when: number, sec: string, phraseBar: number, chord: ChordStep): void {
+    const isBuildupDropBreath = (sec === "BUILDUP" && phraseBar === 7);
+    const dropBreathDuration = isBuildupDropBreath ? (14.85 * 60) / (this.currentBpm * 4) : undefined;
+
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const loop = this.activeLoops[stem];
+      if (!loop) continue;
+
+      // Invariant section muting rules:
+      if (sec === "BREAKDOWN" && (stem === "drums" || stem === "bass")) {
+        continue;
+      }
+      if (sec === "INTRO" && stem === "bass") {
+        continue;
+      }
+      if (sec === "BUILDUP" && stem === "bass" && phraseBar >= 6) {
+        continue;
+      }
+
+      let rate = this.currentBpm / loop.meta.source_bpm;
+      if (stem !== "drums") {
+        let shift = (chord.rootPitch - loop.meta.dominant_pitch) % 12;
+        if (shift > 6) shift -= 12;
+        if (shift < -6) shift += 12;
+        rate *= Math.pow(2, shift / 12);
+      }
+
+      this.engine.scheduleSlice(stem, loop.buffer, when, {
+        rate,
+        duration: dropBreathDuration,
+        fadeMs: stem === "vocals" ? 8 : 4,
+      });
+
+      if (stem === "vocals") {
+        this.currentVocalMeta = {
+          lyric: `${loop.meta.track_title}`,
+          songTitle: loop.meta.track_title,
+          syllable: loop.meta.category.toUpperCase(),
+          vowel: "EE",
+          note: `${ROOT_NAMES[chord.rootPitch]}4`,
+          sectionName: sec,
+        };
+      }
+    }
+  }
+
   private composeBarPatterns(phraseBar: number): void {
     const sec = this.arranger.getSection();
     const isTurnaround = (phraseBar === 7);
+    const chord = this.activeProgression[phraseBar % this.activeProgression.length];
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      // 1. Try to select matching 1-bar studio loop from the authentic training corpus
+      const loopMatch = this.getBestLoop(stem, sec, phraseBar, stem === "drums" ? undefined : chord.rootPitch);
+      if (loopMatch) {
+        this.activeLoops[stem] = loopMatch.loop;
+        const grid = loopMatch.loop.meta.onset_grid;
+        const onsetIndices: number[] = [];
+        const vels: number[] = new Array(16).fill(0.0);
+        for (let i = 0; i < 16; i++) {
+          if (grid[i] === 1) {
+            onsetIndices.push(i);
+            vels[i] = 0.95;
+          }
+        }
+        this.activePatterns[stem] = {
+          id: loopMatch.loop.meta.id,
+          name: loopMatch.loop.meta.name,
+          groove_type: loopMatch.loop.meta.category,
+          energy: sec === "DROP" ? 0.95 : (sec === "BUILDUP" ? 0.80 : 0.70),
+          density: onsetIndices.length / 16,
+          onset_grid: onsetIndices,
+          velocities: vels,
+          length: 16,
+          key: loopMatch.loop.meta.key,
+        };
+        continue;
+      }
+
+      this.activeLoops[stem] = undefined;
       const currG = this.activePatterns[stem]?.groove_type || "four_on_floor_hats";
       let nextG = isTurnaround && stem === "drums"
         ? "turnaround_fill"
@@ -1785,7 +2020,7 @@ export class ClientGrooveboxConductor {
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       const p = this.activePatterns[stem];
       if (p) {
-        patterns[stem] = `KG-505 [${chord.name}] (${p.groove_type})`;
+        patterns[stem] = p.name ? `${p.name}` : `KG-505 [${chord.name}] (${p.groove_type})`;
         patternGrooves[stem] = p.groove_type;
         const grid = new Array(this.stepsPerPattern).fill(0);
         for (const idx of p.onset_grid) {
