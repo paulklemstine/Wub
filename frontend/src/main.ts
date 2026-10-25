@@ -77,8 +77,17 @@ export interface GrooveboxMeta {
   section: string;
   phraseBar: number;
   stepInBar: number;
+  totalBars?: number;
   isFill: boolean;
+  key?: string;
+  energy?: number;
+  sectionBarsElapsed?: number;
+  sectionTotalBars?: number;
+  nextSection?: string;
+  sectionBarsLeft?: number;
   patterns: Record<string, string>;
+  patternGrooves?: Record<string, string>;
+  patternGrids?: Record<string, number[]>;
 }
 
 interface TatumMessage {
@@ -162,8 +171,17 @@ function parseServerMessage(raw: string): HelloMessage | TatumMessage | null {
         section: asString(gbRaw["section"], "GROOVE_A"),
         phraseBar: asNumber(gbRaw["phrase_bar"], 1),
         stepInBar: asNumber(gbRaw["step_in_bar"], 1),
+        totalBars: asNumber(gbRaw["total_bars"], 0),
         isFill: Boolean(gbRaw["is_fill"]),
+        key: asString(gbRaw["key"], "8B (C major)"),
+        energy: asNumber(gbRaw["energy"], 0.6),
+        sectionBarsElapsed: asNumber(gbRaw["section_bars_elapsed"], 1),
+        sectionTotalBars: asNumber(gbRaw["section_total_bars"], 16),
+        nextSection: asString(gbRaw["next_section"], "BUILDUP"),
+        sectionBarsLeft: asNumber(gbRaw["section_bars_left"], 15),
         patterns: isRecord(gbRaw["patterns"]) ? (gbRaw["patterns"] as Record<string, string>) : {},
+        patternGrooves: isRecord(gbRaw["pattern_grooves"]) ? (gbRaw["pattern_grooves"] as Record<string, string>) : {},
+        patternGrids: isRecord(gbRaw["pattern_grids"]) ? (gbRaw["pattern_grids"] as Record<string, number[]>) : {},
       };
     }
     return {
@@ -942,6 +960,72 @@ class WubApp {
         const patEl = document.getElementById(`gb-pat-${stem}`);
         if (patEl && gb.patterns[stem]) {
           patEl.textContent = gb.patterns[stem];
+        }
+      }
+    }
+
+    // 6. Song Structure & Arrangement Timeline
+    if (gb.key) {
+      const camelotEl = document.getElementById("struct-camelot");
+      if (camelotEl) camelotEl.textContent = gb.key;
+    }
+    const barCounterEl = document.getElementById("struct-bar-counter");
+    if (barCounterEl && gb.totalBars !== undefined) {
+      barCounterEl.textContent = String(gb.totalBars);
+    }
+    const energyEl = document.getElementById("struct-energy");
+    if (energyEl && gb.energy !== undefined) {
+      energyEl.textContent = `${Math.round(gb.energy * 100)}%`;
+    }
+    const nextSecEl = document.getElementById("struct-next-sec");
+    if (nextSecEl && gb.nextSection && gb.sectionBarsLeft !== undefined) {
+      nextSecEl.textContent = `NEXT: ${gb.nextSection.replace("_", " ")} IN ${gb.sectionBarsLeft} BARS`;
+    }
+    const secProgressEl = document.getElementById("struct-sec-progress");
+    if (secProgressEl && gb.sectionBarsElapsed !== undefined && gb.sectionTotalBars) {
+      const pct = Math.min(100, Math.max(0, (gb.sectionBarsElapsed / gb.sectionTotalBars) * 100));
+      secProgressEl.style.width = `${pct}%`;
+    }
+    const timelineBlocks = document.querySelectorAll(".struct-block");
+    timelineBlocks.forEach((block) => {
+      const secName = block.getAttribute("data-section");
+      if (secName === gb.section) {
+        block.classList.add("active");
+      } else {
+        block.classList.remove("active");
+      }
+    });
+
+    // 7. Multi-Track Pattern Matrix
+    for (const stem of STEMS) {
+      const titleEl = document.getElementById(`matrix-title-${stem}`);
+      if (titleEl && gb.patterns[stem]) {
+        titleEl.textContent = gb.patterns[stem];
+      }
+      const grooveEl = document.getElementById(`matrix-groove-${stem}`);
+      if (grooveEl && gb.patternGrooves?.[stem]) {
+        grooveEl.textContent = gb.patternGrooves[stem].replace(/_/g, " ").toUpperCase();
+      }
+      const gridContainer = document.getElementById(`matrix-grid-${stem}`);
+      if (gridContainer) {
+        if (gridContainer.children.length !== 16) {
+          gridContainer.innerHTML = "";
+          for (let i = 0; i < 16; i++) {
+            const pip = document.createElement("div");
+            pip.className = (i % 4 === 0) ? "matrix-pip beat" : "matrix-pip";
+            gridContainer.appendChild(pip);
+          }
+        }
+        const gridData = gb.patternGrids?.[stem];
+        const pips = gridContainer.children;
+        for (let i = 0; i < 16; i++) {
+          const pip = pips[i] as HTMLElement;
+          const hasSlice = Boolean(gridData && gridData[i] === 1);
+          if (hasSlice) pip.classList.add("has-slice");
+          else pip.classList.remove("has-slice");
+
+          if (i + 1 === gb.stepInBar) pip.classList.add("playhead");
+          else pip.classList.remove("playhead");
         }
       }
     }

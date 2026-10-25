@@ -273,20 +273,54 @@ class GrooveboxConductor:
                 else:
                     slices[stem] = None
 
+        sec_bars_elapsed = self.state.bar_in_section
+        sec_total_bars = SECTION_DURATIONS.get(sec, 16)
+        sec_bars_left = max(0, self.section_bars_remaining)
+
+        cur_key = self.current_phrase.key if self.current_phrase else (self.current_pattern.key if self.current_pattern else "C major")
+        from wub_core.composer import KEY_TO_CAMELOT
+        camelot_tuple = KEY_TO_CAMELOT.get(cur_key, (8, "B"))
+        camelot_str = f"{camelot_tuple[0]}{camelot_tuple[1]} ({cur_key})"
+
+        sec_idx = SECTIONS.index(sec) if sec in SECTIONS else 0
+        next_sec = SECTIONS[(sec_idx + 1) % len(SECTIONS)]
+        target_energy = 0.9 if sec == "DROP" else (0.75 if sec == "BUILDUP" else (0.6 if sec == "GROOVE_A" else 0.4))
+
+        pattern_titles = {}
+        pattern_grooves = {}
+        pattern_grids = {}
+
+        for s in STEMS:
+            if self.current_pattern and s in self.current_pattern.stems:
+                pattern_titles[s] = f"{self.current_pattern.track_title[:24]} Bar {self.current_pattern.bar_num}"
+                pattern_grooves[s] = self.current_pattern.groove_types.get(s, "groove")
+                stem_steps = self.current_pattern.stems[s]
+                pattern_grids[s] = [1 if step_i < len(stem_steps) and stem_steps[step_i] is not None else 0 for step_i in range(16)]
+            elif self.active_patterns.get(s):
+                pat = self.active_patterns[s]
+                pattern_titles[s] = pat.pattern_name[:28]
+                pattern_grooves[s] = pat.groove_type
+                pattern_grids[s] = [1 if step_i < len(pat.steps) and pat.steps[step_i] is not None else 0 for step_i in range(16)]
+            else:
+                pattern_titles[s] = "Rest"
+                pattern_grooves[s] = "none"
+                pattern_grids[s] = [0] * 16
+
         meta = {
             "section": sec,
             "phrase_bar": self.state.phrase_bar + 1,
             "step_in_bar": step + 1,
             "total_bars": self.state.total_bars,
             "is_fill": self.state.is_fill_bar,
-            "patterns": {
-                s: (
-                    f"{self.current_pattern.track_title[:16]} Bar {self.current_pattern.bar_num} ({self.current_pattern.groove_types.get(s, 'groove')})"
-                    if (self.current_pattern and self.current_pattern.track_title)
-                    else (self.active_patterns[s].pattern_name if self.active_patterns.get(s) else "empty")
-                )
-                for s in STEMS
-            },
+            "key": camelot_str,
+            "energy": target_energy,
+            "section_bars_elapsed": sec_bars_elapsed + 1,
+            "section_total_bars": sec_total_bars,
+            "next_section": next_sec,
+            "section_bars_left": sec_bars_left,
+            "patterns": pattern_titles,
+            "pattern_grooves": pattern_grooves,
+            "pattern_grids": pattern_grids,
         }
 
         # Advance step counter
