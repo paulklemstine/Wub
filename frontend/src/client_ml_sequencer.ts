@@ -22,6 +22,7 @@ export interface SerializedPattern {
   length: number;
   key?: string;
   audio_similarity_score?: number;
+  cohesion_score?: number;
 }
 
 export interface SerializedPhrase {
@@ -122,6 +123,24 @@ export interface StandaloneManifest {
   vocal_themes?: VocalSongTheme[];
   vocal_patterns?: Record<string, any>;
   style_kits?: Record<string, any>;
+  stem_cohesion_weights?: StemCohesionWeights;
+}
+
+export interface StemCohesionWeights {
+  stem_pair_compatibility: {
+    drums_bass?: Record<string, Record<string, number>>;
+    other_vocals?: Record<string, Record<string, number>>;
+    drums_vocals?: Record<string, Record<string, number>>;
+    bass_other?: Record<string, Record<string, number>>;
+  };
+  frequency_masking_targets?: {
+    kick_bass_low_cutoff_hz?: number;
+    vocal_presence_band_hz?: [number, number];
+    synth_ducking_on_vocal_db?: number;
+    bass_sidechain_ducking_db?: number;
+  };
+  grooves?: Record<string, Record<string, number>>;
+  trained_slice_scores?: Record<string, number>;
 }
 
 export interface ComposingMLWeights {
@@ -129,6 +148,7 @@ export interface ComposingMLWeights {
   phrase_transitions: Record<string, Record<string, number>>;
   section_transitions: Record<string, Record<string, number>>;
   section_energy_targets: Record<string, number>;
+  stem_cohesion_weights?: StemCohesionWeights;
 }
 
 // Semitone pitch constants: 0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B
@@ -1378,6 +1398,7 @@ export class ClientGrooveboxConductor {
   private phraseModel: ClientMarkovPhraseModel;
   private arranger: ClientSongArranger;
   private manifest: StandaloneManifest | null = null;
+  private stemCohesionWeights: StemCohesionWeights | null = null;
 
   // Master Clock & Sequencer State
   private tatumIndex: number = 0;
@@ -1536,6 +1557,10 @@ export class ClientGrooveboxConductor {
         const weights = (await wRes.json()) as ComposingMLWeights;
         this.phraseModel.updateWeights(weights);
         this.arranger = new ClientSongArranger(weights);
+        if (weights.stem_cohesion_weights) {
+          this.stemCohesionWeights = weights.stem_cohesion_weights;
+          console.info("[Client ML] Locked in multi-stem audio feedback & cohesion weights from training.");
+        }
         console.info("[Client ML] Loaded pre-trained composing Markov weights into in-browser engine.");
       }
 
@@ -1543,6 +1568,10 @@ export class ClientGrooveboxConductor {
       const pRes = await fetch(`${basePath}/standalone_patterns.json`);
       if (pRes.ok) {
         this.manifest = (await pRes.json()) as StandaloneManifest;
+        if (this.manifest.stem_cohesion_weights && !this.stemCohesionWeights) {
+          this.stemCohesionWeights = this.manifest.stem_cohesion_weights;
+          console.info("[Client ML] Locked in multi-stem audio cohesion weights from manifest.");
+        }
         console.info(
           `[Client ML] Loaded standalone pattern bank (${Object.keys(this.manifest.patterns).length} stems, ${this.manifest.phrases.length} phrases).`
         );
@@ -1832,10 +1861,19 @@ export class ClientGrooveboxConductor {
     }
 
     if (targetPitch === undefined) {
-      // Pick with reticule sliding variation across available slices
+      // Prioritize slices with high acoustic scores from the trained feedback loop
+      const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
+      let effectiveList = list;
+      if (trainedScores && list.length > 2) {
+        effectiveList = [...list].sort((a, b) => {
+          const sA = trainedScores[a.name] ?? 0.8;
+          const sB = trainedScores[b.name] ?? 0.8;
+          return sB - sA;
+        });
+      }
       const v = variationFraction !== undefined ? Math.max(0, Math.min(0.999, variationFraction)) : Math.random();
-      const idx = Math.floor(v * list.length) % list.length;
-      return { buffer: list[idx].buffer, rate: 1.0, asset: list[idx] };
+      const idx = Math.floor(v * effectiveList.length) % effectiveList.length;
+      return { buffer: effectiveList[idx].buffer, rate: 1.0, asset: effectiveList[idx] };
     }
 
     // For pitched stems (bass, other, vocals): find slice closest to target pitch
@@ -1859,8 +1897,16 @@ export class ClientGrooveboxConductor {
       }
     }
 
-    // If multiple candidates have closest pitch, use variationFraction to slide through them
+    // If multiple candidates have closest pitch, rank by trained feedback scores then slide
     if (candidates.length > 0 && variationFraction !== undefined) {
+      const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
+      if (trainedScores) {
+        candidates.sort((a, b) => {
+          const sA = trainedScores[a.item.name] ?? 0.8;
+          const sB = trainedScores[b.item.name] ?? 0.8;
+          return sB - sA;
+        });
+      }
       const v = Math.max(0, Math.min(0.999, variationFraction));
       const cIdx = Math.floor(v * candidates.length) % candidates.length;
       best = candidates[cIdx].item;
@@ -2131,6 +2177,19 @@ export class ClientGrooveboxConductor {
       this.synthSidechainGain.gain.cancelScheduledValues(t);
       this.synthSidechainGain.gain.setValueAtTime(0.63, t);
       this.synthSidechainGain.gain.exponentialRampToValueAtTime(1.0, t + 0.060);
+    }
+  }
+
+  private applyVocalDucking(when: number, durationSec: number): void {
+    // Frequency Masking & Vocal Presence Carving:
+    // Dip synths/chords by -2.5 dB while vocal formants sing to avoid mid-range frequency masking
+    if (this.synthSidechainGain) {
+      const t = Math.max(this.engine.now(), when);
+      const duckDb = this.stemCohesionWeights?.frequency_masking_targets?.synth_ducking_on_vocal_db ?? -2.5;
+      const duckGain = Math.pow(10, duckDb / 20);
+      this.synthSidechainGain.gain.cancelScheduledValues(t);
+      this.synthSidechainGain.gain.setValueAtTime(duckGain, t);
+      this.synthSidechainGain.gain.linearRampToValueAtTime(1.0, t + durationSec + 0.05);
     }
   }
 
@@ -2507,6 +2566,9 @@ export class ClientGrooveboxConductor {
         const noteHz = 440 * Math.pow(2, (chord.rootPitch + syl.semitoneOffset - 9 - 12) / 12);
         const durSec = (syl.durationSteps * 60) / (this.currentBpm * 4);
 
+        // Dynamic Frequency Pocketing: Duck other/synths so vocal formants stand out
+        this.applyVocalDucking(when, durSec);
+
         const activeTitle = this.vocalSongArranger.getSongTitle(vTerr);
         this.currentVocalMeta = {
           lyric: this.vocalSongArranger.getCurrentLyricLine(sec, phraseBar, vTerr),
@@ -2717,6 +2779,32 @@ export class ClientGrooveboxConductor {
     return mutated;
   }
 
+  private computeInterStemAffinity(stem: StemName, candidateGroove: string): number {
+    if (!this.stemCohesionWeights) return 0.85;
+    const compat = this.stemCohesionWeights.stem_pair_compatibility;
+    if (!compat) return 0.85;
+
+    let score = 0.85;
+    if (stem === "bass") {
+      const dG = this.activePatterns.drums?.groove_type || "four_on_floor_hats";
+      score = compat.drums_bass?.[dG]?.[candidateGroove] ??
+              compat.drums_bass?.["four_on_floor_hats"]?.[candidateGroove] ?? 0.85;
+    } else if (stem === "other") {
+      const vG = this.activePatterns.vocals?.groove_type || "vocal_verse";
+      score = compat.other_vocals?.[candidateGroove]?.[vG] ??
+              compat.other_vocals?.["chords"]?.[vG] ?? 0.85;
+    } else if (stem === "vocals") {
+      const oG = this.activePatterns.other?.groove_type || "chords";
+      score = compat.other_vocals?.[oG]?.[candidateGroove] ??
+              compat.other_vocals?.["chords"]?.[candidateGroove] ?? 0.85;
+    } else if (stem === "drums") {
+      const bG = this.activePatterns.bass?.groove_type || "offbeat";
+      score = compat.drums_bass?.[candidateGroove]?.[bG] ??
+              compat.drums_bass?.[candidateGroove]?.["offbeat"] ?? 0.85;
+    }
+    return Math.max(0.2, Math.min(1.0, score));
+  }
+
   private synthesizePattern(stem: StemName, grooveType: string, territory?: StyleTerritory): SerializedPattern {
     const terr = territory ?? this.getStemTerritory(stem);
 
@@ -2746,9 +2834,34 @@ export class ClientGrooveboxConductor {
       });
 
       if (matches.length > 0) {
-        const v = Math.max(0, Math.min(0.999, this.steering[stem].y));
-        const idx = Math.floor(v * matches.length) % matches.length;
-        const pat = { ...matches[idx] };
+        // ML Features Feedback Loop:
+        // Rank and probabilistically select patterns based on:
+        // 1. audio_similarity_score (from original song training data)
+        // 2. cohesion_score (multi-stem mix synergy)
+        // 3. inter-stem affinity (compatibility with currently active partner stems)
+        const steerY = this.steering[stem]?.y ?? 0.5;
+        const scores = matches.map((pat) => {
+          const sim = pat.audio_similarity_score ?? 0.85;
+          const coh = pat.cohesion_score ?? sim;
+          const aff = this.computeInterStemAffinity(stem, pat.groove_type);
+          return (0.45 * sim) + (0.35 * coh) + (0.20 * aff);
+        });
+
+        const temp = 0.12 + Math.abs(steerY - 0.5) * 0.20;
+        const maxScore = Math.max(...scores);
+        const exps = scores.map((s) => Math.exp((s - maxScore) / temp));
+        const sumExp = exps.reduce((acc, val) => acc + val, 0);
+
+        let r = Math.random() * sumExp;
+        let chosenIdx = 0;
+        for (let i = 0; i < exps.length; i++) {
+          r -= exps[i];
+          if (r <= 0) {
+            chosenIdx = i;
+            break;
+          }
+        }
+        const pat = { ...matches[chosenIdx] };
         return this.applyPatternMutation(stem, pat);
       }
     }

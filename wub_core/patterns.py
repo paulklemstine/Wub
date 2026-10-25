@@ -33,6 +33,7 @@ class SequencerPattern:
     bpm: float = 126.0
     key: str = "C major"
     audio_similarity_score: float = 0.5  # Acoustic similarity to real song audio (0.0..1.0)
+    cohesion_score: float = 0.5  # Multi-stem acoustic synergy score (0.0..1.0)
     velocities: Optional[List[float]] = None  # Per-step velocity curve (0.0..1.0)
 
 
@@ -53,6 +54,7 @@ class MultiStemPattern:
     onset_grids: Dict[str, List[int]] = field(default_factory=dict)
     groove_types: Dict[str, str] = field(default_factory=dict)
     audio_similarity_score: float = 0.5  # Acoustic similarity to real song audio (0.0..1.0)
+    cohesion_score: float = 0.5  # Multi-stem acoustic synergy score (0.0..1.0)
 
 
 @dataclass
@@ -492,6 +494,7 @@ class PatternBank:
                     for pat in self.patterns_by_stem.get(stem, []):
                         if pat.id in pat_scores:
                             pat.audio_similarity_score = float(pat_scores[pat.id].get("composite_score", 0.5))
+                            pat.cohesion_score = float(pat_scores[pat.id].get("cohesion_score", pat.audio_similarity_score))
         except Exception:
             pass
 

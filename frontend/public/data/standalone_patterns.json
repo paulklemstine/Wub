@@ -1732,7 +1732,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_f9e292_043",
@@ -1767,7 +1768,8 @@
         "length": 16,
         "key": "E major",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_4e3ddc_112",
@@ -1802,7 +1804,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_f9e292_041",
@@ -1837,7 +1840,8 @@
         "length": 16,
         "key": "E major",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_0cf8c4_070",
@@ -1872,7 +1876,8 @@
         "length": 16,
         "key": "D major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_bdd67e_000",
@@ -1906,8 +1911,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.69,
-        "style": "breaks"
+        "audio_similarity_score": 0.5483,
+        "style": "breaks",
+        "cohesion_score": 0.5991
       },
       {
         "id": "pat_drums_af817d_062",
@@ -1942,7 +1948,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_c2e804_134",
@@ -1977,7 +1984,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_3262b5_167",
@@ -2013,7 +2021,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_3262b5_165",
@@ -2050,7 +2059,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_5c63c9_096",
@@ -2088,7 +2098,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_4e3ddc_105",
@@ -2127,7 +2138,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_516c26_118",
@@ -2163,7 +2175,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_b18471_158",
@@ -2202,7 +2215,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_30c1e6_102",
@@ -2241,7 +2255,8 @@
         "length": 16,
         "key": "F# major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_c2e804_093",
@@ -2280,7 +2295,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_f9e292_106",
@@ -2317,7 +2333,8 @@
         "length": 16,
         "key": "E major",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_f18d8e_075",
@@ -2355,7 +2372,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_f18d8e_138",
@@ -2392,7 +2410,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_4e3ddc_108",
@@ -2431,7 +2450,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_30c1e6_112",
@@ -2468,7 +2488,8 @@
         "length": 16,
         "key": "F# major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_c45d55_186",
@@ -2510,7 +2531,8 @@
         "length": 16,
         "key": "C major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_c097cb_093",
@@ -2549,7 +2571,8 @@
         "length": 16,
         "key": "E minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_ccbdd8_161",
@@ -2589,7 +2612,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_516c26_119",
@@ -2624,7 +2648,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_ccbdd8_102",
@@ -2659,7 +2684,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_30c1e6_185",
@@ -2694,7 +2720,8 @@
         "length": 16,
         "key": "F# major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_3262b5_202",
@@ -2729,7 +2756,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_c2e804_133",
@@ -2765,7 +2793,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_3bafe0_076",
@@ -2800,7 +2829,8 @@
         "length": 16,
         "key": "G# minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_a47718_097",
@@ -2835,7 +2865,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_fcab4f_178",
@@ -2870,7 +2901,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_5c63c9_013",
@@ -2917,7 +2949,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_5c63c9_014",
@@ -2964,7 +2997,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_9f535c_007",
@@ -3011,7 +3045,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_9f535c_008",
@@ -3058,7 +3093,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_fde807_105",
@@ -3105,7 +3141,8 @@
         "length": 16,
         "key": "D# minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_fcab4f_141",
@@ -3152,7 +3189,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_af817d_156",
@@ -3199,7 +3237,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_drums_f18d8e_076",
@@ -3246,7 +3285,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       }
     ],
     "bass": [
@@ -3279,8 +3319,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.998,
-        "style": "breaks"
+        "audio_similarity_score": 0.5322,
+        "style": "breaks",
+        "cohesion_score": 0.5943
       },
       {
         "id": "pat_bass_bdd67e_003",
@@ -3311,8 +3352,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.887,
-        "style": "breaks"
+        "audio_similarity_score": 0.9982,
+        "style": "breaks",
+        "cohesion_score": 0.8869
       },
       {
         "id": "pat_bass_bdd67e_005",
@@ -3343,8 +3385,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.878,
-        "style": "breaks"
+        "audio_similarity_score": 0.9985,
+        "style": "breaks",
+        "cohesion_score": 0.8785
       },
       {
         "id": "pat_bass_bdd67e_009",
@@ -3375,8 +3418,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.863,
-        "style": "breaks"
+        "audio_similarity_score": 0.9984,
+        "style": "breaks",
+        "cohesion_score": 0.8632
       },
       {
         "id": "pat_bass_3262b5_167",
@@ -3408,7 +3452,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_fde807_105",
@@ -3440,7 +3485,8 @@
         "length": 16,
         "key": "D# minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_5c63c9_120",
@@ -3472,7 +3518,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_516c26_119",
@@ -3504,7 +3551,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_bdd67e_004",
@@ -3536,8 +3584,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.817,
-        "style": "breaks"
+        "audio_similarity_score": 0.5331,
+        "style": "breaks",
+        "cohesion_score": 0.6221
       },
       {
         "id": "pat_bass_bdd67e_010",
@@ -3569,8 +3618,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.761,
-        "style": "breaks"
+        "audio_similarity_score": 0.8174,
+        "style": "breaks",
+        "cohesion_score": 0.7614
       },
       {
         "id": "pat_bass_5c63c9_013",
@@ -3605,7 +3655,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_5c63c9_014",
@@ -3640,7 +3691,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_9f535c_007",
@@ -3675,7 +3727,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_4e3ddc_105",
@@ -3710,7 +3763,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_516c26_118",
@@ -3743,7 +3797,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_f18d8e_076",
@@ -3778,7 +3833,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_b18471_156",
@@ -3814,7 +3870,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_9f535c_071",
@@ -3850,7 +3907,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_9f535c_083",
@@ -3886,7 +3944,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_9f535c_091",
@@ -3924,7 +3983,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_f90470_105",
@@ -3960,7 +4020,8 @@
         "length": 16,
         "key": "G# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_3262b5_216",
@@ -3998,7 +4059,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_c2e804_173",
@@ -4034,7 +4096,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_e6de3a_093",
@@ -4071,7 +4134,8 @@
         "length": 16,
         "key": "C minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_3262b5_126",
@@ -4112,7 +4176,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_3262b5_073",
@@ -4155,7 +4220,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_3262b5_111",
@@ -4196,7 +4262,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_bass_3262b5_112",
@@ -4239,7 +4306,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       }
     ],
     "vocals": [
@@ -4272,8 +4340,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.998,
-        "style": "breaks"
+        "audio_similarity_score": 0.5322,
+        "style": "breaks",
+        "cohesion_score": 0.5943
       },
       {
         "id": "pat_vocals_bdd67e_005",
@@ -4304,8 +4373,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.879,
-        "style": "breaks"
+        "audio_similarity_score": 0.9996,
+        "style": "breaks",
+        "cohesion_score": 0.8791
       },
       {
         "id": "pat_vocals_bdd67e_003",
@@ -4336,8 +4406,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.877,
-        "style": "breaks"
+        "audio_similarity_score": 0.9995,
+        "style": "breaks",
+        "cohesion_score": 0.8773
       },
       {
         "id": "pat_vocals_bdd67e_009",
@@ -4368,8 +4439,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.86,
-        "style": "breaks"
+        "audio_similarity_score": 0.9996,
+        "style": "breaks",
+        "cohesion_score": 0.8602
       },
       {
         "id": "pat_vocals_fde807_105",
@@ -4401,7 +4473,8 @@
         "length": 16,
         "key": "D# minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_af817d_156",
@@ -4433,7 +4506,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_9f535c_104",
@@ -4465,7 +4539,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_f9e292_043",
@@ -4497,7 +4572,8 @@
         "length": 16,
         "key": "E major",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_bdd67e_006",
@@ -4529,8 +4605,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.832,
-        "style": "breaks"
+        "audio_similarity_score": 0.8408,
+        "style": "breaks",
+        "cohesion_score": 0.8317
       },
       {
         "id": "pat_vocals_bdd67e_004",
@@ -4562,8 +4639,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.808,
-        "style": "breaks"
+        "audio_similarity_score": 0.8901,
+        "style": "breaks",
+        "cohesion_score": 0.8077
       },
       {
         "id": "pat_vocals_bdd67e_002",
@@ -4595,8 +4673,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.818,
-        "style": "breaks"
+        "audio_similarity_score": 0.5332,
+        "style": "breaks",
+        "cohesion_score": 0.5946
       },
       {
         "id": "pat_vocals_bdd67e_010",
@@ -4628,8 +4707,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.749,
-        "style": "breaks"
+        "audio_similarity_score": 0.8155,
+        "style": "breaks",
+        "cohesion_score": 0.7488
       },
       {
         "id": "pat_vocals_9f535c_107",
@@ -4662,7 +4742,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_1571ea_034",
@@ -4695,7 +4776,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_f9e292_032",
@@ -4728,7 +4810,8 @@
         "length": 16,
         "key": "E major",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_96b520_089",
@@ -4761,7 +4844,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_af817d_155",
@@ -4795,7 +4879,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_af817d_149",
@@ -4829,7 +4914,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_f18d8e_134",
@@ -4863,7 +4949,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_c097cb_079",
@@ -4897,7 +4984,8 @@
         "length": 16,
         "key": "E minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_96b520_092",
@@ -4931,7 +5019,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_fde807_037",
@@ -4965,7 +5054,8 @@
         "length": 16,
         "key": "D# minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_1b9172_125",
@@ -4999,7 +5089,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_9f535c_081",
@@ -5033,7 +5124,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_f18d8e_126",
@@ -5069,7 +5161,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_fde807_127",
@@ -5106,7 +5199,8 @@
         "length": 16,
         "key": "D# minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_f18d8e_135",
@@ -5143,7 +5237,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_f18d8e_125",
@@ -5181,7 +5276,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_ca9500_107",
@@ -5218,7 +5314,8 @@
         "length": 16,
         "key": "C minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_0cf8c4_088",
@@ -5259,7 +5356,8 @@
         "length": 16,
         "key": "D major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_b18471_144",
@@ -5297,7 +5395,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_c45d55_128",
@@ -5336,7 +5435,8 @@
         "length": 16,
         "key": "C major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_f18d8e_133",
@@ -5371,7 +5471,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_f18d8e_127",
@@ -5406,7 +5507,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_1b9172_083",
@@ -5441,7 +5543,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_c097cb_028",
@@ -5476,7 +5579,8 @@
         "length": 16,
         "key": "E minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_cb1b7c_121",
@@ -5512,7 +5616,8 @@
         "length": 16,
         "key": "C# major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_c7e175_035",
@@ -5549,7 +5654,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_af817d_143",
@@ -5584,7 +5690,8 @@
         "length": 16,
         "key": "A# minor",
         "audio_similarity_score": 0.5,
-        "style": "breaks"
+        "style": "breaks",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_1ab626_136",
@@ -5619,7 +5726,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_c097cb_037",
@@ -5655,7 +5763,8 @@
         "length": 16,
         "key": "E minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_c097cb_063",
@@ -5690,7 +5799,8 @@
         "length": 16,
         "key": "E minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_c45d55_202",
@@ -5725,7 +5835,8 @@
         "length": 16,
         "key": "C major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_30c1e6_190",
@@ -5760,7 +5871,8 @@
         "length": 16,
         "key": "F# major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_d1c753_084",
@@ -5795,7 +5907,8 @@
         "length": 16,
         "key": "F minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_065ff5_026",
@@ -5830,7 +5943,8 @@
         "length": 16,
         "key": "C# minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_0cf8c4_057",
@@ -5866,7 +5980,8 @@
         "length": 16,
         "key": "D major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_b18471_160",
@@ -5900,7 +6015,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_1ab626_064",
@@ -5939,7 +6055,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_vocals_d22d5e_006",
@@ -5979,7 +6096,8 @@
           "AWAY"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_009",
@@ -6019,7 +6137,8 @@
           "STRAY"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_011",
@@ -6059,7 +6178,8 @@
           "LIGHT"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_013",
@@ -6099,7 +6219,8 @@
           "HOLD"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_015",
@@ -6139,7 +6260,8 @@
           "FLOW"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_016",
@@ -6183,7 +6305,8 @@
           "SLOW"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_017",
@@ -6223,7 +6346,8 @@
           "FLOAT"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_019",
@@ -6267,7 +6391,8 @@
           "SPACE"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_020",
@@ -6307,7 +6432,8 @@
           "LIGHT"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_021",
@@ -6347,7 +6473,8 @@
           "DAWN"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_023",
@@ -6387,7 +6514,8 @@
           "FLOW"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_026",
@@ -6427,7 +6555,8 @@
           "HOLD"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_028",
@@ -6467,7 +6596,8 @@
           "OCEAN"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_029",
@@ -6507,7 +6637,8 @@
           "DREAM"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_030",
@@ -6547,7 +6678,8 @@
           "STARS"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_031",
@@ -6591,7 +6723,8 @@
           "SOUL"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_033",
@@ -6631,7 +6764,8 @@
           "SLOW"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_034",
@@ -6671,7 +6805,8 @@
           "HOLD"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_036",
@@ -6711,7 +6846,8 @@
           "DREAM"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_038",
@@ -6751,7 +6887,8 @@
           "STARS"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_041",
@@ -6791,7 +6928,8 @@
           "FLOAT"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_043",
@@ -6831,7 +6969,8 @@
           "STARS"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_045",
@@ -6871,7 +7010,8 @@
           "DAWN"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_048",
@@ -6911,7 +7051,8 @@
           "SEEK"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_050",
@@ -6951,7 +7092,8 @@
           "FREE"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_052",
@@ -6991,7 +7133,8 @@
           "PEACE"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_055",
@@ -7031,7 +7174,8 @@
           "LIGHT"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_057",
@@ -7071,7 +7215,8 @@
           "DAWN"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_058",
@@ -7111,7 +7256,8 @@
           "SOUL"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_059",
@@ -7151,7 +7297,8 @@
           "OCEAN"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_060",
@@ -7191,7 +7338,8 @@
           "SOUL"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_061",
@@ -7231,7 +7379,8 @@
           "LIGHT"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_063",
@@ -7271,7 +7420,8 @@
           "FEEL"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_083",
@@ -7311,7 +7461,8 @@
           "DEEP"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_084",
@@ -7351,7 +7502,8 @@
           "DEEP"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_086",
@@ -7391,7 +7543,8 @@
           "SKIES"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_090",
@@ -7431,7 +7584,8 @@
           "HAZE"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_097",
@@ -7471,7 +7625,8 @@
           "PEACE"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_099",
@@ -7511,7 +7666,8 @@
           "SKIES"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_d22d5e_102",
@@ -7551,7 +7707,8 @@
           "PEACE"
         ],
         "length": 16,
-        "key": "G minor"
+        "key": "G minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_010",
@@ -7591,7 +7748,8 @@
           "GRID"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_012",
@@ -7631,7 +7789,8 @@
           "CRACK"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_014",
@@ -7671,7 +7830,8 @@
           "TEM"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_015",
@@ -7711,7 +7871,8 @@
           "BREAK"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_016",
@@ -7759,7 +7920,8 @@
           "CODE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_017",
@@ -7803,7 +7965,8 @@
           "DARK"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_018",
@@ -7851,7 +8014,8 @@
           "FEED"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_020",
@@ -7891,7 +8055,8 @@
           "GLITCH"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_022",
@@ -7935,7 +8100,8 @@
           "CRACK"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_024",
@@ -7979,7 +8145,8 @@
           "GLITCH"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_026",
@@ -8027,7 +8194,8 @@
           "CRACK"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_028",
@@ -8071,7 +8239,8 @@
           "TEM"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_030",
@@ -8111,7 +8280,8 @@
           "GRID"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_032",
@@ -8151,7 +8321,8 @@
           "FEED"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_034",
@@ -8191,7 +8362,8 @@
           "SYS"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_036",
@@ -8231,7 +8403,8 @@
           "BLADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_037",
@@ -8271,7 +8444,8 @@
           "TEM"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_038",
@@ -8311,7 +8485,8 @@
           "FADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_039",
@@ -8351,7 +8526,8 @@
           "BLADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_040",
@@ -8395,7 +8571,8 @@
           "GLITCH"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_041",
@@ -8435,7 +8612,8 @@
           "GRID"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_042",
@@ -8475,7 +8653,8 @@
           "FADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_043",
@@ -8519,7 +8698,8 @@
           "FADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_044",
@@ -8575,7 +8755,8 @@
           "FADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_045",
@@ -8615,7 +8796,8 @@
           "CYBER"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_046",
@@ -8659,7 +8841,8 @@
           "BLADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_047",
@@ -8703,7 +8886,8 @@
           "FADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_049",
@@ -8747,7 +8931,8 @@
           "BLADE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_050",
@@ -8787,7 +8972,8 @@
           "HARD"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_052",
@@ -8831,7 +9017,8 @@
           "TEM"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_053",
@@ -8875,7 +9062,8 @@
           "FEED"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_054",
@@ -8927,7 +9115,8 @@
           "GRID"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_055",
@@ -8975,7 +9164,8 @@
           "CYBER"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_056",
@@ -9019,7 +9209,8 @@
           "RIDE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_071",
@@ -9059,7 +9250,8 @@
           "TRACE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_072",
@@ -9103,7 +9295,8 @@
           "BREAK"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_073",
@@ -9147,7 +9340,8 @@
           "CRACK"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_074",
@@ -9187,7 +9381,8 @@
           "CYBER"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_075",
@@ -9227,7 +9422,8 @@
           "GLITCH"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_2911a0_076",
@@ -9271,7 +9467,8 @@
           "PULSE"
         ],
         "length": 16,
-        "key": "D# minor"
+        "key": "D# minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_031",
@@ -9311,7 +9508,8 @@
           "DEEP"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_048",
@@ -9355,7 +9553,8 @@
           "SWEET"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_050",
@@ -9395,7 +9594,8 @@
           "DEEP"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_052",
@@ -9435,7 +9635,8 @@
           "DEEP"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_053",
@@ -9475,7 +9676,8 @@
           "MAKE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_054",
@@ -9515,7 +9717,8 @@
           "SEE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_055",
@@ -9555,7 +9758,8 @@
           "BABY"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_057",
@@ -9595,7 +9799,8 @@
           "STAY"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_059",
@@ -9635,7 +9840,8 @@
           "LOVE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_061",
@@ -9675,7 +9881,8 @@
           "DANCE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_063",
@@ -9715,7 +9922,8 @@
           "FEEL"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_065",
@@ -9755,7 +9963,8 @@
           "GROOVE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_066",
@@ -9803,7 +10012,8 @@
           "FLOW"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_067",
@@ -9855,7 +10065,8 @@
           "HOLD"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_068",
@@ -9911,7 +10122,8 @@
           "MOVE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_069",
@@ -9951,7 +10163,8 @@
           "ROOM"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_070",
@@ -9995,7 +10208,8 @@
           "TAKE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_072",
@@ -10035,7 +10249,8 @@
           "DEEP"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_131",
@@ -10075,7 +10290,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_132",
@@ -10115,7 +10331,8 @@
           "FEEL"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_134",
@@ -10155,7 +10372,8 @@
           "SEE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_136",
@@ -10195,7 +10413,8 @@
           "FREE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_138",
@@ -10235,7 +10454,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_139",
@@ -10275,7 +10495,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_141",
@@ -10315,7 +10536,8 @@
           "FREE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_143",
@@ -10355,7 +10577,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_145",
@@ -10395,7 +10618,8 @@
           "DAY"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_146",
@@ -10435,7 +10659,8 @@
           "DAY"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_147",
@@ -10475,7 +10700,8 @@
           "FREE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_149",
@@ -10515,7 +10741,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_150",
@@ -10555,7 +10782,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_8c7537_151",
@@ -10595,7 +10823,8 @@
           "SEE"
         ],
         "length": 16,
-        "key": "C major"
+        "key": "C major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_b18471_004",
@@ -10635,7 +10864,8 @@
           "HEART"
         ],
         "length": 16,
-        "key": "A minor"
+        "key": "A minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_b18471_006",
@@ -10675,7 +10905,8 @@
           "SHINE"
         ],
         "length": 16,
-        "key": "A minor"
+        "key": "A minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_b18471_008",
@@ -10715,7 +10946,8 @@
           "TOUCH"
         ],
         "length": 16,
-        "key": "A minor"
+        "key": "A minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_b18471_010",
@@ -10755,7 +10987,8 @@
           "LOVE"
         ],
         "length": 16,
-        "key": "A minor"
+        "key": "A minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_b18471_017",
@@ -10795,7 +11028,8 @@
           "HEART"
         ],
         "length": 16,
-        "key": "A minor"
+        "key": "A minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_b18471_019",
@@ -10835,7 +11069,8 @@
           "SUN"
         ],
         "length": 16,
-        "key": "A minor"
+        "key": "A minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_b18471_021",
@@ -10875,7 +11110,8 @@
           "PLAY"
         ],
         "length": 16,
-        "key": "A minor"
+        "key": "A minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_b18471_027",
@@ -10915,7 +11151,8 @@
           "PLAY"
         ],
         "length": 16,
-        "key": "A minor"
+        "key": "A minor",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_006",
@@ -10955,7 +11192,8 @@
           "BREAK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_009",
@@ -10999,7 +11237,8 @@
           "SHAKE"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_011",
@@ -11043,7 +11282,8 @@
           "HIT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_012",
@@ -11083,7 +11323,8 @@
           "PEAK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_013",
@@ -11127,7 +11368,8 @@
           "PEAK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_015",
@@ -11167,7 +11409,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_016",
@@ -11207,7 +11450,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_019",
@@ -11247,7 +11491,8 @@
           "HIT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_021",
@@ -11291,7 +11536,8 @@
           "HIT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_024",
@@ -11331,7 +11577,8 @@
           "ACE"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_026",
@@ -11371,7 +11618,8 @@
           "KICK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_029",
@@ -11419,7 +11667,8 @@
           "TRIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_030",
@@ -11459,7 +11708,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_031",
@@ -11515,7 +11765,8 @@
           "KICK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_032",
@@ -11559,7 +11810,8 @@
           "KICK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_033",
@@ -11603,7 +11855,8 @@
           "TRIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_034",
@@ -11643,7 +11896,8 @@
           "FLIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_035",
@@ -11687,7 +11941,8 @@
           "FLIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_036",
@@ -11731,7 +11986,8 @@
           "KICK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_037",
@@ -11775,7 +12031,8 @@
           "PEAK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_038",
@@ -11815,7 +12072,8 @@
           "MAKE"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_039",
@@ -11863,7 +12121,8 @@
           "KICK"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_040",
@@ -11903,7 +12162,8 @@
           "FLIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_042",
@@ -11943,7 +12203,8 @@
           "HIT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_045",
@@ -11983,7 +12244,8 @@
           "TRIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_046",
@@ -12023,7 +12285,8 @@
           "TRIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_048",
@@ -12063,7 +12326,8 @@
           "DROP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_051",
@@ -12103,7 +12367,8 @@
           "STONE"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_053",
@@ -12147,7 +12412,8 @@
           "GO"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_054",
@@ -12191,7 +12457,8 @@
           "SHAKE"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_055",
@@ -12231,7 +12498,8 @@
           "RAVE"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_056",
@@ -12271,7 +12539,8 @@
           "SHAKE"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_058",
@@ -12311,7 +12580,8 @@
           "MAKE"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_061",
@@ -12355,7 +12625,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_062",
@@ -12395,7 +12666,8 @@
           "PUNCH"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_063",
@@ -12435,7 +12707,8 @@
           "FLIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_065",
@@ -12479,7 +12752,8 @@
           "FLIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_067",
@@ -12519,7 +12793,8 @@
           "HIT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_069",
@@ -12559,7 +12834,8 @@
           "TRIP"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       },
       {
         "id": "pat_vocals_e067e6_070",
@@ -12599,7 +12875,8 @@
           "BEAT"
         ],
         "length": 16,
-        "key": "F major"
+        "key": "F major",
+        "cohesion_score": 0.85
       }
     ],
     "other": [
@@ -12633,8 +12910,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.998,
-        "style": "breaks"
+        "audio_similarity_score": 0.5322,
+        "style": "breaks",
+        "cohesion_score": 0.5943
       },
       {
         "id": "pat_other_bdd67e_003",
@@ -12665,8 +12943,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.849,
-        "style": "breaks"
+        "audio_similarity_score": 0.9094,
+        "style": "breaks",
+        "cohesion_score": 0.8485
       },
       {
         "id": "pat_other_bdd67e_007",
@@ -12697,8 +12976,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.828,
-        "style": "breaks"
+        "audio_similarity_score": 0.8793,
+        "style": "breaks",
+        "cohesion_score": 0.8279
       },
       {
         "id": "pat_other_bdd67e_009",
@@ -12729,8 +13009,9 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.815,
-        "style": "breaks"
+        "audio_similarity_score": 0.8884,
+        "style": "breaks",
+        "cohesion_score": 0.8152
       },
       {
         "id": "pat_other_3262b5_167",
@@ -12762,7 +13043,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_9f535c_007",
@@ -12794,7 +13076,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_fde807_105",
@@ -12827,7 +13110,8 @@
         "length": 16,
         "key": "D# minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_5c63c9_120",
@@ -12861,7 +13145,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_3262b5_139",
@@ -12900,7 +13185,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_b18471_089",
@@ -12939,7 +13225,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_3262b5_131",
@@ -12980,7 +13267,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_2c09f4_064",
@@ -13019,7 +13307,8 @@
         "length": 16,
         "key": "G major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_e6de3a_081",
@@ -13058,7 +13347,8 @@
         "length": 16,
         "key": "C minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_c097cb_059",
@@ -13099,7 +13389,8 @@
         "length": 16,
         "key": "E minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_fcab4f_186",
@@ -13138,7 +13429,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_96b520_069",
@@ -13178,7 +13470,8 @@
         "length": 16,
         "key": "D minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_5c63c9_013",
@@ -13213,7 +13506,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_5c63c9_014",
@@ -13249,7 +13543,8 @@
         "length": 16,
         "key": "F# minor",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_fcab4f_141",
@@ -13286,7 +13581,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_9f535c_109",
@@ -13321,7 +13617,8 @@
         "length": 16,
         "key": "A minor",
         "audio_similarity_score": 0.5,
-        "style": "wave"
+        "style": "wave",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_c45d55_111",
@@ -13358,7 +13655,8 @@
         "length": 16,
         "key": "C major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_30c1e6_066",
@@ -13393,7 +13691,8 @@
         "length": 16,
         "key": "F# major",
         "audio_similarity_score": 0.5,
-        "style": "house"
+        "style": "house",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_3262b5_140",
@@ -13429,7 +13728,8 @@
         "length": 16,
         "key": "G minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       },
       {
         "id": "pat_other_c097cb_076",
@@ -13466,7 +13766,8 @@
         "length": 16,
         "key": "E minor",
         "audio_similarity_score": 0.5,
-        "style": "cyber"
+        "style": "cyber",
+        "cohesion_score": 0.5
       }
     ]
   },
@@ -96113,5 +96414,421 @@
       "segment_id": "seg_vocals_0065",
       "vowel": "EE"
     }
-  ]
+  ],
+  "stem_cohesion_weights": {
+    "stem_pair_compatibility": {
+      "drums_bass": {
+        "four_on_floor": {
+          "sustained": 0.8536,
+          "offbeat": 0.663
+        },
+        "fill": {
+          "sustained": 0.6001,
+          "offbeat": 0.7594,
+          "stabs": 0.8101
+        },
+        "minimal": {
+          "sustained": 0.6645,
+          "offbeat": 0.755
+        },
+        "four_on_floor_hats": {
+          "sustained": 0.7333,
+          "offbeat": 0.8556
+        },
+        "breakbeat": {
+          "offbeat": 0.798,
+          "sustained": 0.6542
+        }
+      },
+      "other_vocals": {
+        "hook": {
+          "vocal_sustained": 0.8629,
+          "vocal_hook": 0.7844,
+          "chop": 0.8839,
+          "vocal_syncopated_chop": 0.798
+        },
+        "pad": {
+          "vocal_sustained": 0.6009,
+          "chop": 0.6249,
+          "vocal_hook": 0.8315,
+          "vocal_call_response": 0.8553
+        },
+        "chords": {
+          "vocal_verse": 0.8414
+        },
+        "riff": {
+          "vocal_sustained": 0.7966,
+          "vocal_call_response": 0.8009
+        }
+      },
+      "drums_vocals": {
+        "four_on_floor": {
+          "vocal_sustained": 0.7136,
+          "chop": 0.8067
+        },
+        "fill": {
+          "chop": 0.6385,
+          "vocal_sustained": 0.6137,
+          "vocal_hook": 0.8011,
+          "vocal_call_response": 0.8428
+        },
+        "minimal": {
+          "chop": 0.7684,
+          "vocal_sustained": 0.6386
+        },
+        "four_on_floor_hats": {
+          "vocal_sustained": 0.7168,
+          "vocal_hook": 0.8217,
+          "chop": 0.8839,
+          "vocal_call_response": 0.8245,
+          "vocal_verse": 0.8414
+        },
+        "breakbeat": {
+          "vocal_syncopated_chop": 0.798,
+          "chop": 0.7342,
+          "vocal_sustained": 0.6606
+        }
+      },
+      "bass_other": {
+        "sustained": {
+          "hook": 0.881,
+          "pad": 0.5955
+        },
+        "offbeat": {
+          "pad": 0.6903,
+          "hook": 0.8574,
+          "chords": 0.8414,
+          "riff": 0.7984
+        },
+        "stabs": {
+          "hook": 0.8026,
+          "pad": 0.8079
+        }
+      }
+    },
+    "frequency_masking_targets": {
+      "kick_bass_low_cutoff_hz": 120,
+      "vocal_presence_band_hz": [
+        1500,
+        4500
+      ],
+      "synth_ducking_on_vocal_db": -2.5,
+      "bass_sidechain_ducking_db": -9.0
+    },
+    "grooves": {
+      "drums": {
+        "minimal": 0.5993,
+        "four_on_floor_hats": 0.5268,
+        "breakbeat": 0.5723,
+        "fill": 0.5969,
+        "four_on_floor": 0.5823
+      },
+      "bass": {
+        "sustained": 0.5983,
+        "offbeat": 0.6555,
+        "rolling": 0.5915,
+        "stabs": 0.5949
+      },
+      "vocals": {
+        "chop": 0.6357,
+        "phrase": 0.53,
+        "vocal_sustained": 0.6048
+      },
+      "other": {
+        "pad": 0.5997,
+        "chords": 0.5186,
+        "riff": 0.5286
+      }
+    },
+    "trained_slice_scores": {
+      "seg_drums_0001": 0.5976,
+      "seg_drums_0002": 0.5945,
+      "seg_drums_0003": 0.5978,
+      "seg_drums_0004": 0.6029,
+      "seg_drums_0005": 0.5581,
+      "seg_drums_0006": 0.5584,
+      "seg_drums_0007": 0.5684,
+      "seg_drums_0008": 0.5584,
+      "seg_drums_0009": 0.5583,
+      "seg_drums_0010": 0.4845,
+      "seg_drums_0011": 0.5056,
+      "seg_drums_0012": 0.4845,
+      "seg_drums_0013": 0.4845,
+      "seg_drums_0014": 0.4845,
+      "seg_drums_0015": 0.477,
+      "seg_drums_0016": 0.4907,
+      "seg_drums_0017": 0.4772,
+      "seg_drums_0018": 0.4983,
+      "seg_drums_0019": 0.5688,
+      "seg_drums_0020": 0.5799,
+      "seg_drums_0021": 0.5799,
+      "seg_drums_0022": 0.5799,
+      "seg_drums_0023": 0.5799,
+      "seg_drums_0024": 0.5799,
+      "seg_drums_0025": 0.4854,
+      "seg_drums_0026": 0.4854,
+      "seg_drums_0027": 0.4854,
+      "seg_drums_0028": 0.4854,
+      "seg_drums_0029": 0.4854,
+      "seg_drums_0030": 0.4644,
+      "seg_drums_0031": 0.4922,
+      "seg_drums_0032": 0.4644,
+      "seg_drums_0033": 0.4644,
+      "seg_drums_0034": 0.4644,
+      "seg_drums_0035": 0.4812,
+      "seg_drums_0036": 0.5018,
+      "seg_drums_0037": 0.4812,
+      "seg_drums_0038": 0.4812,
+      "seg_drums_0039": 0.4812,
+      "seg_drums_0040": 0.4812,
+      "seg_drums_0041": 0.5134,
+      "seg_drums_0042": 0.5162,
+      "seg_drums_0043": 0.5247,
+      "seg_drums_0044": 0.5162,
+      "seg_drums_0045": 0.5361,
+      "seg_drums_0046": 0.4632,
+      "seg_drums_0047": 0.4632,
+      "seg_drums_0048": 0.4632,
+      "seg_drums_0049": 0.4632,
+      "seg_drums_0050": 0.4684,
+      "seg_drums_0051": 0.5099,
+      "seg_drums_0052": 0.489,
+      "seg_drums_0053": 0.513,
+      "seg_drums_0054": 0.5099,
+      "seg_drums_0055": 0.489,
+      "seg_drums_0056": 0.4528,
+      "seg_drums_0057": 0.4528,
+      "seg_drums_0058": 0.4528,
+      "seg_drums_0059": 0.4528,
+      "seg_drums_0060": 0.475,
+      "seg_bass_0000": 0.5953,
+      "seg_bass_0001": 0.6687,
+      "seg_bass_0002": 0.6698,
+      "seg_bass_0003": 0.7805,
+      "seg_bass_0004": 0.772,
+      "seg_bass_0005": 0.7675,
+      "seg_vocals_0000": 0.5981,
+      "seg_vocals_0001": 0.6217,
+      "seg_vocals_0002": 0.8172,
+      "seg_vocals_0003": 0.7843,
+      "seg_vocals_0004": 0.7672,
+      "seg_vocals_0005": 0.764,
+      "seg_other_0000": 0.5981,
+      "seg_other_0001": 0.5981,
+      "seg_other_0002": 0.8037,
+      "seg_other_0003": 0.796,
+      "seg_other_0004": 0.7592,
+      "seg_other_0005": 0.7428,
+      "seg_other_0006": 0.7222,
+      "seg_other_0007": 0.6578,
+      "seg_drums_0305": 0.54,
+      "seg_drums_0542": 0.54,
+      "seg_drums_0218": 0.54,
+      "seg_drums_0176": 0.54,
+      "seg_drums_1023": 0.54,
+      "seg_drums_0387": 0.54,
+      "seg_drums_0494": 0.54,
+      "seg_drums_0150": 0.54,
+      "seg_drums_0441": 0.5473,
+      "seg_drums_0299": 0.54,
+      "seg_drums_0338": 0.5296,
+      "seg_drums_0483": 0.54,
+      "seg_drums_0179": 0.5377,
+      "seg_drums_0987": 0.54,
+      "seg_drums_0209": 0.54,
+      "seg_drums_0743": 0.54,
+      "seg_drums_0576": 0.54,
+      "seg_drums_0541": 0.54,
+      "seg_drums_0866": 0.54,
+      "seg_drums_0325": 0.54,
+      "seg_drums_0222": 0.54,
+      "seg_drums_0220": 0.5385,
+      "seg_drums_0385": 0.54,
+      "seg_bass_0148": 0.54,
+      "seg_bass_0179": 0.572,
+      "seg_bass_0302": 0.6386,
+      "seg_bass_0010": 0.54,
+      "seg_bass_0115": 0.54,
+      "seg_bass_0207": 0.54,
+      "seg_drums_0518": 0.4968,
+      "seg_drums_1287": 0.4968,
+      "seg_drums_0136": 0.4968,
+      "seg_drums_0390": 0.495,
+      "seg_drums_0293": 0.4968,
+      "seg_drums_0355": 0.5349,
+      "seg_drums_0183": 0.5221,
+      "seg_drums_1170": 0.5194,
+      "seg_drums_0249": 0.5194,
+      "seg_drums_0481": 0.5194,
+      "seg_drums_0461": 0.5194,
+      "seg_drums_1390": 0.4976,
+      "seg_drums_1305": 0.4976,
+      "seg_drums_0372": 0.4976,
+      "seg_drums_0206": 0.4976,
+      "seg_drums_0508": 0.4976,
+      "seg_drums_0380": 0.4976,
+      "seg_drums_0075": 0.5969,
+      "seg_bass_0176": 0.6372,
+      "seg_bass_0460": 0.5465,
+      "seg_bass_0236": 0.5465,
+      "seg_bass_0018": 0.5465,
+      "seg_bass_0209": 0.5503,
+      "seg_bass_0049": 0.6228,
+      "seg_bass_0373": 0.5503,
+      "seg_bass_0123": 0.5503,
+      "seg_bass_0089": 0.5849,
+      "seg_bass_0257": 0.548,
+      "seg_bass_0390": 0.6171,
+      "seg_bass_0141": 0.6171,
+      "seg_bass_0217": 0.548,
+      "seg_other_0103": 0.5028,
+      "seg_other_0338": 0.5028,
+      "seg_other_1188": 0.5028,
+      "seg_other_0101": 0.5028,
+      "seg_other_0894": 0.5028,
+      "seg_other_0102": 0.5028,
+      "seg_other_0011": 0.5028,
+      "seg_other_0379": 0.5028,
+      "seg_other_0051": 0.5114,
+      "seg_other_0307": 0.5114,
+      "seg_other_0600": 0.5114,
+      "seg_other_0322": 0.5114,
+      "seg_other_0205": 0.5214,
+      "seg_other_0201": 0.5114,
+      "seg_other_0105": 0.5114,
+      "seg_drums_0462": 0.5133,
+      "seg_drums_0359": 0.5133,
+      "seg_drums_0000": 0.5492,
+      "seg_drums_1680": 0.5133,
+      "seg_drums_0499": 0.5133,
+      "seg_drums_0507": 0.5133,
+      "seg_drums_1176": 0.5133,
+      "seg_drums_0311": 0.5133,
+      "seg_drums_0374": 0.5133,
+      "seg_drums_0803": 0.5133,
+      "seg_drums_0414": 0.5133,
+      "seg_drums_0071": 0.6,
+      "seg_drums_0254": 0.5091,
+      "seg_drums_0304": 0.5091,
+      "seg_drums_0410": 0.5141,
+      "seg_drums_0916": 0.5091,
+      "seg_drums_0167": 0.5091,
+      "seg_drums_1180": 0.5091,
+      "seg_drums_0262": 0.5091,
+      "seg_drums_0682": 0.5091,
+      "seg_drums_0067": 0.5091,
+      "seg_drums_0660": 0.5091,
+      "seg_drums_0107": 0.5091,
+      "seg_drums_1144": 0.5091,
+      "seg_drums_0733": 0.5091,
+      "seg_drums_0226": 0.5091,
+      "seg_drums_0577": 0.5153,
+      "seg_drums_0681": 0.5153,
+      "seg_drums_0085": 0.5153,
+      "seg_drums_0082": 0.5153,
+      "seg_drums_0200": 0.5153,
+      "seg_drums_0162": 0.5153,
+      "seg_drums_0603": 0.5153,
+      "seg_drums_0538": 0.5153,
+      "seg_drums_0375": 0.5153,
+      "seg_drums_0516": 0.5153,
+      "seg_bass_0031": 0.5507,
+      "seg_bass_0043": 0.5908,
+      "seg_bass_0199": 0.5507,
+      "seg_bass_0503": 0.5507,
+      "seg_bass_0645": 0.5507,
+      "seg_bass_0079": 0.5507,
+      "seg_bass_0296": 0.5484,
+      "seg_bass_0234": 0.5484,
+      "seg_bass_0045": 0.5484,
+      "seg_bass_0100": 0.5489,
+      "seg_bass_0266": 0.6444,
+      "seg_bass_0473": 0.588,
+      "seg_bass_0132": 0.5489,
+      "seg_other_0111": 0.5124,
+      "seg_other_0185": 0.5124,
+      "seg_other_0094": 0.5124,
+      "seg_other_0262": 0.5124,
+      "seg_other_0047": 0.5124,
+      "seg_other_0360": 0.5224,
+      "seg_other_0203": 0.5124,
+      "seg_other_0859": 0.503,
+      "seg_other_0921": 0.503,
+      "seg_other_0948": 0.5012,
+      "seg_other_0300": 0.5012,
+      "seg_other_0065": 0.5148,
+      "seg_other_0043": 0.505,
+      "seg_other_0395": 0.509,
+      "seg_other_0107": 0.505,
+      "seg_vocals_0042": 0.572,
+      "seg_vocals_0107": 0.54,
+      "seg_vocals_0009": 0.54,
+      "seg_vocals_0102": 0.54,
+      "seg_vocals_0098": 0.54,
+      "seg_vocals_0054": 0.54,
+      "seg_vocals_0123": 0.54,
+      "seg_drums_0160": 0.5975,
+      "seg_drums_0161": 0.5975,
+      "seg_drums_0072": 0.5975,
+      "seg_drums_0073": 0.5975,
+      "seg_drums_0074": 0.5975,
+      "seg_drums_0300": 0.5091,
+      "seg_drums_1074": 0.5091,
+      "seg_drums_1147": 0.5091,
+      "seg_drums_0246": 0.5091,
+      "seg_drums_0537": 0.5091,
+      "seg_drums_0716": 0.5091,
+      "seg_drums_0725": 0.5141,
+      "seg_drums_0829": 0.5091,
+      "seg_drums_0450": 0.5091,
+      "seg_drums_0208": 0.5091,
+      "seg_drums_1368": 0.5141,
+      "seg_drums_0217": 0.5091,
+      "seg_drums_0198": 0.5065,
+      "seg_drums_0169": 0.5065,
+      "seg_drums_0178": 0.5065,
+      "seg_drums_0847": 0.5065,
+      "seg_drums_0126": 0.5065,
+      "seg_drums_1440": 0.5065,
+      "seg_drums_0449": 0.5065,
+      "seg_drums_0099": 0.5065,
+      "seg_drums_1962": 0.5065,
+      "seg_drums_1850": 0.5065,
+      "seg_drums_0133": 0.5124,
+      "seg_drums_0376": 0.5069,
+      "seg_drums_0591": 0.5069,
+      "seg_drums_0729": 0.5069,
+      "seg_drums_0432": 0.5069,
+      "seg_drums_0289": 0.5069,
+      "seg_drums_1018": 0.5069,
+      "seg_drums_0079": 0.5069,
+      "seg_drums_0568": 0.5069,
+      "seg_bass_0078": 0.532,
+      "seg_bass_0009": 0.532,
+      "seg_bass_0084": 0.5781,
+      "seg_bass_0319": 0.532,
+      "seg_bass_0242": 0.532,
+      "seg_bass_0112": 0.532,
+      "seg_bass_0065": 0.5804,
+      "seg_bass_0488": 0.609,
+      "seg_bass_0465": 0.5447,
+      "seg_bass_0526": 0.5447,
+      "seg_bass_0021": 0.5502,
+      "seg_bass_0394": 0.5904,
+      "seg_bass_0142": 0.5502,
+      "seg_bass_0012": 0.5502,
+      "seg_bass_0098": 0.5502,
+      "seg_bass_0540": 0.5502,
+      "seg_other_0872": 0.5362,
+      "seg_other_0193": 0.5123,
+      "seg_other_0429": 0.5221,
+      "seg_other_0436": 0.5289,
+      "seg_other_0277": 0.5289,
+      "seg_other_0170": 0.5289,
+      "seg_other_0159": 0.552,
+      "seg_other_0177": 0.5289,
+      "seg_other_0211": 0.5289,
+      "seg_other_0202": 0.5289
+    }
+  }
 }

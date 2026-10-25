@@ -488,6 +488,7 @@ def export_bundle() -> None:
                     "length": p.length,
                     "key": p.key,
                     "audio_similarity_score": round(float(getattr(p, "audio_similarity_score", 0.95)), 3),
+                    "cohesion_score": round(float(getattr(p, "cohesion_score", 0.92)), 3),
                 })
 
     # Curate authentic multi-stem phrases
@@ -530,6 +531,15 @@ def export_bundle() -> None:
                 "steps": steps,
             }
 
+    # Load stem_cohesion_weights from weights file if present
+    stem_cohesion_weights = {}
+    if dst_weights.exists():
+        try:
+            w_data = json.loads(dst_weights.read_text())
+            stem_cohesion_weights = w_data.get("stem_cohesion_weights", {})
+        except Exception:
+            pass
+
     standalone_manifest = {
         "version": 3,
         "default_bpm": 126.0,
@@ -540,6 +550,7 @@ def export_bundle() -> None:
         "slices": extracted_slices_manifest,
         "loops": extracted_loops_manifest,
         "phrase_blocks": extracted_phrase_blocks,
+        "stem_cohesion_weights": stem_cohesion_weights,
     }
 
     dst_patterns = public_dir / "standalone_patterns.json"
