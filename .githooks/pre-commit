@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: automatically increment the version control number on every commit
+set -e
+
+if [ -n "$SKIP_VERSION_BUMP" ]; then
+  exit 0
+fi
+
+echo "⚙️ [git hook] Incrementing Wub version control number..."
+python3 scripts/bump_version.py

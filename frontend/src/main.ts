@@ -28,6 +28,7 @@ import type { SliceArcEvent, NebulaPoint, WaveformStemData } from "./visualizer"
 import type { StemName } from "./types";
 import { PsychedelicBackground } from "./psychedelic_bg";
 import type { TripMode, TripPalette } from "./psychedelic_bg";
+import { VERSION_INFO } from "./version";
 
 interface BackendConfig {
   httpBase: string;
@@ -313,6 +314,18 @@ class WubApp {
 
   init(): void {
     this.statusEl = el<HTMLElement>("status-line");
+
+    // Display version info from version.ts
+    const versionBadge = document.getElementById("mc-version-badge");
+    if (versionBadge) {
+      versionBadge.innerHTML = `v${VERSION_INFO.version} <span class="mc-build-num">#${VERSION_INFO.build}</span>`;
+      versionBadge.title = `KG-505 Build #${VERSION_INFO.build} • Rev ${VERSION_INFO.commit} • Built ${VERSION_INFO.timestamp}`;
+    }
+    const footerVersion = document.getElementById("footer-version-tag");
+    if (footerVersion) {
+      footerVersion.textContent = `v${VERSION_INFO.version} (Build #${VERSION_INFO.build} • rev ${VERSION_INFO.commit})`;
+    }
+    console.info(`[KG-505] Initialized v${VERSION_INFO.version} (Build #${VERSION_INFO.build} • rev ${VERSION_INFO.commit})`);
 
     const ringsCanvas = el<HTMLCanvasElement>("rings-canvas");
     const rings = ringsCanvas.getContext("2d");
