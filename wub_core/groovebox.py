@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from wub_core.composer import SongArranger
 from wub_core.model_markov import SliceRef
 from wub_core.patterns import MultiStemPattern, PatternBank, SequencerPattern, SongPhrase
 from wub_core.schema import STEMS, TrackAnalysis
@@ -56,6 +57,7 @@ class GrooveboxConductor:
     def __init__(self, pattern_bank: PatternBank, seed: int = 42) -> None:
         self.bank = pattern_bank
         self.rng = np.random.default_rng(seed)
+        self.arranger = SongArranger(pattern_bank, seed=seed)
         self.state = GrooveboxState()
         self.state.section = "GROOVE_A"
         self.section_bars_remaining = SECTION_DURATIONS.get(self.state.section, 16)
@@ -160,16 +162,22 @@ class GrooveboxConductor:
         # Cohesive Multi-Stem Phrase progression
         if self.current_phrase and phrase_bar < len(self.current_phrase.bars):
             if phrase_bar == 0 and self.state.total_bars > 0:
-                # Phrase boundary: check for next phrase in current track or transition
-                track_phrases = self.bank.phrases_by_track.get(self.current_phrase.track_id, [])
-                next_p_idx = self.current_phrase.phrase_index + 1
-                if next_p_idx < len(track_phrases) and self.rng.random() < 0.7:
-                    self.current_phrase = track_phrases[next_p_idx]
-                else:
-                    self.current_phrase = (
-                        self.bank.pick_phrase(section=self.state.section, preferred_track_id=self.lead_track_id, rng=self.rng)
-                        or self.current_phrase
-                    )
+                # Plan the next phrase and macro section using SongArranger ML
+                cur_key = self.current_phrase.key if self.current_phrase else "C major"
+                cur_bpm = self.current_phrase.bpm if self.current_phrase else 126.0
+                next_p, next_sec, is_sec_change = self.arranger.plan_next_phrase(
+                    current_phrase=self.current_phrase,
+                    current_section=self.state.section,
+                    current_key=cur_key,
+                    current_bpm=cur_bpm,
+                    bars_in_section=self.state.bar_in_section,
+                    total_bars=self.state.total_bars,
+                )
+                self.current_phrase = next_p
+                if is_sec_change:
+                    self.state.section = next_sec
+                    self.state.bar_in_section = 0
+                    self.section_bars_remaining = SECTION_DURATIONS.get(next_sec, 16)
 
             self.current_pattern = self.current_phrase.bars[phrase_bar]
             self.lead_track_id = self.current_phrase.track_id

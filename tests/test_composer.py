@@ -5,8 +5,44 @@ import numpy as np
 import pytest
 
 from tests.test_groovebox import _make_dance_track
-from wub_core.composer import PatternComposer, PhraseComposerModel
+from wub_core.composer import PatternComposer, PhraseComposerModel, SongArranger, camelot_distance
 from wub_core.patterns import PatternBank
+
+
+def test_camelot_distance():
+    assert camelot_distance("F minor", "F minor") == 0.0
+    assert camelot_distance("F minor", "G# major") == 0.5   # relative major/minor
+    assert camelot_distance("F minor", "C minor") == 1.0    # circle of fifths adjacent
+    assert camelot_distance("F minor", "B major") >= 2.0    # distant tritone
+
+
+def test_song_arranger_transitions():
+    tr1 = _make_dance_track("test_tr_arr_1", bpm=126.0, n_bars=16)
+    tr2 = _make_dance_track("test_tr_arr_2", bpm=126.0, n_bars=16)
+    bank = PatternBank()
+    bank.load_from_tracks([tr1, tr2])
+
+    arranger = SongArranger(bank, seed=42)
+    n_trans = arranger.train_on_corpus([tr1, tr2])
+    assert arranger.trained is True
+
+    # Test section decision rules
+    assert arranger.decide_next_section("INTRO", bars_in_section=8, total_bars=8) == "GROOVE_A"
+    assert arranger.decide_next_section("BUILDUP", bars_in_section=8, total_bars=24) == "DROP"
+
+    # Test phrase planning
+    p0 = bank.phrases[0]
+    next_p, next_sec, is_sec_change = arranger.plan_next_phrase(
+        current_phrase=p0,
+        current_section="GROOVE_A",
+        current_key="C major",
+        current_bpm=126.0,
+        bars_in_section=8,
+        total_bars=8,
+    )
+    assert next_p is not None
+    assert len(next_p.bars) == 8
+    assert next_sec in ("GROOVE_A", "BUILDUP")
 
 
 def test_phrase_composer_model_training():

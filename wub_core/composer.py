@@ -15,8 +15,10 @@ import numpy as np
 
 from wub_core.model_markov import SliceRef
 from wub_core.patterns import (
+    MultiStemPattern,
     PatternBank,
     SequencerPattern,
+    SongPhrase,
     classify_drum_groove,
     classify_bass_groove,
     classify_synth_groove,
@@ -263,3 +265,166 @@ class PatternComposer:
                 slices[stem] = None  # Sustain existing slice naturally!
 
         return slices
+
+
+KEY_TO_CAMELOT: Dict[str, Tuple[int, str]] = {
+    "Ab minor": (1, "A"), "G# minor": (1, "A"), "B major": (1, "B"),
+    "Eb minor": (2, "A"), "D# minor": (2, "A"), "F# major": (2, "B"),
+    "Bb minor": (3, "A"), "A# minor": (3, "A"), "Db major": (3, "B"), "C# major": (3, "B"),
+    "F minor": (4, "A"), "Ab major": (4, "B"), "G# major": (4, "B"),
+    "C minor": (5, "A"), "Eb major": (5, "B"), "D# major": (5, "B"),
+    "G minor": (6, "A"), "Bb major": (6, "B"), "A# major": (6, "B"),
+    "D minor": (7, "A"), "F major": (7, "B"),
+    "A minor": (8, "A"), "C major": (8, "B"),
+    "E minor": (9, "A"), "G major": (9, "B"),
+    "B minor": (10, "A"), "D major": (10, "B"),
+    "F# minor": (11, "A"), "A major": (11, "B"),
+    "Db minor": (12, "A"), "C# minor": (12, "A"), "E major": (12, "B"),
+}
+
+
+def camelot_distance(k1: str, k2: str) -> float:
+    """Calculate distance on the Camelot wheel (0.0 = exact match/relative, 1.0 = adjacent fifth)."""
+    c1 = KEY_TO_CAMELOT.get(k1)
+    c2 = KEY_TO_CAMELOT.get(k2)
+    if not c1 or not c2:
+        return 1.5
+    num1, mode1 = c1
+    num2, mode2 = c2
+    diff = abs(num1 - num2)
+    circle_dist = min(diff, 12 - diff)
+    mode_penalty = 0.0 if mode1 == mode2 else 0.5
+    return float(circle_dist + mode_penalty)
+
+
+class SongArranger:
+    """Tier 3 ML Song Arranger: Plans macro-sections and harmonic phrase assemblies.
+    
+    Trained on dance music song structures, energy envelopes, and harmonic mixing
+    rules to assemble multi-phrase tracks that flow with natural tension and release.
+    """
+
+    def __init__(self, bank: PatternBank, seed: int = 42) -> None:
+        self.bank = bank
+        self.rng = np.random.default_rng(seed)
+        self.section_transition_counts: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        self.trained = False
+
+    def train_on_corpus(self, tracks: List[TrackAnalysis]) -> int:
+        """Learn section-to-section transitions and phrase durations from corpus."""
+        n_transitions = 0
+        for tr in tracks:
+            phrases = self.bank.phrases_by_track.get(tr.track_id, [])
+            if len(phrases) < 2:
+                continue
+            for i in range(len(phrases) - 1):
+                s_curr = phrases[i].section
+                s_next = phrases[i + 1].section
+                self.section_transition_counts[s_curr][s_next] += 1.0
+                n_transitions += 1
+        self.trained = True
+        return n_transitions
+
+    def decide_next_section(
+        self,
+        current_section: str,
+        bars_in_section: int,
+        total_bars: int,
+    ) -> str:
+        """Determine whether to stay in current section or transition to next."""
+        if current_section == "INTRO":
+            if bars_in_section >= 8:
+                return "GROOVE_A"
+            return "INTRO"
+
+        elif current_section == "GROOVE_A":
+            if bars_in_section >= 16:
+                return "BUILDUP"
+            elif bars_in_section >= 8:
+                # 45% chance to build, 55% chance to extend groove
+                return "BUILDUP" if self.rng.random() < 0.45 else "GROOVE_A"
+            return "GROOVE_A"
+
+        elif current_section == "BUILDUP":
+            if bars_in_section >= 8:
+                return "DROP"
+            return "BUILDUP"
+
+        elif current_section == "DROP":
+            if bars_in_section >= 16:
+                return "BREAKDOWN"
+            elif bars_in_section >= 8:
+                # 65% chance to sustain peak drop for a 2nd 8-bar phrase
+                return "BREAKDOWN" if self.rng.random() < 0.35 else "DROP"
+            return "DROP"
+
+        elif current_section == "BREAKDOWN":
+            if bars_in_section >= 8:
+                return "BUILDUP"
+            return "BREAKDOWN"
+
+        return "GROOVE_A"
+
+    def plan_next_phrase(
+        self,
+        current_phrase: Optional[SongPhrase],
+        current_section: str,
+        current_key: str,
+        current_bpm: float,
+        bars_in_section: int,
+        total_bars: int,
+    ) -> Tuple[SongPhrase, str, bool]:
+        """Select the next optimal 8-bar phrase and macro section using harmonic compatibility scoring."""
+        next_section = self.decide_next_section(current_section, bars_in_section, total_bars)
+        is_sec_change = (next_section != current_section)
+
+        candidates = list(self.bank.phrases)
+        if not candidates:
+            raise ValueError("No phrases available in PatternBank")
+
+        # Compute weights for each candidate phrase
+        scores = []
+        for p in candidates:
+            # 1. Section Compatibility
+            if p.section == next_section:
+                sec_score = 1.0
+            elif next_section == "BUILDUP" and (p.has_fill or p.section == "GROOVE_A"):
+                sec_score = 0.8
+            elif next_section == "DROP" and p.energy >= 0.4:
+                sec_score = 0.7
+            elif next_section == "INTRO" and p.section in ("GROOVE_A", "BREAKDOWN"):
+                sec_score = 0.6
+            elif next_section == "BREAKDOWN" and p.energy < 0.3:
+                sec_score = 0.7
+            else:
+                sec_score = 0.15
+
+            # 2. Harmonic Key Compatibility
+            k_dist = camelot_distance(current_key, p.key)
+            key_score = float(np.exp(-1.2 * k_dist))
+
+            # 3. BPM Compatibility
+            bpm_diff = abs(p.bpm - current_bpm) / current_bpm
+            bpm_score = float(np.exp(-25.0 * (bpm_diff ** 2)))
+
+            # 4. Track Narrative Continuity
+            narrative_score = 1.0
+            if current_phrase is not None and p.track_id == current_phrase.track_id:
+                if p.phrase_index == current_phrase.phrase_index + 1:
+                    # Consecutive next phrase in the same track: strong continuity bonus!
+                    narrative_score = 3.0 if not is_sec_change else 1.8
+                elif p.phrase_index == current_phrase.phrase_index:
+                    # Loop back to same phrase
+                    narrative_score = 0.2
+                else:
+                    narrative_score = 1.2
+
+            total_score = sec_score * key_score * bpm_score * narrative_score
+            scores.append(max(1e-6, total_score))
+
+        scores_arr = np.array(scores, dtype=np.float64)
+        probs = scores_arr / np.sum(scores_arr)
+
+        chosen_idx = int(self.rng.choice(len(candidates), p=probs))
+        chosen_phrase = candidates[chosen_idx]
+        return chosen_phrase, next_section, is_sec_change

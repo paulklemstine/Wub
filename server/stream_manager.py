@@ -159,6 +159,9 @@ class StreamSession:
             from wub_core.groovebox import GrooveboxConductor
             bank = get_cached_pattern_bank(self.store)
             self._conductor = GrooveboxConductor(bank, seed=int(self.seed + self._rng_seed))
+            multistem = [t for t in self.store.tracks if len(t.stems_available) == 4]
+            target_tracks = multistem if multistem else self.store.tracks
+            self._conductor.arranger.train_on_corpus(target_tracks)
         return self._conductor
 
     def _get_track_center(self, stem: str, track_id: str) -> Optional[Tuple[float, float]]:
