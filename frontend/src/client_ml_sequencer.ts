@@ -1407,11 +1407,11 @@ export class ClientSongArranger {
   };
 
   private sectionTransitions: Record<string, Record<string, number>> = {
-    INTRO: { BUILDUP: 8.0, GROOVE_A: 2.0 },
+    INTRO: { GROOVE_A: 7.0, BUILDUP: 3.0 },
     BUILDUP: { DROP: 10.0 },
-    DROP: { GROOVE_A: 7.0, BREAKDOWN: 3.0 },
-    GROOVE_A: { DROP: 6.0, BUILDUP: 4.0, BREAKDOWN: 2.0 },
-    BREAKDOWN: { BUILDUP: 8.0, GROOVE_A: 3.0 },
+    DROP: { GROOVE_A: 5.0, BREAKDOWN: 5.0 },
+    GROOVE_A: { BUILDUP: 6.5, DROP: 2.5, BREAKDOWN: 1.0 },
+    BREAKDOWN: { BUILDUP: 8.5, GROOVE_A: 1.5 },
   };
 
   constructor(weights?: ComposingMLWeights) {
@@ -1479,19 +1479,35 @@ export class ClientSongArranger {
 
     this.currentSection = nextSec;
     this.barInSection = 0;
-    this.sectionDuration = (nextSec === "BUILDUP" || nextSec === "INTRO" || nextSec === "BREAKDOWN") ? 8 : 16;
+    if (nextSec === "GROOVE_A" || nextSec === "DROP") {
+      this.sectionDuration = Math.random() < 0.4 ? 16 : 32; // 256 or 512 ticks (2 to 4 full 128-tick phrases)
+    } else if (nextSec === "INTRO") {
+      this.sectionDuration = 16; // 256 ticks (two 128-tick phrases)
+    } else if (nextSec === "BREAKDOWN") {
+      this.sectionDuration = Math.random() < 0.5 ? 8 : 16; // 128 or 256 ticks
+    } else {
+      this.sectionDuration = 8; // BUILDUP is 8 bars (128 ticks)
+    }
   }
 
   public setSection(section: string): void {
     this.currentSection = section;
     this.barInSection = 0;
-    this.sectionDuration = (section === "BUILDUP" || section === "INTRO" || section === "BREAKDOWN") ? 8 : 16;
+    if (section === "GROOVE_A" || section === "DROP" || section === "INTRO") {
+      this.sectionDuration = 16;
+    } else {
+      this.sectionDuration = 8;
+    }
   }
 
   public resetToSection(section: string): void {
     this.currentSection = section;
     this.barInSection = 0;
-    this.sectionDuration = (section === "BUILDUP" || section === "INTRO" || section === "BREAKDOWN") ? 8 : 16;
+    if (section === "GROOVE_A" || section === "DROP" || section === "INTRO") {
+      this.sectionDuration = 16;
+    } else {
+      this.sectionDuration = 8;
+    }
   }
 
   public randomizeStartingSection(): string {
@@ -1881,11 +1897,11 @@ export class ClientGrooveboxConductor {
     }
 
     // Same-Track Co-Stem Affinity Prior (Authentic Studio Session Glue)
-    // When drums is playing from a specific track, prioritize bass & synths from that SAME track for 2-4 bars
+    // When drums is playing from a specific track, strongly prioritize bass & synths from that SAME track
     const activeDrumTrack = this.activeLoops.drums?.meta.track_id;
-    if (activeDrumTrack && stem !== "drums" && (phraseBar % 4 < 3)) {
+    if (activeDrumTrack && stem !== "drums") {
       const sameTrackMatches = candidates.filter((l) => l.meta.track_id === activeDrumTrack);
-      if (sameTrackMatches.length > 0 && Math.random() < 0.70) {
+      if (sameTrackMatches.length > 0 && Math.random() < 0.85) {
         candidates = sameTrackMatches;
       }
     }
@@ -2102,7 +2118,8 @@ export class ClientGrooveboxConductor {
       delete this.activePhraseBlock.buffers[stem];
     }
     const sec = this.arranger.getSection();
-    const chord = this.activeProgression[this.phraseBar % this.activeProgression.length];
+    const chordIndex = Math.floor(this.phraseBar / 2) % this.activeProgression.length;
+    const chord = this.activeProgression[chordIndex];
     const loopMatch = this.getBestLoop(stem, sec, this.phraseBar, stem === "drums" ? undefined : chord.rootPitch);
     if (loopMatch) {
       this.activeLoops[stem] = loopMatch.loop;
@@ -2209,7 +2226,7 @@ export class ClientGrooveboxConductor {
       this.engine.setStemFilter("other", 16000, 0.7);
     }
 
-    this.composeBarPatterns(0);
+    this.composeBarPatterns(0, true);
 
     this.timer = window.setInterval(() => this.clockTick(), 20);
   }
@@ -2248,8 +2265,12 @@ export class ClientGrooveboxConductor {
     const isBarStart = (stepInBar === 0);
 
     if (isBarStart) {
-      this.onBarStart();
-      this.composeBarPatterns(phraseBar);
+      let isSectionChange = false;
+      if (tatum > 0) {
+        const res = this.onBarStart();
+        isSectionChange = res.isSectionChange;
+      }
+      this.composeBarPatterns(phraseBar, isSectionChange);
     }
 
     // Trigger audio hits for all active stems
@@ -2265,7 +2286,7 @@ export class ClientGrooveboxConductor {
     this.tatumIndex++;
   }
 
-  private onBarStart(): void {
+  private onBarStart(): { isSectionChange: boolean; section: string } {
     const { isSectionChange, section } = this.arranger.advanceBar();
     this.totalBarsPlayed++;
     this.barsInCurrentKey++;
@@ -2287,9 +2308,16 @@ export class ClientGrooveboxConductor {
       }
     }
 
-    if (isSectionChange || this.barsInCurrentKey >= 32) {
-      // Modulate key on Camelot wheel for continuous infinite harmonic drift!
-      const shouldModulate = isSectionChange ? (Math.random() < 0.60) : (this.barsInCurrentKey >= 32);
+    // Key Modulation (Camelot Drift):
+    // Invariant: NEVER modulate key on BUILDUP -> DROP transition!
+    // A drop must always land with crushing resolve in the same key as the buildup.
+    // Modulate key only after a full song cycle (barsInCurrentKey >= 48)
+    // or when entering a reflective BREAKDOWN / INTRO.
+    const isHarmonicResetPoint = (section === "BREAKDOWN" || section === "INTRO") && isSectionChange;
+    const isSongCycleComplete = this.barsInCurrentKey >= 48 && section !== "BUILDUP" && section !== "DROP";
+
+    if (isHarmonicResetPoint || isSongCycleComplete) {
+      const shouldModulate = Math.random() < 0.65;
       if (shouldModulate) {
         this.currentCamelotCode = getAdjacentCamelotKey(this.currentCamelotCode);
         this.currentTemplateIndex = (this.currentTemplateIndex + 1) % HARMONIC_TEMPLATES.length;
@@ -2298,19 +2326,19 @@ export class ClientGrooveboxConductor {
         this.activeProgression = buildProgressionFromKey(keyInfo, this.currentTemplateIndex);
         console.info(`[KG-505 Harmonic Drift] Key shifted to ${keyInfo.code} (${keyInfo.name}) • Template #${this.currentTemplateIndex + 1}`);
       } else {
-        // Switch progression from manifest or key templates
         this.shiftToNextProgression();
       }
 
       this.phraseBarCount = 0;
       this.activePhraseBlock = null;
-      // Progress to next song composition when cycling into a new verse/song cycle
       if (section === "GROOVE_A" || section === "INTRO") {
         this.vocalSongArranger.nextSong();
       }
     } else {
-      this.phraseBarCount = (this.phraseBarCount + 1) % 4;
+      this.phraseBarCount = (this.phraseBarCount + 1) % 8;
     }
+
+    return { isSectionChange, section };
   }
 
   private schedulePhraseBlock(phrase: LoadedPhraseBlock, when: number, sec: string, barInSec: number): void {
@@ -2410,7 +2438,8 @@ export class ClientGrooveboxConductor {
   private scheduleStepAudio(step: number, when: number, phraseBar: number): void {
     const sec = this.arranger.getSection();
     const barInSec = this.arranger.getBarInSection();
-    const chord = this.activeProgression[phraseBar % this.activeProgression.length];
+    const chordIndex = Math.floor(phraseBar / 2) % this.activeProgression.length;
+    const chord = this.activeProgression[chordIndex];
 
     const dInput = this.engine.getStemInput("drums");
     const bDest = this.bassSidechainGain || this.engine.getStemInput("bass");
@@ -2875,6 +2904,7 @@ export class ClientGrooveboxConductor {
   private scheduleBarLoops(when: number, sec: string, phraseBar: number, chord: ChordStep): void {
     const isBuildupDropBreath = (sec === "BUILDUP" && phraseBar === 7);
     const dropBreathDuration = isBuildupDropBreath ? (14.85 * 60) / (this.currentBpm * 4) : undefined;
+    const barInSec = this.arranger.getBarInSection();
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       const loop = this.activeLoops[stem];
@@ -2884,11 +2914,22 @@ export class ClientGrooveboxConductor {
       if (sec === "BREAKDOWN" && (stem === "drums" || stem === "bass")) {
         continue;
       }
-      if (sec === "INTRO" && stem === "bass") {
-        continue;
+      if (sec === "INTRO" && stem === "bass" && barInSec < 8) {
+        continue; // First 8 bars of INTRO: bass is completely muted
       }
       if (sec === "BUILDUP" && stem === "bass" && phraseBar >= 6) {
-        continue;
+        continue; // Bar 6-7 of BUILDUP: bass cuts out for tension
+      }
+
+      // Staged Vocal Layering in GROOVE_A and INTRO:
+      // Allow listener to "get a feel for the song" in the first 8 bars (128 ticks)
+      if (stem === "vocals") {
+        if (sec === "INTRO" && phraseBar !== 0 && phraseBar !== 4) {
+          continue; // Ethereal calls only on bars 0 & 4
+        }
+        if (sec === "GROOVE_A" && barInSec < 8 && phraseBar !== 0 && phraseBar !== 4) {
+          continue; // Groove foundation in Block 0: vocal calls on bar 0 & 4 only
+        }
       }
 
       let rate = this.currentBpm / loop.meta.source_bpm;
@@ -2918,18 +2959,37 @@ export class ClientGrooveboxConductor {
     }
   }
 
-  private composeBarPatterns(phraseBar: number): void {
+  private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
     const sec = this.arranger.getSection();
+    const isNewPhrase = (phraseBar === 0);
     const isTurnaround = (phraseBar === 7);
 
-    // Dynamic progression shift across 8-bar musical phrase cycles
-    if (phraseBar === 0 && this.totalBarsPlayed > 0 && (this.totalBarsPlayed % 8 === 0)) {
+    // Harmonic pacing: chords sustain for 2 bars (32 steps) across the 8-bar (128-tick) sequence
+    const chordIndex = Math.floor(phraseBar / 2) % this.activeProgression.length;
+    const chord = this.activeProgression[chordIndex];
+    const isChordBoundary = (phraseBar % 2 === 0);
+
+    // Dynamic progression shift across 8-bar musical phrase cycles (when not building up or dropping)
+    if (isNewPhrase && this.totalBarsPlayed > 0 && (this.totalBarsPlayed % 8 === 0) && sec !== "BUILDUP" && sec !== "DROP") {
       this.shiftToNextProgression();
     }
 
-    const chord = this.activeProgression[phraseBar % this.activeProgression.length];
-
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      // 128-Tick Sequence Phrase Lock Architecture:
+      // - DRUMS & BASS: Only re-roll on brand-new 128-tick phrase (phraseBar === 0) or on section transition!
+      //   Keep them firmly locked on bars 1, 2, 3, 4, 5, 6 so the listener can groove to the rhythm!
+      // - OTHER (Synths/Pads/Chords): Only re-roll on 2-bar chord boundaries (phraseBar % 2 === 0) or on section transition.
+      // - VOCALS: Staged according to section arrangement and phrase bar.
+      const shouldLockStem = !isSectionChange && !isNewPhrase &&
+        ((stem === "drums" || stem === "bass") ||
+         (stem === "other" && !isChordBoundary) ||
+         (stem === "vocals" && !isChordBoundary));
+
+      if (shouldLockStem && (this.activeLoops[stem] || this.activePatterns[stem])) {
+        // Locked! Keep existing groove/pattern playing without frantic swapping
+        continue;
+      }
+
       if (this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") {
         // 1. Try to select matching 1-bar studio loop from the authentic training corpus
         const loopMatch = this.getBestLoop(stem, sec, phraseBar, stem === "drums" ? undefined : chord.rootPitch);
@@ -3290,7 +3350,8 @@ export class ClientGrooveboxConductor {
   private buildMeta(stepInPattern: number, patternInCycle: number, phraseBar: number): any {
     const sec = this.arranger.getSection();
     const isFill = (phraseBar === 7);
-    const chord = this.activeProgression[phraseBar % this.activeProgression.length];
+    const chordIndex = Math.floor(phraseBar / 2) % this.activeProgression.length;
+    const chord = this.activeProgression[chordIndex];
 
     const dTerr = this.getStemTerritory("drums");
     const vTerr = this.getStemTerritory("vocals");
