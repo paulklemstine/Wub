@@ -190,6 +190,11 @@ def main() -> None:
                 subprocess.run([sys.executable, "scripts/build_umap.py"], check=False)
                 log("FAISS & UMAP updated.")
 
+                # Multi-Stem Cohesion Feedback Refinement
+                log("Refining Multi-Stem Cohesion Feedback Weights...")
+                subprocess.run([sys.executable, "scripts/train_multistem_cohesion_feedback.py", "--bars", "30"], check=False)
+                log("Multi-Stem Cohesion Feedback Weights updated.")
+
                 # Refresh standalone client bundle
                 log("Exporting updated standalone client bundle...")
                 subprocess.run([sys.executable, "scripts/export_standalone_client_bundle.py"], check=False)
