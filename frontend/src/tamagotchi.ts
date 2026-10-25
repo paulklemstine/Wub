@@ -57,6 +57,10 @@ export class TamagotchiAvatar {
   private temporaryAction: string | null = null;
   private actionTimer: number = 0;
 
+  // Vocal Waveform & Mathematical Singing Mouth State
+  private smoothedVocalAmp: number = 0;
+  private singingLoopPhase: number = 0;
+
   constructor() {
     this.loadState();
   }
@@ -276,7 +280,7 @@ export class TamagotchiAvatar {
       this.speechBubble = `"${meta.vocalLyric}"`;
     }
 
-    this.renderASCII(meta, isDropGap, waveform);
+    this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel);
     this.updateDashboard();
   }
 
@@ -288,65 +292,122 @@ export class TamagotchiAvatar {
     waveform: Uint8Array | null | undefined,
     isSinging: boolean,
     vowel: string,
-    isDropGap: boolean
+    isDropGap: boolean,
+    dt: number,
+    bpm: number,
+    vocalsLevel?: number
   ): string {
-    if (isDropGap) return " O ";
+    if (isDropGap) return "  O  ";
 
-    const WAVE_CHARS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    // 1. Physical Waveform Acoustic Feature Extraction
+    let waveRms = 0;
+    let peakDev = 0;
+    let zeroCrossings = 0;
 
-    if (!waveform || waveform.length === 0) {
-      if (isSinging) {
-        if (vowel === "AH") return " ▃█▃ ";
-        if (vowel === "EE") return " ▄▇▄ ";
-        if (vowel === "OH") return " ▅█▅ ";
-        if (vowel === "OO") return "  █  ";
-        return " ▃▅▃ ";
+    if (waveform && waveform.length > 0) {
+      const len = waveform.length;
+      let sumSquares = 0;
+      let prevSign = 0;
+      for (let i = 0; i < len; i++) {
+        const dev = (waveform[i] - 128) / 128; // Normalized -1.0 .. +1.0
+        sumSquares += dev * dev;
+        const absDev = Math.abs(dev);
+        if (absDev > peakDev) peakDev = absDev;
+        const sign = dev >= 0 ? 1 : -1;
+        if (i > 0 && sign !== prevSign) zeroCrossings++;
+        prevSign = sign;
       }
-      return " ‿ ";
+      waveRms = Math.sqrt(sumSquares / len);
     }
 
-    // Sample 5 points across the center of the waveform buffer
-    const len = waveform.length;
-    const startIdx = Math.floor(len * 0.25);
-    const endIdx = Math.floor(len * 0.75);
-    const step = Math.floor((endIdx - startIdx) / 4);
+    const zcr = waveform && waveform.length > 0 ? zeroCrossings / waveform.length : 0.12;
 
-    let maxAmp = 0;
-    const amps: number[] = [];
-    for (let i = 0; i < 5; i++) {
-      const idx = Math.min(len - 1, startIdx + i * step);
-      const val = Math.abs(waveform[idx] - 128) / 128; // 0..1
-      amps.push(val);
-      if (val > maxAmp) maxAmp = val;
-    }
+    // 2. Instantaneous Vocal Audio Envelope Follower
+    // Voice audio drives the primary mouth aperture (instant attack, musical vocal decay)
+    const instantAmp = (waveform && waveform.length > 0)
+      ? Math.max(waveRms * 2.6, peakDev * 0.95)
+      : Math.max(vocalsLevel ?? 0, isSinging ? 0.40 : 0);
+
+    const attackRate = 28.0;
+    const releaseRate = 8.5;
+    const rate = instantAmp > this.smoothedVocalAmp ? attackRate : releaseRate;
+    this.smoothedVocalAmp += (instantAmp - this.smoothedVocalAmp) * Math.min(1.0, dt * rate);
 
     // Mouth animation strictly active for the voice instrument only
-    const voiceActive = isSinging || maxAmp >= 0.035;
+    const voiceActive = isSinging || this.smoothedVocalAmp >= 0.035 || (vocalsLevel ?? 0) >= 0.015;
     if (!voiceActive) {
-      return " ‿ ";
+      this.smoothedVocalAmp = Math.max(0, this.smoothedVocalAmp - dt * 2.5);
+      return "  ‿  ";
     }
 
-    // Boost sensitivity for animated singing visibility
-    const boost = isSinging ? 3.4 : 2.6;
-    const chars = amps.map((a, i) => {
-      let mod = a * boost;
-      if (vowel === "AH" || vowel === "OH") {
-        if (i === 2) mod *= 1.35; // taller center mouth opening
-      } else if (vowel === "EE") {
-        mod *= 0.95; // wide teeth spread
-      }
-      const charIdx = Math.min(WAVE_CHARS.length - 1, Math.floor(mod * (WAVE_CHARS.length - 1)));
-      return WAVE_CHARS[Math.max(1, charIdx)];
-    });
+    // 3. Mathematically Derived Singing Loop
+    // Vibrato cycle locked to musical tempo (~3.2 - 4.2 Hz)
+    const vibratoHz = (bpm / 60) * 1.6;
+    // Acoustic texture from waveform zero-crossing rate modulates continuous loop speed
+    const loopAdvance = dt * vibratoHz * (1.0 + Math.min(0.5, zcr * 2.0)) * Math.PI * 2;
+    this.singingLoopPhase = (this.singingLoopPhase + loopAdvance) % (Math.PI * 2);
 
-    return chars.join("");
+    // Mathematical aperture modulated by real-time vocal audio envelope & singing loop vibrato
+    const vibratoOsc = Math.sin(this.singingLoopPhase);
+    const dynAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * (1.2 + 0.32 * vibratoOsc) * 1.8));
+    const tier = Math.min(4, Math.floor(dynAperture * 5));
+
+    // Determine Vowel Geometry: from slice metadata or inferred from waveform formant energy (ZCR)
+    let activeVowel = (vowel || "").toUpperCase();
+    if (!activeVowel || !["AH", "EE", "OH", "OO", "AY"].includes(activeVowel)) {
+      if (zcr > 0.22) activeVowel = "EE";       // High formant brightness -> wide smile
+      else if (zcr < 0.08) activeVowel = "OO";  // Deep fundamental -> tight rounded vowel
+      else if (zcr < 0.15) activeVowel = "OH";  // Resonant mid vowel -> round trumpet mouth
+      else activeVowel = "AH";                  // Standard open vocalization
+    }
+
+    // 4. Mathematical Mouth Shape Tables (Primary vs Resonant Vibrato Phase)
+    // Every single glyph string is strictly 5 monospace characters
+    const MOUTH_SHAPES: Record<string, { primary: string[]; resonant: string[] }> = {
+      AH: {
+        primary:  ["  -  ", " ⌢─⌣ ", " ╭─╮ ", " ╭▽╮ ", " ╭█╮ "],
+        resonant: ["  -  ", " ⌢─⌣ ", " ╭◯╮ ", " ╭◇╮ ", " ❨█❩ "],
+      },
+      EE: {
+        primary:  [" ─‿─ ", " ═‿═ ", " ═─═ ", " ◖═◗ ", " [≡] "],
+        resonant: [" ─‿─ ", " ═‿═ ", " ◖─◗ ", " ◖■◗ ", " [█] "],
+      },
+      OH: {
+        primary:  ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◯❩ "],
+        resonant: ["  ·  ", "  o  ", "  0  ", "  ◎  ", " ❨◎❩ "],
+      },
+      OO: {
+        primary:  ["  ·  ", "  ∘  ", "  ᴥ  ", "  o  ", " ◖·◗ "],
+        resonant: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "],
+      },
+      AY: {
+        primary:  ["  ‿  ", " ─⌣─ ", " ╭‿╮ ", " ❨⌢❩ ", " ❨▲❩ "],
+        resonant: ["  ‿  ", " ─‿─ ", " ╭─╮ ", " ❨═❩ ", " ❨▼❩ "],
+      },
+      DEFAULT: {
+        primary:  ["  ‿  ", " ⌢─⌣ ", " ╭─╮ ", " ╭◯╮ ", " ❨█❩ "],
+        resonant: ["  ‿  ", " ─‿─ ", " ╭◇╮ ", " ╭◆╮ ", " ❨◆❩ "],
+      },
+    };
+
+    const family = MOUTH_SHAPES[activeVowel] ?? MOUTH_SHAPES.DEFAULT;
+    // Alternate between primary and resonant singing loop forms at peak of vibrato phase
+    const isResonantPhase = Math.cos(this.singingLoopPhase) > 0.15;
+    return (isResonantPhase && tier >= 2) ? family.resonant[tier] : family.primary[tier];
   }
 
   // ---------------------------------------------------------------------------
   // ASCII Rendering Engine
   // ---------------------------------------------------------------------------
 
-  private renderASCII(meta: GrooveboxMeta | null, isDropGap: boolean, waveform?: Uint8Array | null): void {
+  private renderASCII(
+    meta: GrooveboxMeta | null,
+    isDropGap: boolean,
+    waveform?: Uint8Array | null,
+    dt: number = 0.016,
+    bpm: number = 126,
+    vocalsLevel?: number
+  ): void {
     if (!this.asciiEl) return;
 
     const sec = meta?.section ?? "GROOVE_A";
@@ -379,8 +440,8 @@ export class TamagotchiAvatar {
       eyes = "◕   ◕";
     }
 
-    // Determine Live Animated Waveform Mouth!
-    const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap);
+    // Determine Live Animated Waveform Singing Mouth!
+    const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap, dt, bpm, vocalsLevel);
 
     // Render Unicorn Stages without shifting borders
     let faceLines: string[] = [];
@@ -392,13 +453,13 @@ export class TamagotchiAvatar {
         `       . <span class="rave-horn">\\▲/</span> .       `,
         `      (\\_/)   <span class="rave-spark">${noteChar}</span>    `,
         `     ( <span class="rave-eyes">${eyes}</span> )     `,
-        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~♡</span>  `,
+        `     ( <span class="rave-mouth">${mouth}</span> )  <span class="rave-spark">~♡</span> `,
         `      <span class="rave-body">/     \\</span>       `,
       ] : [
         `       . <span class="rave-horn">\\▲/</span> .       `,
         `      (\\_/)   <span class="rave-spark">${noteChar}</span>    `,
         `     ( <span class="rave-eyes">${eyes}</span> )     `,
-        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~~*</span> `,
+        `     ( <span class="rave-mouth">${mouth}</span> ) <span class="rave-spark">~~*</span> `,
         `      <span class="rave-body">|     |</span>       `,
       ];
     } else if (this.stage === 2) {
@@ -407,13 +468,13 @@ export class TamagotchiAvatar {
         `      . : <span class="rave-horn">\\▲/</span> : .     `,
         `     (\\\\___/)   <span class="rave-spark">${noteChar}</span>  `,
         `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>    `,
-        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~🌈</span> `,
+        `     ( <span class="rave-mouth">${mouth}</span> )  <span class="rave-spark">~🌈</span> `,
         `      <span class="rave-body">/| WUB |\\</span>     `,
       ] : [
         `      . : <span class="rave-horn">\\▲/</span> : .     `,
         `     (\\\\___/)   <span class="rave-spark">${noteChar}</span>  `,
         `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>    `,
-        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~~✨</span>`,
+        `     ( <span class="rave-mouth">${mouth}</span> ) <span class="rave-spark">~~✨</span> `,
         `      <span class="rave-body">\\| WUB |/</span>     `,
       ];
     } else if (this.stage === 3) {
@@ -421,13 +482,13 @@ export class TamagotchiAvatar {
       faceLines = bob ? [
         `      *   <span class="rave-horn">\\⚡/</span>   *     `,
         `    <span class="rave-wings">~/(\\</span> (<span class="rave-eyes">★   ★</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
-        `     <span class="rave-body">&lt;[~</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-body">~]&gt;</span>   `,
+        `     <span class="rave-body">&lt;[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]&gt;</span>   `,
         `      <span class="rave-body">/  | WUB |  \\</span>    `,
         `     <span class="rave-body">(____/   \\____)</span>   `,
       ] : [
         `      *   <span class="rave-horn">\\⚡/</span>   *     `,
         `    <span class="rave-wings">~/\\(</span> (<span class="rave-eyes">★   ★</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
-        `     <span class="rave-body">\\[~</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-body">~]/</span>   `,
+        `     <span class="rave-body">\\[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]/</span>   `,
         `      <span class="rave-body">|  | WUB |  |</span>    `,
         `     <span class="rave-body">(____/   \\____)</span>   `,
       ];
