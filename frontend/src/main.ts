@@ -30,6 +30,7 @@ import { PsychedelicBackground } from "./psychedelic_bg";
 import type { TripMode, TripPalette } from "./psychedelic_bg";
 import { VERSION_INFO } from "./version";
 import { ClientGrooveboxConductor } from "./client_ml_sequencer";
+import { TamagotchiAvatar } from "./tamagotchi";
 
 interface BackendConfig {
   httpBase: string;
@@ -332,6 +333,7 @@ class WubApp {
   private statusEl!: HTMLElement;
   private lastGrooveboxMeta: GrooveboxMeta | null = null;
   private clientConductor: ClientGrooveboxConductor | null = null;
+  private tamagotchi: TamagotchiAvatar | null = null;
   private engineMode: "direct_ml" | "websocket_cloud" = "direct_ml";
   private uiEventQueue: UIEvent[] = [];
   private currentStepIndex: number = 0;
@@ -376,6 +378,13 @@ class WubApp {
       this.bindTripController();
     } catch (e) {
       console.warn("Psychedelic background init failed:", e);
+    }
+
+    try {
+      this.tamagotchi = new TamagotchiAvatar();
+      this.tamagotchi.initDOM();
+    } catch (e) {
+      console.warn("Tamagotchi init failed:", e);
     }
 
     this.bindTransport();
@@ -900,6 +909,9 @@ class WubApp {
   }
 
   private sendFeedback(stem: StemName, rating: 1 | -1): void {
+    if (this.tamagotchi) {
+      this.tamagotchi.recordFeedback(stem, rating);
+    }
     if (this.clientConductor) {
       this.clientConductor.recordFeedback(stem, rating);
     }
@@ -1696,6 +1708,16 @@ class WubApp {
         masterLevel: masterLvl,
       });
     }
+
+    if (this.tamagotchi !== null) {
+      const drumsLvl = this.analyserLevel("drums");
+      const bassLvl = this.analyserLevel("bass");
+      const vocalsLvl = this.analyserLevel("vocals");
+      const otherLvl = this.analyserLevel("other");
+      const masterLvl = Math.max(drumsLvl, bassLvl, vocalsLvl, otherLvl);
+      this.tamagotchi.update(this.lastGrooveboxMeta, audioNow, masterLvl, this.currentStepIndex, this.bpm);
+    }
+
     requestAnimationFrame((next) => this.frame(next));
   }
 

@@ -866,6 +866,119 @@
     #master-canvas { aspect-ratio: 24 / 7; }
     .master-card { grid-column: 1 / -1; }
 
+    /* --- TAMAGOTCHI PET AVATAR PANEL --- */
+    .tamagotchi-card {
+      display: flex;
+      flex-direction: column;
+      background: #0d1219;
+      border: 2px solid var(--mc-bezel);
+    }
+    .tamagotchi-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      padding: 10px;
+      gap: 10px;
+      justify-content: space-between;
+    }
+    .tamagotchi-screen {
+      position: relative;
+      background: #07130b;
+      border: 3px inset #10381e;
+      border-radius: 8px;
+      padding: 8px;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 240px;
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.9), 0 0 10px rgba(57, 255, 20, 0.15);
+    }
+    .tamagotchi-scanlines {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.25) 0px,
+        rgba(0, 0, 0, 0.25) 1px,
+        transparent 1px,
+        transparent 3px
+      );
+      pointer-events: none;
+      z-index: 2;
+    }
+    .tamagotchi-ascii {
+      font-family: "Courier New", Courier, monospace;
+      font-size: 0.85rem;
+      font-weight: 900;
+      line-height: 1.25;
+      color: #39ff14;
+      text-shadow: 0 0 8px rgba(57, 255, 20, 0.8);
+      white-space: pre;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      z-index: 1;
+      text-align: center;
+    }
+    .tamagotchi-dashboard {
+      background: #101520;
+      border: 1px solid #242d3d;
+      border-radius: 6px;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .tamagotchi-stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.72rem;
+      font-family: monospace;
+      color: #94a3b8;
+      font-weight: 700;
+    }
+    .tamagotchi-stat-row b {
+      color: #38bdf8;
+    }
+    #tamagotchi-vibe {
+      color: var(--neon-green);
+    }
+    #tamagotchi-mood {
+      color: var(--neon-amber);
+    }
+    .tamagotchi-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: space-between;
+    }
+    .tamagotchi-btn {
+      flex: 1;
+      background: linear-gradient(180deg, #1e2636 0%, #131822 100%);
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #cbd5e1;
+      padding: 4px 6px;
+      font-size: 0.70rem;
+      font-weight: 800;
+      font-family: monospace;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tamagotchi-btn:hover {
+      background: linear-gradient(180deg, #2a374d 0%, #1a2232 100%);
+      border-color: #38bdf8;
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+    .tamagotchi-btn:active {
+      transform: translateY(1px);
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+    }
+
     /* Status Bar */
     #status-line {
       margin-top: 14px;
@@ -1361,7 +1474,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.47 <span class="mc-build-num">#47</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.48 <span class="mc-build-num">#48</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -1749,6 +1862,31 @@
         </div>
         <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
       </div>
+      <!-- Panel 3: Neural ASCII Tamagotchi Avatar ("WubGotchi") -->
+      <div class="stage-card tamagotchi-card">
+        <div class="stage-header">
+          <span style="color: var(--neon-amber);">WubGotchi • Neural Music Pet</span>
+          <span id="tamagotchi-stage-badge">LVL 1 • BABY BLOB</span>
+        </div>
+        <div class="tamagotchi-container">
+          <div class="tamagotchi-screen">
+            <div class="tamagotchi-scanlines"></div>
+            <pre id="tamagotchi-ascii" class="tamagotchi-ascii" aria-label="Tamagotchi ASCII Face"></pre>
+          </div>
+          <div class="tamagotchi-dashboard">
+            <div class="tamagotchi-stat-row">
+              <span>VIBE: <b id="tamagotchi-vibe">85%</b></span>
+              <span>MOOD: <b id="tamagotchi-mood">CHILL</b></span>
+              <span>XP: <b id="tamagotchi-xp">0</b></span>
+            </div>
+            <div class="tamagotchi-actions">
+              <button id="btn-tamagotchi-pet" class="tamagotchi-btn" type="button" title="Praise & Pet WubGotchi">PET ♥</button>
+              <button id="btn-tamagotchi-feed" class="tamagotchi-btn" type="button" title="Feed Audio Slice Snack">SNACK 🍕</button>
+              <button id="btn-tamagotchi-hype" class="tamagotchi-btn" type="button" title="Hype up the dance energy">HYPE ⚡</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="stage-card master-card">
         <div class="stage-header">
           <span style="color: var(--neon-green);">Master Summed Audio Analysis</span>
@@ -1760,7 +1898,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.47 (Build #47 • rev 1169b76)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.48 (Build #48 • rev d174744)</span>
     </div>
   </div>
 
