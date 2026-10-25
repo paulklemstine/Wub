@@ -1425,7 +1425,7 @@ export class ClientSongArranger {
   private currentSection: string = "GROOVE_A";
   private barInSection: number = 0;
   private totalBars: number = 0;
-  private sectionDuration: number = 32;
+  private sectionDuration: number = 48;
   private sectionEnergyTargets: Record<string, number> = {
     INTRO: 0.25,
     BUILDUP: 0.65,
@@ -1508,16 +1508,16 @@ export class ClientSongArranger {
     this.currentSection = nextSec;
     this.barInSection = 0;
     // Section-Wide Groove Persistence:
-    // Dance movements hold the feel for 32 to 48 bars (512 to 768 tatums),
-    // giving listeners a steady, hypnotic groove that breathes and evolves
+    // Dance movements hold the feel for 48 to 64 bars (768 to 1024 tatums),
+    // giving listeners an extended 2-3 minute steady, hypnotic groove that breathes and evolves
     if (nextSec === "GROOVE_A" || nextSec === "DROP") {
-      this.sectionDuration = Math.random() < 0.5 ? 32 : 48; // 512 or 768 ticks (2 to 3 full 16-bar dance movements)
+      this.sectionDuration = Math.random() < 0.5 ? 48 : 64; // 768 or 1024 tatums (2 to 3 minutes of steady hypnotic groove)
     } else if (nextSec === "INTRO") {
-      this.sectionDuration = Math.random() < 0.5 ? 16 : 32; // 256 or 512 ticks
+      this.sectionDuration = Math.random() < 0.5 ? 16 : 32; // 256 or 512 tatums
     } else if (nextSec === "BREAKDOWN") {
-      this.sectionDuration = Math.random() < 0.5 ? 16 : 24; // 256 or 384 ticks
+      this.sectionDuration = Math.random() < 0.5 ? 16 : 32; // 256 or 512 tatums
     } else {
-      this.sectionDuration = 16; // BUILDUP is 16 bars (256 ticks) for a true gradual buildup arc!
+      this.sectionDuration = 16; // BUILDUP is 16 bars (256 tatums) for a true gradual buildup arc!
     }
   }
 
@@ -1525,9 +1525,9 @@ export class ClientSongArranger {
     this.currentSection = section;
     this.barInSection = 0;
     if (section === "GROOVE_A" || section === "DROP") {
-      this.sectionDuration = 32;
-    } else if (section === "INTRO" || section === "BREAKDOWN" || section === "BUILDUP") {
-      this.sectionDuration = 16;
+      this.sectionDuration = 48;
+    } else if (section === "INTRO" || section === "BREAKDOWN") {
+      this.sectionDuration = 24;
     } else {
       this.sectionDuration = 16;
     }
@@ -1537,9 +1537,9 @@ export class ClientSongArranger {
     this.currentSection = section;
     this.barInSection = 0;
     if (section === "GROOVE_A" || section === "DROP") {
-      this.sectionDuration = 32;
-    } else if (section === "INTRO" || section === "BREAKDOWN" || section === "BUILDUP") {
-      this.sectionDuration = 16;
+      this.sectionDuration = 48;
+    } else if (section === "INTRO" || section === "BREAKDOWN") {
+      this.sectionDuration = 24;
     } else {
       this.sectionDuration = 16;
     }
@@ -1618,6 +1618,7 @@ export class ClientGrooveboxConductor {
   private phraseBlockRegistry: Map<string, LoadedPhraseBlock[]> = new Map();
   private activePhraseBlock: LoadedPhraseBlock | null = null;
   private activeTrackId?: string;
+  private pendingTrackId?: string;
   private phraseBarCount: number = 0;
   private totalBarsPlayed: number = 0;
   private recentLoops: Record<StemName, string[]> = {
@@ -2522,39 +2523,52 @@ export class ClientGrooveboxConductor {
       this.activeSongKit.hatOpen = hatOpenBuf ? { buffer: hatOpenBuf, rate: 1.0, asset: hatOpenAsset || undefined } : null;
       this.activeSongKit.percussion = percBuf ? { buffer: percBuf, rate: 1.0, asset: percAsset || undefined } : null;
       this.activeSongKit.fill = fillBuf ? { buffer: fillBuf, rate: 1.0, asset: fillAsset || undefined } : null;
-
-      // Unlock drums from whole-loop/phrase playback so steered slices play immediately in pattern!
-      if (this.activePhraseBlock?.buffers.drums) {
-        delete this.activePhraseBlock.buffers.drums;
-      }
-      delete this.activeLoops.drums;
     } else if (stem === "bass") {
       this.activeSongKit.bassSubAsset = this.selectBestAsset("bass:sub", terr, keyRoot, coord) || this.selectBestAsset("bass:sub", undefined, keyRoot, coord);
       this.activeSongKit.bassRollingAsset = this.selectBestAsset("bass:rolling", terr, keyRoot, coord) || this.selectBestAsset("bass:rolling", undefined, keyRoot, coord);
-
-      if (this.activePhraseBlock?.buffers.bass) {
-        delete this.activePhraseBlock.buffers.bass;
-      }
-      delete this.activeLoops.bass;
     } else if (stem === "other") {
       this.activeSongKit.chordAsset = this.selectBestAsset("other:chord", terr, keyRoot, coord) || this.selectBestAsset("other:chord", undefined, keyRoot, coord);
       this.activeSongKit.padAsset = this.selectBestAsset("other:pad", terr, keyRoot, coord) || this.selectBestAsset("other:pad", undefined, keyRoot, coord);
       this.activeSongKit.arpAsset = this.selectBestAsset("other:arp", terr, keyRoot, coord) || this.selectBestAsset("other:arp", undefined, keyRoot, coord);
-
-      if (this.activePhraseBlock?.buffers.other) {
-        delete this.activePhraseBlock.buffers.other;
-      }
-      delete this.activeLoops.other;
     } else if (stem === "vocals") {
       this.activeSongKit.vocalHookAsset = this.selectBestAsset("vocals:hook", terr, keyRoot, coord) || this.selectBestAsset("vocals:hook", undefined, keyRoot, coord);
       this.activeSongKit.vocalCallAsset = this.selectBestAsset("vocals:call", terr, keyRoot, coord) || this.selectBestAsset("vocals:call", undefined, keyRoot, coord);
       this.activeSongKit.vocalChopAsset = this.selectBestAsset("vocals:chop", terr, keyRoot, coord) || this.selectBestAsset("vocals:chop", undefined, keyRoot, coord);
-
-      if (this.activePhraseBlock?.buffers.vocals) {
-        delete this.activePhraseBlock.buffers.vocals;
-      }
-      delete this.activeLoops.vocals;
     }
+
+    // In Track-Centric mode: Reticule steers to nearest authentic track session in UMAP space!
+    const nearestTrack = this.findNearestTrackForCoord(coord, stem);
+    if (nearestTrack && nearestTrack !== this.activeTrackId) {
+      this.pendingTrackId = nearestTrack;
+      console.info(`[Client ML] Reticule steered nearest authentic track: ${nearestTrack} (queued for phrase boundary)`);
+    }
+  }
+
+  private findNearestTrackForCoord(coord: { x: number; y: number }, stem: StemName): string | null {
+    const candidateTracks = new Set<string>();
+    for (const [, blocks] of this.phraseBlockRegistry) {
+      for (const b of blocks) {
+        candidateTracks.add(b.meta.track_id);
+      }
+    }
+    if (candidateTracks.size === 0) return null;
+
+    let bestTrack: string | null = null;
+    let minDist = Infinity;
+
+    for (const trackId of candidateTracks) {
+      const stemPos = this.trackStemPositions.get(`${trackId}:${stem}`) ||
+                      this.trackStemPositions.get(`${trackId}:drums`) ||
+                      this.trackStemPositions.get(`${trackId}:other`);
+      if (stemPos) {
+        const d = Math.hypot(stemPos.x - coord.x, stemPos.y - coord.y);
+        if (d < minDist) {
+          minDist = d;
+          bestTrack = trackId;
+        }
+      }
+    }
+    return bestTrack;
   }
 
   private getPitchedSliceFromAsset(
@@ -2897,7 +2911,8 @@ export class ClientGrooveboxConductor {
       this.engine.scheduleSlice(stem, buffer, when, {
         rate,
         duration: dropGapBreathSec,
-        fadeMs: 6,
+        fadeMs: 8,
+        voiceKey: `phrase_${stem}`,
       });
 
       const grid = phrase.meta.onset_grids[stem] || [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
@@ -3102,6 +3117,16 @@ export class ClientGrooveboxConductor {
       if (step % 16 === 0) {
         // Cohesive 4-bar phrase blocks loop continuously across the section without jumping between random tracks!
         if (barInSec % 4 === 0) {
+          // If a new track was steered via reticule, smoothly transition to it at phrase boundary!
+          if (this.pendingTrackId && this.pendingTrackId !== this.activeTrackId) {
+            const steeredBlock = this.getBestPhraseBlock(sec, this.pendingTrackId);
+            if (steeredBlock) {
+              this.activePhraseBlock = steeredBlock;
+              this.activeTrackId = this.pendingTrackId;
+              this.pendingTrackId = undefined;
+              console.info(`[Client ML] DJ Crossfade: Steered to authentic track ${steeredBlock.meta.track_title} at phrase boundary.`);
+            }
+          }
           if (!this.activePhraseBlock) {
             this.activePhraseBlock = this.getBestPhraseBlock(sec, this.activeTrackId);
             if (this.activePhraseBlock && !this.activeTrackId) {
@@ -3628,6 +3653,7 @@ export class ClientGrooveboxConductor {
         rate,
         duration: dropBreathDuration,
         fadeMs: stem === "vocals" ? 8 : 4,
+        voiceKey: `loop_${stem}`,
       });
 
       if (stem === "vocals") {
