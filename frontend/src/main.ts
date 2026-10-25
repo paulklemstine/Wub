@@ -44,7 +44,7 @@ export interface StemState {
 
 const BPM_MIN = 80;
 const BPM_MAX = 175;
-const DEFAULT_BPM = 126;
+const DEFAULT_BPM = 96;
 const CACHE_CAP = 300;
 const WS_PATH = "/ws/stream";
 const RECONNECT_BASE_MS = 500;
@@ -295,13 +295,53 @@ class WubApp {
     this.bindMaster();
     for (const stem of STEMS) this.bindStem(stem);
 
+    // Sticky BPM: load from localStorage if set, else default to 96 BPM
+    const savedBpm = localStorage.getItem("wub_bpm");
+    if (savedBpm) {
+      const parsed = Number(savedBpm);
+      if (Number.isFinite(parsed) && parsed >= BPM_MIN && parsed <= BPM_MAX) {
+        this.bpm = parsed;
+        this.userSetBpm = true;
+        const slider = document.getElementById("bpm-slider");
+        if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
+        const label = document.getElementById("bpm-value");
+        if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
+        this.engine.setTargetBpm(this.bpm);
+      }
+    } else {
+      this.bpm = DEFAULT_BPM;
+      this.userSetBpm = true;
+    }
+
     window.addEventListener("resize", () => {
       if (this.nebula !== null) this.nebula.resize();
     });
     window.addEventListener("beforeunload", () => this.teardown());
 
-    this.setStatus("Ready — press Play.");
+    this.setStatus("Auto-playing at " + Math.round(this.bpm) + " BPM…");
     requestAnimationFrame((t) => this.frame(t));
+
+    // Auto-play immediately (and add pointerdown/keydown fallback if blocked by browser policy)
+    const tryAutoPlay = async () => {
+      if (!this.playing) {
+        try {
+          await this.play();
+        } catch {
+          // Browser requires user gesture
+        }
+      }
+    };
+    setTimeout(() => {
+      void tryAutoPlay();
+    }, 200);
+
+    const onUserInteraction = () => {
+      window.removeEventListener("pointerdown", onUserInteraction);
+      window.removeEventListener("keydown", onUserInteraction);
+      void tryAutoPlay();
+    };
+    window.addEventListener("pointerdown", onUserInteraction, { once: true });
+    window.addEventListener("keydown", onUserInteraction, { once: true });
   }
 
   private bindBackendConfig(): void {
@@ -599,6 +639,7 @@ class WubApp {
       if (!Number.isFinite(next)) return;
       this.userSetBpm = true;
       this.bpm = next;
+      localStorage.setItem("wub_bpm", String(next));
       value.textContent = `${Math.round(next)} BPM`;
       this.engine.setTargetBpm(next);
       this.send({ type: "set_bpm", bpm: next });

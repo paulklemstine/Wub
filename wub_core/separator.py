@@ -56,7 +56,7 @@ def separate_track(
         return track_id, out_dir
 
     # Resolve device (require at least 1.8GB VRAM free on CUDA, else fallback to CPU)
-    if device is None:
+    if device is None or device == "cuda":
         try:
             import torch
 

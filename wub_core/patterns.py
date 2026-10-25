@@ -136,6 +136,7 @@ class PatternBank:
             "INTRO": [],
         }
         self.phrases_by_track: Dict[str, List[SongPhrase]] = {}
+        self.groove_model: Optional[Any] = None
         self.slice_palette: Dict[str, Dict[str, List[SliceRef]]] = {
             "drums": {"kick": [], "snare": [], "hat": [], "fill": []},
             "bass": {"sub": [], "stab": [], "rolling": []},
@@ -343,6 +344,14 @@ class PatternBank:
                 self.phrases_by_section.setdefault(sec, []).append(phrase)
                 self.phrases_by_track.setdefault(tr.track_id, []).append(phrase)
 
+        # Train statistical groove model on extracted track bars
+        try:
+            from wub_core.groove_miner import StatisticalGrooveModel
+            self.groove_model = StatisticalGrooveModel()
+            self.groove_model.fit_from_tracks(tracks)
+        except Exception:
+            pass
+
         return total_extracted
 
     def get_multistem_pattern(self, track_id: str, bar_num: int) -> Optional[MultiStemPattern]:
@@ -443,9 +452,20 @@ class PatternBank:
         preferred_track_id: Optional[str] = None,
         rng: Optional[np.random.Generator] = None,
     ) -> Optional[SequencerPattern]:
-        """Synthesize a dedicated 16-step dance groove pattern using real slices from the palette."""
+        """Synthesize a dedicated 16-step dance groove pattern using statistical ML and real slices."""
         if rng is None:
             rng = np.random.default_rng()
+
+        if self.groove_model is not None:
+            stat_pat = self.groove_model.generate_statistical_groove(
+                stem=stem,
+                template_name=template_name,
+                slice_palette=self.slice_palette.get(stem, {}),
+                preferred_track_id=preferred_track_id,
+                rng=rng,
+            )
+            if stat_pat is not None:
+                return stat_pat
 
         pal = self.slice_palette.get(stem, {})
         steps: List[Optional[SliceRef]] = [None] * 16

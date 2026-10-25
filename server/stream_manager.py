@@ -108,20 +108,26 @@ def get_cached_wubgpt() -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
 
 
 _GLOBAL_PATTERN_BANK: Optional[PatternBank] = None
+_GLOBAL_PATTERN_BANK_COUNT: int = 0
 
 
 def get_cached_pattern_bank(store: CorpusStore) -> PatternBank:
-    global _GLOBAL_PATTERN_BANK
-    if _GLOBAL_PATTERN_BANK is not None and len(_GLOBAL_PATTERN_BANK.patterns_by_stem.get("drums", [])) > 0:
+    global _GLOBAL_PATTERN_BANK, _GLOBAL_PATTERN_BANK_COUNT
+    multistem = [t for t in store.tracks if len(t.stems_available) == 4]
+    target_tracks = multistem if multistem else store.tracks
+    if (
+        _GLOBAL_PATTERN_BANK is not None
+        and len(_GLOBAL_PATTERN_BANK.patterns_by_stem.get("drums", [])) > 0
+        and len(target_tracks) == _GLOBAL_PATTERN_BANK_COUNT
+    ):
         return _GLOBAL_PATTERN_BANK
 
     from wub_core.patterns import PatternBank
 
     bank = PatternBank()
-    multistem = [t for t in store.tracks if len(t.stems_available) == 4]
-    target_tracks = multistem if multistem else store.tracks
     count = bank.load_from_tracks(target_tracks)
-    print(f"[Groovebox] Loaded {count} sequencer patterns into pattern memory bank.")
+    _GLOBAL_PATTERN_BANK_COUNT = len(target_tracks)
+    print(f"[Groovebox] Loaded {count} sequencer patterns from {len(target_tracks)} multi-stem tracks into pattern memory bank.")
     _GLOBAL_PATTERN_BANK = bank
     return bank
 
@@ -136,7 +142,7 @@ class StreamSession:
         "other": 0.5,   # Synths and hooks
     })
     synth_blend: Dict[str, float] = field(default_factory=lambda: {s: 0.0 for s in STEMS})
-    bpm: float = 126.0
+    bpm: float = 96.0
     seed: int = 0
     pitch_lock: bool = True
     key: str = "C major"
@@ -155,9 +161,9 @@ class StreamSession:
     _wubgpt_active_segs: Dict[str, Optional[str]] = field(default_factory=dict)
 
     def get_conductor(self) -> Any:
-        if self._conductor is None:
+        bank = get_cached_pattern_bank(self.store)
+        if self._conductor is None or self._conductor.bank is not bank:
             from wub_core.groovebox import GrooveboxConductor
-            bank = get_cached_pattern_bank(self.store)
             self._conductor = GrooveboxConductor(bank, seed=int(self.seed + self._rng_seed))
             multistem = [t for t in self.store.tracks if len(t.stems_available) == 4]
             target_tracks = multistem if multistem else self.store.tracks
