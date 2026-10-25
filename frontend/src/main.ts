@@ -318,30 +318,10 @@ class WubApp {
     });
     window.addEventListener("beforeunload", () => this.teardown());
 
-    this.setStatus("Auto-playing at " + Math.round(this.bpm) + " BPM…");
+    this.setStatus("Ready — press Play (" + Math.round(this.bpm) + " BPM)");
+    el<HTMLButtonElement>("btn-play").classList.remove("active");
+    el<HTMLButtonElement>("btn-stop").classList.add("active");
     requestAnimationFrame((t) => this.frame(t));
-
-    // Auto-play immediately (and add pointerdown/keydown fallback if blocked by browser policy)
-    const tryAutoPlay = async () => {
-      if (!this.playing) {
-        try {
-          await this.play();
-        } catch {
-          // Browser requires user gesture
-        }
-      }
-    };
-    setTimeout(() => {
-      void tryAutoPlay();
-    }, 200);
-
-    const onUserInteraction = () => {
-      window.removeEventListener("pointerdown", onUserInteraction);
-      window.removeEventListener("keydown", onUserInteraction);
-      void tryAutoPlay();
-    };
-    window.addEventListener("pointerdown", onUserInteraction, { once: true });
-    window.addEventListener("keydown", onUserInteraction, { once: true });
   }
 
   private bindBackendConfig(): void {
