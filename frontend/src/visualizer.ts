@@ -27,6 +27,8 @@ export interface WaveformAnalysisState {
   bpm: number;
   /** Visual-clock seconds (performance.now()/1000). */
   timeSec: number;
+  /** Normalized position of active sequencer playhead across the pattern (0..1). */
+  playheadProgress?: number;
 }
 
 /**
@@ -60,7 +62,9 @@ export function drawWaveformAnalysis(
   const laneH = h / stems.length;
   const bpm = Number.isFinite(state.bpm) && state.bpm > 0 ? state.bpm : 126;
   const beatPhase = (state.timeSec * bpm) / 60.0;
-  const playheadX = ((beatPhase % 4) / 4) * w;
+  const playheadX = typeof state.playheadProgress === "number"
+    ? Math.max(0, Math.min(1, state.playheadProgress)) * w
+    : ((beatPhase % 4) / 4) * w;
 
   for (let i = 0; i < stems.length; i++) {
     const stem = stems[i];
@@ -287,6 +291,8 @@ export interface MasterAnalysisState {
   bpm: number;
   /** Visual-clock seconds (performance.now()/1000). */
   timeSec: number;
+  /** Normalized position of active sequencer playhead across the pattern (0..1). */
+  playheadProgress?: number;
 }
 
 /**
@@ -476,7 +482,9 @@ export function drawMasterAnalysis(
 
   // Master Global Playhead Laser Line
   const beatPhase = (state.timeSec * bpm) / 60.0;
-  const playheadX = ((beatPhase % 4) / 4) * w;
+  const playheadX = typeof state.playheadProgress === "number"
+    ? Math.max(0, Math.min(1, state.playheadProgress)) * w
+    : ((beatPhase % 4) / 4) * w;
   ctx2d.save();
   ctx2d.strokeStyle = "#ffffff";
   ctx2d.lineWidth = 2;

@@ -105,6 +105,13 @@ export interface GrooveboxMeta {
   patternAudioScores?: Record<string, number>;
 }
 
+interface UIEvent {
+  atAudioSec: number;
+  meta: GrooveboxMeta;
+  step: number;
+  totalSteps: number;
+}
+
 interface TatumMessage {
   type: "tatum";
   tatumIndex: number;
@@ -316,6 +323,10 @@ class WubApp {
   private lastGrooveboxMeta: GrooveboxMeta | null = null;
   private clientConductor: ClientGrooveboxConductor | null = null;
   private engineMode: "direct_ml" | "websocket_cloud" = "direct_ml";
+  private uiEventQueue: UIEvent[] = [];
+  private currentStepIndex: number = 0;
+  private currentStepAudioTime: number = 0;
+  private totalStepsInPattern: number = 16;
 
   init(): void {
     this.statusEl = el<HTMLElement>("status-line");
@@ -368,19 +379,13 @@ class WubApp {
     try {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
       void this.clientConductor.loadStaticBundle("data");
-      this.clientConductor.setMetaCallback((meta) => {
-        this.updateGrooveboxUI(meta);
-        const now = this.engine.now();
-        const curStep = ((meta.stepInPattern ?? meta.step_in_pattern ?? 1) - 1) % 16;
-        for (const stem of STEMS) {
-          if (meta.patternGrids?.[stem]?.[curStep] === 1 || meta.pattern_grids?.[stem]?.[curStep] === 1) {
-            this.pushRingEvent({
-              stem,
-              trackId: "kg505_ml",
-              atSec: performance.now() / 1000,
-            });
-          }
-        }
+      this.clientConductor.setMetaCallback((meta, atAudioSec, step, totalSteps) => {
+        this.enqueueUIEvent({
+          atAudioSec,
+          meta,
+          step,
+          totalSteps: totalSteps || 16,
+        });
       });
       this.bindEngineModeToggle();
     } catch (e) {
@@ -687,17 +692,28 @@ class WubApp {
     }
     this.nextTatumTime = 0;
     this.tatumQueue = [];
-    if (this.schedulerTimer !== null) clearInterval(this.schedulerTimer);
-    this.schedulerTimer = setInterval(() => this.scheduleLoop(), 20);
+    this.uiEventQueue = [];
+    this.currentStepIndex = 0;
+    this.currentStepAudioTime = 0;
 
     this.applyAllMixerState();
 
     if (this.engineMode === "direct_ml") {
+      // Direct ML: Ensure any existing WebSocket / cloud scheduler is cleanly deactivated
+      if (this.ws !== null) {
+        try { this.ws.close(); } catch {}
+        this.ws = null;
+      }
+      this.clearReconnect();
+      if (this.schedulerTimer !== null) {
+        clearInterval(this.schedulerTimer);
+        this.schedulerTimer = null;
+      }
       this.setStatus(`Playing — 🧠 Direct In-Browser ML Engine (Sample-Accurate Sequencer @ ${Math.round(this.bpm)} BPM)`);
       this.clientConductor?.start(this.bpm);
     } else {
-      this.nextTatumTime = 0;
-      this.tatumQueue = [];
+      // WebSocket cloud mode: Stop client sequencer
+      this.clientConductor?.stop();
       if (this.schedulerTimer !== null) clearInterval(this.schedulerTimer);
       this.schedulerTimer = setInterval(() => this.scheduleLoop(), 20);
       this.connectWs();
@@ -717,6 +733,9 @@ class WubApp {
     }
     this.clientConductor?.stop();
     this.tatumQueue = [];
+    this.uiEventQueue = [];
+    this.currentStepIndex = 0;
+    this.currentStepAudioTime = 0;
     this.nextTatumTime = 0;
     this.activeSlices = {};
     if (this.ws !== null) {
@@ -768,8 +787,7 @@ class WubApp {
       this.engine.setTargetBpm(next);
       this.send({ type: "set_bpm", bpm: next });
       if (this.playing && this.engineMode === "direct_ml" && this.clientConductor) {
-        this.clientConductor.stop();
-        this.clientConductor.start(this.bpm);
+        this.clientConductor.setBpm(next);
       }
     });
 
@@ -1159,11 +1177,14 @@ class WubApp {
       const when = this.nextTatumTime;
 
       if (msg.groovebox) {
-        const delayMs = Math.max(0, (when - now) * 1000);
-        setTimeout(() => {
-          if (!this.playing) return;
-          this.updateGrooveboxUI(msg.groovebox!);
-        }, delayMs);
+        const step = (msg.groovebox.stepInPattern ?? 1) - 1;
+        const totalSteps = msg.groovebox.stepsPerPattern ?? 16;
+        this.enqueueUIEvent({
+          atAudioSec: when,
+          meta: msg.groovebox,
+          step,
+          totalSteps,
+        });
       }
 
       for (const stem of STEMS) {
@@ -1174,6 +1195,13 @@ class WubApp {
         }
       }
       this.nextTatumTime += tatumDur;
+    }
+  }
+
+  private enqueueUIEvent(ev: UIEvent): void {
+    this.uiEventQueue.push(ev);
+    if (this.uiEventQueue.length > 128) {
+      this.uiEventQueue.splice(0, this.uiEventQueue.length - 128);
     }
   }
 
@@ -1490,6 +1518,41 @@ class WubApp {
 
   private frame(_t: number): void {
     const t = visualNow();
+    const audioNow = this.engine.now();
+
+    // Consume queued UI events strictly when their scheduled audio playback time arrives
+    let latestUIEvent: UIEvent | null = null;
+    while (this.uiEventQueue.length > 0 && this.uiEventQueue[0].atAudioSec <= audioNow) {
+      latestUIEvent = this.uiEventQueue.shift()!;
+    }
+
+    if (latestUIEvent !== null) {
+      this.currentStepIndex = latestUIEvent.step;
+      this.currentStepAudioTime = latestUIEvent.atAudioSec;
+      this.totalStepsInPattern = latestUIEvent.totalSteps || 16;
+      this.updateGrooveboxUI(latestUIEvent.meta);
+
+      const curStep = latestUIEvent.step % 16;
+      for (const stem of STEMS) {
+        if (latestUIEvent.meta.patternGrids?.[stem]?.[curStep] === 1) {
+          this.pushRingEvent({
+            stem,
+            trackId: "kg505_ml",
+            atSec: t,
+          });
+        }
+      }
+    }
+
+    // Continuous sub-step playhead progression across pattern
+    let playheadProgress: number | undefined = undefined;
+    if (this.playing && this.totalStepsInPattern > 0) {
+      const stepDur = 60 / this.bpm / 4;
+      const stepElapsed = Math.max(0, audioNow - this.currentStepAudioTime);
+      const frac = Math.min(1.0, stepElapsed / stepDur);
+      playheadProgress = ((this.currentStepIndex + frac) % this.totalStepsInPattern) / this.totalStepsInPattern;
+    }
+
     // Prune stale ring events.
     while (this.ringEvents.length > 0 && t - this.ringEvents[0].atSec > RING_WINDOW_SEC) {
       this.ringEvents.shift();
@@ -1531,6 +1594,7 @@ class WubApp {
         stems: stemsData,
         bpm: this.bpm,
         timeSec: t,
+        playheadProgress,
       });
     }
     if (this.masterCtx !== null) {
@@ -1565,6 +1629,7 @@ class WubApp {
         level,
         bpm: this.bpm,
         timeSec: t,
+        playheadProgress,
       });
     }
     if (this.nebula !== null) {

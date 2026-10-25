@@ -677,7 +677,8 @@ export class ClientGrooveboxConductor {
   private isRunning: boolean = false;
   private timer: number | null = null;
   private nextStepTime: number = 0;
-  private onMetaCallback?: (meta: any) => void;
+  private currentBpm: number = 126;
+  private onMetaCallback?: (meta: any, atAudioSec: number, step: number, totalSteps: number) => void;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -796,8 +797,12 @@ export class ClientGrooveboxConductor {
     return true;
   }
 
-  public setMetaCallback(cb: (meta: any) => void): void {
+  public setMetaCallback(cb: (meta: any, atAudioSec: number, step: number, totalSteps: number) => void): void {
     this.onMetaCallback = cb;
+  }
+
+  public setBpm(bpm: number): void {
+    this.currentBpm = Math.max(60, Math.min(200, bpm));
   }
 
   public recordFeedback(stem: StemName, rating: 1 | -1): void {
@@ -825,11 +830,9 @@ export class ClientGrooveboxConductor {
   public start(bpm: number): void {
     if (this.isRunning) return;
     this.isRunning = true;
+    this.currentBpm = Math.max(60, Math.min(200, bpm));
     this.nextStepTime = this.engine.now() + 0.05;
     this.tatumIndex = 0;
-    this.phraseBar = 0;
-    this.stepInBar = 0;
-    this.patternInCycle = 1;
 
     // Pick a progression
     this.progressionIndex = (this.progressionIndex + 1) % DEFAULT_PROGRESSIONS.length;
@@ -837,8 +840,7 @@ export class ClientGrooveboxConductor {
 
     this.composeBarPatterns(0);
 
-    const stepIntervalMs = (60 / bpm / 4) * 1000;
-    this.timer = window.setInterval(() => this.clockTick(bpm), Math.min(25, stepIntervalMs / 2));
+    this.timer = window.setInterval(() => this.clockTick(), 20);
   }
 
   public stop(): void {
@@ -849,44 +851,47 @@ export class ClientGrooveboxConductor {
     }
   }
 
-  private clockTick(bpm: number): void {
+  private clockTick(): void {
     if (!this.isRunning) return;
     const now = this.engine.now();
-    const tatumSec = 60 / bpm / 4;
+    const tatumSec = 60 / this.currentBpm / 4;
 
-    // Schedule 150ms ahead
+    // Clamp if nextStepTime fell behind current audio clock (e.g. background tab)
+    if (this.nextStepTime < now) {
+      this.nextStepTime = now + 0.02;
+    }
+
+    // Schedule 150ms ahead into Web Audio
     while (this.nextStepTime < now + 0.15) {
-      this.processStep(this.nextStepTime, bpm);
+      this.processStep(this.nextStepTime);
       this.nextStepTime += tatumSec;
     }
   }
 
-  private processStep(when: number, bpm: number): void {
-    const step = this.stepInBar;
-    const isBarStart = (step === 0);
+  private processStep(when: number): void {
+    const tatum = this.tatumIndex;
+    const stepInPattern = tatum % this.stepsPerPattern;
+    const patternInCycle = Math.floor(tatum / this.stepsPerPattern) % this.patternsPerCycle;
+    const stepInBar = tatum % 16;
+    const phraseBar = Math.floor(tatum / 16) % 8;
+    const isBarStart = (stepInBar === 0);
 
     if (isBarStart) {
       this.onBarStart();
+      this.composeBarPatterns(phraseBar);
     }
 
     // Trigger audio hits for all active stems
-    this.scheduleStepAudio(step, when, bpm);
+    this.scheduleStepAudio(stepInPattern, when, phraseBar);
 
-    // Emit live GrooveboxMeta for UI matrix, LED dots, and timeline
+    // Emit live GrooveboxMeta with exact audio schedule timestamp
     if (this.onMetaCallback) {
-      const meta = this.buildMeta(step);
-      this.onMetaCallback(meta);
+      const meta = this.buildMeta(stepInPattern, patternInCycle, phraseBar);
+      this.onMetaCallback(meta, when, stepInPattern, this.stepsPerPattern);
     }
 
-    // Advance metrical counters
-    this.stepInBar = (this.stepInBar + 1) % 16;
+    // Advance master monotonic tatum step
     this.tatumIndex++;
-
-    if (this.stepInBar === 0) {
-      this.phraseBar = (this.phraseBar + 1) % 8;
-      this.patternInCycle = (this.patternInCycle % this.patternsPerCycle) + 1;
-      this.composeBarPatterns(this.phraseBar);
-    }
   }
 
   private onBarStart(): void {
@@ -915,10 +920,9 @@ export class ClientGrooveboxConductor {
     }
   }
 
-  private scheduleStepAudio(step: number, when: number, bpm: number): void {
+  private scheduleStepAudio(step: number, when: number, phraseBar: number): void {
     const sec = this.arranger.getSection();
     const barInSec = this.arranger.getBarInSection();
-    const phraseBar = this.phraseBar; // 0..7
     const chord = this.activeProgression[phraseBar % this.activeProgression.length];
 
     const dInput = this.engine.getStemInput("drums");
@@ -936,7 +940,7 @@ export class ClientGrooveboxConductor {
 
       if (isBreakdown) {
         // Breakdown: Kicks completely muted, gentle closed hats on 2, 6, 10, 14
-        if (step in [2, 6, 10, 14]) {
+        if ([2, 6, 10, 14].includes(step % 16)) {
           this.synth.playHat(when, 0.45, false, dInput);
         }
       } else if (isBuildup) {
@@ -970,7 +974,7 @@ export class ClientGrooveboxConductor {
 
         // Trigger Pitch Riser on bar 6 step 0
         if (barInSec === 6 && step === 0) {
-          this.synth.playRiser(when, (60 / bpm) * 8, dInput);
+          this.synth.playRiser(when, (60 / this.currentBpm) * 8, dInput);
         }
       } else {
         // Standard Groove / Drop: Full rhythm driving forward
@@ -978,7 +982,7 @@ export class ClientGrooveboxConductor {
         const vel = dPat.velocities ? dPat.velocities[step] : 1.0;
 
         // Kick triggers: 0, 4, 8, 12 (or syncopations)
-        const isKickStep = (step in [0, 4, 8, 12]) || (step === 10 && dPat.groove_type.includes("syncopated"));
+        const isKickStep = ([0, 4, 8, 12].includes(step % 16)) || ((step % 16) === 10 && dPat.groove_type.includes("syncopated"));
         if (isKickStep && hasHit) {
           const kickBuf = this.synth.getSliceBuffer("drums:kick");
           if (kickBuf) this.engine.scheduleSlice("drums", kickBuf, when, { rate: 1.0, fadeMs: 2 });
@@ -987,7 +991,7 @@ export class ClientGrooveboxConductor {
         }
 
         // Snare / Clap triggers: 4 and 12 (+ fill roll on bar 7)
-        const isSnareStep = (step === 4 || step === 12) || (phraseBar === 7 && step >= 8 && step !== 15);
+        const isSnareStep = ((step % 16) === 4 || (step % 16) === 12) || (phraseBar === 7 && (step % 16) >= 8 && (step % 16) !== 15);
         if (isSnareStep) {
           const snareBuf = this.synth.getSliceBuffer("drums:snare");
           if (snareBuf) this.engine.scheduleSlice("drums", snareBuf, when, { rate: 1.0, fadeMs: 2 });
@@ -995,7 +999,7 @@ export class ClientGrooveboxConductor {
         }
 
         // Hi-Hats: Open hat on upbeats (2, 6, 10, 14) + closed 16th hats
-        if (step in [2, 6, 10, 14]) {
+        if ([2, 6, 10, 14].includes(step % 16)) {
           const hatBuf = this.synth.getSliceBuffer("drums:hat_open");
           if (hatBuf) this.engine.scheduleSlice("drums", hatBuf, when, { rate: 1.0, fadeMs: 2 });
           else this.synth.playHat(when, 0.90, true, dInput);
@@ -1006,7 +1010,7 @@ export class ClientGrooveboxConductor {
         }
 
         // Syncopated Perc on 3, 7, 11
-        if (step in [3, 7, 11] && (sec === "DROP" || sec === "GROOVE_A")) {
+        if ([3, 7, 11].includes(step % 16) && (sec === "DROP" || sec === "GROOVE_A")) {
           this.synth.playPerc(when, 0.70, 420.0, dInput);
         }
       }
@@ -1192,10 +1196,10 @@ export class ClientGrooveboxConductor {
     this.activePatterns.vocals = this.synthesizePattern("vocals", "chop");
   }
 
-  private buildMeta(step: number): any {
+  private buildMeta(stepInPattern: number, patternInCycle: number, phraseBar: number): any {
     const sec = this.arranger.getSection();
-    const isFill = (this.phraseBar === 7);
-    const chord = this.activeProgression[this.phraseBar % this.activeProgression.length];
+    const isFill = (phraseBar === 7);
+    const chord = this.activeProgression[phraseBar % this.activeProgression.length];
 
     const patterns: Record<string, string> = {};
     const patternGrooves: Record<string, string> = {};
@@ -1216,14 +1220,15 @@ export class ClientGrooveboxConductor {
       }
     }
 
+    const stepInBar = (stepInPattern % 16);
     return {
       tatum_index: this.tatumIndex,
       tatumIndex: this.tatumIndex,
       section: sec,
-      phrase_bar: this.phraseBar + 1,
-      phraseBar: this.phraseBar + 1,
-      step_in_bar: step + 1,
-      stepInBar: step + 1,
+      phrase_bar: phraseBar + 1,
+      phraseBar: phraseBar + 1,
+      step_in_bar: stepInBar + 1,
+      stepInBar: stepInBar + 1,
       total_bars: this.arranger.getTotalBars(),
       totalBars: this.arranger.getTotalBars(),
       section_bars_elapsed: this.arranger.getBarInSection(),
@@ -1240,18 +1245,18 @@ export class ClientGrooveboxConductor {
       chordName: chord.name,
       cycle_mode: this.cycleMode,
       cycleMode: this.cycleMode,
-      pattern_in_cycle: this.patternInCycle,
-      patternInCycle: this.patternInCycle,
+      pattern_in_cycle: patternInCycle + 1,
+      patternInCycle: patternInCycle + 1,
       patterns_per_cycle: this.patternsPerCycle,
       patternsPerCycle: this.patternsPerCycle,
-      step_in_pattern: step + 1,
-      stepInPattern: step + 1,
+      step_in_pattern: stepInPattern + 1,
+      stepInPattern: stepInPattern + 1,
       steps_per_pattern: this.stepsPerPattern,
       stepsPerPattern: this.stepsPerPattern,
       cycle_total_steps: this.patternsPerCycle * this.stepsPerPattern,
       cycleTotalSteps: this.patternsPerCycle * this.stepsPerPattern,
-      cycle_progress: ((this.patternInCycle - 1) * this.stepsPerPattern + step) / (this.patternsPerCycle * this.stepsPerPattern),
-      cycleProgress: ((this.patternInCycle - 1) * this.stepsPerPattern + step) / (this.patternsPerCycle * this.stepsPerPattern),
+      cycle_progress: (patternInCycle * this.stepsPerPattern + stepInPattern) / (this.patternsPerCycle * this.stepsPerPattern),
+      cycleProgress: (patternInCycle * this.stepsPerPattern + stepInPattern) / (this.patternsPerCycle * this.stepsPerPattern),
       patterns,
       pattern_grooves: patternGrooves,
       patternGrooves,
