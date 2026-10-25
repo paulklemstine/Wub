@@ -32,6 +32,7 @@ class SequencerPattern:
     bar_num: int = 0
     bpm: float = 126.0
     key: str = "C major"
+    audio_similarity_score: float = 0.5  # Acoustic similarity to real song audio (0.0..1.0)
 
 
 @dataclass
@@ -50,6 +51,7 @@ class MultiStemPattern:
     stems: Dict[str, List[Optional[SliceRef]]] = field(default_factory=dict)
     onset_grids: Dict[str, List[int]] = field(default_factory=dict)
     groove_types: Dict[str, str] = field(default_factory=dict)
+    audio_similarity_score: float = 0.5  # Acoustic similarity to real song audio (0.0..1.0)
 
 
 @dataclass
@@ -440,7 +442,28 @@ class PatternBank:
         except Exception:
             pass
 
+        # Load acoustic feedback scores if available
+        try:
+            fb_path = Path("data/pattern_audio_feedback.json")
+            if fb_path.exists():
+                import json
+                fb = json.loads(fb_path.read_text())
+                pat_scores = fb.get("patterns", {})
+                for stem in STEMS:
+                    for pat in self.patterns_by_stem.get(stem, []):
+                        if pat.id in pat_scores:
+                            pat.audio_similarity_score = float(pat_scores[pat.id].get("composite_score", 0.5))
+        except Exception:
+            pass
+
         return total_extracted
+
+    def add_pattern(self, pat: SequencerPattern) -> None:
+        """Register a new or optimized sequencer pattern into the bank."""
+        self.patterns_by_stem.setdefault(pat.stem, []).append(pat)
+        self.patterns_by_type.setdefault(pat.stem, {}).setdefault(pat.groove_type, []).append(pat)
+        if pat.track_id:
+            self.patterns_by_track[(pat.track_id, pat.stem, pat.bar_num)] = pat
 
     def get_multistem_pattern(self, track_id: str, bar_num: int) -> Optional[MultiStemPattern]:
         return self.multistem_by_track_bar.get((track_id, bar_num))
@@ -549,6 +572,11 @@ class PatternBank:
         weights = np.ones(len(candidates), dtype=float)
         for i, p in enumerate(candidates):
             w = 1.0
+            # Incorporate audio similarity score feedback from training
+            sim = getattr(p, "audio_similarity_score", 0.5)
+            # Patterns that sound closely matched to real song audio get boosted up to 3x
+            w *= float(np.exp(2.0 * (sim - 0.5)))
+
             if feedback_weights and p.track_id in feedback_weights:
                 w *= float(feedback_weights[p.track_id])
             if preferred_track_id and p.track_id == preferred_track_id:
@@ -681,6 +709,7 @@ class PatternBank:
             bar_num=pat.bar_num,
             bpm=pat.bpm,
             key=pat.key,
+            audio_similarity_score=pat.audio_similarity_score,
         )
 
     def create_groove_pattern(

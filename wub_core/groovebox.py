@@ -509,6 +509,7 @@ class GrooveboxConductor:
         pattern_track_ids = {}
         pattern_ids = {}
         pattern_ratings = {}
+        pattern_audio_scores = {}
 
         for s in STEMS:
             pat = self.active_patterns.get(s)
@@ -522,6 +523,7 @@ class GrooveboxConductor:
                 pattern_track_ids[s] = pat.track_id
                 pattern_ids[s] = pat.id
                 pattern_ratings[s] = self.feedback_data.get(s, {}).get(pat.track_id, 0)
+                pattern_audio_scores[s] = round(float(getattr(pat, "audio_similarity_score", 0.5)), 3)
             elif self.current_pattern and s in self.current_pattern.stems:
                 pattern_titles[s] = f"{self.current_pattern.track_title[:24]} Bar {self.current_pattern.bar_num}"
                 pattern_grooves[s] = self.current_pattern.groove_types.get(s, "groove")
@@ -533,6 +535,7 @@ class GrooveboxConductor:
                 pattern_track_ids[s] = self.current_pattern.track_id
                 pattern_ids[s] = f"pat_{s}_{self.current_pattern.track_id[:6]}_{self.current_pattern.bar_num:03d}"
                 pattern_ratings[s] = self.feedback_data.get(s, {}).get(self.current_pattern.track_id, 0)
+                pattern_audio_scores[s] = round(float(getattr(self.current_pattern, "audio_similarity_score", 0.5)), 3)
             else:
                 pattern_titles[s] = "Rest"
                 pattern_grooves[s] = "none"
@@ -540,6 +543,7 @@ class GrooveboxConductor:
                 pattern_track_ids[s] = ""
                 pattern_ids[s] = ""
                 pattern_ratings[s] = 0
+                pattern_audio_scores[s] = 0.5
 
         meta = {
             "section": sec,
@@ -566,6 +570,7 @@ class GrooveboxConductor:
             "pattern_track_ids": pattern_track_ids,
             "pattern_ids": pattern_ids,
             "pattern_ratings": pattern_ratings,
+            "pattern_audio_scores": pattern_audio_scores,
         }
 
         # Advance step counter

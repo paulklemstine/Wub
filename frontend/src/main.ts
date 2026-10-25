@@ -101,6 +101,7 @@ export interface GrooveboxMeta {
   patternTrackIds?: Record<string, string>;
   patternIds?: Record<string, string>;
   patternRatings?: Record<string, number>;
+  patternAudioScores?: Record<string, number>;
 }
 
 interface TatumMessage {
@@ -205,6 +206,7 @@ function parseServerMessage(raw: string): HelloMessage | TatumMessage | null {
         patternTrackIds: isRecord(gbRaw["pattern_track_ids"]) ? (gbRaw["pattern_track_ids"] as Record<string, string>) : {},
         patternIds: isRecord(gbRaw["pattern_ids"]) ? (gbRaw["pattern_ids"] as Record<string, string>) : {},
         patternRatings: isRecord(gbRaw["pattern_ratings"]) ? (gbRaw["pattern_ratings"] as Record<string, number>) : {},
+        patternAudioScores: isRecord(gbRaw["pattern_audio_scores"]) ? (gbRaw["pattern_audio_scores"] as Record<string, number>) : {},
       };
     }
     return {
@@ -1238,6 +1240,10 @@ class WubApp {
       const titleEl = document.getElementById(`matrix-title-${stem}`);
       if (titleEl && gb.patterns[stem]) {
         titleEl.textContent = gb.patterns[stem];
+        const audioScore = gb.patternAudioScores?.[stem];
+        if (audioScore !== undefined) {
+          titleEl.title = `${gb.patterns[stem]} • Real Audio Similarity Match: ${Math.round(audioScore * 100)}%`;
+        }
       }
       const grooveEl = document.getElementById(`matrix-groove-${stem}`);
       if (grooveEl && gb.patternGrooves?.[stem]) {

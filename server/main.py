@@ -128,6 +128,17 @@ def api_set_cycle_mode(body: dict) -> dict:
     return {"status": "ok" if ok else "error", "cycle_mode": cond.cycle_mode, "patterns_per_cycle": cond.patterns_per_cycle, "steps_per_pattern": cond.steps_per_pattern}
 
 
+@app.get("/api/pattern_audio_feedback")
+def api_pattern_audio_feedback() -> dict:
+    from wub_core.pattern_audio_trainer import FEEDBACK_FILE
+    if FEEDBACK_FILE.exists():
+        try:
+            return json.loads(FEEDBACK_FILE.read_text())
+        except Exception:
+            pass
+    return {"version": 1, "patterns": {}, "grooves": {}, "eval_count": 0}
+
+
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket) -> None:
     await ws.accept()
