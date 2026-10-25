@@ -35,12 +35,31 @@
     .mc-chassis-shell {
       max-width: 1400px;
       margin: 0 auto;
-      background: var(--mc-chassis);
-      border: 2px solid var(--mc-bezel);
+      background: rgba(18, 22, 30, 0.88);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 2px solid rgba(53, 63, 84, 0.85);
       border-radius: 12px;
       padding: 14px 18px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9), 0 0 30px rgba(0, 229, 255, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
       position: relative;
+      z-index: 1;
+    }
+
+    #psychedelic-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 0;
+      pointer-events: none;
+      display: block;
+    }
+
+    #master, #structure-panel, #trip-panel, .mixer-channel, .stage-card {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
 
     header {
@@ -932,6 +951,164 @@
       box-shadow: 0 0 10px #ffffff, 0 0 18px var(--neon-magenta) !important;
     }
 
+    /* --- PSYCHEDELIC TRIP LIGHT SHOW CONTROLLER --- */
+    #trip-panel {
+      background: var(--mc-panel);
+      border: 2px solid var(--mc-bezel);
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin: 12px 0;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 6px 20px rgba(0, 0, 0, 0.7);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .trip-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .trip-title {
+      font-weight: 900;
+      font-size: 0.88rem;
+      letter-spacing: 0.12em;
+      color: var(--neon-magenta);
+      text-transform: uppercase;
+      text-shadow: 0 0 10px rgba(255, 0, 127, 0.6);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .trip-led {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--neon-magenta);
+      box-shadow: 0 0 8px var(--neon-magenta), 0 0 16px var(--neon-magenta);
+      display: inline-block;
+      animation: trip-pulse 2s infinite ease-in-out;
+    }
+    @keyframes trip-pulse {
+      0%, 100% { opacity: 0.6; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.15); box-shadow: 0 0 12px var(--neon-cyan), 0 0 24px var(--neon-magenta); }
+    }
+    .trip-sub {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: #94a3b8;
+      text-transform: uppercase;
+      margin-left: 6px;
+    }
+    .trip-controls-grid {
+      display: grid;
+      grid-template-columns: auto auto 1fr;
+      gap: 16px;
+      align-items: center;
+      background: #090c12;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid #1e2434;
+    }
+    @media (max-width: 900px) {
+      .trip-controls-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .trip-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .trip-group-label {
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      color: #64748b;
+      text-transform: uppercase;
+    }
+    .trip-buttons {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .trip-buttons button {
+      padding: 5px 10px;
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+      background: #151a24;
+      border: 1px solid #2b3447;
+      color: #94a3b8;
+      border-radius: 4px;
+    }
+    .trip-buttons button.active {
+      color: #ffffff;
+      background: #252f44;
+      border-color: var(--neon-magenta);
+      box-shadow: 0 0 8px rgba(255, 0, 127, 0.6);
+    }
+    .trip-mode-btn[data-mode="dmt"].active {
+      border-color: #ff007f !important;
+      box-shadow: 0 0 10px #ff007f !important;
+      color: #ffcce6 !important;
+    }
+    .trip-mode-btn[data-mode="lsd"].active {
+      border-color: #00e5ff !important;
+      box-shadow: 0 0 10px #00e5ff !important;
+      color: #ccf8ff !important;
+    }
+    .trip-mode-btn[data-mode="mescaline"].active {
+      border-color: #ffb700 !important;
+      box-shadow: 0 0 10px #ffb700 !important;
+      color: #fff0cc !important;
+    }
+    .trip-mode-btn[data-mode="hybrid"].active {
+      border-color: #00ff88 !important;
+      box-shadow: 0 0 10px #00ff88 !important;
+      color: #ccffe6 !important;
+    }
+    .trip-sliders {
+      display: flex;
+      flex-direction: row;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .trip-sliders label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      color: #94a3b8;
+    }
+    .trip-sliders input[type="range"] {
+      width: 90px;
+    }
+    .trip-sliders .val {
+      font-family: monospace;
+      color: var(--neon-cyan);
+      min-width: 32px;
+    }
+    .trip-check-label {
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .trip-check-label input {
+      accent-color: var(--neon-green);
+    }
+    #trip-toggle-btn.active {
+      border-color: var(--neon-green);
+      color: #ffffff;
+      background: #143522;
+      box-shadow: 0 0 10px rgba(0, 255, 136, 0.6);
+    }
+
     dialog {
       background: #141822;
       color: #e2e8f0;
@@ -944,6 +1121,7 @@
   </style>
 </head>
 <body>
+  <canvas id="psychedelic-bg"></canvas>
   <div class="mc-chassis-shell">
     <header>
       <div class="mc-brand-block">
@@ -1150,6 +1328,54 @@
             <span class="matrix-badge" id="matrix-groove-other" style="color: var(--neon-magenta); border-color: var(--neon-magenta);">HOOK</span>
           </div>
           <div class="matrix-grid-strip" id="matrix-grid-other"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PSYCHEDELIC LIGHT SHOW CONTROLLER -->
+    <section id="trip-panel" aria-label="Psychedelic Light Show Controller">
+      <div class="trip-header">
+        <div class="trip-title">
+          <span class="trip-led"></span>
+          <span>DMT / LSD / MESCALINE LIGHT SHOW</span>
+          <span class="trip-sub">Self-Reactive • WebGL • Color-Cycling • 60 FPS</span>
+        </div>
+        <div class="trip-master-toggle">
+          <button id="trip-toggle-btn" class="active" type="button" aria-pressed="true">LIGHT SHOW: ON</button>
+        </div>
+      </div>
+      <div class="trip-controls-grid">
+        <div class="trip-group">
+          <span class="trip-group-label">TRIP MODE</span>
+          <div class="trip-buttons" id="trip-mode-btns">
+            <button type="button" class="trip-mode-btn active" data-mode="hybrid">HYBRID</button>
+            <button type="button" class="trip-mode-btn" data-mode="dmt">DMT FRACTAL</button>
+            <button type="button" class="trip-mode-btn" data-mode="lsd">LSD MELTING</button>
+            <button type="button" class="trip-mode-btn" data-mode="mescaline">MESCALINE</button>
+          </div>
+        </div>
+        <div class="trip-group">
+          <span class="trip-group-label">COLOR PALETTE</span>
+          <div class="trip-buttons" id="trip-palette-btns">
+            <button type="button" class="trip-pal-btn active" data-palette="neon">NEON HYPER</button>
+            <button type="button" class="trip-pal-btn" data-palette="acid">ACID RAINBOW</button>
+            <button type="button" class="trip-pal-btn" data-palette="solar">SOLAR FIRE</button>
+            <button type="button" class="trip-pal-btn" data-palette="cyber">CYBER UV</button>
+          </div>
+        </div>
+        <div class="trip-group trip-sliders">
+          <label>INTENSITY
+            <input id="trip-intensity-slider" type="range" min="0" max="1.5" step="0.05" value="0.95" />
+            <span class="val" id="trip-intensity-val">95%</span>
+          </label>
+          <label>SPEED
+            <input id="trip-speed-slider" type="range" min="0.2" max="2.5" step="0.05" value="1.0" />
+            <span class="val" id="trip-speed-val">1.0x</span>
+          </label>
+          <label class="trip-check-label">
+            <input id="trip-reactive-check" type="checkbox" checked />
+            <span>AUDIO REACTIVE</span>
+          </label>
         </div>
       </div>
     </section>

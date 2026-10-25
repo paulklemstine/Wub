@@ -26,6 +26,8 @@ import { AudioEngine, STEMS } from "./audio_engine";
 import { NebulaRenderer, drawRings, drawWaveformAnalysis, drawMasterAnalysis } from "./visualizer";
 import type { SliceArcEvent, NebulaPoint, WaveformStemData } from "./visualizer";
 import type { StemName } from "./types";
+import { PsychedelicBackground } from "./psychedelic_bg";
+import type { TripMode, TripPalette } from "./psychedelic_bg";
 
 interface BackendConfig {
   httpBase: string;
@@ -252,6 +254,7 @@ class WubApp {
   private nebula: NebulaRenderer | null = null;
   private ringsCtx: CanvasRenderingContext2D | null = null;
   private masterCtx: CanvasRenderingContext2D | null = null;
+  private psychedelicBg: PsychedelicBackground | null = null;
 
   private states: Record<StemName, StemState> = {
     drums: { stem: "drums", mute: false, solo: false, volume: 1, chaos: 0.1, synthBlend: 0.0 },
@@ -307,6 +310,13 @@ class WubApp {
     });
     this.nebula.setPoints(demoPoints());
     void this.loadUmapPoints();
+
+    try {
+      this.psychedelicBg = new PsychedelicBackground("psychedelic-bg");
+      this.bindTripController();
+    } catch (e) {
+      console.warn("Psychedelic background init failed:", e);
+    }
 
     this.bindTransport();
     this.bindBackendConfig();
@@ -655,6 +665,78 @@ class WubApp {
       this.musicalKey = key.value;
       this.send({ type: "set_key", key: key.value });
     });
+  }
+
+  private bindTripController(): void {
+    if (this.psychedelicBg === null) return;
+    const bg = this.psychedelicBg;
+
+    // Master Toggle
+    const toggleBtn = document.getElementById("trip-toggle-btn") as HTMLButtonElement | null;
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", () => {
+        const cur = bg.getState().enabled;
+        const next = !cur;
+        bg.setState({ enabled: next });
+        toggleBtn.classList.toggle("active", next);
+        toggleBtn.setAttribute("aria-pressed", String(next));
+        toggleBtn.textContent = next ? "LIGHT SHOW: ON" : "LIGHT SHOW: OFF";
+      });
+    }
+
+    // Mode Buttons
+    const modeBtns = document.querySelectorAll<HTMLButtonElement>(".trip-mode-btn");
+    modeBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = btn.dataset.mode as TripMode;
+        if (!mode) return;
+        bg.setState({ mode });
+        modeBtns.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+    });
+
+    // Palette Buttons
+    const palBtns = document.querySelectorAll<HTMLButtonElement>(".trip-pal-btn");
+    palBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const palette = btn.dataset.palette as TripPalette;
+        if (!palette) return;
+        bg.setState({ palette });
+        palBtns.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+    });
+
+    // Intensity Slider
+    const intensitySlider = document.getElementById("trip-intensity-slider") as HTMLInputElement | null;
+    const intensityVal = document.getElementById("trip-intensity-val");
+    if (intensitySlider && intensityVal) {
+      intensitySlider.addEventListener("input", () => {
+        const val = Number(intensitySlider.value);
+        bg.setState({ intensity: val });
+        intensityVal.textContent = `${Math.round((val / 1.5) * 100)}%`;
+      });
+    }
+
+    // Speed Slider
+    const speedSlider = document.getElementById("trip-speed-slider") as HTMLInputElement | null;
+    const speedVal = document.getElementById("trip-speed-val");
+    if (speedSlider && speedVal) {
+      speedSlider.addEventListener("input", () => {
+        const val = Number(speedSlider.value);
+        bg.setState({ speed: val });
+        speedVal.textContent = `${val.toFixed(1)}x`;
+      });
+    }
+
+    // Audio Reactive Checkbox
+    const reactiveCheck = document.getElementById("trip-reactive-check") as HTMLInputElement | null;
+    if (reactiveCheck) {
+      reactiveCheck.addEventListener("change", () => {
+        bg.setState({ audioReactive: reactiveCheck.checked });
+      });
+    }
   }
 
   private bindStem(stem: StemName): void {
@@ -1233,6 +1315,23 @@ class WubApp {
           vocals: this.analyserLevel("vocals"),
           other: this.analyserLevel("other"),
         },
+      });
+    }
+    if (this.psychedelicBg !== null) {
+      const drumsLvl = this.analyserLevel("drums");
+      const bassLvl = this.analyserLevel("bass");
+      const vocalsLvl = this.analyserLevel("vocals");
+      const otherLvl = this.analyserLevel("other");
+      const combinedBass = Math.max(drumsLvl * 1.15, bassLvl * 1.25);
+      const combinedMid = Math.max(vocalsLvl, otherLvl);
+      const combinedTreble = (drumsLvl * 0.5) + (otherLvl * 0.7);
+      const masterLvl = Math.max(combinedBass, combinedMid, combinedTreble);
+
+      this.psychedelicBg.render({
+        bassLevel: combinedBass,
+        midLevel: combinedMid,
+        trebleLevel: combinedTreble,
+        masterLevel: masterLvl,
       });
     }
     requestAnimationFrame((next) => this.frame(next));
