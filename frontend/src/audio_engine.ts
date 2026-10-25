@@ -29,6 +29,12 @@ export interface SliceScheduleOptions {
   fadeMs?: number;
   /** Optional playback duration clamp in seconds (fades out at end of duration). */
   duration?: number;
+  /** Gain / velocity scaling (0.0..1.5). */
+  gain?: number;
+  /** Dedicated voice track key (e.g. "drums:kick", "drums:snare", "drums:hat_closed", "drums:hat_open", "bass"). */
+  voiceKey?: string;
+  /** Voice keys to choke (fade out over crossfadeSec). E.g. ["drums:hat_open"] choked by hat_closed. */
+  chokeKeys?: string[];
 }
 
 interface StemFilterSpec {
@@ -80,7 +86,7 @@ export class AudioEngine {
   private buses_: Record<StemName, StemBus> | null = null;
   private timer_: ReturnType<typeof setInterval> | null = null;
   private liveSources_: Map<AudioBufferSourceNode, number> = new Map();
-  private activeVoices_: Partial<Record<StemName, { source: AudioBufferSourceNode; gain: GainNode; endAt: number }>> = {};
+  private activeVoices_: Partial<Record<string, { source: AudioBufferSourceNode; gain: GainNode; endAt: number }>> = {};
   private targetBpm_: number = 128;
 
   // Desired mixer state, applied lazily so UI can be touched before the
@@ -295,18 +301,23 @@ export class AudioEngine {
         ? opts.duration
         : naturalDurSec;
 
-    // Crossfade out previous voice on this stem so voices never pile up into noise
-    const prev = this.activeVoices_[stem];
-    if (prev && prev.endAt > startAt) {
-      const crossfadeSec = Math.min(requestedFadeMs / 1000, 0.008);
-      const stopAt = startAt + crossfadeSec;
-      try {
-        prev.gain.gain.cancelScheduledValues(startAt);
-        prev.gain.gain.setValueAtTime(prev.gain.gain.value, startAt);
-        prev.gain.gain.linearRampToValueAtTime(0, stopAt);
-        prev.source.stop(stopAt + 0.01);
-      } catch {
-        // Safe if already stopped
+    // Choke voice tracking: allows independent drum tracks (kick, snare, hat) while choking open hats or previous bass
+    const vKey = opts.voiceKey || stem;
+    const chokes = [vKey, ...(opts.chokeKeys || [])];
+    const crossfadeSec = Math.min(requestedFadeMs / 1000, 0.008);
+
+    for (const cKey of chokes) {
+      const prev = this.activeVoices_[cKey];
+      if (prev && prev.endAt > startAt) {
+        const stopAt = startAt + crossfadeSec;
+        try {
+          prev.gain.gain.cancelScheduledValues(startAt);
+          prev.gain.gain.setValueAtTime(prev.gain.gain.value, startAt);
+          prev.gain.gain.linearRampToValueAtTime(0, stopAt);
+          prev.source.stop(stopAt + 0.01);
+        } catch {
+          // Safe if already stopped
+        }
       }
     }
 
@@ -315,6 +326,7 @@ export class AudioEngine {
     source.playbackRate.value = rate;
     source.detune.value = detune;
 
+    const vGain = typeof opts.gain === "number" && Number.isFinite(opts.gain) ? Math.max(0, Math.min(1.5, opts.gain)) : 1.0;
     const sliceGain = ctx.createGain();
     source.connect(sliceGain);
     sliceGain.connect(buses[stem].input);
@@ -327,28 +339,28 @@ export class AudioEngine {
         const fadeOut = new Float32Array(n);
         for (let i = 0; i < n; i++) {
           const t = i / (n - 1);
-          // Equal-power (cosine) curves: sin^2 + cos^2 = 1 across the seam.
-          fadeIn[i] = Math.sin(0.5 * Math.PI * t);
-          fadeOut[i] = Math.cos(0.5 * Math.PI * t);
+          // Equal-power (cosine) curves scaled by velocity/gain
+          fadeIn[i] = Math.sin(0.5 * Math.PI * t) * vGain;
+          fadeOut[i] = Math.cos(0.5 * Math.PI * t) * vGain;
         }
         const endAt = startAt + durSec;
         sliceGain.gain.setValueAtTime(0, startAt);
         sliceGain.gain.setValueCurveAtTime(fadeIn, startAt, fadeSec);
-        sliceGain.gain.setValueAtTime(1, startAt + fadeSec);
+        sliceGain.gain.setValueAtTime(vGain, startAt + fadeSec);
         sliceGain.gain.setValueCurveAtTime(fadeOut, endAt - fadeSec, fadeSec);
       } else {
-        sliceGain.gain.value = 1;
+        sliceGain.gain.value = vGain;
       }
     } else {
-      sliceGain.gain.value = 1;
+      sliceGain.gain.value = vGain;
     }
 
     const endAt = startAt + durSec;
-    this.activeVoices_[stem] = { source, gain: sliceGain, endAt };
+    this.activeVoices_[vKey] = { source, gain: sliceGain, endAt };
     source.onended = () => {
       this.liveSources_.delete(source);
-      if (this.activeVoices_[stem]?.source === source) {
-        delete this.activeVoices_[stem];
+      if (this.activeVoices_[vKey]?.source === source) {
+        delete this.activeVoices_[vKey];
       }
       try {
         source.disconnect();

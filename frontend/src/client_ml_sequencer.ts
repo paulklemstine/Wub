@@ -1067,6 +1067,7 @@ export class ClientGrooveboxConductor {
     other: 0,
   };
 
+  public playbackMode: "slices" | "phrase_blocks" = "slices";
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
   private loopRegistry: Map<StemName, LoadedLoop[]> = new Map();
   private activeLoops: Partial<Record<StemName, LoadedLoop>> = {};
@@ -1347,9 +1348,29 @@ export class ClientGrooveboxConductor {
       // Intelligent fallback within same stem
       const [stem, cat] = stemCategory.split(":");
       if (stem === "vocals") {
-        for (const alt of ["hook", "phrase", "call", "chop"]) {
+        for (const alt of ["hook", "call", "chop"]) {
           if (alt !== cat) {
             const altList = this.sliceRegistry.get(`vocals:${alt}`);
+            if (altList && altList.length > 0) {
+              list = altList;
+              break;
+            }
+          }
+        }
+      } else if (stem === "bass") {
+        for (const alt of ["sub", "rolling", "stab"]) {
+          if (alt !== cat) {
+            const altList = this.sliceRegistry.get(`bass:${alt}`);
+            if (altList && altList.length > 0) {
+              list = altList;
+              break;
+            }
+          }
+        }
+      } else if (stem === "other") {
+        for (const alt of ["chord", "arp", "pad"]) {
+          if (alt !== cat) {
+            const altList = this.sliceRegistry.get(`other:${alt}`);
             if (altList && altList.length > 0) {
               list = altList;
               break;
@@ -1386,8 +1407,10 @@ export class ClientGrooveboxConductor {
       }
     }
 
-    // Shift rate by semitones: 2^(shift / 12)
-    const rate = Math.pow(2, bestShift / 12);
+    // If exact chromatic pitch exists (bestDiff == 0), rate is 1.0 (zero drift!).
+    // Otherwise clamp shift to +/- 1 semitone max.
+    const clampedShift = Math.max(-1, Math.min(1, bestShift));
+    const rate = Math.pow(2, clampedShift / 12);
     return { buffer: best.buffer, rate };
   }
 
@@ -1644,24 +1667,29 @@ export class ClientGrooveboxConductor {
     const oDest = this.synthSidechainGain || this.engine.getStemInput("other");
     const vInput = this.engine.getStemInput("vocals");
 
-    // 0. Trigger 4-bar cohesive multi-stem phrase blocks or 1-bar studio loops on downbeat
-    if (step % 16 === 0) {
-      if (this.phraseBarCount === 0 || !this.activePhraseBlock) {
-        this.activePhraseBlock = this.getBestPhraseBlock(sec);
-        if (this.activePhraseBlock) {
-          this.schedulePhraseBlock(this.activePhraseBlock, when, sec, barInSec);
+    // 0. Downbeat handling: phrase blocks mode vs authentic learned slice mode
+    if (this.playbackMode === "phrase_blocks") {
+      if (step % 16 === 0) {
+        if (this.phraseBarCount === 0 || !this.activePhraseBlock) {
+          this.activePhraseBlock = this.getBestPhraseBlock(sec);
+          if (this.activePhraseBlock) {
+            this.schedulePhraseBlock(this.activePhraseBlock, when, sec, barInSec);
+          }
+        }
+        if (!this.activePhraseBlock) {
+          this.scheduleBarLoops(when, sec, phraseBar, chord);
         }
       }
-      if (!this.activePhraseBlock) {
-        this.scheduleBarLoops(when, sec, phraseBar, chord);
-      }
+    } else {
+      this.activePhraseBlock = null;
+      this.activeLoops = {};
     }
 
     // -------------------------------------------------------------------------
-    // 1. DRUMS (Section-Aware Arrangement)
+    // 1. DRUMS (Section-Aware Arrangement with Real Acoustic Slices)
     // -------------------------------------------------------------------------
     const dPat = this.activePatterns.drums;
-    if (this.activePhraseBlock || this.activeLoops.drums) {
+    if (this.playbackMode === "phrase_blocks" && (this.activePhraseBlock || this.activeLoops.drums)) {
       // Continuous studio drum phrase or loop is active: dynamic sidechain ducking on downbeats
       if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
         this.applySidechainDucking(when);
@@ -1677,11 +1705,20 @@ export class ClientGrooveboxConductor {
       if (isBreakdown) {
         // Breakdown: Kicks completely muted, gentle closed hats on 2, 6, 10, 14
         if ([2, 6, 10, 14].includes(step % 16)) {
-          this.synth.playHat(when, 0.45, false, dInput);
+          const hatSlice = this.getBestSlice("drums:hat_closed");
+          if (hatSlice) {
+            this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.0,
+              gain: 0.45,
+              voiceKey: "drums:hat_closed",
+            });
+          } else {
+            this.synth.playHat(when, 0.45, false, dInput);
+          }
         }
       } else if (isBuildup) {
         // Buildup: Snare acceleration & tension riser!
-        // Steps 0..14: Accelerating snare roll
         let playSnare = false;
         let snareVel = 0.70;
 
@@ -1699,12 +1736,32 @@ export class ClientGrooveboxConductor {
         }
 
         if (playSnare) {
-          this.synth.playSnare(when, snareVel, dInput);
+          const snareSlice = this.getBestSlice("drums:snare");
+          if (snareSlice) {
+            this.engine.scheduleSlice("drums", snareSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: snareVel,
+              voiceKey: "drums:snare",
+            });
+          } else {
+            this.synth.playSnare(when, snareVel, dInput);
+          }
         }
 
-        // Downbeat Kick pulse
+        // Downbeat Kick pulse (bars 1-5 only)
         if (step % 4 === 0 && barInSec < 6) {
-          this.synth.playKick(when, 0.90, dInput);
+          const kickSlice = this.getBestSlice("drums:kick");
+          if (kickSlice) {
+            this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: 0.90,
+              voiceKey: "drums:kick",
+            });
+          } else {
+            this.synth.playKick(when, 0.90, dInput);
+          }
           this.applySidechainDucking(when);
         }
 
@@ -1713,7 +1770,7 @@ export class ClientGrooveboxConductor {
           this.synth.playRiser(when, (60 / this.currentBpm) * 8, dInput);
         }
       } else {
-        // Standard Groove / Drop: Full rhythm driving forward
+        // Standard Groove / Drop: Full rhythm driving forward with authentic slices
         const hasHit = dPat.onset_grid.includes(step);
         const vel = dPat.velocities ? dPat.velocities[step] : 1.0;
 
@@ -1721,8 +1778,16 @@ export class ClientGrooveboxConductor {
         const isKickStep = ([0, 4, 8, 12].includes(step % 16)) || ((step % 16) === 10 && dPat.groove_type.includes("syncopated"));
         if (isKickStep && hasHit) {
           const kickSlice = this.getBestSlice("drums:kick");
-          if (kickSlice) this.engine.scheduleSlice("drums", kickSlice.buffer, when, { rate: kickSlice.rate, fadeMs: 2 });
-          this.synth.playKick(when, vel, dInput);
+          if (kickSlice) {
+            this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: vel,
+              voiceKey: "drums:kick",
+            });
+          } else {
+            this.synth.playKick(when, vel, dInput);
+          }
           this.applySidechainDucking(when);
         }
 
@@ -1730,50 +1795,97 @@ export class ClientGrooveboxConductor {
         const isSnareStep = ((step % 16) === 4 || (step % 16) === 12) || (phraseBar === 7 && (step % 16) >= 8 && (step % 16) !== 15);
         if (isSnareStep) {
           const snareSlice = this.getBestSlice("drums:snare");
-          if (snareSlice) this.engine.scheduleSlice("drums", snareSlice.buffer, when, { rate: snareSlice.rate, fadeMs: 2 });
-          this.synth.playSnare(when, vel, dInput);
+          if (snareSlice) {
+            this.engine.scheduleSlice("drums", snareSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: vel,
+              voiceKey: "drums:snare",
+            });
+          } else {
+            this.synth.playSnare(when, vel, dInput);
+          }
         }
 
-        // Hi-Hats: Open hat on upbeats (2, 6, 10, 14) + closed 16th hats
+        // Hi-Hats: Open hat on upbeats (2, 6, 10, 14) + closed 16th hats with choking
         if ([2, 6, 10, 14].includes(step % 16)) {
           const hatSlice = this.getBestSlice("drums:hat_open");
-          if (hatSlice) this.engine.scheduleSlice("drums", hatSlice.buffer, when, { rate: hatSlice.rate, fadeMs: 2 });
-          else this.synth.playHat(when, 0.90, true, dInput);
+          if (hatSlice) {
+            this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: 0.88,
+              voiceKey: "drums:hat_open",
+            });
+          } else {
+            this.synth.playHat(when, 0.90, true, dInput);
+          }
         } else if (step % 2 === 1 && sec !== "INTRO") {
           const hatSlice = this.getBestSlice("drums:hat_closed");
           const hatVel = (step % 4 === 1 || step % 4 === 3) ? 0.72 : 0.58;
-          if (hatSlice) this.engine.scheduleSlice("drums", hatSlice.buffer, when, { rate: hatSlice.rate, fadeMs: 2 });
-          else this.synth.playHat(when, hatVel, false, dInput);
+          if (hatSlice) {
+            this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.0,
+              gain: hatVel,
+              voiceKey: "drums:hat_closed",
+              chokeKeys: ["drums:hat_open"],
+            });
+          } else {
+            this.synth.playHat(when, hatVel, false, dInput);
+          }
         }
 
         // Syncopated Perc on 3, 7, 11
         if ([3, 7, 11].includes(step % 16) && (sec === "DROP" || sec === "GROOVE_A")) {
           const percSlice = this.getBestSlice("drums:percussion");
-          if (percSlice) this.engine.scheduleSlice("drums", percSlice.buffer, when, { rate: percSlice.rate, fadeMs: 2 });
-          else this.synth.playPerc(when, 0.70, 420.0, dInput);
+          if (percSlice) {
+            this.engine.scheduleSlice("drums", percSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: 0.75,
+              voiceKey: "drums:perc",
+            });
+          } else {
+            this.synth.playPerc(when, 0.70, 420.0, dInput);
+          }
         }
 
         // Dramatic Turnaround Fill on Bar 7
         if (phraseBar === 7 && step === 14) {
           const fillSlice = this.getBestSlice("drums:fill");
-          if (fillSlice) this.engine.scheduleSlice("drums", fillSlice.buffer, when, { rate: fillSlice.rate, fadeMs: 2 });
+          if (fillSlice) {
+            this.engine.scheduleSlice("drums", fillSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 2.0,
+              gain: 1.0,
+              voiceKey: "drums:fill",
+            });
+          }
         }
       }
     }
 
     // -------------------------------------------------------------------------
-    // 2. BASS (Harmonically Locked to Chord Progression Root)
+    // 2. BASS (Harmonically Locked to Chord Progression Root with Pure Slices)
     // -------------------------------------------------------------------------
     const bPat = this.activePatterns.bass;
-    if (!this.activePhraseBlock && !this.activeLoops.bass && bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
+    if (bPat && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
       if (bPat.onset_grid.includes(step)) {
         let vel = bPat.velocities ? bPat.velocities[step] : 0.90;
         const dur = (bPat.groove_type === "rolling") ? 0.14 : 0.22;
-        const subSlice = this.getBestSlice(bPat.groove_type === "rolling" ? "bass:rolling" : "bass:sub", chord.rootPitch);
+        const bassCat = bPat.groove_type === "rolling" ? "bass:rolling" : (bPat.groove_type === "stabs" ? "bass:stab" : "bass:sub");
+        const subSlice = this.getBestSlice(bassCat, chord.rootPitch);
         if (subSlice) {
-          this.engine.scheduleSlice("bass", subSlice.buffer, when, { rate: subSlice.rate, fadeMs: 4 });
+          this.engine.scheduleSlice("bass", subSlice.buffer, when, {
+            rate: subSlice.rate,
+            fadeMs: 4,
+            gain: vel,
+            voiceKey: "bass",
+          });
+        } else {
+          this.synth.playSub(when, vel, chord.bassHz, dur, bDest);
         }
-        this.synth.playSub(when, vel, chord.bassHz, dur, bDest);
       }
     }
 
@@ -1781,41 +1893,51 @@ export class ClientGrooveboxConductor {
     // 3. SYNTHS / OTHER (Full Harmonic Triads & Arpeggios)
     // -------------------------------------------------------------------------
     const oPat = this.activePatterns.other;
-    if (!this.activePhraseBlock && !this.activeLoops.other && oPat) {
+    if (oPat) {
       if (oPat.onset_grid.includes(step)) {
         const vel = oPat.velocities ? oPat.velocities[step] : 0.85;
 
         if (oPat.groove_type === "riff" || sec === "DROP") {
-          // Melodic phrase contour across the 8-bar musical arc
-          const thirdMult = chord.isMinor ? Math.pow(2, 3 / 12) : Math.pow(2, 4 / 12);
-          const fifthMult = Math.pow(2, 7 / 12);
-          const octMult = 2.0;
-          const ninthMult = 2.0 * Math.pow(2, 2 / 12);
+          const arpSlice = this.getBestSlice("other:arp", chord.rootPitch);
+          if (arpSlice) {
+            this.engine.scheduleSlice("other", arpSlice.buffer, when, {
+              rate: arpSlice.rate,
+              fadeMs: 4,
+              gain: vel,
+              voiceKey: "other:arp",
+            });
+          } else {
+            const thirdMult = chord.isMinor ? Math.pow(2, 3 / 12) : Math.pow(2, 4 / 12);
+            const fifthMult = Math.pow(2, 7 / 12);
+            const octMult = 2.0;
+            const ninthMult = 2.0 * Math.pow(2, 2 / 12);
 
-          let arpPool = [chord.chordHz, chord.chordHz * thirdMult, chord.chordHz * fifthMult, chord.chordHz * octMult];
-          if (phraseBar === 2 || phraseBar === 3) {
-            arpPool = [chord.chordHz * thirdMult, chord.chordHz * fifthMult, chord.chordHz * ninthMult, chord.chordHz * octMult];
-          } else if (phraseBar === 4 || phraseBar === 5) {
-            arpPool = [chord.chordHz * fifthMult, chord.chordHz * octMult, chord.chordHz * octMult * thirdMult, chord.chordHz * ninthMult];
-          } else if (phraseBar >= 6) {
-            arpPool = [chord.chordHz * octMult, chord.chordHz * fifthMult, chord.chordHz * thirdMult, chord.chordHz];
-          }
+            let arpPool = [chord.chordHz, chord.chordHz * thirdMult, chord.chordHz * fifthMult, chord.chordHz * octMult];
+            if (phraseBar === 2 || phraseBar === 3) {
+              arpPool = [chord.chordHz * thirdMult, chord.chordHz * fifthMult, chord.chordHz * ninthMult, chord.chordHz * octMult];
+            } else if (phraseBar === 4 || phraseBar === 5) {
+              arpPool = [chord.chordHz * fifthMult, chord.chordHz * octMult, chord.chordHz * octMult * thirdMult, chord.chordHz * ninthMult];
+            } else if (phraseBar >= 6) {
+              arpPool = [chord.chordHz * octMult, chord.chordHz * fifthMult, chord.chordHz * thirdMult, chord.chordHz];
+            }
 
-          const arpFreq = arpPool[step % arpPool.length];
-          this.synth.playArp(when, vel, arpFreq, oDest);
-
-          if (step % 4 === 0) {
-            const arpSlice = this.getBestSlice("other:arp", chord.rootPitch);
-            if (arpSlice) this.engine.scheduleSlice("other", arpSlice.buffer, when, { rate: arpSlice.rate, fadeMs: 4 });
+            const arpFreq = arpPool[step % arpPool.length];
+            this.synth.playArp(when, vel, arpFreq, oDest);
           }
         } else {
           // Polyphonic Synth Chord on upbeats (2, 6, 10, 14)
           const dur = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.45 : 0.28;
           const chordSlice = this.getBestSlice("other:chord", chord.rootPitch);
           if (chordSlice) {
-            this.engine.scheduleSlice("other", chordSlice.buffer, when, { rate: chordSlice.rate, fadeMs: 4 });
+            this.engine.scheduleSlice("other", chordSlice.buffer, when, {
+              rate: chordSlice.rate,
+              fadeMs: 4,
+              gain: vel,
+              voiceKey: "other:chord",
+            });
+          } else {
+            this.synth.playChord(when, vel, chord.chordHz, chord.isMinor, dur, oDest);
           }
-          this.synth.playChord(when, vel, chord.chordHz, chord.isMinor, dur, oDest);
         }
       }
     }
@@ -1826,7 +1948,7 @@ export class ClientGrooveboxConductor {
     const vPat = this.activePatterns.vocals;
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
-    if (!isDropGap && !this.activePhraseBlock && !this.activeLoops.vocals && vPat) {
+    if (!isDropGap && vPat) {
       // 1. Check if the song engine has a lyrical singing syllable on this step
       const syllable = this.vocalSongArranger.getSyllableForStep(sec, phraseBar, step % 16);
 
@@ -1862,38 +1984,30 @@ export class ClientGrooveboxConductor {
         let slice = null;
         if (sec === "DROP") {
           slice = this.getBestSlice("vocals:hook", melodyPitch) ||
-                  this.getBestSlice("vocals:phrase", melodyPitch) ||
-                  this.getBestSlice("vocals:call", melodyPitch);
+                  this.getBestSlice("vocals:call", melodyPitch) ||
+                  this.getBestSlice("vocals:chop", melodyPitch);
         } else if (sec === "BUILDUP") {
-          slice = this.getBestSlice("vocals:call", melodyPitch) ||
-                  this.getBestSlice("vocals:chop", melodyPitch) ||
-                  this.getBestSlice("vocals:hook", melodyPitch);
+          slice = this.getBestSlice("vocals:chop", melodyPitch) ||
+                  this.getBestSlice("vocals:call", melodyPitch);
         } else if (sec === "BREAKDOWN" || sec === "INTRO") {
-          slice = this.getBestSlice("vocals:phrase", melodyPitch) ||
-                  this.getBestSlice("vocals:hook", melodyPitch);
+          slice = this.getBestSlice("vocals:hook", melodyPitch) ||
+                  this.getBestSlice("vocals:call", melodyPitch);
         } else {
           // GROOVE_A
           const isDownbeat = (step % 8) === 0;
           slice = isDownbeat
-            ? (this.getBestSlice("vocals:phrase", melodyPitch) || this.getBestSlice("vocals:hook", melodyPitch))
-            : (this.getBestSlice("vocals:chop", melodyPitch) || this.getBestSlice("vocals:call", melodyPitch));
+            ? (this.getBestSlice("vocals:call", melodyPitch) || this.getBestSlice("vocals:hook", melodyPitch))
+            : this.getBestSlice("vocals:chop", melodyPitch);
         }
 
-        if (!slice) {
-          slice = this.getBestSlice("vocals:chop", melodyPitch) || this.getBestSlice("vocals:phrase", melodyPitch);
-        }
-
-        const isLong = syl.durationSteps >= 4 || sec === "BREAKDOWN" || sec === "INTRO";
         if (slice) {
-          // Schedule real acoustic singing slice repitched to the active melody note
           this.engine.scheduleSlice("vocals", slice.buffer, when, {
             rate: slice.rate,
-            fadeMs: isLong ? 12 : 6,
+            fadeMs: 6,
+            gain: vel,
+            voiceKey: "vocals",
           });
-          // Also softly layer the singing formant body for authentic vocal vowel clarity & pitch resonance
-          this.synth.playSingingVoice(when, noteHz, syl.vowel, Math.min(0.45, durSec), vel * 0.40, vInput);
         } else {
-          // Autonomous singing formant synthesizer
           this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vel, vInput);
         }
       }
@@ -1952,31 +2066,33 @@ export class ClientGrooveboxConductor {
     const chord = this.activeProgression[phraseBar % this.activeProgression.length];
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
-      // 1. Try to select matching 1-bar studio loop from the authentic training corpus
-      const loopMatch = this.getBestLoop(stem, sec, phraseBar, stem === "drums" ? undefined : chord.rootPitch);
-      if (loopMatch) {
-        this.activeLoops[stem] = loopMatch.loop;
-        const grid = loopMatch.loop.meta.onset_grid;
-        const onsetIndices: number[] = [];
-        const vels: number[] = new Array(16).fill(0.0);
-        for (let i = 0; i < 16; i++) {
-          if (grid[i] === 1) {
-            onsetIndices.push(i);
-            vels[i] = 0.95;
+      if (this.playbackMode === "phrase_blocks") {
+        // 1. Try to select matching 1-bar studio loop from the authentic training corpus
+        const loopMatch = this.getBestLoop(stem, sec, phraseBar, stem === "drums" ? undefined : chord.rootPitch);
+        if (loopMatch) {
+          this.activeLoops[stem] = loopMatch.loop;
+          const grid = loopMatch.loop.meta.onset_grid;
+          const onsetIndices: number[] = [];
+          const vels: number[] = new Array(16).fill(0.0);
+          for (let i = 0; i < 16; i++) {
+            if (grid[i] === 1) {
+              onsetIndices.push(i);
+              vels[i] = 0.95;
+            }
           }
+          this.activePatterns[stem] = {
+            id: loopMatch.loop.meta.id,
+            name: loopMatch.loop.meta.name,
+            groove_type: loopMatch.loop.meta.category,
+            energy: sec === "DROP" ? 0.95 : (sec === "BUILDUP" ? 0.80 : 0.70),
+            density: onsetIndices.length / 16,
+            onset_grid: onsetIndices,
+            velocities: vels,
+            length: 16,
+            key: loopMatch.loop.meta.key,
+          };
+          continue;
         }
-        this.activePatterns[stem] = {
-          id: loopMatch.loop.meta.id,
-          name: loopMatch.loop.meta.name,
-          groove_type: loopMatch.loop.meta.category,
-          energy: sec === "DROP" ? 0.95 : (sec === "BUILDUP" ? 0.80 : 0.70),
-          density: onsetIndices.length / 16,
-          onset_grid: onsetIndices,
-          velocities: vels,
-          length: 16,
-          key: loopMatch.loop.meta.key,
-        };
-        continue;
       }
 
       this.activeLoops[stem] = undefined;

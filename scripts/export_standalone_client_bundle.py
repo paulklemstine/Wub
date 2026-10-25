@@ -411,125 +411,13 @@ def export_bundle() -> None:
     # 4. Harvest Whole 1-Bar Pattern Loops Across Stems
     extracted_loops_manifest = harvest_whole_pattern_loops(multistem_tracks, loops_dir)
 
-    # 4. Harvest Clean Audio Slices per Acoustic Category
-    extracted_slices_manifest: Dict[str, Dict[str, List[dict]]] = {
-        s: {} for s in STEMS
-    }
-
-    # Desired slice categories per stem
-    targets: Dict[str, List[str]] = {
-        "drums": ["kick", "snare", "hat_closed", "hat_open", "percussion", "fill"],
-        "bass": ["sub", "rolling", "stab"],
-        "other": ["chord", "arp", "pad", "stab"],
-        "vocals": ["hook", "phrase", "call", "chop"],
-    }
-
-    slice_count = 0
-
-    # Pre-gather high-energy vocal slices directly from multistem tracks
-    vocal_candidates_by_cat: Dict[str, List] = {
-        "hook": [],
-        "phrase": [],
-        "call": [],
-        "chop": [],
-    }
-
-    for tr in multistem_tracks:
-        for s in getattr(tr, "segments", []):
-            if getattr(s, "stem", "") == "vocals" and not s.is_silent:
-                loud = float(getattr(s, "loudness_max", -99.0))
-                dur = float(getattr(s, "duration", 0.0))
-                if loud >= -24.0 and dur >= 0.12:
-                    if dur < 0.35:
-                        vocal_candidates_by_cat["chop"].append((s, tr))
-                    elif dur < 0.85:
-                        vocal_candidates_by_cat["call"].append((s, tr))
-                    elif dur < 1.8:
-                        vocal_candidates_by_cat["hook"].append((s, tr))
-                    elif dur <= 4.0:
-                        vocal_candidates_by_cat["phrase"].append((s, tr))
-
-    for cat in vocal_candidates_by_cat:
-        vocal_candidates_by_cat[cat].sort(key=lambda item: getattr(item[0], "loudness_max", -99.0), reverse=True)
-
-    for stem, cat_list in targets.items():
-        pal = bank.slice_palette.get(stem, {})
-        for cat in cat_list:
-            extracted_slices_manifest[stem][cat] = []
-
-            if stem == "vocals":
-                raw_candidates = vocal_candidates_by_cat.get(cat, [])
-                candidates = [s for s, _tr in raw_candidates]
-            else:
-                candidates = pal.get(cat, [])
-                if not candidates and "hat" in cat:
-                    candidates = pal.get("hat", [])
-                if not candidates:
-                    candidates = [s for bucket in pal.values() for s in bucket]
-                candidates = [s for s in candidates if getattr(s, "loud_max", -99.0) > -32.0]
-                candidates.sort(key=lambda s: getattr(s, "loud_max", -99.0), reverse=True)
-
-            taken = 0
-            seen_pitches: Set[int] = set()
-            seen_tracks: Set[str] = set()
-            max_take = 6 if stem == "vocals" else 4
-
-            for s in candidates:
-                if taken >= max_take:
-                    break
-                pitch = int(np.argmax(s.pitches)) if hasattr(s, "pitches") and s.pitches else (
-                    int(np.argmax(s.chroma)) if hasattr(s, "chroma") and s.chroma is not None and len(s.chroma) == 12 else 0
-                )
-                tid = s.track_id
-                if (pitch in seen_pitches and len(seen_pitches) < 10) and (tid in seen_tracks and len(seen_tracks) < 5):
-                    continue
-
-                stem_path = Path("data/stems") / s.track_id / f"{stem}.wav"
-                if not stem_path.exists():
-                    stem_path = Path("data/stems") / s.track_id / f"{stem}.mp3"
-                if not stem_path.exists():
-                    continue
-
-                try:
-                    info = sf.info(str(stem_path))
-                    start_frame = max(0, int(s.start * info.samplerate))
-                    frame_len = min(info.frames - start_frame, int(s.duration * info.samplerate))
-                    if frame_len <= 100:
-                        continue
-
-                    data, sr = sf.read(str(stem_path), start=start_frame, frames=frame_len, always_2d=True, dtype="float32")
-                    mono = data.mean(axis=1)
-
-                    peak = float(np.max(np.abs(mono)))
-                    if peak > 0.001:
-                        mono = mono * (0.89 / peak)
-
-                    out_name = f"{stem}_{cat}_{taken+1}.wav"
-                    out_wav = slices_dir / out_name
-                    sf.write(str(out_wav), mono, sr, subtype="PCM_16")
-
-                    data_bytes = out_wav.read_bytes()
-                    b64_uri = f"data:audio/wav;base64,{base64.b64encode(data_bytes).decode('ascii')}"
-
-                    extracted_slices_manifest[stem][cat].append({
-                        "name": out_name,
-                        "url": f"data/slices/{out_name}",
-                        "b64": b64_uri if len(b64_uri) < 65000 else None,
-                        "duration": float(s.duration),
-                        "centroid": float(getattr(s, "spectral_centroid", 0.0)),
-                        "pitch": pitch,
-                        "loudness": float(getattr(s, "loud_max", getattr(s, "loudness_max", -12.0))),
-                        "track_id": s.track_id,
-                        "segment_id": getattr(s, "segment_id", getattr(s, "id", "")),
-                    })
-                    seen_pitches.add(pitch)
-                    seen_tracks.add(tid)
-                    taken += 1
-                    slice_count += 1
-                except Exception:
-                    continue
-
-    print(f"✓ Exported {slice_count} clean acoustic slice WAVs to {slices_dir}", flush=True)
+    # 4. Harvest Pure Audio Slices (Zero Duplicates, Chromatic Bass/Other 0..11)
+    from scripts.harvest_pure_slices import harvest_pure_slices
+    extracted_slices_manifest = harvest_pure_slices(
+        Path("data/stems"),
+        Path("data/processed"),
+        slices_dir,
+    )
 
     # 5. Extract authentic harmonic chord progressions from real tracks
     chord_progressions: List[dict] = []
