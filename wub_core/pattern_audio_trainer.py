@@ -1257,6 +1257,15 @@ class PatternAudioFeedbackEngine:
             "grooves": self.feedback_data.get("grooves", {}),
             "trained_slice_scores": slice_scores,
             "song_composition_scores": self.feedback_data.get("song_composition_scores", {}),
+            "stem_mix_automation": {
+                "INTRO": {"drums": 0.65, "bass": 0.0, "other": 0.88, "vocals": 0.75},
+                "GROOVE_A": {"drums": 0.95, "bass": 0.92, "other": 0.88, "vocals": 0.95},
+                "BUILDUP": {"drums": 0.98, "bass": 0.40, "other": 1.05, "vocals": 1.0},
+                "DROP": {"drums": 1.05, "bass": 1.05, "other": 0.90, "vocals": 1.0},
+                "BREAKDOWN": {"drums": 0.0, "bass": 0.0, "other": 1.05, "vocals": 1.05},
+                "fade_curve": "exponential_asymptotic",
+                "crossfade_bars": 2.0,
+            },
         }
 
         for p in (weights_path, public_weights_path):

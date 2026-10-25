@@ -2907,8 +2907,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.594,
-        "cohesion_score": 0.594
+        "audio_similarity_score": 0.5322,
+        "cohesion_score": 0.5943
       },
       {
         "id": "pat_drums_10de13_013",
@@ -3270,8 +3270,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.887,
-        "cohesion_score": 0.887
+        "audio_similarity_score": 0.9982,
+        "cohesion_score": 0.8869
       },
       {
         "id": "pat_bass_bdd67e_005",
@@ -3302,8 +3302,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.878,
-        "cohesion_score": 0.878
+        "audio_similarity_score": 0.9985,
+        "cohesion_score": 0.8785
       },
       {
         "id": "pat_bass_bdd67e_009",
@@ -3334,8 +3334,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.863,
-        "cohesion_score": 0.863
+        "audio_similarity_score": 0.9984,
+        "cohesion_score": 0.8632
       },
       {
         "id": "pat_bass_bdd67e_007",
@@ -3366,8 +3366,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.849,
-        "cohesion_score": 0.849
+        "audio_similarity_score": 0.9986,
+        "cohesion_score": 0.8486
       },
       {
         "id": "pat_bass_10de13_016",
@@ -3530,8 +3530,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.761,
-        "cohesion_score": 0.761
+        "audio_similarity_score": 0.8174,
+        "cohesion_score": 0.7614
       },
       {
         "id": "pat_bass_10de13_013",
@@ -4269,8 +4269,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.879,
-        "cohesion_score": 0.879
+        "audio_similarity_score": 0.9996,
+        "cohesion_score": 0.8791
       },
       {
         "id": "pat_vocals_bdd67e_003",
@@ -4301,8 +4301,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.877,
-        "cohesion_score": 0.877
+        "audio_similarity_score": 0.9995,
+        "cohesion_score": 0.8773
       },
       {
         "id": "pat_vocals_bdd67e_009",
@@ -4333,8 +4333,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.86,
-        "cohesion_score": 0.86
+        "audio_similarity_score": 0.9996,
+        "cohesion_score": 0.8602
       },
       {
         "id": "pat_vocals_bdd67e_007",
@@ -4365,8 +4365,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.847,
-        "cohesion_score": 0.847
+        "audio_similarity_score": 0.9995,
+        "cohesion_score": 0.8466
       },
       {
         "id": "pat_vocals_10de13_016",
@@ -4526,8 +4526,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.832,
-        "cohesion_score": 0.832
+        "audio_similarity_score": 0.8408,
+        "cohesion_score": 0.8317
       },
       {
         "id": "pat_vocals_bdd67e_004",
@@ -4559,8 +4559,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.808,
-        "cohesion_score": 0.808
+        "audio_similarity_score": 0.8901,
+        "cohesion_score": 0.8077
       },
       {
         "id": "pat_vocals_bdd67e_010",
@@ -4592,8 +4592,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.749,
-        "cohesion_score": 0.749
+        "audio_similarity_score": 0.8155,
+        "cohesion_score": 0.7488
       },
       {
         "id": "pat_vocals_bdd67e_008",
@@ -4625,8 +4625,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.756,
-        "cohesion_score": 0.756
+        "audio_similarity_score": 0.8107,
+        "cohesion_score": 0.7562
       },
       {
         "id": "pat_vocals_10de13_039",
@@ -5971,8 +5971,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.849,
-        "cohesion_score": 0.849
+        "audio_similarity_score": 0.9094,
+        "cohesion_score": 0.8485
       },
       {
         "id": "pat_other_bdd67e_007",
@@ -6003,8 +6003,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.828,
-        "cohesion_score": 0.828
+        "audio_similarity_score": 0.8793,
+        "cohesion_score": 0.8279
       },
       {
         "id": "pat_other_bdd67e_009",
@@ -6035,8 +6035,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.815,
-        "cohesion_score": 0.815
+        "audio_similarity_score": 0.8884,
+        "cohesion_score": 0.8152
       },
       {
         "id": "pat_other_bdd67e_004",
@@ -6068,8 +6068,8 @@
         ],
         "length": 16,
         "key": "D# major",
-        "audio_similarity_score": 0.866,
-        "cohesion_score": 0.866
+        "audio_similarity_score": 0.8137,
+        "cohesion_score": 0.8661
       },
       {
         "id": "pat_other_10de13_013",
@@ -24358,8 +24358,42 @@
         "total_tatums_count": 128,
         "core_pattern_count": 1,
         "total_bars_count": 8,
-        "evaluated_at": 1792967821.6140683
+        "evaluated_at": 1792968919.4602318
       }
+    },
+    "stem_mix_automation": {
+      "INTRO": {
+        "drums": 0.65,
+        "bass": 0.0,
+        "other": 0.88,
+        "vocals": 0.75
+      },
+      "GROOVE_A": {
+        "drums": 0.95,
+        "bass": 0.92,
+        "other": 0.88,
+        "vocals": 0.95
+      },
+      "BUILDUP": {
+        "drums": 0.98,
+        "bass": 0.4,
+        "other": 1.05,
+        "vocals": 1.0
+      },
+      "DROP": {
+        "drums": 1.05,
+        "bass": 1.05,
+        "other": 0.9,
+        "vocals": 1.0
+      },
+      "BREAKDOWN": {
+        "drums": 0.0,
+        "bass": 0.0,
+        "other": 1.05,
+        "vocals": 1.05
+      },
+      "fade_curve": "exponential_asymptotic",
+      "crossfade_bars": 2.0
     }
   },
   "style_kits": {
@@ -71741,5 +71775,20 @@
       "segment_id": "seg_vocals_0065",
       "vowel": "EE"
     }
-  ]
+  ],
+  "song_composition_scores": {
+    "tr_001": {
+      "track_id": "tr_001",
+      "track_title": "Deep Electronic",
+      "slice_compression_ratio": 1.0,
+      "pattern_subset_economy": 0.875,
+      "acoustic_fidelity": 0.8,
+      "composite_song_score": 0.8888,
+      "unique_slices_count": 1,
+      "total_tatums_count": 128,
+      "core_pattern_count": 1,
+      "total_bars_count": 8,
+      "evaluated_at": 1792968919.4602318
+    }
+  }
 }

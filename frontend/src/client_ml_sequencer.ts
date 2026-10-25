@@ -148,6 +148,7 @@ export interface StemCohesionWeights {
   grooves?: Record<string, Record<string, number>>;
   trained_slice_scores?: Record<string, number>;
   song_composition_scores?: Record<string, any>;
+  stem_mix_automation?: Record<string, any>;
 }
 
 export interface ComposingMLWeights {
@@ -1608,6 +1609,7 @@ export class ClientGrooveboxConductor {
   };
 
   public playbackMode: "jukebox" | "slices" | "phrase_blocks" = "jukebox";
+  private stemMixLevels: Record<StemName, number> = { drums: 1.0, bass: 1.0, other: 1.0, vocals: 1.0 };
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
   private segmentPositions: Map<string, { x: number; y: number }> = new Map();
   private trackStemPositions: Map<string, { x: number; y: number }> = new Map();
@@ -2963,11 +2965,126 @@ export class ClientGrooveboxConductor {
     }
   }
 
+  /**
+   * Automates the volume levels of the four instruments (drums, bass, other, vocals)
+   * to gently and smoothly mix them in and out of the global audio wave across phrases,
+   * section builds, drop gaps, and transcendent breakdowns.
+   */
+  private updateStemMixAutomation(
+    when: number,
+    sec: string,
+    barInSec: number,
+    totalSecBars: number,
+    stepInBar: number
+  ): void {
+    const barsLeft = Math.max(0, totalSecBars - barInSec);
+    const progressInSec = Math.max(0, Math.min(1, (barInSec * 16 + stepInBar) / (totalSecBars * 16)));
+    const isTransitioning = barsLeft <= 2;
+    const nextSec = sec === "BUILDUP" ? "DROP" : (sec === "DROP" ? "BREAKDOWN" : (sec === "BREAKDOWN" ? "GROOVE_A" : (sec === "INTRO" ? "GROOVE_A" : "BUILDUP")));
+
+    // Baseline mix profiles per section
+    const secProfiles: Record<string, Record<StemName, number>> = {
+      INTRO: { drums: 0.60, bass: 0.00, other: 0.88, vocals: 0.75 },
+      GROOVE_A: { drums: 0.95, bass: 0.92, other: 0.88, vocals: 0.95 },
+      BUILDUP: { drums: 0.98, bass: 0.70, other: 1.05, vocals: 1.00 },
+      DROP: { drums: 1.05, bass: 1.05, other: 0.90, vocals: 1.00 },
+      BREAKDOWN: { drums: 0.00, bass: 0.00, other: 1.05, vocals: 1.05 },
+    };
+
+    const trainedAuto = this.stemCohesionWeights?.stem_mix_automation;
+    const currProfile = trainedAuto?.[sec] || secProfiles[sec] || secProfiles.GROOVE_A;
+    const nextProfile = trainedAuto?.[nextSec] || secProfiles[nextSec] || secProfiles.GROOVE_A;
+
+    let dTarget = currProfile.drums ?? 0.95;
+    let bTarget = currProfile.bass ?? 0.92;
+    let oTarget = currProfile.other ?? 0.88;
+    let vTarget = currProfile.vocals ?? 0.95;
+
+    if (sec === "INTRO") {
+      // Gentle swell from ethereal ambient pad to driving groove introduction
+      dTarget = 0.40 + 0.45 * progressInSec;
+      bTarget = 0.00;
+      oTarget = 0.82 + 0.18 * progressInSec;
+      vTarget = 0.65 + 0.25 * progressInSec;
+    } else if (sec === "BUILDUP") {
+      // Snare riser crescendo, bass rolling off, synths & vocals rising
+      dTarget = 0.85 + 0.20 * progressInSec;
+      if (barInSec < 4) {
+        bTarget = 0.75;
+      } else if (barInSec < 6) {
+        const subProgress = ((barInSec - 4) * 16 + stepInBar) / 32;
+        bTarget = 0.75 * (1.0 - subProgress);
+      } else {
+        bTarget = 0.00; // Completely muted on bar 7
+      }
+      oTarget = 0.90 + 0.22 * progressInSec; // Saw riser & chords swell up
+      vTarget = 0.92 + 0.16 * progressInSec;
+
+      // Drop Gap Breath: Bar 7 Step 15 is 100% SILENT for maximum drop impact!
+      if (barInSec >= totalSecBars - 1 && stepInBar === 15) {
+        dTarget = 0.0;
+        bTarget = 0.0;
+        oTarget = 0.0;
+        vTarget = 0.0;
+      }
+    } else if (sec === "DROP") {
+      // Explosive impact on bar 0, then full driving energy
+      if (barInSec === 0) {
+        dTarget = 1.08;
+        bTarget = 1.08;
+        oTarget = 0.82;
+        vTarget = 0.95;
+      } else {
+        dTarget = 1.00;
+        bTarget = 1.00;
+        oTarget = 0.92;
+        vTarget = 1.00;
+      }
+    } else if (sec === "BREAKDOWN") {
+      // Transcendent fade: drums and bass smoothly dissolve out over bars 0-1
+      if (barInSec < 2) {
+        const fadeProg = (barInSec * 16 + stepInBar) / 32;
+        dTarget = Math.max(0, 0.75 * (1.0 - fadeProg));
+        bTarget = Math.max(0, 0.70 * (1.0 - fadeProg));
+      } else {
+        dTarget = 0.0;
+        bTarget = 0.0;
+      }
+      oTarget = 1.05;
+      vTarget = 1.08;
+    }
+
+    // Smooth asymptotic transition blending in the penultimate 2 bars
+    if (isTransitioning && sec !== "BUILDUP") {
+      const blendFactor = Math.max(0, Math.min(1, ((2 - barsLeft) * 16 + stepInBar) / 32));
+      const sCurve = 0.5 - 0.5 * Math.cos(blendFactor * Math.PI);
+      dTarget = dTarget * (1.0 - sCurve) + (nextProfile.drums ?? dTarget) * sCurve;
+      bTarget = bTarget * (1.0 - sCurve) + (nextProfile.bass ?? bTarget) * sCurve;
+      oTarget = oTarget * (1.0 - sCurve) + (nextProfile.other ?? oTarget) * sCurve;
+      vTarget = vTarget * (1.0 - sCurve) + (nextProfile.vocals ?? vTarget) * sCurve;
+    }
+
+    const rampTime = (sec === "BUILDUP" && barInSec >= totalSecBars - 1 && stepInBar === 15) ? 0.005 : 0.08;
+    this.stemMixLevels.drums = dTarget;
+    this.stemMixLevels.bass = bTarget;
+    this.stemMixLevels.other = oTarget;
+    this.stemMixLevels.vocals = vTarget;
+
+    this.engine.setStemMixLevel("drums", dTarget, rampTime);
+    this.engine.setStemMixLevel("bass", bTarget, rampTime);
+    this.engine.setStemMixLevel("other", oTarget, rampTime);
+    this.engine.setStemMixLevel("vocals", vTarget, rampTime);
+  }
+
   private scheduleStepAudio(step: number, when: number, phraseBar: number): void {
     const sec = this.arranger.getSection();
     const barInSec = this.arranger.getBarInSection();
+    const totalSecBars = this.arranger.getSectionDuration();
     const chordIndex = Math.floor(phraseBar / 2) % this.activeProgression.length;
     const chord = this.activeProgression[chordIndex];
+
+    // Automate volume levels of the four instruments for transcendent flow
+    this.updateStemMixAutomation(when, sec, barInSec, totalSecBars, step % 16);
 
     const dInput = this.engine.getStemInput("drums");
     const bDest = this.bassSidechainGain || this.engine.getStemInput("bass");
@@ -3010,7 +3127,6 @@ export class ClientGrooveboxConductor {
     const movement = this.getMovementPhase();
     const barsLeft = this.arranger.getSectionBarsLeft();
     const isTransitionBar = (barsLeft <= 1);
-    const totalSecBars = this.arranger.getSectionDuration();
 
     // 1. DROP Explosive Impact on Step 0 (Crash Cymbal + Sub Boom)
     if (sec === "DROP" && barInSec === 0 && (step % 16) === 0) {
@@ -4061,6 +4177,8 @@ export class ClientGrooveboxConductor {
         other: this.activeSongKit?.chordAsset?.x !== undefined ? { x: this.activeSongKit.chordAsset.x, y: this.activeSongKit.chordAsset.y! } : undefined,
         vocals: this.activeSongKit?.vocalHookAsset?.x !== undefined ? { x: this.activeSongKit.vocalHookAsset.x, y: this.activeSongKit.vocalHookAsset.y! } : undefined,
       },
+      stem_mix_levels: { ...this.stemMixLevels },
+      stemMixLevels: { ...this.stemMixLevels },
       direct_ml_engine: true,
     };
   }

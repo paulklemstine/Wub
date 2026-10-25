@@ -71,6 +71,7 @@ export interface GrooveboxMeta {
   vocalVowel?: string;
   vocalNote?: string;
   activeSliceCoords?: Partial<Record<StemName, { x: number; y: number }>>;
+  stemMixLevels?: Record<StemName, number>;
 }
 
 interface UIEvent {

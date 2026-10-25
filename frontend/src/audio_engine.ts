@@ -92,6 +92,7 @@ export class AudioEngine {
   // Desired mixer state, applied lazily so UI can be touched before the
   // AudioContext exists (creating one pre-gesture would start suspended).
   private volumes_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
+  private autoVolumes_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
   private mutes_: Record<StemName, boolean> = { drums: false, bass: false, vocals: false, other: false };
   private solos_: Record<StemName, boolean> = { drums: false, bass: false, vocals: false, other: false };
 
@@ -175,8 +176,32 @@ export class AudioEngine {
     for (const stem of STEMS) {
       const bus = this.buses_[stem];
       const audible = !this.mutes_[stem] && (!anySolo || this.solos_[stem]);
-      bus.input.gain.setTargetAtTime(audible ? this.volumes_[stem] : 0, t, 0.01);
+      const eff = audible ? (this.volumes_[stem] * this.autoVolumes_[stem]) : 0;
+      bus.input.gain.setTargetAtTime(eff, t, 0.02);
     }
+  }
+
+  /**
+   * Automated gentle mix level for transcendent section and phrase crossfades.
+   * Modulates bus input gain smoothly with exponential asymptotic interpolation.
+   */
+  setStemMixLevel(stem: StemName, level: number, rampTimeSec: number = 0.08): void {
+    this.autoVolumes_[stem] = Math.max(0, Math.min(1.5, level));
+    if (this.ctx_ === null || this.buses_ === null) return;
+    const bus = this.buses_[stem];
+    const anySolo = STEMS.some((s) => this.solos_[s]);
+    const audible = !this.mutes_[stem] && (!anySolo || this.solos_[stem]);
+    const targetGain = audible ? (this.volumes_[stem] * this.autoVolumes_[stem]) : 0;
+    const t = this.ctx_.currentTime;
+    try {
+      bus.input.gain.setTargetAtTime(targetGain, t, Math.max(0.01, rampTimeSec));
+    } catch {
+      // Safe fallback
+    }
+  }
+
+  getStemMixLevel(stem: StemName): number {
+    return this.autoVolumes_[stem];
   }
 
   /** Create (lazily) and resume the context. Must be called from a gesture. */

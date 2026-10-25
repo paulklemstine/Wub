@@ -30,6 +30,9 @@ const MUSIC_NOTES = ["✨", "💖", "🦄", "🌈", "✦", "✧", "💫", "♬",
 export class TamagotchiAvatar {
   private containerEl: HTMLElement | null = null;
   private asciiEl: HTMLElement | null = null;
+  private canvasEl: HTMLCanvasElement | null = null;
+  private ctx2d: CanvasRenderingContext2D | null = null;
+  private lyricBarEl: HTMLElement | null = null;
   private stageBadgeEl: HTMLElement | null = null;
   private vibeEl: HTMLElement | null = null;
   private moodEl: HTMLElement | null = null;
@@ -77,6 +80,12 @@ export class TamagotchiAvatar {
     this.vibeEl = document.getElementById(vibeId);
     this.moodEl = document.getElementById(moodId);
     this.xpEl = document.getElementById(xpId);
+
+    this.canvasEl = document.getElementById("tamagotchi-canvas") as HTMLCanvasElement | null;
+    if (this.canvasEl) {
+      this.ctx2d = this.canvasEl.getContext("2d");
+    }
+    this.lyricBarEl = document.getElementById("tamagotchi-lyric-bar");
 
     // Bind action buttons
     const btnPet = document.getElementById("btn-tamagotchi-pet");
@@ -224,8 +233,8 @@ export class TamagotchiAvatar {
         const char = MUSIC_NOTES[Math.floor(Math.random() * MUSIC_NOTES.length)];
         this.noteFloating.push({
           char,
-          x: Math.floor(Math.random() * 4) + (Math.random() > 0.5 ? 1 : 24),
-          y: 6,
+          x: 140 + (Math.random() - 0.5) * 60,
+          y: 125,
           life: 1.0,
         });
       }
@@ -242,8 +251,8 @@ export class TamagotchiAvatar {
     // Update floating notes
     for (let i = this.noteFloating.length - 1; i >= 0; i--) {
       const n = this.noteFloating[i];
-      n.life -= dt * 1.2;
-      n.y -= dt * 2.0;
+      n.life -= dt * 1.1;
+      n.y -= dt * 26.0;
       if (n.life <= 0) this.noteFloating.splice(i, 1);
     }
 
@@ -280,6 +289,7 @@ export class TamagotchiAvatar {
       this.speechBubble = `"${meta.vocalLyric}"`;
     }
 
+    this.renderCanvas(meta, isDropGap, waveform, dt, bpm, vocalsLevel ?? 0, rmsLevel);
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel);
     this.updateDashboard();
   }
@@ -538,7 +548,314 @@ export class TamagotchiAvatar {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Audio Reactive Single Line Loop & Live Waveform Mouth Canvas Engine
+  // ---------------------------------------------------------------------------
+
+  private renderCanvas(
+    meta: GrooveboxMeta | null,
+    isDropGap: boolean,
+    waveform?: Uint8Array | null,
+    dt: number = 0.016,
+    bpm: number = 126,
+    vocalsLevel: number = 0,
+    rmsLevel: number = 0
+  ): void {
+    if (!this.canvasEl) return;
+    if (!this.ctx2d) {
+      this.ctx2d = this.canvasEl.getContext("2d");
+      if (!this.ctx2d) return;
+    }
+    const ctx = this.ctx2d;
+    const w = this.canvasEl.width;
+    const h = this.canvasEl.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    const sec = meta?.section ?? "GROOVE_A";
+    const vowel = meta?.vocalVowel ?? "";
+    const isSinging = Boolean(meta?.vocalSyllable) || (vocalsLevel >= 0.02);
+    const bob = this.isHeadBobbed;
+    const t = performance.now() / 1000;
+
+    // Center coordinates with beat bobbing
+    const cx = w * 0.5;
+    const bobOffset = bob ? 4.0 : 0.0;
+    const cy = h * 0.48 + bobOffset;
+
+    // Stage-based color palette
+    let mainColor = "#ff77e9";
+    let glowColor = "#ff00a0";
+    let accentColor = "#00ffff";
+    if (this.stage === 2) {
+      mainColor = "#ff00c8";
+      glowColor = "#ff0077";
+      accentColor = "#00ffcc";
+    } else if (this.stage === 3) {
+      mainColor = "#00f0ff";
+      glowColor = "#0088ff";
+      accentColor = "#ffe600";
+    } else if (this.stage === 4) {
+      mainColor = "#ffe600";
+      glowColor = "#ffaa00";
+      accentColor = "#ff00e6";
+    }
+
+    if (isSinging) {
+      this.canvasEl.classList.add("singing");
+    } else {
+      this.canvasEl.classList.remove("singing");
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. THE AUDIO REACTIVE SINGLE LINE LOOP (CREATURE HEAD & HORN SILHOUETTE)
+    // -------------------------------------------------------------------------
+    const N = 180;
+    const baseR = 44 + 4 * this.stage;
+    const audioExpansion = 1.0 + 0.20 * Math.min(1.5, rmsLevel);
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    ctx.beginPath();
+    for (let i = 0; i <= N; i++) {
+      const theta = (i / N) * Math.PI * 2 - Math.PI / 2; // -pi/2 is top/horn
+
+      // Cute pear/kawaii head outline
+      const headProfile = 1.0 + 0.12 * Math.sin(theta);
+
+      // Symmetrical ears at left (-0.72 pi) and right (-0.28 pi)
+      const dEar1 = Math.abs(theta - (-0.72 * Math.PI));
+      const dEar2 = Math.abs(theta - (-0.28 * Math.PI));
+      const earPeak = 0.44 * (Math.exp(-Math.pow(dEar1 / 0.15, 2)) + Math.exp(-Math.pow(dEar2 / 0.15, 2)));
+
+      // Horn at top (-0.5 pi)
+      const dHorn = Math.abs(theta - (-0.5 * Math.PI));
+      const hornLength = 0.85 + 0.22 * this.stage;
+      const hornPeak = hornLength * Math.exp(-Math.pow(dHorn / 0.075, 2));
+      const spiralRib = Math.cos(24 * theta + t * 5.0) * 0.05 * hornPeak;
+
+      // Audio reactive standing waves rippling around the perimeter
+      const waveRipple = (
+        Math.sin(5 * theta - t * 4.2) * 3.6 +
+        Math.cos(9 * theta + t * 6.5) * 2.2
+      ) * Math.min(1.0, rmsLevel * 2.0);
+
+      const r = (baseR * (headProfile + earPeak + hornPeak + spiralRib)) * audioExpansion + waveRipple;
+      const px = cx + r * Math.cos(theta);
+      const py = cy + r * Math.sin(theta);
+
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+
+    // Outer neon bloom pass
+    ctx.shadowBlur = 14 + 18 * rmsLevel;
+    ctx.shadowColor = glowColor;
+    ctx.strokeStyle = glowColor;
+    ctx.lineWidth = 4.2;
+    ctx.globalAlpha = 0.40;
+    ctx.stroke();
+
+    // Inner crisp laser vector pass
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = "#ffffff";
+    ctx.strokeStyle = mainColor;
+    ctx.lineWidth = 2.2;
+    ctx.globalAlpha = 1.0;
+    ctx.stroke();
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 2. EXPRESSIVE FACIAL FEATURES
+    // -------------------------------------------------------------------------
+    const eyeSpacing = 22 + 2 * this.stage;
+    const eyeY = cy - 4;
+    const leftEyeX = cx - eyeSpacing;
+    const rightEyeX = cx + eyeSpacing;
+
+    // Cheeks subtle neon blush
+    ctx.save();
+    ctx.fillStyle = "rgba(255, 105, 180, 0.28)";
+    ctx.beginPath();
+    ctx.arc(leftEyeX - 10, eyeY + 14, 6.5, 0, Math.PI * 2);
+    ctx.arc(rightEyeX + 10, eyeY + 14, 6.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Eyes rendering
+    ctx.save();
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = accentColor;
+    ctx.strokeStyle = accentColor;
+    ctx.fillStyle = accentColor;
+    ctx.lineWidth = 2.2;
+
+    if (this.isBlinking) {
+      ctx.beginPath();
+      ctx.arc(leftEyeX, eyeY, 6, 0.2 * Math.PI, 0.8 * Math.PI);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(rightEyeX, eyeY, 6, 0.2 * Math.PI, 0.8 * Math.PI);
+      ctx.stroke();
+    } else if (isDropGap) {
+      ctx.beginPath();
+      ctx.arc(leftEyeX, eyeY, 7.5, 0, Math.PI * 2);
+      ctx.arc(rightEyeX, eyeY, 7.5, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (this.temporaryAction === "PET") {
+      this.drawHeart(ctx, leftEyeX, eyeY, 6.5);
+      this.drawHeart(ctx, rightEyeX, eyeY, 6.5);
+    } else if (sec === "DROP" || this.temporaryAction === "HYPE") {
+      this.drawStar(ctx, leftEyeX, eyeY, 7.5, 3.5);
+      this.drawStar(ctx, rightEyeX, eyeY, 7.5, 3.5);
+    } else if (sec === "BREAKDOWN") {
+      ctx.beginPath();
+      ctx.arc(leftEyeX, eyeY, 6, 0.1 * Math.PI, 0.9 * Math.PI);
+      ctx.arc(rightEyeX, eyeY, 6, 0.1 * Math.PI, 0.9 * Math.PI);
+      ctx.stroke();
+    } else {
+      this.drawSparkleEye(ctx, leftEyeX, eyeY, 6.0);
+      this.drawSparkleEye(ctx, rightEyeX, eyeY, 6.0);
+    }
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 3. THE MINI LOOP AUDIO REACTIVE MOUTH (SINGS LIVE VOCAL WAVEFORM)
+    // -------------------------------------------------------------------------
+    const mouthY = cy + 22;
+    const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    const mouthSteps = 64;
+    const mouthColor = isSinging ? "#ffff00" : "#00ff88";
+    const mouthGlow = isSinging ? "#ffea00" : "#00ffcc";
+
+    ctx.shadowBlur = isSinging ? (14 + 18 * mouthAperture) : 8;
+    ctx.shadowColor = mouthGlow;
+    ctx.strokeStyle = mouthColor;
+    ctx.fillStyle = isSinging ? "rgba(255, 234, 0, 0.15)" : "transparent";
+    ctx.lineWidth = 2.4;
+
+    ctx.beginPath();
+    if (!isSinging && vocalsLevel < 0.015) {
+      // Resting / Breathing cute smiling mini loop
+      const breathe = Math.sin(t * 2.5) * 1.2;
+      const rx = 10 + breathe;
+      const ry = 4 + breathe * 0.5;
+      for (let j = 0; j <= mouthSteps; j++) {
+        const phi = (j / mouthSteps) * Math.PI * 2;
+        const mx = cx + rx * Math.cos(phi);
+        const my = mouthY + ry * Math.sin(phi) + 1.8 * Math.pow(Math.cos(phi), 2);
+        if (j === 0) ctx.moveTo(mx, my);
+        else ctx.lineTo(mx, my);
+      }
+    } else {
+      // Live Audio Waveform Voice Instrument Singing Mini Loop!
+      let baseW = 14;
+      let baseH = 12;
+      const upVowel = (vowel || "AH").toUpperCase();
+      if (upVowel === "EE") { baseW = 18; baseH = 6; }
+      else if (upVowel === "OH") { baseW = 11; baseH = 16; }
+      else if (upVowel === "OO") { baseW = 8; baseH = 8; }
+      else if (upVowel === "AY") { baseW = 16; baseH = 10; }
+
+      const curW = baseW * (0.6 + 0.9 * mouthAperture);
+      const curH = baseH * (0.6 + 1.1 * mouthAperture);
+
+      const waveLen = waveform ? waveform.length : 0;
+      for (let j = 0; j <= mouthSteps; j++) {
+        const phi = (j / mouthSteps) * Math.PI * 2;
+        let sampleNorm = 0;
+        if (waveform && waveLen > 0) {
+          const wIdx = Math.floor((j / mouthSteps) * (waveLen - 1));
+          sampleNorm = (waveform[wIdx] - 128) / 128.0;
+        } else {
+          sampleNorm = Math.sin(phi * 3.0 + t * 14.0) * 0.4;
+        }
+
+        const rad = Math.sqrt(Math.pow(curW * Math.cos(phi), 2) + Math.pow(curH * Math.sin(phi), 2));
+        const waveDisp = sampleNorm * (6.0 * mouthAperture + 1.5);
+        const mx = cx + (rad + waveDisp * 0.7) * Math.cos(phi);
+        const my = mouthY + (rad + waveDisp) * Math.sin(phi);
+
+        if (j === 0) ctx.moveTo(mx, my);
+        else ctx.lineTo(mx, my);
+      }
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 4. FLOATING SPARKS & MUSICAL PARTICLES
+    // -------------------------------------------------------------------------
+    ctx.save();
+    for (const note of this.noteFloating) {
+      ctx.font = "bold 13px monospace";
+      ctx.fillStyle = mainColor;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = accentColor;
+      ctx.globalAlpha = Math.max(0, Math.min(1.0, note.life));
+      ctx.fillText(note.char, note.x, note.y);
+    }
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 5. LYRICS & ACTIVE VOCAL METADATA DISPLAY
+    // -------------------------------------------------------------------------
+    if (this.lyricBarEl) {
+      if (meta?.vocalNote) {
+        this.lyricBarEl.innerHTML = `<span style="color: #ffff00;">♪ SING: ${meta.vocalNote} [${vowel || "--"}]</span> • <span style="color: #00ffff;">${this.speechBubble || meta.vocalLyric || sec}</span>`;
+      } else {
+        this.lyricBarEl.innerHTML = `<span style="color: #00ffaa;">♫ ${sec}</span> • <span style="color: #ff77e9;">${this.speechBubble || "WUB GROOVE"}</span>`;
+      }
+    }
+  }
+
+  private drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, outerR: number, innerR: number): void {
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const r = i % 2 === 0 ? outerR : innerR;
+      const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
+      const x = cx + r * Math.cos(a);
+      const y = cy + r * Math.sin(a);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  private drawHeart(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number): void {
+    ctx.beginPath();
+    const topCurveHeight = size * 0.3;
+    ctx.moveTo(cx, cy + size * 0.2);
+    ctx.bezierCurveTo(cx, cy - topCurveHeight, cx - size, cy - topCurveHeight, cx - size, cy + size * 0.1);
+    ctx.bezierCurveTo(cx - size, cy + size * 0.5, cx, cy + size * 0.8, cx, cy + size);
+    ctx.bezierCurveTo(cx, cy + size * 0.8, cx + size, cy + size * 0.5, cx + size, cy + size * 0.1);
+    ctx.bezierCurveTo(cx + size, cy - topCurveHeight, cx, cy - topCurveHeight, cx, cy + size * 0.2);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  private drawSparkleEye(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number): void {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.3, cy - r * 0.3, r * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   public render(): void {
+    this.renderCanvas(null, false);
     this.renderASCII(null, false);
     this.updateDashboard();
   }

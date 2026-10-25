@@ -1059,11 +1059,45 @@
         "total_tatums_count": 128,
         "core_pattern_count": 1,
         "total_bars_count": 8,
-        "evaluated_at": 1792967821.6140683
+        "evaluated_at": 1792968919.4602318
       }
+    },
+    "stem_mix_automation": {
+      "INTRO": {
+        "drums": 0.65,
+        "bass": 0.0,
+        "other": 0.88,
+        "vocals": 0.75
+      },
+      "GROOVE_A": {
+        "drums": 0.95,
+        "bass": 0.92,
+        "other": 0.88,
+        "vocals": 0.95
+      },
+      "BUILDUP": {
+        "drums": 0.98,
+        "bass": 0.4,
+        "other": 1.05,
+        "vocals": 1.0
+      },
+      "DROP": {
+        "drums": 1.05,
+        "bass": 1.05,
+        "other": 0.9,
+        "vocals": 1.0
+      },
+      "BREAKDOWN": {
+        "drums": 0.0,
+        "bass": 0.0,
+        "other": 1.05,
+        "vocals": 1.05
+      },
+      "fade_curve": "exponential_asymptotic",
+      "crossfade_bars": 2.0
     }
   },
-  "updated_at": 1792967821.6164389,
+  "updated_at": 1792968919.4642355,
   "vocal_vowel_transitions": {
     "AH": {
       "AH": 0.4293,
