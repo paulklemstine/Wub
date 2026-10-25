@@ -65,6 +65,10 @@ export interface SliceAsset {
   name: string;
   vowel?: string;
   trackTitle?: string;
+  trackId?: string;
+  segmentId?: string;
+  x?: number;
+  y?: number;
 }
 
 export interface LoopManifestItem {
@@ -1604,6 +1608,7 @@ export class ClientGrooveboxConductor {
 
   public playbackMode: "jukebox" | "slices" | "phrase_blocks" = "jukebox";
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
+  private segmentPositions: Map<string, { x: number; y: number }> = new Map();
   private loopRegistry: Map<StemName, LoadedLoop[]> = new Map();
   private activeLoops: Partial<Record<StemName, LoadedLoop>> = {};
   private phraseBlockRegistry: Map<string, LoadedPhraseBlock[]> = new Map();
@@ -1691,6 +1696,28 @@ export class ClientGrooveboxConductor {
       const freq = 600 * Math.pow(15000 / 600, cx);
       const q = 0.8 + 1.6 * cx;
       this.engine.setStemFilter("vocals", freq, q);
+    }
+
+    // Dynamic Reticule Slice Steering: immediately update the set of slices used by this stem's pattern!
+    this.updateStemSlicesForReticle(stem, { x: cx, y: cy });
+  }
+
+  public setSegmentPositions(positions: Map<string, { x: number; y: number }>): void {
+    this.segmentPositions = positions;
+    for (const [, assets] of this.sliceRegistry) {
+      for (const asset of assets) {
+        if (asset.segmentId) {
+          const pos = positions.get(asset.segmentId) ?? (asset.trackId ? positions.get(`${asset.trackId}:${asset.segmentId}`) : undefined);
+          if (pos) {
+            asset.x = pos.x;
+            asset.y = pos.y;
+          }
+        }
+      }
+    }
+    // Re-prime kit slices with updated UMAP map positions
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      this.updateStemSlicesForReticle(stem, this.steering[stem]);
     }
   }
 
@@ -1789,6 +1816,18 @@ export class ClientGrooveboxConductor {
             if (res.ok) {
               const bytes = await res.arrayBuffer();
               const decoded = await this.engine.decodeWav(bytes);
+              const segPos = item.segment_id
+                ? (this.segmentPositions.get(item.segment_id) ?? (item.track_id ? this.segmentPositions.get(`${item.track_id}:${item.segment_id}`) : undefined))
+                : undefined;
+              let x = segPos?.x;
+              let y = segPos?.y;
+              if (x === undefined || y === undefined) {
+                const normCentroid = Math.max(0, Math.min(1, Math.log2(Math.max(50, item.centroid || 500) / 50) / 7.6));
+                const isRight = cat.includes("cyber") || cat.includes("breaks");
+                const isBottom = cat.includes("house") || cat.includes("breaks");
+                x = (isRight ? 0.52 : 0.04) + 0.44 * normCentroid;
+                y = (isBottom ? 0.52 : 0.04) + 0.44 * Math.max(0, Math.min(1, (item.duration || 0.2) / 0.8));
+              }
               const asset: SliceAsset = {
                 buffer: decoded,
                 pitch: typeof item.pitch === "number" ? item.pitch : 0,
@@ -1798,6 +1837,10 @@ export class ClientGrooveboxConductor {
                 name: item.name,
                 vowel: item.vowel,
                 trackTitle: item.track_title,
+                trackId: item.track_id,
+                segmentId: item.segment_id,
+                x,
+                y,
               };
               assets.push(asset);
               this.synth.registerSliceBuffer(`${stem}:${cat}_${i}`, decoded);
@@ -2129,46 +2172,87 @@ export class ClientGrooveboxConductor {
     return { buffer: best.buffer, rate, asset: best };
   }
 
-  private selectBestAsset(stemCategory: string, territory?: StyleTerritory, targetPitch?: number): SliceAsset | null {
-    let list: SliceAsset[] | undefined;
-    if (territory) {
-      list = this.sliceRegistry.get(`${stemCategory}:${territory}`) ||
-             this.sliceRegistry.get(`${stemCategory}_${territory}`);
-    }
-    if (!list || list.length === 0) {
-      list = this.sliceRegistry.get(stemCategory);
-    }
-    if (!list || list.length === 0) {
-      // Fallback within stem
-      const [stem, cat] = stemCategory.split(":");
-      if (stem === "drums") {
+  private selectBestAsset(
+    stemCategory: string,
+    territory?: StyleTerritory,
+    targetPitch?: number,
+    targetCoord?: { x: number; y: number }
+  ): SliceAsset | null {
+    let pool: SliceAsset[] = [];
+    const [stem, cat] = stemCategory.split(":");
+
+    if (targetCoord) {
+      // Gather all slice assets available for this category across all territories
+      for (const t of ["wave", "cyber", "house", "breaks"]) {
+        const tList = this.sliceRegistry.get(`${stem}:${cat}:${t}`) || this.sliceRegistry.get(`${stem}:${cat}_${t}`);
+        if (tList) pool.push(...tList);
+      }
+      const directList = this.sliceRegistry.get(stemCategory);
+      if (directList) pool.push(...directList);
+
+      // Fallback within stem if category pool is empty
+      if (pool.length === 0 && stem === "drums") {
+        for (const alt of ["kick", "snare", "hat_closed", "hat_open", "percussion", "fill"]) {
+          for (const t of ["wave", "cyber", "house", "breaks"]) {
+            const altList = this.sliceRegistry.get(`drums:${alt}:${t}`) || this.sliceRegistry.get(`drums:${alt}_${t}`);
+            if (altList) pool.push(...altList);
+          }
+        }
+      }
+    } else {
+      if (territory) {
+        pool = this.sliceRegistry.get(`${stemCategory}:${territory}`) ||
+               this.sliceRegistry.get(`${stemCategory}_${territory}`) || [];
+      }
+      if (pool.length === 0) {
+        pool = this.sliceRegistry.get(stemCategory) || [];
+      }
+      if (pool.length === 0 && stem === "drums") {
         for (const alt of ["kick", "snare", "hat_closed", "hat_open", "percussion", "fill"]) {
           if (alt !== cat) {
             const altList = (territory ? (this.sliceRegistry.get(`drums:${alt}:${territory}`) || this.sliceRegistry.get(`drums:${alt}_${territory}`)) : undefined) ||
               this.sliceRegistry.get(`drums:${alt}`);
             if (altList && altList.length > 0) {
-              list = altList;
+              pool = altList;
               break;
             }
           }
         }
       }
     }
-    if (!list || list.length === 0) {
+
+    if (pool.length === 0) {
       return null;
+    }
+
+    // Deduplicate candidate pool by unique asset name
+    const seen = new Set<string>();
+    const list: SliceAsset[] = [];
+    for (const item of pool) {
+      if (!seen.has(item.name)) {
+        seen.add(item.name);
+        list.push(item);
+      }
     }
 
     const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
     let bestAsset = list[0];
-    let bestScore = -999;
+    let bestScore = -99999;
 
     for (const item of list) {
       let score = (trainedScores && trainedScores[item.name]) ? trainedScores[item.name] : 0.8;
+      // Reticule Distance Steering: heavily favor slices physically closest to the reticule on the map
+      if (targetCoord && typeof item.x === "number" && typeof item.y === "number") {
+        const dx = item.x - targetCoord.x;
+        const dy = item.y - targetCoord.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        score -= dist * 6.5;
+      }
       if (targetPitch !== undefined) {
         let diff = (targetPitch - item.pitch) % 12;
         if (diff > 6) diff -= 12;
         if (diff < -6) diff += 12;
-        score -= Math.abs(diff) * 0.05;
+        score -= Math.abs(diff) * 0.08;
       }
       if (score > bestScore) {
         bestScore = score;
@@ -2178,20 +2262,30 @@ export class ClientGrooveboxConductor {
     return bestAsset;
   }
 
-  public initSongKit(territory: StyleTerritory, keyRoot: number): void {
-    const kickAsset = this.selectBestAsset("drums:kick", territory);
-    const snareAsset = this.selectBestAsset("drums:snare", territory);
-    const hatClosedAsset = this.selectBestAsset("drums:hat_closed", territory);
-    const hatOpenAsset = this.selectBestAsset("drums:hat_open", territory);
-    const percAsset = this.selectBestAsset("drums:percussion", territory);
-    const fillAsset = this.selectBestAsset("drums:fill", territory);
+  public initSongKit(territory: StyleTerritory, keyRoot: number, coord?: { x: number; y: number }): void {
+    const dCoord = (coord && this.steering.drums) || this.steering.drums;
+    const bCoord = (coord && this.steering.bass) || this.steering.bass;
+    const oCoord = (coord && this.steering.other) || this.steering.other;
+    const vCoord = (coord && this.steering.vocals) || this.steering.vocals;
 
-    const kickBuf = kickAsset ? kickAsset.buffer : this.synth.getSliceBuffer(`drums:kick:${territory}`) || this.synth.getSliceBuffer("drums:kick");
-    const snareBuf = snareAsset ? snareAsset.buffer : this.synth.getSliceBuffer(`drums:snare:${territory}`) || this.synth.getSliceBuffer("drums:snare");
-    const hatClosedBuf = hatClosedAsset ? hatClosedAsset.buffer : this.synth.getSliceBuffer(`drums:hat_closed:${territory}`) || this.synth.getSliceBuffer("drums:hat_closed");
-    const hatOpenBuf = hatOpenAsset ? hatOpenAsset.buffer : this.synth.getSliceBuffer(`drums:hat_open:${territory}`) || this.synth.getSliceBuffer("drums:hat_open");
-    const percBuf = percAsset ? percAsset.buffer : this.synth.getSliceBuffer(`drums:percussion:${territory}`) || this.synth.getSliceBuffer("drums:percussion");
-    const fillBuf = fillAsset ? fillAsset.buffer : this.synth.getSliceBuffer(`drums:fill:${territory}`) || this.synth.getSliceBuffer("drums:fill");
+    const dTerr = getStyleTerritory(dCoord.x, dCoord.y);
+    const bTerr = getStyleTerritory(bCoord.x, bCoord.y);
+    const oTerr = getStyleTerritory(oCoord.x, oCoord.y);
+    const vTerr = getStyleTerritory(vCoord.x, vCoord.y);
+
+    const kickAsset = this.selectBestAsset("drums:kick", dTerr, undefined, dCoord);
+    const snareAsset = this.selectBestAsset("drums:snare", dTerr, undefined, dCoord);
+    const hatClosedAsset = this.selectBestAsset("drums:hat_closed", dTerr, undefined, dCoord);
+    const hatOpenAsset = this.selectBestAsset("drums:hat_open", dTerr, undefined, dCoord);
+    const percAsset = this.selectBestAsset("drums:percussion", dTerr, undefined, dCoord);
+    const fillAsset = this.selectBestAsset("drums:fill", dTerr, undefined, dCoord);
+
+    const kickBuf = kickAsset ? kickAsset.buffer : this.synth.getSliceBuffer(`drums:kick:${dTerr}`) || this.synth.getSliceBuffer("drums:kick");
+    const snareBuf = snareAsset ? snareAsset.buffer : this.synth.getSliceBuffer(`drums:snare:${dTerr}`) || this.synth.getSliceBuffer("drums:snare");
+    const hatClosedBuf = hatClosedAsset ? hatClosedAsset.buffer : this.synth.getSliceBuffer(`drums:hat_closed:${dTerr}`) || this.synth.getSliceBuffer("drums:hat_closed");
+    const hatOpenBuf = hatOpenAsset ? hatOpenAsset.buffer : this.synth.getSliceBuffer(`drums:hat_open:${dTerr}`) || this.synth.getSliceBuffer("drums:hat_open");
+    const percBuf = percAsset ? percAsset.buffer : this.synth.getSliceBuffer(`drums:percussion:${dTerr}`) || this.synth.getSliceBuffer("drums:percussion");
+    const fillBuf = fillAsset ? fillAsset.buffer : this.synth.getSliceBuffer(`drums:fill:${dTerr}`) || this.synth.getSliceBuffer("drums:fill");
 
     this.activeSongKit = {
       territory,
@@ -2203,20 +2297,87 @@ export class ClientGrooveboxConductor {
       percussion: percBuf ? { buffer: percBuf, rate: 1.0, asset: percAsset || undefined } : null,
       fill: fillBuf ? { buffer: fillBuf, rate: 1.0, asset: fillAsset || undefined } : null,
 
-      bassSubAsset: this.selectBestAsset("bass:sub", territory, keyRoot) || this.selectBestAsset("bass:sub", undefined, keyRoot),
-      bassRollingAsset: this.selectBestAsset("bass:rolling", territory, keyRoot) || this.selectBestAsset("bass:rolling", undefined, keyRoot),
+      bassSubAsset: this.selectBestAsset("bass:sub", bTerr, keyRoot, bCoord) || this.selectBestAsset("bass:sub", undefined, keyRoot, bCoord),
+      bassRollingAsset: this.selectBestAsset("bass:rolling", bTerr, keyRoot, bCoord) || this.selectBestAsset("bass:rolling", undefined, keyRoot, bCoord),
 
-      chordAsset: this.selectBestAsset("other:chord", territory, keyRoot) || this.selectBestAsset("other:chord", undefined, keyRoot),
-      padAsset: this.selectBestAsset("other:pad", territory, keyRoot) || this.selectBestAsset("other:pad", undefined, keyRoot),
-      arpAsset: this.selectBestAsset("other:arp", territory, keyRoot) || this.selectBestAsset("other:arp", undefined, keyRoot),
+      chordAsset: this.selectBestAsset("other:chord", oTerr, keyRoot, oCoord) || this.selectBestAsset("other:chord", undefined, keyRoot, oCoord),
+      padAsset: this.selectBestAsset("other:pad", oTerr, keyRoot, oCoord) || this.selectBestAsset("other:pad", undefined, keyRoot, oCoord),
+      arpAsset: this.selectBestAsset("other:arp", oTerr, keyRoot, oCoord) || this.selectBestAsset("other:arp", undefined, keyRoot, oCoord),
 
-      vocalHookAsset: this.selectBestAsset("vocals:hook", territory, keyRoot) || this.selectBestAsset("vocals:hook", undefined, keyRoot),
-      vocalCallAsset: this.selectBestAsset("vocals:call", territory, keyRoot) || this.selectBestAsset("vocals:call", undefined, keyRoot),
-      vocalChopAsset: this.selectBestAsset("vocals:chop", territory, keyRoot) || this.selectBestAsset("vocals:chop", undefined, keyRoot),
+      vocalHookAsset: this.selectBestAsset("vocals:hook", vTerr, keyRoot, vCoord) || this.selectBestAsset("vocals:hook", undefined, keyRoot, vCoord),
+      vocalCallAsset: this.selectBestAsset("vocals:call", vTerr, keyRoot, vCoord) || this.selectBestAsset("vocals:call", undefined, keyRoot, vCoord),
+      vocalChopAsset: this.selectBestAsset("vocals:chop", vTerr, keyRoot, vCoord) || this.selectBestAsset("vocals:chop", undefined, keyRoot, vCoord),
     };
     this.kitKeyRoot = keyRoot;
     this.kitTerritory = territory;
     console.info(`[Client ML] Curated unified song kit locked in for territory: ${territory.toUpperCase()}, key root: ${ROOT_NAMES[keyRoot % 12]}`);
+  }
+
+  public updateStemSlicesForReticle(stem: StemName, coord: { x: number; y: number }): void {
+    const terr = getStyleTerritory(coord.x, coord.y);
+    const chordIndex = Math.floor(this.phraseBar / 2) % this.activeProgression.length;
+    const chord = this.activeProgression[chordIndex] || this.activeProgression[0];
+    const keyRoot = chord ? chord.rootPitch : 0;
+
+    if (!this.activeSongKit) {
+      this.initSongKit(terr, keyRoot, coord);
+      return;
+    }
+
+    if (stem === "drums") {
+      const kickAsset = this.selectBestAsset("drums:kick", terr, undefined, coord);
+      const snareAsset = this.selectBestAsset("drums:snare", terr, undefined, coord);
+      const hatClosedAsset = this.selectBestAsset("drums:hat_closed", terr, undefined, coord);
+      const hatOpenAsset = this.selectBestAsset("drums:hat_open", terr, undefined, coord);
+      const percAsset = this.selectBestAsset("drums:percussion", terr, undefined, coord);
+      const fillAsset = this.selectBestAsset("drums:fill", terr, undefined, coord);
+
+      const kickBuf = kickAsset ? kickAsset.buffer : this.synth.getSliceBuffer(`drums:kick:${terr}`) || this.synth.getSliceBuffer("drums:kick");
+      const snareBuf = snareAsset ? snareAsset.buffer : this.synth.getSliceBuffer(`drums:snare:${terr}`) || this.synth.getSliceBuffer("drums:snare");
+      const hatClosedBuf = hatClosedAsset ? hatClosedAsset.buffer : this.synth.getSliceBuffer(`drums:hat_closed:${terr}`) || this.synth.getSliceBuffer("drums:hat_closed");
+      const hatOpenBuf = hatOpenAsset ? hatOpenAsset.buffer : this.synth.getSliceBuffer(`drums:hat_open:${terr}`) || this.synth.getSliceBuffer("drums:hat_open");
+      const percBuf = percAsset ? percAsset.buffer : this.synth.getSliceBuffer(`drums:percussion:${terr}`) || this.synth.getSliceBuffer("drums:percussion");
+      const fillBuf = fillAsset ? fillAsset.buffer : this.synth.getSliceBuffer(`drums:fill:${terr}`) || this.synth.getSliceBuffer("drums:fill");
+
+      this.activeSongKit.kick = kickBuf ? { buffer: kickBuf, rate: 1.0, asset: kickAsset || undefined } : null;
+      this.activeSongKit.snare = snareBuf ? { buffer: snareBuf, rate: 1.0, asset: snareAsset || undefined } : null;
+      this.activeSongKit.hatClosed = hatClosedBuf ? { buffer: hatClosedBuf, rate: 1.0, asset: hatClosedAsset || undefined } : null;
+      this.activeSongKit.hatOpen = hatOpenBuf ? { buffer: hatOpenBuf, rate: 1.0, asset: hatOpenAsset || undefined } : null;
+      this.activeSongKit.percussion = percBuf ? { buffer: percBuf, rate: 1.0, asset: percAsset || undefined } : null;
+      this.activeSongKit.fill = fillBuf ? { buffer: fillBuf, rate: 1.0, asset: fillAsset || undefined } : null;
+
+      // Unlock drums from whole-loop/phrase playback so steered slices play immediately in pattern!
+      if (this.activePhraseBlock?.buffers.drums) {
+        delete this.activePhraseBlock.buffers.drums;
+      }
+      delete this.activeLoops.drums;
+    } else if (stem === "bass") {
+      this.activeSongKit.bassSubAsset = this.selectBestAsset("bass:sub", terr, keyRoot, coord) || this.selectBestAsset("bass:sub", undefined, keyRoot, coord);
+      this.activeSongKit.bassRollingAsset = this.selectBestAsset("bass:rolling", terr, keyRoot, coord) || this.selectBestAsset("bass:rolling", undefined, keyRoot, coord);
+
+      if (this.activePhraseBlock?.buffers.bass) {
+        delete this.activePhraseBlock.buffers.bass;
+      }
+      delete this.activeLoops.bass;
+    } else if (stem === "other") {
+      this.activeSongKit.chordAsset = this.selectBestAsset("other:chord", terr, keyRoot, coord) || this.selectBestAsset("other:chord", undefined, keyRoot, coord);
+      this.activeSongKit.padAsset = this.selectBestAsset("other:pad", terr, keyRoot, coord) || this.selectBestAsset("other:pad", undefined, keyRoot, coord);
+      this.activeSongKit.arpAsset = this.selectBestAsset("other:arp", terr, keyRoot, coord) || this.selectBestAsset("other:arp", undefined, keyRoot, coord);
+
+      if (this.activePhraseBlock?.buffers.other) {
+        delete this.activePhraseBlock.buffers.other;
+      }
+      delete this.activeLoops.other;
+    } else if (stem === "vocals") {
+      this.activeSongKit.vocalHookAsset = this.selectBestAsset("vocals:hook", terr, keyRoot, coord) || this.selectBestAsset("vocals:hook", undefined, keyRoot, coord);
+      this.activeSongKit.vocalCallAsset = this.selectBestAsset("vocals:call", terr, keyRoot, coord) || this.selectBestAsset("vocals:call", undefined, keyRoot, coord);
+      this.activeSongKit.vocalChopAsset = this.selectBestAsset("vocals:chop", terr, keyRoot, coord) || this.selectBestAsset("vocals:chop", undefined, keyRoot, coord);
+
+      if (this.activePhraseBlock?.buffers.vocals) {
+        delete this.activePhraseBlock.buffers.vocals;
+      }
+      delete this.activeLoops.vocals;
+    }
   }
 
   private getPitchedSliceFromAsset(
@@ -2711,7 +2872,7 @@ export class ClientGrooveboxConductor {
 
     const dPat = this.activePatterns.drums;
     const dSteer = this.steering.drums;
-    const isLoopDrumActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activePhraseBlock || this.activeLoops.drums));
+    const isLoopDrumActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activePhraseBlock?.buffers?.drums || this.activeLoops.drums));
     if (isLoopDrumActive) {
       // Continuous studio drum phrase or loop is active: dynamic sidechain ducking on downbeats
       if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
@@ -2955,7 +3116,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const bPat = this.activePatterns.bass;
     const bSteer = this.steering.bass;
-    const isLoopBassActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.bass || this.activePhraseBlock));
+    const isLoopBassActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.bass || this.activePhraseBlock?.buffers?.bass));
     if (bPat && !isLoopBassActive && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
       const bassCat = bSteer.x < 0.38 ? "bass:sub" : (bSteer.x < 0.72 ? "bass:rolling" : "bass:stab");
       const isSparseBass = (bSteer.y < 0.35 && bTerr !== "cyber");
@@ -2994,7 +3155,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const oPat = this.activePatterns.other;
     const oSteer = this.steering.other;
-    const isLoopOtherActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.other || this.activePhraseBlock));
+    const isLoopOtherActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.other || this.activePhraseBlock?.buffers?.other));
     if (oPat && !isLoopOtherActive) {
       const otherCat = oSteer.x < 0.40 ? "other:pad" : (oSteer.x < 0.75 ? "other:chord" : "other:arp");
       const isArpMode = (otherCat === "other:arp" || sec === "DROP" || oSteer.y > 0.72 || oTerr === "cyber");
@@ -3062,7 +3223,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const vPat = this.activePatterns.vocals;
     const vSteer = this.steering.vocals;
-    const isLoopVocalActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.vocals || this.activePhraseBlock));
+    const isLoopVocalActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.vocals || this.activePhraseBlock?.buffers?.vocals));
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
     if (!isDropGap && !isLoopVocalActive && vPat) {
@@ -3695,6 +3856,18 @@ export class ClientGrooveboxConductor {
       vocalNote: this.currentVocalMeta.note,
       vocal_persona: activePersona,
       vocalPersona: activePersona,
+      active_slice_coords: {
+        drums: this.activeSongKit?.kick?.asset?.x !== undefined ? { x: this.activeSongKit.kick.asset.x, y: this.activeSongKit.kick.asset.y! } : undefined,
+        bass: this.activeSongKit?.bassSubAsset?.x !== undefined ? { x: this.activeSongKit.bassSubAsset.x, y: this.activeSongKit.bassSubAsset.y! } : undefined,
+        other: this.activeSongKit?.chordAsset?.x !== undefined ? { x: this.activeSongKit.chordAsset.x, y: this.activeSongKit.chordAsset.y! } : undefined,
+        vocals: this.activeSongKit?.vocalHookAsset?.x !== undefined ? { x: this.activeSongKit.vocalHookAsset.x, y: this.activeSongKit.vocalHookAsset.y! } : undefined,
+      },
+      activeSliceCoords: {
+        drums: this.activeSongKit?.kick?.asset?.x !== undefined ? { x: this.activeSongKit.kick.asset.x, y: this.activeSongKit.kick.asset.y! } : undefined,
+        bass: this.activeSongKit?.bassSubAsset?.x !== undefined ? { x: this.activeSongKit.bassSubAsset.x, y: this.activeSongKit.bassSubAsset.y! } : undefined,
+        other: this.activeSongKit?.chordAsset?.x !== undefined ? { x: this.activeSongKit.chordAsset.x, y: this.activeSongKit.chordAsset.y! } : undefined,
+        vocals: this.activeSongKit?.vocalHookAsset?.x !== undefined ? { x: this.activeSongKit.vocalHookAsset.x, y: this.activeSongKit.vocalHookAsset.y! } : undefined,
+      },
       direct_ml_engine: true,
     };
   }

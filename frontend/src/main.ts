@@ -70,6 +70,7 @@ export interface GrooveboxMeta {
   vocalSyllable?: string;
   vocalVowel?: string;
   vocalNote?: string;
+  activeSliceCoords?: Partial<Record<StemName, { x: number; y: number }>>;
 }
 
 interface UIEvent {
@@ -236,11 +237,18 @@ class WubApp {
     // Initialize Autonomous In-Browser ML Sequencer
     try {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
+      if (this.segmentPositions.size > 0) {
+        this.clientConductor.setSegmentPositions(this.segmentPositions);
+      }
       for (const stem of STEMS) {
         const r = this.nebula.getReticle(stem);
         this.clientConductor.setReticleSteering(stem, r.x, r.y);
       }
-      void this.clientConductor.loadStaticBundle("data");
+      void this.clientConductor.loadStaticBundle("data").then(() => {
+        if (this.segmentPositions.size > 0 && this.clientConductor) {
+          this.clientConductor.setSegmentPositions(this.segmentPositions);
+        }
+      });
       this.clientConductor.setMetaCallback((meta, atAudioSec, step, totalSteps) => {
         this.enqueueUIEvent({
           atAudioSec,
@@ -319,6 +327,9 @@ class WubApp {
       }
       if (pts.length > 0 && this.nebula !== null) {
         this.nebula.setPoints(pts);
+        if (this.clientConductor) {
+          this.clientConductor.setSegmentPositions(this.segmentPositions);
+        }
       }
     } catch {
       // Fallback stays as seeded demo points
@@ -924,7 +935,7 @@ class WubApp {
             atSec: t,
           });
           if (this.nebula !== null) {
-            const pos = this.getSliceCoordinates(stem, trackId, "");
+            const pos = latestUIEvent.meta.activeSliceCoords?.[stem] ?? this.getSliceCoordinates(stem, trackId, "");
             this.nebula.setActiveSlice(stem, pos.x, pos.y, t);
           }
         }
