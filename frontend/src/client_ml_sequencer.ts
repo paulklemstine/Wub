@@ -48,6 +48,8 @@ export interface SliceManifestItem {
   duration: number;
   centroid: number;
   pitch?: number;
+  vowel?: string;
+  track_title?: string;
   loudness?: number;
   track_id: string;
   segment_id: string;
@@ -60,6 +62,8 @@ export interface SliceAsset {
   duration: number;
   loudness: number;
   name: string;
+  vowel?: string;
+  trackTitle?: string;
 }
 
 export interface LoopManifestItem {
@@ -1588,8 +1592,9 @@ export class ClientGrooveboxConductor {
       if (!stemSlices) continue;
       for (const [cat, list] of Object.entries(stemSlices)) {
         const assets: SliceAsset[] = [];
-        // Load up to 16 slices per category (guarantees full p0..p11 chromatic coverage)
-        for (let i = 0; i < Math.min(16, list.length); i++) {
+        // Load up to 36 slices for vocals (3 variations per 12 pitches) or 16 for other stems
+        const maxSlices = stem === "vocals" ? 36 : 16;
+        for (let i = 0; i < Math.min(maxSlices, list.length); i++) {
           const item = list[i];
           try {
             const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
@@ -1604,6 +1609,8 @@ export class ClientGrooveboxConductor {
                 duration: typeof item.duration === "number" ? item.duration : decoded.duration,
                 loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
                 name: item.name,
+                vowel: item.vowel,
+                trackTitle: item.track_title,
               };
               assets.push(asset);
               this.synth.registerSliceBuffer(`${stem}:${cat}_${i}`, decoded);
@@ -1768,7 +1775,7 @@ export class ClientGrooveboxConductor {
     targetPitch?: number,
     variationFraction?: number,
     territory?: StyleTerritory
-  ): { buffer: AudioBuffer; rate: number } | null {
+  ): { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null {
     // 1. Look for style-specific slices first (e.g. drums:kick:wave / drums:kick_wave)
     let list: SliceAsset[] | undefined;
     if (territory) {
@@ -1828,7 +1835,7 @@ export class ClientGrooveboxConductor {
       // Pick with reticule sliding variation across available slices
       const v = variationFraction !== undefined ? Math.max(0, Math.min(0.999, variationFraction)) : Math.random();
       const idx = Math.floor(v * list.length) % list.length;
-      return { buffer: list[idx].buffer, rate: 1.0 };
+      return { buffer: list[idx].buffer, rate: 1.0, asset: list[idx] };
     }
 
     // For pitched stems (bass, other, vocals): find slice closest to target pitch
@@ -1866,7 +1873,7 @@ export class ClientGrooveboxConductor {
     const maxShift = stemCategory.startsWith("vocals") ? 6 : 3;
     const clampedShift = Math.max(-maxShift, Math.min(maxShift, bestShift));
     const rate = Math.pow(2, clampedShift / 12);
-    return { buffer: best.buffer, rate };
+    return { buffer: best.buffer, rate, asset: best };
   }
 
   public setCycleMode(mode: string): boolean {
@@ -2521,6 +2528,12 @@ export class ClientGrooveboxConductor {
           : null;
 
         if (slice) {
+          if (slice.asset?.trackTitle) {
+            this.currentVocalMeta.songTitle = slice.asset.trackTitle;
+          }
+          if (slice.asset?.vowel) {
+            this.currentVocalMeta.vowel = slice.asset.vowel as any;
+          }
           // Sing current melody note using authentic acoustic vocal slice
           this.engine.scheduleSlice("vocals", slice.buffer, when, {
             rate: slice.rate,
