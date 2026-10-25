@@ -888,10 +888,13 @@
     }
     .tamagotchi-ascii {
       position: relative;
-      font-family: "Courier New", Courier, monospace;
+      font-family: "DejaVu Sans Mono", "Liberation Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, "Courier New", monospace;
+      font-feature-settings: "liga" 0, "calt" 0;
+      font-variant-ligatures: none;
+      letter-spacing: 0;
       font-size: 0.88rem;
       font-weight: 900;
-      line-height: 1.28;
+      line-height: 1.25;
       background: linear-gradient(
         90deg,
         #ff007f,
@@ -1547,7 +1550,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.61 <span class="mc-build-num">#61</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.62 <span class="mc-build-num">#62</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -1949,7 +1952,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.61 (Build #61 • rev 1d51725)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.62 (Build #62 • rev ecfe521)</span>
     </div>
   </div>
 
