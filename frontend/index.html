@@ -3,262 +3,893 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Wub — Infinite Jukebox</title>
+  <title>Wub — MC-505 Groovebox</title>
   <style>
-    :root { color-scheme: dark; }
+    :root {
+      color-scheme: dark;
+      --mc-chassis: #12151c;
+      --mc-panel: #181c26;
+      --mc-bezel: #262d3d;
+      --mc-border: #353f54;
+      --mc-lcd-bg: #03140e;
+      --mc-lcd-text: #00ffaa;
+      --mc-lcd-dim: #004d33;
+      --neon-green: #00ff88;
+      --neon-cyan: #00e5ff;
+      --neon-amber: #ffb700;
+      --neon-magenta: #ff007f;
+      --neon-red: #ff2255;
+      --neon-orange: #ff6600;
+    }
     * { box-sizing: border-box; }
     body {
-      background: #0a0a12; color: #e8e8f0;
-      font-family: system-ui, -apple-system, sans-serif;
-      margin: 0; padding: 16px;
+      background: radial-gradient(circle at 50% 0%, #1e2433 0%, #0c0e14 100%);
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      margin: 0;
+      padding: 16px;
+      min-height: 100vh;
     }
-    header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    h1 { font-size: 1.4rem; margin: 0 8px 0 0; }
+
+    /* --- MC-505 GROOVEBOX CHASSIS HEADER --- */
+    .mc-chassis-shell {
+      max-width: 1400px;
+      margin: 0 auto;
+      background: var(--mc-chassis);
+      border: 2px solid var(--mc-bezel);
+      border-radius: 12px;
+      padding: 14px 18px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      position: relative;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding-bottom: 12px;
+      border-bottom: 2px solid var(--mc-panel);
+    }
+    .mc-brand-block {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .mc-logo {
+      font-size: 1.3rem;
+      font-weight: 900;
+      letter-spacing: 0.15em;
+      color: #ffb700;
+      text-transform: uppercase;
+      text-shadow: 0 0 10px rgba(255, 183, 0, 0.6);
+      font-style: italic;
+    }
+    .mc-model {
+      font-size: 1.4rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      color: #ffffff;
+      text-transform: uppercase;
+    }
+    .mc-tagline {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      color: #00e5ff;
+      text-transform: uppercase;
+      text-shadow: 0 0 8px rgba(0, 229, 255, 0.5);
+    }
+
+    /* --- HARDWARE TACTILE BUTTONS --- */
     button {
-      background: #1c1c2c; color: #e8e8f0; border: 1px solid #3a3a55;
-      border-radius: 6px; padding: 8px 14px; cursor: pointer;
+      background: linear-gradient(180deg, #323a4d 0%, #1e2433 100%);
+      color: #e2e8f0;
+      border: 1px solid #4a5568;
+      border-bottom: 3px solid #10141d;
+      border-top: 1px solid #6b7a99;
+      border-radius: 6px;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 0.82rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 3px 6px rgba(0, 0, 0, 0.6);
+      transition: all 0.08s ease-out;
+      user-select: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
-    button:hover { background: #262640; }
-    button.active { background: #6d28d9; border-color: #a78bfa; }
-    #transport { display: flex; gap: 8px; align-items: center; }
-    #master { display: flex; gap: 16px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
-    #master label { display: flex; gap: 8px; align-items: center; }
-    #decks { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    button:hover {
+      background: linear-gradient(180deg, #3d465c 0%, #262e40 100%);
+      border-color: #64748b;
+    }
+    button:active {
+      transform: translateY(2px);
+      border-bottom-width: 1px;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.8);
+    }
+
+    /* --- TRANSPORT CONTROLS --- */
+    #transport {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    #btn-play {
+      background: linear-gradient(180deg, #165338 0%, #0d3322 100%);
+      border-color: #22c55e;
+      border-bottom: 3px solid #062114;
+      border-top: 1px solid #4ade80;
+      color: #86efac;
+    }
+    #btn-play:hover {
+      background: linear-gradient(180deg, #1a6344 0%, #0f3d29 100%);
+    }
+    #btn-play.active {
+      background: linear-gradient(180deg, #15803d 0%, #059669 100%) !important;
+      color: #ffffff !important;
+      border-color: #4ade80 !important;
+      box-shadow: 0 0 16px rgba(74, 222, 128, 0.85), inset 0 1px 2px #fff !important;
+      text-shadow: 0 0 8px #86efac;
+      transform: translateY(1px);
+    }
+    #btn-play::before {
+      content: "";
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #14532d;
+      border: 1px solid #22c55e;
+      box-shadow: 0 0 4px #22c55e;
+      margin-right: 4px;
+    }
+    #btn-play.active::before {
+      background: #4ade80;
+      border-color: #ffffff;
+      box-shadow: 0 0 10px #4ade80, 0 0 18px #4ade80;
+    }
+
+    #btn-stop {
+      background: linear-gradient(180deg, #4d232a 0%, #30141a 100%);
+      border-color: #ef4444;
+      border-bottom: 3px solid #1a080c;
+      border-top: 1px solid #f87171;
+      color: #fca5a5;
+    }
+    #btn-stop:hover {
+      background: linear-gradient(180deg, #5e2a33 0%, #3d1921 100%);
+    }
+    #btn-stop.active {
+      background: linear-gradient(180deg, #b91c1c 0%, #991b1b 100%) !important;
+      color: #ffffff !important;
+      box-shadow: 0 0 14px rgba(239, 68, 68, 0.8), inset 0 1px 2px #fff !important;
+      text-shadow: 0 0 8px #fca5a5;
+      transform: translateY(1px);
+    }
+    #btn-stop::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      background: #7f1d1d;
+      border: 1px solid #ef4444;
+      margin-right: 4px;
+    }
+    #btn-stop.active::before {
+      background: #ef4444;
+      border-color: #ffffff;
+      box-shadow: 0 0 8px #ef4444;
+    }
+
+    /* --- BACKEND CONFIG BAR --- */
+    #backend-config {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.8rem;
+      background: #0d1017;
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--mc-border);
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+    }
+    #backend-status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #64748b;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+      transition: background 0.2s ease;
+    }
+    #backend-host-input {
+      background: #171c26;
+      border: 1px solid #333d52;
+      border-radius: 4px;
+      color: #00ffaa;
+      padding: 4px 8px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      width: 175px;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.7);
+    }
+    #backend-host-input:focus {
+      outline: none;
+      border-color: var(--neon-cyan);
+      box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+    }
+    #btn-backend-connect {
+      padding: 4px 10px;
+      font-size: 0.75rem;
+    }
+    #btn-backend-help {
+      padding: 3px 6px;
+      font-size: 0.75rem;
+      border-radius: 50%;
+      width: 22px;
+      height: 22px;
+      line-height: 1;
+    }
+
+    /* --- MC-505 RETRO BACKLIT LCD MATRIX DISPLAY --- */
+    #master {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      margin: 14px 0;
+      padding: 10px 16px;
+      background: var(--mc-lcd-bg);
+      border: 2px inset #083325;
+      border-radius: 8px;
+      box-shadow: inset 0 0 20px rgba(0, 255, 170, 0.2), 0 3px 8px rgba(0, 0, 0, 0.7);
+      flex-wrap: wrap;
+    }
+    #master label {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-family: monospace;
+      font-weight: 700;
+      font-size: 0.88rem;
+      color: var(--mc-lcd-text);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      text-shadow: 0 0 6px rgba(0, 255, 170, 0.7);
+    }
+    #bpm-slider {
+      flex: 1;
+      min-width: 130px;
+      accent-color: var(--neon-green);
+    }
+    #bpm-value {
+      font-size: 1.1rem;
+      font-weight: 900;
+      color: #00ffaa;
+      text-shadow: 0 0 8px rgba(0, 255, 170, 0.9);
+      min-width: 80px;
+      letter-spacing: 0.05em;
+    }
+    #key-select {
+      background: #09261c;
+      color: #00ffaa;
+      border: 1px solid #145942;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-family: monospace;
+      font-weight: 700;
+      font-size: 0.9rem;
+      cursor: pointer;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.8), 0 0 6px rgba(0, 255, 170, 0.3);
+    }
+    #key-select:focus {
+      outline: none;
+      border-color: #00ffaa;
+      box-shadow: 0 0 10px rgba(0, 255, 170, 0.6);
+    }
+
+    /* --- GROOVEBOX 16-STEP SEQUENCER PANEL --- */
+    #groovebox-panel {
+      background: var(--mc-panel);
+      border: 2px solid var(--mc-bezel);
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin: 14px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 6px 18px rgba(0, 0, 0, 0.7);
+    }
+    .gb-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .gb-title {
+      font-weight: 900;
+      font-size: 0.88rem;
+      letter-spacing: 0.12em;
+      color: var(--neon-cyan);
+      text-transform: uppercase;
+      text-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .gb-title::before {
+      content: "";
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      background: var(--neon-cyan);
+      box-shadow: 0 0 8px var(--neon-cyan);
+      border-radius: 2px;
+    }
+    #gb-section-badge {
+      background: linear-gradient(180deg, #7c3aed 0%, #5b21b6 100%);
+      color: #fff;
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-weight: 800;
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      box-shadow: 0 0 10px rgba(124, 58, 237, 0.6);
+      border: 1px solid #a78bfa;
+    }
+    #gb-fill-badge {
+      background: linear-gradient(180deg, #ef4444 0%, #b91c1c 100%);
+      color: #fff;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 800;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.9);
+      border: 1px solid #fca5a5;
+      animation: pulse-fill 0.4s infinite alternate;
+    }
+    @keyframes pulse-fill {
+      from { transform: scale(1); box-shadow: 0 0 8px #ef4444; }
+      to { transform: scale(1.08); box-shadow: 0 0 16px #ef4444; }
+    }
+
+    /* 8-Bar phrase progress dots */
+    .gb-bar-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #1e2533;
+      border: 1px solid #3b4760;
+      box-shadow: inset 0 1px 2px #000;
+      transition: all 0.1s ease;
+    }
+    .gb-bar-dot.active {
+      background: var(--neon-green);
+      border-color: #a7f3d0;
+      box-shadow: 0 0 10px var(--neon-green);
+    }
+    .gb-bar-dot.fill {
+      background: var(--neon-red);
+      border-color: #fecaca;
+      box-shadow: 0 0 10px var(--neon-red);
+    }
+
+    /* --- THE 16-STEP CHICLET SEQUENCER KEYS --- */
+    #gb-step-strip {
+      display: grid;
+      grid-template-columns: repeat(16, 1fr);
+      gap: 5px;
+      background: #0f1218;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid #232a3a;
+      box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8);
+    }
+    .gb-step {
+      background: linear-gradient(180deg, #2a3244 0%, #171b26 100%);
+      border: 1px solid #3c4760;
+      border-bottom: 3px solid #0c0f16;
+      border-top: 1px solid #5a6888;
+      border-radius: 5px;
+      height: 38px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 800;
+      color: #94a3b8;
+      transition: all 0.05s ease-out;
+      user-select: none;
+      position: relative;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 2px 4px rgba(0,0,0,0.7);
+    }
+    /* Distinctive Roland downbeat keys on 1, 5, 9, 13 */
+    .gb-step.beat {
+      background: linear-gradient(180deg, #3d2a2a 0%, #201515 100%);
+      border-color: #633333;
+      border-top-color: #994444;
+      color: #fca5a5;
+    }
+    .gb-step-led {
+      width: 14px;
+      height: 4px;
+      border-radius: 2px;
+      background: #171c26;
+      border: 1px solid #2e374b;
+      margin-bottom: 3px;
+      box-shadow: inset 0 1px 1px #000;
+    }
+    .gb-step.beat .gb-step-led {
+      border-color: #552222;
+      background: #2b1212;
+    }
+
+    /* ACTIVE / TRIGGERED STEP: Electric Roland flash */
+    .gb-step.active {
+      background: linear-gradient(180deg, #22c55e 0%, #15803d 100%) !important;
+      color: #ffffff !important;
+      border-color: #86efac !important;
+      border-top-color: #ffffff !important;
+      box-shadow: 0 0 16px rgba(34, 197, 94, 0.95), inset 0 1px 2px #fff !important;
+      transform: translateY(2px);
+      border-bottom-width: 1px;
+    }
+    .gb-step.active .gb-step-led {
+      background: #ffffff !important;
+      box-shadow: 0 0 8px #ffffff, 0 0 14px #4ade80 !important;
+      border-color: #ffffff !important;
+    }
+
+    /* Active Stem Patterns readout */
+    #gb-patterns-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      font-family: monospace;
+      letter-spacing: 0.05em;
+      overflow-x: auto;
+      white-space: nowrap;
+      padding: 6px 10px;
+      background: #090c12;
+      border-radius: 6px;
+      border: 1px solid #1c2230;
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
+    }
+
+    /* --- 4-STEM HARDWARE MIXER DECKS --- */
+    #decks {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
     .deck {
-      background: #12121e; border: 1px solid #2a2a45; border-radius: 10px;
-      padding: 12px;
+      background: linear-gradient(180deg, #1b202c 0%, #12151e 100%);
+      border: 2px solid var(--mc-bezel);
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 20px rgba(0, 0, 0, 0.7);
+      position: relative;
     }
-    .deck h2 { margin: 0 0 8px; font-size: 1rem; text-transform: capitalize; }
-    .deck .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
-    .deck label { display: flex; gap: 8px; align-items: center; flex: 1; font-size: 0.85rem; }
-    .deck input[type="range"] { flex: 1; min-width: 0; }
-    .deck .val { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.8; }
-    .deck .toggles { display: flex; gap: 8px; }
-    .deck .toggles button { flex: 1; }
-    #stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; margin-top: 14px; }
+    .deck h2 {
+      margin: 0 0 10px;
+      font-size: 0.95rem;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .deck h2::before {
+      content: "";
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+    }
+
+    /* Dedicated Neon Stem Accents */
+    #deck-drums h2 { color: var(--neon-green); text-shadow: 0 0 8px rgba(0, 255, 136, 0.5); }
+    #deck-drums h2::before { background: var(--neon-green); box-shadow: 0 0 8px var(--neon-green); }
+    #deck-drums { border-top: 3px solid var(--neon-green); }
+
+    #deck-bass h2 { color: var(--neon-cyan); text-shadow: 0 0 8px rgba(0, 229, 255, 0.5); }
+    #deck-bass h2::before { background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan); }
+    #deck-bass { border-top: 3px solid var(--neon-cyan); }
+
+    #deck-vocals h2 { color: var(--neon-amber); text-shadow: 0 0 8px rgba(255, 183, 0, 0.5); }
+    #deck-vocals h2::before { background: var(--neon-amber); box-shadow: 0 0 8px var(--neon-amber); }
+    #deck-vocals { border-top: 3px solid var(--neon-amber); }
+
+    #deck-other h2 { color: var(--neon-magenta); text-shadow: 0 0 8px rgba(255, 0, 127, 0.5); }
+    #deck-other h2::before { background: var(--neon-magenta); box-shadow: 0 0 8px var(--neon-magenta); }
+    #deck-other { border-top: 3px solid var(--neon-magenta); }
+
+    .deck .toggles {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .deck .toggles button {
+      flex: 1;
+      padding: 6px 10px;
+      font-size: 0.78rem;
+    }
+
+    /* MUTE Button: MC-505 Ruby Red Jewel */
+    button[id$="-mute"]::before {
+      content: "";
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      background: #2b1115;
+      border: 1px solid #7f1d1d;
+      margin-right: 4px;
+    }
+    button[id$="-mute"].active {
+      background: linear-gradient(180deg, #dc2626 0%, #991b1b 100%) !important;
+      border-color: #f87171 !important;
+      color: #ffffff !important;
+      box-shadow: 0 0 14px rgba(239, 68, 68, 0.9), inset 0 1px 2px #fff !important;
+      transform: translateY(2px);
+    }
+    button[id$="-mute"].active::before {
+      background: #ffffff;
+      border-color: #ffffff;
+      box-shadow: 0 0 8px #ff4d6d;
+    }
+
+    /* SOLO Button: MC-505 Electric Amber Jewel */
+    button[id$="-solo"]::before {
+      content: "";
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      background: #332007;
+      border: 1px solid #92400e;
+      margin-right: 4px;
+    }
+    button[id$="-solo"].active {
+      background: linear-gradient(180deg, #f59e0b 0%, #b45309 100%) !important;
+      border-color: #fde68a !important;
+      color: #000000 !important;
+      box-shadow: 0 0 14px rgba(245, 158, 11, 0.9), inset 0 1px 2px #fff !important;
+      transform: translateY(2px);
+    }
+    button[id$="-solo"].active::before {
+      background: #ffffff;
+      border-color: #ffffff;
+      box-shadow: 0 0 8px #ffea00;
+    }
+
+    /* Hardware Mixer Sliders */
+    .deck .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin: 8px 0;
+    }
+    .deck label {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex: 1;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #94a3b8;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .deck input[type="range"] {
+      flex: 1;
+      min-width: 0;
+      height: 8px;
+      appearance: none;
+      background: #090b10;
+      border: 1px solid #252c3c;
+      border-radius: 4px;
+      box-shadow: inset 0 2px 4px #000;
+      cursor: pointer;
+    }
+    .deck input[type="range"]::-webkit-slider-thumb {
+      appearance: none;
+      width: 18px;
+      height: 22px;
+      border-radius: 3px;
+      background: linear-gradient(180deg, #4b5568 0%, #232834 50%, #151821 100%);
+      border: 1px solid #718096;
+      box-shadow: 0 3px 6px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+      cursor: ew-resize;
+    }
+    #deck-drums input[type="range"]::-webkit-slider-thumb { border-color: var(--neon-green); box-shadow: 0 0 6px rgba(0, 255, 136, 0.6); }
+    #deck-bass input[type="range"]::-webkit-slider-thumb { border-color: var(--neon-cyan); box-shadow: 0 0 6px rgba(0, 229, 255, 0.6); }
+    #deck-vocals input[type="range"]::-webkit-slider-thumb { border-color: var(--neon-amber); box-shadow: 0 0 6px rgba(255, 183, 0, 0.6); }
+    #deck-other input[type="range"]::-webkit-slider-thumb { border-color: var(--neon-magenta); box-shadow: 0 0 6px rgba(255, 0, 127, 0.6); }
+
+    .deck .val {
+      min-width: 42px;
+      text-align: right;
+      font-family: monospace;
+      font-weight: 700;
+      font-size: 0.82rem;
+      color: #e2e8f0;
+      background: #0a0c12;
+      padding: 2px 5px;
+      border-radius: 3px;
+      border: 1px solid #1f2533;
+    }
+
+    /* --- STUDIO RACK VISUALIZERS --- */
+    #stages {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
     .stage-card {
-      background: #11111e;
-      border: 1px solid #2a2a45;
+      background: #10131a;
+      border: 2px solid var(--mc-bezel);
       border-radius: 10px;
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 10px 24px rgba(0, 0, 0, 0.8);
+      position: relative;
     }
     .stage-header {
-      padding: 7px 12px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: #94a3b8;
-      border-bottom: 1px solid #232338;
+      padding: 8px 14px;
+      font-size: 0.82rem;
+      font-weight: 800;
+      color: #cbd5e1;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      border-bottom: 2px solid #1a202c;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: #141424;
+      background: linear-gradient(180deg, #1b202c 0%, #141722 100%);
     }
     .stage-header span:last-child {
       font-size: 0.72rem;
       font-weight: normal;
-      opacity: 0.75;
+      font-family: monospace;
+      color: #94a3b8;
     }
     canvas.stage {
-      width: 100%; height: auto; background: #090910;
+      width: 100%;
+      height: auto;
+      background: #06070a;
       display: block;
     }
     #rings-canvas { aspect-ratio: 16 / 10; }
     #nebula-canvas { aspect-ratio: 16 / 10; cursor: crosshair; }
     #master-canvas { aspect-ratio: 24 / 7; }
     .master-card { grid-column: 1 / -1; }
-    #status-line { margin-top: 12px; opacity: 0.85; font-size: 0.9rem; min-height: 1.2em; }
-    .gb-step {
-      background: #151522; border: 1px solid #2e2e48; border-radius: 4px;
-      height: 24px; display: flex; align-items: center; justify-content: center;
-      font-size: 0.65rem; font-weight: 600; color: #71717a; transition: all 0.05s ease-out;
-      user-select: none;
+
+    /* Status Bar */
+    #status-line {
+      margin-top: 14px;
+      padding: 8px 14px;
+      background: var(--mc-lcd-bg);
+      border: 2px inset #083325;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--mc-lcd-text);
+      text-shadow: 0 0 6px rgba(0, 255, 170, 0.7);
+      min-height: 1.4em;
     }
-    .gb-step.beat { border-color: #4b5563; color: #9ca3af; background: #1a1a2c; }
-    .gb-step.active {
-      background: #4ade80 !important; color: #000 !important; border-color: #86efac !important;
-      box-shadow: 0 0 10px rgba(74, 222, 128, 0.8); transform: translateY(-1px);
+
+    dialog {
+      background: #141822;
+      color: #e2e8f0;
+      border: 2px solid #3b4760;
+      border-radius: 10px;
+      max-width: 540px;
+      padding: 20px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.9), 0 0 20px rgba(0, 229, 255, 0.3);
     }
-    .gb-bar-dot {
-      width: 7px; height: 7px; border-radius: 50%; background: #27273a; border: 1px solid #3f3f5a;
-    }
-    .gb-bar-dot.active { background: #4ade80; border-color: #86efac; box-shadow: 0 0 6px #4ade80; }
-    .gb-bar-dot.fill { background: #ef4444; border-color: #fca5a5; box-shadow: 0 0 6px #ef4444; }
   </style>
 </head>
 <body>
-  <header>
-    <h1>Wub — Infinite Jukebox</h1>
-    <div id="transport">
-      <button id="btn-play" type="button">Play</button>
-      <button id="btn-stop" type="button">Stop</button>
-    </div>
-    <div id="backend-config" style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.82rem; background: #141424; padding: 4px 10px; border-radius: 6px; border: 1px solid #2a2a45;">
-      <span id="backend-status-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #6b7280;"></span>
-      <span id="backend-label" style="opacity: 0.8;">Server:</span>
-      <input id="backend-host-input" type="text" placeholder="localhost:8123" style="background: #1c1c2c; border: 1px solid #3a3a55; border-radius: 4px; color: #e8e8f0; padding: 3px 6px; font-size: 0.8rem; width: 170px;" />
-      <button id="btn-backend-connect" type="button" style="padding: 3px 8px; font-size: 0.78rem;">Connect</button>
-      <button id="btn-backend-help" type="button" title="How to connect backend" style="padding: 3px 6px; font-size: 0.75rem; border-radius: 50%; width: 22px; height: 22px; line-height: 1;">?</button>
-    </div>
-  </header>
-
-  <dialog id="backend-help-dialog" style="background: #12121e; color: #e8e8f0; border: 1px solid #3a3a55; border-radius: 8px; max-width: 520px; padding: 18px; line-height: 1.5; font-size: 0.88rem;">
-    <h3 style="margin-top: 0; color: #a78bfa;">Connecting to Wub Backend</h3>
-    <p>This web page can stream directly from your running Python server:</p>
-    <ul style="padding-left: 20px;">
-      <li><b>Local LAN Direct (Recommended):</b> Open <code>http://192.168.1.136:8123</code> directly in your browser. (The backend server serves this entire UI natively without mixed-content restrictions).</li>
-      <li><b>Cloudflare Tunnel (HTTPS/WSS):</b> Run <code>cloudflared tunnel --url http://127.0.0.1:8123</code> on the host machine and paste the resulting <code>https://...trycloudflare.com</code> URL into the Server box. Works over GitHub Pages without browser warnings!</li>
-      <li><b>GitHub Pages + Insecure Content:</b> If connecting to <code>http://192.168.1.136:8123</code> from <code>https://paulklemstine.github.io/Wub/</code>, your browser will block mixed content by default. In Chrome/Edge: click the icon next to the URL in the address bar &rarr; <i>Site Settings</i> &rarr; set <i>Insecure content</i> to <b>Allow</b>.</li>
-    </ul>
-    <div style="text-align: right; margin-top: 14px;">
-      <button id="btn-close-dialog" type="button">Close</button>
-    </div>
-  </dialog>
-
-  <section id="master" aria-label="Master controls">
-    <label>BPM
-      <input id="bpm-slider" type="range" min="80" max="175" step="1" value="128" />
-      <span id="bpm-value">128 BPM</span>
-    </label>
-    <label>Key
-      <select id="key-select">
-        <option value="C" selected>C</option>
-        <option value="G">G</option>
-        <option value="D">D</option>
-        <option value="A">A</option>
-        <option value="E">E</option>
-        <option value="B">B</option>
-        <option value="F#">F#</option>
-        <option value="F">F</option>
-        <option value="Bb">Bb</option>
-        <option value="Eb">Eb</option>
-        <option value="Am">Am</option>
-        <option value="Em">Em</option>
-        <option value="Dm">Dm</option>
-      </select>
-    </label>
-  </section>
-
-  <section id="groovebox-panel" aria-label="Groovebox Sequencer" style="background: #11111e; border: 1px solid #2a2a45; border-radius: 10px; padding: 10px 14px; margin: 12px 0; display: flex; flex-direction: column; gap: 8px;">
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-weight: 700; font-size: 0.85rem; letter-spacing: 0.05em; color: #a78bfa;">GROOVEBOX SEQUENCER</span>
-        <span id="gb-section-badge" style="background: #6d28d9; color: #fff; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 0.72rem; letter-spacing: 0.05em;">GROOVE A</span>
-        <span id="gb-fill-badge" style="display: none; background: #dc2626; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 0.7rem;">FILL</span>
+  <div class="mc-chassis-shell">
+    <header>
+      <div class="mc-brand-block">
+        <span class="mc-logo">Roland</span>
+        <span class="mc-model">MC-505</span>
+        <span class="mc-tagline">Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
-      <div style="display: flex; align-items: center; gap: 10px; font-size: 0.82rem; opacity: 0.9;">
-        <span>Bar: <b id="gb-bar-num" style="color: #4ade80;">1</b>/8</span>
-        <div id="gb-bars-dots" style="display: flex; gap: 4px; align-items: center;">
-          <div class="gb-bar-dot active" id="gb-dot-1"></div>
-          <div class="gb-bar-dot" id="gb-dot-2"></div>
-          <div class="gb-bar-dot" id="gb-dot-3"></div>
-          <div class="gb-bar-dot" id="gb-dot-4"></div>
-          <div class="gb-bar-dot" id="gb-dot-5"></div>
-          <div class="gb-bar-dot" id="gb-dot-6"></div>
-          <div class="gb-bar-dot" id="gb-dot-7"></div>
-          <div class="gb-bar-dot" id="gb-dot-8"></div>
+      <div id="transport">
+        <button id="btn-play" type="button">Play</button>
+        <button id="btn-stop" type="button">Stop</button>
+      </div>
+      <div id="backend-config">
+        <span id="backend-status-dot"></span>
+        <span id="backend-label" style="opacity: 0.85;">Server:</span>
+        <input id="backend-host-input" type="text" placeholder="localhost:8123" />
+        <button id="btn-backend-connect" type="button">Connect</button>
+        <button id="btn-backend-help" type="button" title="How to connect backend">?</button>
+      </div>
+    </header>
+
+    <dialog id="backend-help-dialog">
+      <h3 style="margin-top: 0; color: var(--neon-cyan); letter-spacing: 0.08em; text-transform: uppercase;">Connecting to Wub Backend</h3>
+      <p style="line-height: 1.6; font-size: 0.88rem;">Stream directly from your running Python server to the MC-505 groovebox engine:</p>
+      <ul style="padding-left: 20px; line-height: 1.6; font-size: 0.85rem;">
+        <li><b>Local LAN Direct (Recommended):</b> Open <code>http://192.168.1.136:8123</code> directly in your browser. (The backend server serves this entire UI natively without mixed-content restrictions).</li>
+        <li><b>Cloudflare Tunnel (HTTPS/WSS):</b> Run <code>cloudflared tunnel --url http://127.0.0.1:8123</code> on the host machine and paste the resulting <code>https://...trycloudflare.com</code> URL into the Server box. Works over GitHub Pages without browser warnings!</li>
+        <li><b>GitHub Pages + Insecure Content:</b> If connecting to <code>http://192.168.1.136:8123</code> from <code>https://paulklemstine.github.io/Wub/</code>, your browser will block mixed content by default. In Chrome/Edge: click the icon next to the URL in the address bar &rarr; <i>Site Settings</i> &rarr; set <i>Insecure content</i> to <b>Allow</b>.</li>
+      </ul>
+      <div style="text-align: right; margin-top: 16px;">
+        <button id="btn-close-dialog" type="button">Close</button>
+      </div>
+    </dialog>
+
+    <!-- BACKLIT MC-505 LCD MATRIX SCREEN -->
+    <section id="master" aria-label="Master controls">
+      <label>TEMPO
+        <input id="bpm-slider" type="range" min="80" max="175" step="1" value="96" />
+        <span id="bpm-value">96 BPM</span>
+      </label>
+      <label>KEY
+        <select id="key-select">
+          <option value="C" selected>C MAJOR</option>
+          <option value="G">G MAJOR</option>
+          <option value="D">D MAJOR</option>
+          <option value="A">A MAJOR</option>
+          <option value="E">E MAJOR</option>
+          <option value="B">B MAJOR</option>
+          <option value="F#">F# MAJOR</option>
+          <option value="F">F MAJOR</option>
+          <option value="Bb">Bb MAJOR</option>
+          <option value="Eb">Eb MAJOR</option>
+          <option value="Am">A MINOR</option>
+          <option value="Em">E MINOR</option>
+          <option value="Dm">D MINOR</option>
+        </select>
+      </label>
+    </section>
+
+    <!-- MC-505 16-STEP SEQUENCER PANEL -->
+    <section id="groovebox-panel" aria-label="Groovebox Sequencer">
+      <div class="gb-header-row">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="gb-title">16-STEP REALTIME PHRASE SEQUENCER</span>
+          <span id="gb-section-badge">GROOVE A</span>
+          <span id="gb-fill-badge" style="display: none;">FILL</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; font-size: 0.82rem; font-family: monospace; font-weight: 700;">
+          <span style="color: #94a3b8;">PHRASE BAR: <b id="gb-bar-num" style="color: var(--neon-green); font-size: 1rem;">1</b>/8</span>
+          <div id="gb-bars-dots" style="display: flex; gap: 5px; align-items: center;">
+            <div class="gb-bar-dot active" id="gb-dot-1"></div>
+            <div class="gb-bar-dot" id="gb-dot-2"></div>
+            <div class="gb-bar-dot" id="gb-dot-3"></div>
+            <div class="gb-bar-dot" id="gb-dot-4"></div>
+            <div class="gb-bar-dot" id="gb-dot-5"></div>
+            <div class="gb-bar-dot" id="gb-dot-6"></div>
+            <div class="gb-bar-dot" id="gb-dot-7"></div>
+            <div class="gb-bar-dot" id="gb-dot-8"></div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- 16-Step Sequencer LED strip -->
-    <div id="gb-step-strip" style="display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px;">
-      <div class="gb-step beat" id="gb-step-1">1</div>
-      <div class="gb-step" id="gb-step-2">2</div>
-      <div class="gb-step" id="gb-step-3">3</div>
-      <div class="gb-step" id="gb-step-4">4</div>
-      <div class="gb-step beat" id="gb-step-5">5</div>
-      <div class="gb-step" id="gb-step-6">6</div>
-      <div class="gb-step" id="gb-step-7">7</div>
-      <div class="gb-step" id="gb-step-8">8</div>
-      <div class="gb-step beat" id="gb-step-9">9</div>
-      <div class="gb-step" id="gb-step-10">10</div>
-      <div class="gb-step" id="gb-step-11">11</div>
-      <div class="gb-step" id="gb-step-12">12</div>
-      <div class="gb-step beat" id="gb-step-13">13</div>
-      <div class="gb-step" id="gb-step-14">14</div>
-      <div class="gb-step" id="gb-step-15">15</div>
-      <div class="gb-step" id="gb-step-16">16</div>
-    </div>
+      <!-- 16-Step Sequencer LED strip -->
+      <div id="gb-step-strip">
+        <div class="gb-step beat" id="gb-step-1"><span class="gb-step-led"></span>1</div>
+        <div class="gb-step" id="gb-step-2"><span class="gb-step-led"></span>2</div>
+        <div class="gb-step" id="gb-step-3"><span class="gb-step-led"></span>3</div>
+        <div class="gb-step" id="gb-step-4"><span class="gb-step-led"></span>4</div>
+        <div class="gb-step beat" id="gb-step-5"><span class="gb-step-led"></span>5</div>
+        <div class="gb-step" id="gb-step-6"><span class="gb-step-led"></span>6</div>
+        <div class="gb-step" id="gb-step-7"><span class="gb-step-led"></span>7</div>
+        <div class="gb-step" id="gb-step-8"><span class="gb-step-led"></span>8</div>
+        <div class="gb-step beat" id="gb-step-9"><span class="gb-step-led"></span>9</div>
+        <div class="gb-step" id="gb-step-10"><span class="gb-step-led"></span>10</div>
+        <div class="gb-step" id="gb-step-11"><span class="gb-step-led"></span>11</div>
+        <div class="gb-step" id="gb-step-12"><span class="gb-step-led"></span>12</div>
+        <div class="gb-step beat" id="gb-step-13"><span class="gb-step-led"></span>13</div>
+        <div class="gb-step" id="gb-step-14"><span class="gb-step-led"></span>14</div>
+        <div class="gb-step" id="gb-step-15"><span class="gb-step-led"></span>15</div>
+        <div class="gb-step" id="gb-step-16"><span class="gb-step-led"></span>16</div>
+      </div>
 
-    <!-- Active Stem Patterns readout -->
-    <div id="gb-patterns-row" style="display: flex; justify-content: space-between; gap: 8px; font-size: 0.73rem; opacity: 0.75; overflow-x: auto; white-space: nowrap; padding-top: 4px; border-top: 1px solid #1f1f33;">
-      <span>Drums: <span id="gb-pat-drums" style="color: #4ade80;">Four-on-the-Floor</span></span>
-      <span>Bass: <span id="gb-pat-bass" style="color: #60a5fa;">Offbeat</span></span>
-      <span>Synths: <span id="gb-pat-other" style="color: #f472b6;">Hook</span></span>
-      <span>Vocals: <span id="gb-pat-vocals" style="color: #fbbf24;">Phrase</span></span>
-    </div>
-  </section>
+      <!-- Active Stem Patterns readout -->
+      <div id="gb-patterns-row">
+        <span>PART 1 DRUMS: <span id="gb-pat-drums" style="color: var(--neon-green);">Four-on-the-Floor</span></span>
+        <span>PART 2 BASS: <span id="gb-pat-bass" style="color: var(--neon-cyan);">Offbeat</span></span>
+        <span>PART 3 VOCALS: <span id="gb-pat-vocals" style="color: var(--neon-amber);">Phrase</span></span>
+        <span>PART 4 SYNTHS: <span id="gb-pat-other" style="color: var(--neon-magenta);">Hook</span></span>
+      </div>
+    </section>
 
-  <section id="decks" aria-label="Stem decks">
-    <div class="deck" id="deck-drums">
-      <h2>Drums</h2>
-      <div class="row toggles">
-        <button id="drums-mute" type="button" aria-pressed="false">Mute</button>
-        <button id="drums-solo" type="button" aria-pressed="false">Solo</button>
+    <!-- 4-STEM HARDWARE MIXER DECKS -->
+    <section id="decks" aria-label="Stem decks">
+      <div class="deck" id="deck-drums">
+        <h2>Part 1: Drums</h2>
+        <div class="row toggles">
+          <button id="drums-mute" type="button" aria-pressed="false">Mute</button>
+          <button id="drums-solo" type="button" aria-pressed="false">Solo</button>
+        </div>
+        <div class="row"><label>Level <input id="drums-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="drums-vol-val">1.00</span></div>
+        <div class="row"><label>Chaos <input id="drums-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="drums-chaos-val">0.50</span></div>
+        <div class="row"><label>Synth <input id="drums-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="drums-synth-val">0.00</span></div>
       </div>
-      <div class="row"><label>Volume <input id="drums-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="drums-vol-val">1.00</span></div>
-      <div class="row"><label>Chaos <input id="drums-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="drums-chaos-val">0.50</span></div>
-      <div class="row"><label>Synth <input id="drums-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="drums-synth-val">0.00</span></div>
-    </div>
-    <div class="deck" id="deck-bass">
-      <h2>Bass</h2>
-      <div class="row toggles">
-        <button id="bass-mute" type="button" aria-pressed="false">Mute</button>
-        <button id="bass-solo" type="button" aria-pressed="false">Solo</button>
+      <div class="deck" id="deck-bass">
+        <h2>Part 2: Bass</h2>
+        <div class="row toggles">
+          <button id="bass-mute" type="button" aria-pressed="false">Mute</button>
+          <button id="bass-solo" type="button" aria-pressed="false">Solo</button>
+        </div>
+        <div class="row"><label>Level <input id="bass-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="bass-vol-val">1.00</span></div>
+        <div class="row"><label>Chaos <input id="bass-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="bass-chaos-val">0.50</span></div>
+        <div class="row"><label>Synth <input id="bass-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="bass-synth-val">0.00</span></div>
       </div>
-      <div class="row"><label>Volume <input id="bass-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="bass-vol-val">1.00</span></div>
-      <div class="row"><label>Chaos <input id="bass-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="bass-chaos-val">0.50</span></div>
-      <div class="row"><label>Synth <input id="bass-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="bass-synth-val">0.00</span></div>
-    </div>
-    <div class="deck" id="deck-vocals">
-      <h2>Vocals</h2>
-      <div class="row toggles">
-        <button id="vocals-mute" type="button" aria-pressed="false">Mute</button>
-        <button id="vocals-solo" type="button" aria-pressed="false">Solo</button>
+      <div class="deck" id="deck-vocals">
+        <h2>Part 3: Vocals</h2>
+        <div class="row toggles">
+          <button id="vocals-mute" type="button" aria-pressed="false">Mute</button>
+          <button id="vocals-solo" type="button" aria-pressed="false">Solo</button>
+        </div>
+        <div class="row"><label>Level <input id="vocals-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="vocals-vol-val">1.00</span></div>
+        <div class="row"><label>Chaos <input id="vocals-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="vocals-chaos-val">0.50</span></div>
+        <div class="row"><label>Synth <input id="vocals-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="vocals-synth-val">0.00</span></div>
       </div>
-      <div class="row"><label>Volume <input id="vocals-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="vocals-vol-val">1.00</span></div>
-      <div class="row"><label>Chaos <input id="vocals-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="vocals-chaos-val">0.50</span></div>
-      <div class="row"><label>Synth <input id="vocals-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="vocals-synth-val">0.00</span></div>
-    </div>
-    <div class="deck" id="deck-other">
-      <h2>Other</h2>
-      <div class="row toggles">
-        <button id="other-mute" type="button" aria-pressed="false">Mute</button>
-        <button id="other-solo" type="button" aria-pressed="false">Solo</button>
+      <div class="deck" id="deck-other">
+        <h2>Part 4: Other</h2>
+        <div class="row toggles">
+          <button id="other-mute" type="button" aria-pressed="false">Mute</button>
+          <button id="other-solo" type="button" aria-pressed="false">Solo</button>
+        </div>
+        <div class="row"><label>Level <input id="other-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="other-vol-val">1.00</span></div>
+        <div class="row"><label>Chaos <input id="other-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="other-chaos-val">0.50</span></div>
+        <div class="row"><label>Synth <input id="other-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="other-synth-val">0.00</span></div>
       </div>
-      <div class="row"><label>Volume <input id="other-volume" type="range" min="0" max="1.5" step="0.01" value="1" /></label><span class="val" id="other-vol-val">1.00</span></div>
-      <div class="row"><label>Chaos <input id="other-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="other-chaos-val">0.50</span></div>
-      <div class="row"><label>Synth <input id="other-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="other-synth-val">0.00</span></div>
-    </div>
-  </section>
+    </section>
 
-  <section id="stages" aria-label="Visualizers">
-    <div class="stage-card">
-      <div class="stage-header">
-        <span>4-Stem Real-Time Waveform Analysis</span>
-        <span>Oscilloscope • FFT • RMS Meter</span>
+    <!-- STUDIO RACK VISUALIZERS -->
+    <section id="stages" aria-label="Visualizers">
+      <div class="stage-card">
+        <div class="stage-header">
+          <span>4-Stem Real-Time Waveform Analysis</span>
+          <span>Oscilloscope • FFT • RMS</span>
+        </div>
+        <canvas id="rings-canvas" class="stage" width="720" height="450"></canvas>
       </div>
-      <canvas id="rings-canvas" class="stage" width="720" height="450"></canvas>
-    </div>
-    <div class="stage-card">
-      <div class="stage-header">
-        <span>2D Timbre Nebula &amp; Gravity Reticles</span>
-        <span>Drag crosshairs to steer sound</span>
+      <div class="stage-card">
+        <div class="stage-header">
+          <span>2D Timbre Nebula &amp; Gravity Reticles</span>
+          <span>D-Beam Vector Crosshairs</span>
+        </div>
+        <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
       </div>
-      <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
-    </div>
-    <div class="stage-card master-card">
-      <div class="stage-header">
-        <span style="color: #4ade80;">Master Combined Audio Analysis</span>
-        <span>Summed Mix Waveform • 64-Band FFT Spectrum • Peak VU</span>
+      <div class="stage-card master-card">
+        <div class="stage-header">
+          <span style="color: var(--neon-green);">Master Summed Audio Analysis</span>
+          <span>Summed Waveform • 64-Band Spectrum • Peak VU</span>
+        </div>
+        <canvas id="master-canvas" class="stage" width="720" height="240"></canvas>
       </div>
-      <canvas id="master-canvas" class="stage" width="720" height="240"></canvas>
-    </div>
-  </section>
+    </section>
 
-  <div id="status-line" role="status">Loading…</div>
+    <div id="status-line" role="status">Loading…</div>
+  </div>
 
   <script type="module" src="/src/main.ts"></script>
 </body>

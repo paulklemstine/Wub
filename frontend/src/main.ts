@@ -567,10 +567,14 @@ class WubApp {
     if (this.playing) return;
     this.playing = true;
     this.manualClose = false;
+    el<HTMLButtonElement>("btn-play").classList.add("active");
+    el<HTMLButtonElement>("btn-stop").classList.remove("active");
     try {
       await this.engine.resume();
     } catch (err) {
       this.playing = false;
+      el<HTMLButtonElement>("btn-play").classList.remove("active");
+      el<HTMLButtonElement>("btn-stop").classList.add("active");
       this.setStatus(`Audio failed: ${err instanceof Error ? err.message : "unknown error"}`);
       return;
     }
@@ -587,6 +591,8 @@ class WubApp {
   private async stop(): Promise<void> {
     this.playing = false;
     this.manualClose = true;
+    el<HTMLButtonElement>("btn-play").classList.remove("active");
+    el<HTMLButtonElement>("btn-stop").classList.add("active");
     this.clearReconnect();
     if (this.schedulerTimer !== null) {
       clearInterval(this.schedulerTimer);
