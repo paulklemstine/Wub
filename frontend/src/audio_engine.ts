@@ -95,7 +95,7 @@ export class AudioEngine {
     return this.targetBpm_;
   }
 
-  private ensureCtx(): AudioContext {
+  ensureCtx(): AudioContext {
     if (this.ctx_ !== null && this.buses_ !== null) return this.ctx_;
     const Ctor = resolveAudioContextCtor();
     if (Ctor === null) throw new Error("Web Audio is not supported in this browser");
@@ -221,6 +221,13 @@ export class AudioEngine {
     const buses = this.buses_;
     if (buses === null) throw new Error("AudioEngine buses not initialised");
     return buses[stem].analyser;
+  }
+
+  getStemInput(stem: StemName): AudioNode {
+    this.ensureCtx();
+    const buses = this.buses_;
+    if (buses === null) throw new Error("AudioEngine buses not initialised");
+    return buses[stem].input;
   }
 
   getMasterAnalyser(): AnalyserNode {

@@ -10,6 +10,7 @@ data/*
 !data/.gitkeep
 pandora/
 *.wav
+!frontend/public/data/slices/*.wav
 *.mp3
 *.ogg
 *.flac

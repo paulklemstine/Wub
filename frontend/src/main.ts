@@ -29,6 +29,7 @@ import type { StemName } from "./types";
 import { PsychedelicBackground } from "./psychedelic_bg";
 import type { TripMode, TripPalette } from "./psychedelic_bg";
 import { VERSION_INFO } from "./version";
+import { ClientGrooveboxConductor } from "./client_ml_sequencer";
 
 interface BackendConfig {
   httpBase: string;
@@ -313,6 +314,8 @@ class WubApp {
   private analyserScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private statusEl!: HTMLElement;
   private lastGrooveboxMeta: GrooveboxMeta | null = null;
+  private clientConductor: ClientGrooveboxConductor | null = null;
+  private engineMode: "direct_ml" | "websocket_cloud" = "direct_ml";
 
   init(): void {
     this.statusEl = el<HTMLElement>("status-line");
@@ -360,6 +363,29 @@ class WubApp {
     for (const stem of STEMS) this.bindStem(stem);
     this.bindFeedbackControls();
     this.bindGrooveboxCycleControls();
+
+    // Initialize Autonomous In-Browser ML Sequencer
+    try {
+      this.clientConductor = new ClientGrooveboxConductor(this.engine);
+      void this.clientConductor.loadStaticBundle("data");
+      this.clientConductor.setMetaCallback((meta) => {
+        this.updateGrooveboxUI(meta);
+        const now = this.engine.now();
+        const curStep = ((meta.stepInPattern ?? meta.step_in_pattern ?? 1) - 1) % 16;
+        for (const stem of STEMS) {
+          if (meta.patternGrids?.[stem]?.[curStep] === 1 || meta.pattern_grids?.[stem]?.[curStep] === 1) {
+            this.pushRingEvent({
+              stem,
+              trackId: "kg505_ml",
+              atSec: performance.now() / 1000,
+            });
+          }
+        }
+      });
+      this.bindEngineModeToggle();
+    } catch (e) {
+      console.warn("Client ML sequencer init failed:", e);
+    }
 
     // Sticky BPM: load from localStorage if set, else default to 96 BPM
     const savedBpm = localStorage.getItem("wub_bpm");
@@ -438,6 +464,41 @@ class WubApp {
         void this.loadUmapPoints();
       });
     }
+  }
+
+  private bindEngineModeToggle(): void {
+    const btn = document.getElementById("btn-engine-mode") as HTMLButtonElement | null;
+    if (!btn) return;
+
+    const updateBtn = () => {
+      if (this.engineMode === "direct_ml") {
+        btn.innerHTML = "🧠 In-Browser Direct ML";
+        btn.classList.remove("cloud-mode");
+        btn.title = "Mode: In-Browser Direct ML (100% standalone, zero server required). Click to switch to WebSocket Cloud Sync.";
+      } else {
+        btn.innerHTML = "⚡ WebSocket Cloud Sync";
+        btn.classList.add("cloud-mode");
+        btn.title = "Mode: WebSocket Cloud Sync (streaming from Python backend). Click to switch to In-Browser Direct ML.";
+      }
+    };
+    updateBtn();
+
+    btn.addEventListener("click", () => {
+      const wasPlaying = this.playing;
+      if (wasPlaying) {
+        void this.stop();
+      }
+      this.engineMode = (this.engineMode === "direct_ml") ? "websocket_cloud" : "direct_ml";
+      updateBtn();
+      if (this.engineMode === "direct_ml") {
+        this.setStatus("Mode: 🧠 Direct In-Browser ML Engine (Offline Ready — press Play)");
+      } else {
+        this.setStatus("Mode: ⚡ WebSocket Cloud Sync (requires Python server running)");
+      }
+      if (wasPlaying) {
+        void this.play();
+      }
+    });
   }
 
   private updateBackendStatus(state: "connected" | "connecting" | "disconnected"): void {
@@ -630,8 +691,18 @@ class WubApp {
     this.schedulerTimer = setInterval(() => this.scheduleLoop(), 20);
 
     this.applyAllMixerState();
-    this.connectWs();
-    this.setStatus("Playing — streaming synchronized stems…");
+
+    if (this.engineMode === "direct_ml") {
+      this.setStatus(`Playing — 🧠 Direct In-Browser ML Engine (Sample-Accurate Sequencer @ ${Math.round(this.bpm)} BPM)`);
+      this.clientConductor?.start(this.bpm);
+    } else {
+      this.nextTatumTime = 0;
+      this.tatumQueue = [];
+      if (this.schedulerTimer !== null) clearInterval(this.schedulerTimer);
+      this.schedulerTimer = setInterval(() => this.scheduleLoop(), 20);
+      this.connectWs();
+      this.setStatus("Playing — streaming synchronized stems via WebSocket…");
+    }
   }
 
   private async stop(): Promise<void> {
@@ -644,6 +715,7 @@ class WubApp {
       clearInterval(this.schedulerTimer);
       this.schedulerTimer = null;
     }
+    this.clientConductor?.stop();
     this.tatumQueue = [];
     this.nextTatumTime = 0;
     this.activeSlices = {};
@@ -695,6 +767,10 @@ class WubApp {
       value.textContent = `${Math.round(next)} BPM`;
       this.engine.setTargetBpm(next);
       this.send({ type: "set_bpm", bpm: next });
+      if (this.playing && this.engineMode === "direct_ml" && this.clientConductor) {
+        this.clientConductor.stop();
+        this.clientConductor.start(this.bpm);
+      }
     });
 
     const key = el<HTMLSelectElement>("key-select");
@@ -796,6 +872,10 @@ class WubApp {
   }
 
   private sendFeedback(stem: StemName, rating: 1 | -1): void {
+    if (this.clientConductor) {
+      this.clientConductor.recordFeedback(stem, rating);
+    }
+
     const trackId = this.lastGrooveboxMeta?.patternTrackIds?.[stem] || this.activeSlices[stem]?.trackId || "";
     const patternId = this.lastGrooveboxMeta?.patternIds?.[stem] || "";
 
@@ -836,6 +916,9 @@ class WubApp {
       btn.addEventListener("click", () => {
         const mode = btn.dataset.mode;
         if (!mode) return;
+        if (this.clientConductor) {
+          this.clientConductor.setCycleMode(mode);
+        }
         this.send({ type: "set_cycle_mode", mode });
 
         const cfg = this.getBackendConfig();

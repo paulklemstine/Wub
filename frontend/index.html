@@ -229,7 +229,31 @@
       box-shadow: 0 0 8px #ef4444;
     }
 
-    /* --- BACKEND CONFIG BAR --- */
+    /* --- BACKEND CONFIG & ENGINE MODE BAR --- */
+    .mc-mode-toggle {
+      background: linear-gradient(135deg, rgba(0, 243, 255, 0.25), rgba(188, 19, 254, 0.25));
+      border: 1px solid var(--neon-cyan);
+      color: #ffffff;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-family: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+      box-shadow: 0 0 10px rgba(0, 243, 255, 0.3);
+    }
+    .mc-mode-toggle:hover {
+      background: linear-gradient(135deg, rgba(0, 243, 255, 0.45), rgba(188, 19, 254, 0.45));
+      box-shadow: 0 0 16px rgba(0, 243, 255, 0.6);
+    }
+    .mc-mode-toggle.cloud-mode {
+      border-color: #eab308;
+      box-shadow: 0 0 10px rgba(234, 179, 8, 0.3);
+    }
+
     #backend-config {
       margin-left: auto;
       display: flex;
@@ -1273,12 +1297,17 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.41 <span class="mc-build-num">#41</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.42 <span class="mc-build-num">#42</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
         <button id="btn-stop" type="button">Stop</button>
+      </div>
+      <div style="display: flex; align-items: center; margin-left: 14px;">
+        <button id="btn-engine-mode" type="button" class="mc-mode-toggle" title="Click to toggle between In-Browser Direct ML and WebSocket Server Stream">
+          🧠 In-Browser Direct ML
+        </button>
       </div>
       <div id="backend-config">
         <span id="backend-status-dot"></span>
@@ -1657,7 +1686,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.41 (Build #41 • rev 235c140)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.42 (Build #42 • rev e9a8e89)</span>
     </div>
   </div>
 
