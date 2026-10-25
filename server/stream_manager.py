@@ -185,6 +185,18 @@ class StreamSession:
                 self._buffer = self._buffer[:2]
         return res
 
+    def set_cycle_mode(self, mode: str) -> dict:
+        conductor = self.get_conductor()
+        ok = conductor.set_cycle_mode(mode)
+        if ok and len(self._buffer) > 2:
+            self._buffer = self._buffer[:2]
+        return {
+            "status": "ok" if ok else "error",
+            "cycle_mode": conductor.cycle_mode,
+            "patterns_per_cycle": conductor.patterns_per_cycle,
+            "steps_per_pattern": conductor.steps_per_pattern,
+        }
+
     def _get_track_center(self, stem: str, track_id: str) -> Optional[Tuple[float, float]]:
         if not self._track_centers:
             idx_dir = Path("data/indices")

@@ -117,6 +117,17 @@ def submit_feedback(body: dict) -> dict:
     return cond.record_feedback(stem=stem, rating=rating, track_id=track_id, pattern_id=pattern_id)
 
 
+@app.post("/api/groovebox/cycle_mode")
+def api_set_cycle_mode(body: dict) -> dict:
+    mode = str(body.get("mode", "8x16"))
+    from server.stream_manager import get_cached_pattern_bank
+    from wub_core.groovebox import GrooveboxConductor
+    bank = get_cached_pattern_bank(STORE)
+    cond = GrooveboxConductor(bank)
+    ok = cond.set_cycle_mode(mode)
+    return {"status": "ok" if ok else "error", "cycle_mode": cond.cycle_mode, "patterns_per_cycle": cond.patterns_per_cycle, "steps_per_pattern": cond.steps_per_pattern}
+
+
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket) -> None:
     await ws.accept()
@@ -157,6 +168,9 @@ async def ws_stream(ws: WebSocket) -> None:
                         pattern_id=msg.get("pattern_id"),
                     )
                     await ws.send_json({"type": "feedback_ack", **res})
+                elif msg.get("type") == "set_cycle_mode":
+                    res = session.set_cycle_mode(str(msg.get("mode", "8x16")))
+                    await ws.send_json({"type": "cycle_mode_ack", **res})
             except asyncio.TimeoutError:
                 pass
             ev = session.next_event()

@@ -88,6 +88,8 @@ def test_api_endpoints(store, monkeypatch):
         assert client.get("/audio/zz/seg_other_0000.wav").status_code == 404
         m = client.post("/api/mashup", json={"steps": 12, "seed": 2})
         assert m.status_code == 200 and m.content[:4] == b"RIFF"
+        cm = client.post("/api/groovebox/cycle_mode", json={"mode": "4x16"})
+        assert cm.status_code == 200 and cm.json()["cycle_mode"] == "4x16"
 
 
 def test_synth_blend_math():

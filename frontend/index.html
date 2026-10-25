@@ -35,13 +35,13 @@
     .mc-chassis-shell {
       max-width: 1400px;
       margin: 0 auto;
-      background: rgba(18, 22, 30, 0.88);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      border: 2px solid rgba(53, 63, 84, 0.85);
+      background: rgba(12, 16, 24, 0.78);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 2px solid rgba(0, 229, 255, 0.45);
       border-radius: 12px;
       padding: 14px 18px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9), 0 0 30px rgba(0, 229, 255, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9), 0 0 50px rgba(0, 229, 255, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.2);
       position: relative;
       z-index: 1;
     }
@@ -382,7 +382,49 @@
       to { transform: scale(1.08); box-shadow: 0 0 16px #ef4444; }
     }
 
-    /* 8-Bar phrase progress dots */
+    /* Cycle Architecture Selector */
+    .gb-cycle-selector {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: #0b0f16;
+      border: 1px solid #273145;
+      border-radius: 6px;
+      padding: 3px 6px;
+    }
+    .gb-cycle-label {
+      font-size: 0.70rem;
+      font-weight: 800;
+      color: #94a3b8;
+      letter-spacing: 0.08em;
+      margin-right: 2px;
+    }
+    .gb-cycle-btn {
+      background: #1a2233;
+      border: 1px solid #334155;
+      color: #94a3b8;
+      padding: 3px 7px;
+      border-radius: 4px;
+      font-size: 0.70rem;
+      font-family: monospace;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .gb-cycle-btn:hover {
+      background: #25334c;
+      color: #e2e8f0;
+      border-color: #00e5ff;
+    }
+    .gb-cycle-btn.active {
+      background: linear-gradient(180deg, #00e5ff 0%, #0088cc 100%);
+      color: #000;
+      font-weight: 900;
+      border-color: #38bdf8;
+      box-shadow: 0 0 10px rgba(0, 229, 255, 0.7);
+    }
+
+    /* Pattern cycle progress dots */
     .gb-bar-dot {
       width: 9px;
       height: 9px;
@@ -403,7 +445,7 @@
       box-shadow: 0 0 10px var(--neon-red);
     }
 
-    /* --- THE 16-STEP CHICLET SEQUENCER KEYS --- */
+    /* --- THE 16/32-STEP CHICLET SEQUENCER KEYS --- */
     #gb-step-strip {
       display: grid;
       grid-template-columns: repeat(16, 1fr);
@@ -413,6 +455,19 @@
       border-radius: 8px;
       border: 1px solid #232a3a;
       box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8);
+      transition: all 0.2s ease;
+    }
+    #gb-step-strip.mode-32 {
+      grid-template-columns: repeat(32, 1fr);
+      gap: 3px;
+    }
+    #gb-step-strip.mode-32 .gb-step {
+      height: 32px;
+      font-size: 0.60rem;
+    }
+    #gb-step-strip.mode-32 .gb-step-led {
+      width: 8px;
+      height: 3px;
     }
     .gb-step {
       background: linear-gradient(180deg, #2a3244 0%, #171b26 100%);
@@ -971,6 +1026,14 @@
       grid-template-columns: repeat(16, 12px);
       gap: 3px;
     }
+    .matrix-grid-strip.mode-32 {
+      grid-template-columns: repeat(32, 9px);
+      gap: 2px;
+    }
+    .matrix-grid-strip.mode-32 .matrix-pip {
+      width: 9px;
+      height: 14px;
+    }
     .matrix-pip {
       width: 12px;
       height: 16px;
@@ -1241,17 +1304,24 @@
       </label>
     </section>
 
-    <!-- MC-505 16-STEP SEQUENCER PANEL -->
+    <!-- MC-505 MULTI-PATTERN SEQUENCER PANEL -->
     <section id="groovebox-panel" aria-label="Groovebox Sequencer">
       <div class="gb-header-row">
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <span class="gb-title">16-STEP REALTIME PHRASE SEQUENCER</span>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span class="gb-title">REALTIME MULTI-PATTERN SEQUENCER</span>
           <span id="gb-section-badge">GROOVE A</span>
           <span id="gb-fill-badge" style="display: none;">FILL</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 12px; font-size: 0.82rem; font-family: monospace; font-weight: 700;">
-          <span style="color: #94a3b8;">PHRASE BAR: <b id="gb-bar-num" style="color: var(--neon-green); font-size: 1rem;">1</b>/8</span>
-          <div id="gb-bars-dots" style="display: flex; gap: 5px; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 0.82rem; font-family: monospace; font-weight: 700; flex-wrap: wrap;">
+          <div class="gb-cycle-selector">
+            <span class="gb-cycle-label">CYCLE:</span>
+            <button class="gb-cycle-btn" data-mode="4x16" type="button" title="4 Patterns of 16 Steps (64 Tatums)">4×16</button>
+            <button class="gb-cycle-btn active" data-mode="8x16" type="button" title="8 Patterns of 16 Steps (128 Tatums)">8×16</button>
+            <button class="gb-cycle-btn" data-mode="8x32" type="button" title="8 Compound Patterns of 32 Steps (256 Tatums)">8×32</button>
+            <button class="gb-cycle-btn" data-mode="16x32" type="button" title="16 Compound Patterns of 32 Steps (512 Tatums)">16×32</button>
+          </div>
+          <span style="color: #94a3b8;">PATTERN: <b id="gb-bar-num" style="color: var(--neon-green); font-size: 1rem;">1</b>/<span id="gb-patterns-per-cycle">8</span></span>
+          <div id="gb-bars-dots" style="display: flex; gap: 4px; align-items: center;">
             <div class="gb-bar-dot active" id="gb-dot-1"></div>
             <div class="gb-bar-dot" id="gb-dot-2"></div>
             <div class="gb-bar-dot" id="gb-dot-3"></div>
@@ -1264,7 +1334,7 @@
         </div>
       </div>
 
-      <!-- 16-Step Sequencer LED strip -->
+      <!-- Realtime Sequencer LED strip (16 or 32 steps) -->
       <div id="gb-step-strip">
         <div class="gb-step beat" id="gb-step-1"><span class="gb-step-led"></span>1</div>
         <div class="gb-step" id="gb-step-2"><span class="gb-step-led"></span>2</div>
@@ -1446,8 +1516,8 @@
         </div>
         <div class="trip-group trip-sliders">
           <label>INTENSITY
-            <input id="trip-intensity-slider" type="range" min="0" max="1.5" step="0.05" value="0.95" />
-            <span class="val" id="trip-intensity-val">95%</span>
+            <input id="trip-intensity-slider" type="range" min="0" max="2.5" step="0.05" value="1.4" />
+            <span class="val" id="trip-intensity-val">140%</span>
           </label>
           <label>SPEED
             <input id="trip-speed-slider" type="range" min="0.2" max="2.5" step="0.05" value="1.0" />

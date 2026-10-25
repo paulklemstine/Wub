@@ -225,3 +225,54 @@ def test_user_feedback_and_cross_stem_reroll():
     assert "pattern_track_ids" in meta
     assert "pattern_ratings" in meta
     assert "drums" in meta["pattern_ratings"]
+
+
+def test_dynamic_cycle_modes_and_32_step_compound():
+    """Verify selectable cycle modes (4x16, 8x16, 8x32, 16x32) and 32-step grid progression."""
+    tr = _make_dance_track("test_tr_dyn", bpm=126.0, n_bars=16)
+    bank = PatternBank()
+    bank.load_from_tracks([tr])
+
+    conductor = GrooveboxConductor(bank, seed=42)
+
+    # 1. Test 4x16 Mode (4 patterns, 16 steps each = 64 total tatums)
+    assert conductor.set_cycle_mode("4x16") is True
+    assert conductor.patterns_per_cycle == 4
+    assert conductor.steps_per_pattern == 16
+    assert conductor.cycle_total_steps == 64
+
+    patterns_seen = set()
+    fill_at_4 = False
+    for step_i in range(64):
+        slices, meta = conductor.next_step()
+        patterns_seen.add(meta["pattern_in_cycle"])
+        assert meta["cycle_mode"] == "4x16"
+        assert meta["patterns_per_cycle"] == 4
+        assert meta["steps_per_pattern"] == 16
+        assert len(meta["pattern_grids"]["drums"]) == 16
+        if meta["is_fill"] and meta["pattern_in_cycle"] == 4:
+            fill_at_4 = True
+
+    assert patterns_seen == {1, 2, 3, 4}
+    assert fill_at_4 is True
+
+    # 2. Test 8x32 Mode (8 patterns, 32 steps each = 256 total tatums)
+    assert conductor.set_cycle_mode("8x32") is True
+    assert conductor.patterns_per_cycle == 8
+    assert conductor.steps_per_pattern == 32
+    assert conductor.cycle_total_steps == 256
+
+    slices_32, meta_32 = conductor.next_step()
+    assert meta_32["cycle_mode"] == "8x32"
+    assert meta_32["steps_per_pattern"] == 32
+    # Verify 32-step grid length
+    assert len(meta_32["pattern_grids"]["drums"]) == 32
+
+    # 3. Test 16x32 Mode (16 patterns, 32 steps each = 512 total tatums)
+    assert conductor.set_cycle_mode("16x32") is True
+    assert conductor.patterns_per_cycle == 16
+    assert conductor.steps_per_pattern == 32
+    assert conductor.cycle_total_steps == 512
+
+    # 4. Invalid cycle mode fails safely
+    assert conductor.set_cycle_mode("invalid_mode") is False

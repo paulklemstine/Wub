@@ -671,3 +671,55 @@ class PatternBank:
             bpm=126.0,
             key="C major",
         )
+
+    def create_compound_pattern(
+        self,
+        stem: str,
+        pat1: Optional[SequencerPattern],
+        pat2: Optional[SequencerPattern],
+        target_length: int = 32,
+        rng: Optional[np.random.Generator] = None,
+    ) -> Optional[SequencerPattern]:
+        """Combine or synthesize a 32-step compound pattern across two evolving bars."""
+        if rng is None:
+            rng = np.random.default_rng()
+
+        p1 = pat1 or self.pick_pattern(stem, rng=rng)
+        p2 = pat2 or self.pick_pattern(stem, preferred_track_id=p1.track_id if p1 else None, rng=rng)
+        if not p1 and not p2:
+            return None
+        if not p1:
+            p1 = p2
+        if not p2:
+            p2 = p1
+
+        steps1 = list(p1.steps) if p1.steps else [None] * 16
+        steps2 = list(p2.steps) if p2.steps else [None] * 16
+
+        while len(steps1) < 16:
+            steps1.append(None)
+        steps1 = steps1[:16]
+
+        while len(steps2) < 16:
+            steps2.append(None)
+        steps2 = steps2[:16]
+
+        compound_steps = steps1 + steps2
+        onset_grid = [i for i, s in enumerate(compound_steps) if s is not None]
+        density = len(onset_grid) / 32.0
+
+        return SequencerPattern(
+            id=f"cmp_{stem}_{p1.track_id[:6]}_{p1.bar_num}_{p2.bar_num}",
+            stem=stem,
+            track_id=p1.track_id,
+            pattern_name=f"{p1.pattern_name.split(' (')[0]} [32-Step Compound]",
+            length=32,
+            steps=compound_steps,
+            energy=(p1.energy + p2.energy) / 2.0,
+            density=density,
+            onset_grid=onset_grid,
+            groove_type=f"{p1.groove_type}_compound",
+            bar_num=p1.bar_num,
+            bpm=p1.bpm,
+            key=p1.key,
+        )

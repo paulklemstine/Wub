@@ -86,19 +86,21 @@ vec3 neonCosine(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 }
 
 vec3 getPaletteColor(float t, int pal) {
+  vec3 col;
   if (pal == 0) {
-    // Hyper-Neon Electric DMT (Magenta, Cyan, Lime, Electric Gold)
-    return neonCosine(t, vec3(0.5, 0.5, 0.5), vec3(0.5, 0.5, 0.5), vec3(1.0, 1.0, 1.0), vec3(0.00, 0.33, 0.67));
+    // Hyper-Vivid Electric Neon DMT (Hot Magenta, Electric Cyan, Acid Lime, Solar Gold)
+    col = neonCosine(t, vec3(0.68, 0.62, 0.72), vec3(0.58, 0.52, 0.62), vec3(1.2, 1.0, 1.0), vec3(0.00, 0.33, 0.67));
   } else if (pal == 1) {
-    // Acid Rainbow LSD (Saturated Ultraviolet, Neon Green, Hot Amber, Cobalt)
-    return neonCosine(t, vec3(0.55, 0.5, 0.5), vec3(0.5, 0.5, 0.5), vec3(2.0, 1.0, 0.5), vec3(0.50, 0.20, 0.25));
+    // Blazing Acid Rainbow LSD (Saturated Ultraviolet, Neon Emerald, Fiery Orange, Electric Azure)
+    col = neonCosine(t, vec3(0.72, 0.66, 0.66), vec3(0.62, 0.58, 0.58), vec3(2.0, 1.2, 0.8), vec3(0.50, 0.20, 0.25));
   } else if (pal == 2) {
-    // Mescaline Solar Fire & Sacred Turquoise
-    return neonCosine(t, vec3(0.8, 0.45, 0.3), vec3(0.5, 0.5, 0.4), vec3(1.0, 1.0, 0.7), vec3(0.15, 0.25, 0.55));
+    // Solar Mescaline Fire & Electric Turquoise
+    col = neonCosine(t, vec3(0.92, 0.65, 0.42), vec3(0.65, 0.58, 0.48), vec3(1.2, 1.0, 0.8), vec3(0.12, 0.28, 0.60));
   } else {
-    // Cyberpunk Ultraviolet & Toxic Emerald
-    return neonCosine(t, vec3(0.45, 0.3, 0.6), vec3(0.6, 0.5, 0.5), vec3(1.5, 1.2, 0.8), vec3(0.70, 0.10, 0.40));
+    // Cyberpunk Neon Ultraviolet & Toxic Lime
+    col = neonCosine(t, vec3(0.62, 0.48, 0.85), vec3(0.72, 0.62, 0.68), vec3(1.6, 1.4, 0.9), vec3(0.75, 0.12, 0.45));
   }
+  return col * 1.45;
 }
 
 // --- 1. DMT Hyperbolic Fractal Kaleidoscope ---
@@ -256,20 +258,17 @@ void main() {
     finalColor = cDmt * w1 + cLsd * w2 + cMes * w3;
   }
 
-  // Radial optical vignette (leaves center subtle so groovebox UI pops)
-  float distFromCenter = length(uv);
-  float vignette = smoothstep(1.6, 0.3, distFromCenter);
-  float edgeGlow = smoothstep(0.4, 1.4, distFromCenter);
+  // Hyper-saturated neon bloom & radiance curve to make colors intensely bright and pop
+  finalColor = pow(finalColor, vec3(0.78)) * 1.85;
 
-  // Center subtle dark veil for UI contrast, rich edges
-  finalColor *= mix(0.55, 1.15, edgeGlow);
-  finalColor *= vignette;
+  // Vivid neon highlights & specular pop
+  finalColor += pow(finalColor, vec3(2.0)) * 0.55;
+
+  // Audio bass drop shockwave burst
+  finalColor += vec3(0.35, 0.22, 0.45) * pow(u_bass, 1.5);
 
   // Master intensity scaling
   finalColor *= u_intensity;
-
-  // Audio flash on heavy bass drops
-  finalColor += vec3(0.12, 0.08, 0.15) * pow(u_bass, 2.5);
 
   gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
 }
@@ -303,8 +302,8 @@ export class PsychedelicBackground {
     enabled: true,
     mode: "hybrid",
     palette: "neon",
-    intensity: 0.95,
-    speed: 1.0,
+    intensity: 1.4,
+    speed: 1.1,
     audioReactive: true,
   };
 

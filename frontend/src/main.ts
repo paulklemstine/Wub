@@ -87,6 +87,13 @@ export interface GrooveboxMeta {
   sectionTotalBars?: number;
   nextSection?: string;
   sectionBarsLeft?: number;
+  cycleMode?: string;
+  patternInCycle?: number;
+  patternsPerCycle?: number;
+  stepInPattern?: number;
+  stepsPerPattern?: number;
+  cycleTotalSteps?: number;
+  cycleProgress?: number;
   patterns: Record<string, string>;
   patternGrooves?: Record<string, string>;
   patternGrids?: Record<string, number[]>;
@@ -184,6 +191,13 @@ function parseServerMessage(raw: string): HelloMessage | TatumMessage | null {
         sectionTotalBars: asNumber(gbRaw["section_total_bars"], 16),
         nextSection: asString(gbRaw["next_section"], "BUILDUP"),
         sectionBarsLeft: asNumber(gbRaw["section_bars_left"], 15),
+        cycleMode: asString(gbRaw["cycle_mode"], "8x16"),
+        patternInCycle: asNumber(gbRaw["pattern_in_cycle"], 1),
+        patternsPerCycle: asNumber(gbRaw["patterns_per_cycle"], 8),
+        stepInPattern: asNumber(gbRaw["step_in_pattern"], 1),
+        stepsPerPattern: asNumber(gbRaw["steps_per_pattern"], 16),
+        cycleTotalSteps: asNumber(gbRaw["cycle_total_steps"], 128),
+        cycleProgress: asNumber(gbRaw["cycle_progress"], 0.0),
         patterns: isRecord(gbRaw["patterns"]) ? (gbRaw["patterns"] as Record<string, string>) : {},
         patternGrooves: isRecord(gbRaw["pattern_grooves"]) ? (gbRaw["pattern_grooves"] as Record<string, string>) : {},
         patternGrids: isRecord(gbRaw["pattern_grids"]) ? (gbRaw["pattern_grids"] as Record<string, number[]>) : {},
@@ -330,6 +344,7 @@ class WubApp {
     this.bindMaster();
     for (const stem of STEMS) this.bindStem(stem);
     this.bindFeedbackControls();
+    this.bindGrooveboxCycleControls();
 
     // Sticky BPM: load from localStorage if set, else default to 96 BPM
     const savedBpm = localStorage.getItem("wub_bpm");
@@ -723,7 +738,7 @@ class WubApp {
       intensitySlider.addEventListener("input", () => {
         const val = Number(intensitySlider.value);
         bg.setState({ intensity: val });
-        intensityVal.textContent = `${Math.round((val / 1.5) * 100)}%`;
+        intensityVal.textContent = `${Math.round(val * 100)}%`;
       });
     }
 
@@ -798,6 +813,28 @@ class WubApp {
     } else {
       this.setStatus(`👎 ${stemName} downvoted! Rerolling stem immediately to a fresh compatible pattern...`);
     }
+  }
+
+  private bindGrooveboxCycleControls(): void {
+    const cycleBtns = document.querySelectorAll<HTMLButtonElement>(".gb-cycle-btn");
+    cycleBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = btn.dataset.mode;
+        if (!mode) return;
+        this.send({ type: "set_cycle_mode", mode });
+
+        const cfg = this.getBackendConfig();
+        fetch(`${cfg.httpBase}/api/groovebox/cycle_mode`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        }).catch(() => {});
+
+        cycleBtns.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        this.setStatus(`Sequencer cycle set to ${mode.replace("x", " × ")} architecture`);
+      });
+    });
   }
 
   private bindStem(stem: StemName): void {
@@ -1050,29 +1087,73 @@ class WubApp {
   }
 
   private updateGrooveboxUI(gb: GrooveboxMeta): void {
-    // 1. Step in Bar (1..16)
-    for (let s = 1; s <= 16; s++) {
-      const stepEl = document.getElementById(`gb-step-${s}`);
-      if (stepEl) {
-        if (s === gb.stepInBar) stepEl.classList.add("active");
-        else stepEl.classList.remove("active");
+    const curPattern = gb.patternInCycle ?? gb.phraseBar ?? 1;
+    const totalPatterns = gb.patternsPerCycle ?? 8;
+    const curStep = gb.stepInPattern ?? gb.stepInBar ?? 1;
+    const totalSteps = gb.stepsPerPattern ?? 16;
+
+    // 0. Active Cycle Mode Button
+    if (gb.cycleMode) {
+      const cycleBtns = document.querySelectorAll<HTMLButtonElement>(".gb-cycle-btn");
+      cycleBtns.forEach((btn) => {
+        if (btn.dataset.mode === gb.cycleMode) btn.classList.add("active");
+        else btn.classList.remove("active");
+      });
+    }
+
+    // 1. Step in Pattern Sequencer LED strip (16 or 32 steps)
+    const stepStrip = document.getElementById("gb-step-strip");
+    if (stepStrip) {
+      if (totalSteps === 32) stepStrip.classList.add("mode-32");
+      else stepStrip.classList.remove("mode-32");
+
+      if (stepStrip.children.length !== totalSteps) {
+        stepStrip.innerHTML = "";
+        for (let s = 1; s <= totalSteps; s++) {
+          const isBeat = (s - 1) % 4 === 0;
+          const stepDiv = document.createElement("div");
+          stepDiv.id = `gb-step-${s}`;
+          stepDiv.className = isBeat ? "gb-step beat" : "gb-step";
+          stepDiv.innerHTML = `<span class="gb-step-led"></span>${s}`;
+          stepStrip.appendChild(stepDiv);
+        }
+      }
+      for (let s = 1; s <= totalSteps; s++) {
+        const stepEl = stepStrip.children[s - 1] as HTMLElement;
+        if (stepEl) {
+          if (s === curStep) stepEl.classList.add("active");
+          else stepEl.classList.remove("active");
+        }
       }
     }
 
-    // 2. Bar in Phrase (1..8)
+    // 2. Pattern in Cycle Counter & LED dots
     const barNumEl = document.getElementById("gb-bar-num");
-    if (barNumEl) barNumEl.textContent = String(gb.phraseBar);
+    if (barNumEl) barNumEl.textContent = String(curPattern);
+    const patPerCycleEl = document.getElementById("gb-patterns-per-cycle");
+    if (patPerCycleEl) patPerCycleEl.textContent = String(totalPatterns);
 
-    for (let b = 1; b <= 8; b++) {
-      const dot = document.getElementById(`gb-dot-${b}`);
-      if (dot) {
-        if (b === gb.phraseBar) {
-          if (gb.isFill) dot.className = "gb-bar-dot fill";
-          else dot.className = "gb-bar-dot active";
-        } else if (b < gb.phraseBar) {
-          dot.className = "gb-bar-dot active";
-        } else {
+    const dotsContainer = document.getElementById("gb-bars-dots");
+    if (dotsContainer) {
+      if (dotsContainer.children.length !== totalPatterns) {
+        dotsContainer.innerHTML = "";
+        for (let b = 1; b <= totalPatterns; b++) {
+          const dot = document.createElement("div");
+          dot.id = `gb-dot-${b}`;
           dot.className = "gb-bar-dot";
+          dotsContainer.appendChild(dot);
+        }
+      }
+      for (let b = 1; b <= totalPatterns; b++) {
+        const dot = dotsContainer.children[b - 1] as HTMLElement;
+        if (dot) {
+          if (b === curPattern) {
+            dot.className = gb.isFill ? "gb-bar-dot fill" : "gb-bar-dot active";
+          } else if (b < curPattern) {
+            dot.className = "gb-bar-dot active";
+          } else {
+            dot.className = "gb-bar-dot";
+          }
         }
       }
     }
@@ -1139,7 +1220,7 @@ class WubApp {
       }
     });
 
-    // 7. Multi-Track Pattern Matrix
+    // 7. Multi-Track Pattern Matrix (16 or 32 steps)
     for (const stem of STEMS) {
       const titleEl = document.getElementById(`matrix-title-${stem}`);
       if (titleEl && gb.patterns[stem]) {
@@ -1151,9 +1232,12 @@ class WubApp {
       }
       const gridContainer = document.getElementById(`matrix-grid-${stem}`);
       if (gridContainer) {
-        if (gridContainer.children.length !== 16) {
+        if (totalSteps === 32) gridContainer.classList.add("mode-32");
+        else gridContainer.classList.remove("mode-32");
+
+        if (gridContainer.children.length !== totalSteps) {
           gridContainer.innerHTML = "";
-          for (let i = 0; i < 16; i++) {
+          for (let i = 0; i < totalSteps; i++) {
             const pip = document.createElement("div");
             pip.className = (i % 4 === 0) ? "matrix-pip beat" : "matrix-pip";
             gridContainer.appendChild(pip);
@@ -1161,13 +1245,13 @@ class WubApp {
         }
         const gridData = gb.patternGrids?.[stem];
         const pips = gridContainer.children;
-        for (let i = 0; i < 16; i++) {
+        for (let i = 0; i < totalSteps; i++) {
           const pip = pips[i] as HTMLElement;
           const hasSlice = Boolean(gridData && gridData[i] === 1);
           if (hasSlice) pip.classList.add("has-slice");
           else pip.classList.remove("has-slice");
 
-          if (i + 1 === gb.stepInBar) pip.classList.add("playhead");
+          if (i + 1 === curStep) pip.classList.add("playhead");
           else pip.classList.remove("playhead");
         }
       }

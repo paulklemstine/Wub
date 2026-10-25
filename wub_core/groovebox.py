@@ -40,6 +40,15 @@ NEXT_SECTION = {
     "BREAKDOWN": "DROP",  # From breakdown straight into the 2nd Drop
 }
 
+# Cycle presets: dynamic multi-pattern cycle architectures
+CYCLE_PRESETS = {
+    "4x16": {"patterns": 4, "steps": 16, "label": "4 × 16"},
+    "8x16": {"patterns": 8, "steps": 16, "label": "8 × 16"},
+    "8x32": {"patterns": 8, "steps": 32, "label": "8 × 32"},
+    "16x32": {"patterns": 16, "steps": 32, "label": "16 × 32"},
+}
+DEFAULT_CYCLE_MODE = "8x16"
+
 
 @dataclass
 class GrooveboxState:
@@ -47,6 +56,8 @@ class GrooveboxState:
     bar_in_section: int = 0
     phrase_bar: int = 0      # 0..7 (Bar 1 to Bar 8 of an 8-bar phrase)
     step_in_bar: int = 0     # 0..15 (16th note step within the bar)
+    pattern_in_cycle: int = 0  # 0..(patterns_per_cycle - 1)
+    step_in_pattern: int = 0   # 0..(steps_per_pattern - 1)
     total_bars: int = 0
     total_steps: int = 0
     is_fill_bar: bool = False
@@ -60,6 +71,10 @@ class GrooveboxConductor:
         self.bank = pattern_bank
         self.rng = np.random.default_rng(seed)
         self.arranger = SongArranger(pattern_bank, seed=seed)
+        self.cycle_mode = DEFAULT_CYCLE_MODE
+        self.patterns_per_cycle = CYCLE_PRESETS[self.cycle_mode]["patterns"]
+        self.steps_per_pattern = CYCLE_PRESETS[self.cycle_mode]["steps"]
+        self.cycle_total_steps = self.patterns_per_cycle * self.steps_per_pattern
         self.state = GrooveboxState()
         self.state.section = "GROOVE_A"
         self.section_bars_remaining = SECTION_DURATIONS.get(self.state.section, 16)
@@ -74,6 +89,36 @@ class GrooveboxConductor:
         self.stem_weights: Dict[str, Dict[str, float]] = {s: {} for s in STEMS}
         self._load_feedback()
         self._init_section_patterns()
+        if self.steps_per_pattern == 32:
+            self._refresh_cycle_patterns()
+
+    def set_cycle_mode(self, mode: str) -> bool:
+        """Switch cycle preset dynamically (e.g. '4x16', '8x16', '8x32', '16x32')."""
+        if mode not in CYCLE_PRESETS:
+            return False
+        self.cycle_mode = mode
+        self.patterns_per_cycle = CYCLE_PRESETS[mode]["patterns"]
+        self.steps_per_pattern = CYCLE_PRESETS[mode]["steps"]
+        self.cycle_total_steps = self.patterns_per_cycle * self.steps_per_pattern
+        self._refresh_cycle_patterns()
+        return True
+
+    def _refresh_cycle_patterns(self) -> None:
+        """Ensure active stem patterns match the current step length (16 or 32)."""
+        if self.steps_per_pattern == 32:
+            for s in STEMS:
+                cur = self.active_patterns.get(s)
+                if cur is None or cur.length != 32:
+                    p2 = self.bank.pick_pattern(s, preferred_track_id=self.lead_track_id, rng=self.rng)
+                    cmp_pat = self.bank.create_compound_pattern(s, cur, p2, target_length=32, rng=self.rng)
+                    if cmp_pat:
+                        self.active_patterns[s] = cmp_pat
+        elif self.steps_per_pattern == 16:
+            for s in STEMS:
+                cur = self.active_patterns.get(s)
+                if cur is not None and cur.length == 32:
+                    # Fall back to 16-step pattern
+                    self.active_patterns[s] = self.bank.pick_pattern(s, preferred_track_id=self.lead_track_id, rng=self.rng)
 
     def _load_feedback(self) -> None:
         p = Path("data/user_feedback.json")
@@ -254,30 +299,58 @@ class GrooveboxConductor:
             preferred_track_id=self.lead_track_id, rng=self.rng
         ) or self.bank.create_groove_pattern("vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng)
 
-    def _on_bar_start(self) -> None:
-        """Triggered on Step 0 of each bar (beat 1)."""
-        self.state.phrase_bar = self.state.total_bars % 8
-        phrase_bar = self.state.phrase_bar  # 0..7
-        self.state.bar_in_section += 1
-        self.section_bars_remaining -= 1
-        self.active_slice_ids = {s: None for s in STEMS}
+    def _on_pattern_start(self, pattern_in_cycle: int) -> None:
+        """Triggered on Step 0 of each pattern in the cycle."""
+        is_turnaround = (pattern_in_cycle == self.patterns_per_cycle - 1)
+        self.state.is_fill_bar = is_turnaround
+        self.state.pattern_in_cycle = pattern_in_cycle
+        self.state.phrase_bar = pattern_in_cycle % 8
 
-        # Check section transition
-        if self.section_bars_remaining <= 0:
+        # Section transition check on cycle restart
+        if pattern_in_cycle == 0 and self.section_bars_remaining <= 0:
             next_sec = NEXT_SECTION.get(self.state.section, "GROOVE_A")
             self.state.section = next_sec
             self.state.bar_in_section = 0
             self.section_bars_remaining = SECTION_DURATIONS.get(next_sec, 16)
             self._init_section_patterns()
+            if self.steps_per_pattern == 32:
+                self._refresh_cycle_patterns()
             return
 
-        is_turnaround = (phrase_bar == 7)
-        self.state.is_fill_bar = is_turnaround
+        # 32-step Compound Pattern Generation
+        if self.steps_per_pattern == 32:
+            if is_turnaround:
+                base_pat = (
+                    self.bank.pick_pattern("drums", groove_type="four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng)
+                    or self.bank.create_groove_pattern("drums", "four_on_floor_hats", rng=self.rng)
+                )
+                fill_pat = (
+                    self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
+                    or self.bank.create_groove_pattern("drums", "fill", preferred_track_id=self.lead_track_id, rng=self.rng)
+                )
+                self.active_patterns["drums"] = self.bank.create_compound_pattern("drums", base_pat, fill_pat, target_length=32, rng=self.rng)
+                for s in ("bass", "vocals", "other"):
+                    p1 = self.active_patterns.get(s)
+                    p2 = self.bank.pick_pattern(s, preferred_track_id=self.lead_track_id, rng=self.rng)
+                    self.active_patterns[s] = self.bank.create_compound_pattern(s, p1, p2, target_length=32, rng=self.rng)
+            else:
+                bar_offset = (pattern_in_cycle * 2) % 8
+                for s in STEMS:
+                    p1 = self.bank.get_track_pattern(self.lead_track_id, s, self.lead_base_bar + bar_offset) if self.lead_track_id else None
+                    p2 = self.bank.get_track_pattern(self.lead_track_id, s, self.lead_base_bar + bar_offset + 1) if self.lead_track_id else None
+                    if not p1:
+                        p1 = self.bank.pick_pattern(s, preferred_track_id=self.lead_track_id, rng=self.rng)
+                    cmp_pat = self.bank.create_compound_pattern(s, p1, p2, target_length=32, rng=self.rng)
+                    if cmp_pat:
+                        self.active_patterns[s] = cmp_pat
+            return
+
+        # 16-step Standard Pattern Progression
+        phrase_bar = pattern_in_cycle % 8
 
         # Cohesive Multi-Stem Phrase progression
         if self.current_phrase and phrase_bar < len(self.current_phrase.bars):
-            if phrase_bar == 0 and self.state.total_bars > 0:
-                # Plan the next phrase and macro section using SongArranger ML
+            if pattern_in_cycle == 0 and self.state.total_steps > 0:
                 cur_key = self.current_phrase.key if self.current_phrase else "C major"
                 cur_bpm = self.current_phrase.bpm if self.current_phrase else 126.0
                 next_p, next_sec, is_sec_change = self.arranger.plan_next_phrase(
@@ -312,7 +385,7 @@ class GrooveboxConductor:
                         self.current_pattern.stems["drums"] = list(fill_drums.steps)
             return
 
-        # Fallback single-stem mode (used in tests with small synthetic tracks)
+        # Fallback single-stem mode (used in tests with small synthetic tracks or dynamic mashups)
         if is_turnaround:
             fill_pat = (
                 self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
@@ -320,13 +393,13 @@ class GrooveboxConductor:
             )
             if fill_pat:
                 self.active_patterns["drums"] = fill_pat
-        elif phrase_bar == 0:
+        elif pattern_in_cycle == 0:
             self._init_section_patterns()
-        elif phrase_bar == 3 and self.rng.random() < 0.6:
+        elif pattern_in_cycle % 4 == 3 and self.rng.random() < 0.6:
             var_drums = self.bank.pick_pattern("drums", min_energy=0.4, preferred_track_id=self.lead_track_id, rng=self.rng)
             if var_drums:
                 self.active_patterns["drums"] = var_drums
-        elif phrase_bar == 4:
+        elif pattern_in_cycle % 4 == 2:
             lift_drums = self.bank.pick_pattern("drums", groove_type="four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng)
             if lift_drums:
                 self.active_patterns["drums"] = lift_drums
@@ -335,7 +408,7 @@ class GrooveboxConductor:
                 self.active_patterns["bass"] = lift_bass
         else:
             if self.lead_track_id:
-                track_bar = self.lead_base_bar + phrase_bar
+                track_bar = self.lead_base_bar + (pattern_in_cycle % 8)
                 lead_drum_pat = self.bank.get_track_pattern(self.lead_track_id, "drums", track_bar)
                 if lead_drum_pat and lead_drum_pat.energy >= 0.2:
                     self.active_patterns["drums"] = lead_drum_pat
@@ -355,12 +428,28 @@ class GrooveboxConductor:
         if self.active_patterns.get("vocals") is None:
             self.active_patterns["vocals"] = self.bank.create_groove_pattern("vocals", "chop", rng=self.rng)
 
+    def _on_bar_start(self, pattern_in_cycle: int, step_in_pattern: int) -> None:
+        """Triggered on Step 0 of each bar (every 16 tatums)."""
+        self.state.bar_in_section += 1
+        self.section_bars_remaining -= 1
+        self.active_slice_ids = {s: None for s in STEMS}
+
+        if step_in_pattern == 0:
+            self._on_pattern_start(pattern_in_cycle)
+
     def next_step(self) -> Tuple[Dict[str, Optional[SliceRef]], dict]:
         """Advance the groovebox sequencer by 1 tatum step (1/16th note)."""
-        step = self.state.step_in_bar
+        step_in_pattern = self.state.total_steps % self.steps_per_pattern
+        pattern_in_cycle = (self.state.total_steps // self.steps_per_pattern) % self.patterns_per_cycle
+        step_in_bar = self.state.total_steps % 16
 
-        if step == 0:
-            self._on_bar_start()
+        self.state.step_in_bar = step_in_bar
+        self.state.step_in_pattern = step_in_pattern
+        self.state.pattern_in_cycle = pattern_in_cycle
+        self.state.phrase_bar = pattern_in_cycle % 8
+
+        if step_in_bar == 0:
+            self._on_bar_start(pattern_in_cycle, step_in_pattern)
 
         sec = self.state.section
         slices: Dict[str, Optional[SliceRef]] = {}
@@ -368,10 +457,10 @@ class GrooveboxConductor:
         for stem in STEMS:
             pat = self.active_patterns.get(stem)
             if pat and pat.steps:
-                candidate_sref = pat.steps[step % len(pat.steps)]
+                candidate_sref = pat.steps[step_in_pattern % len(pat.steps)]
             elif self.current_pattern and stem in self.current_pattern.stems:
                 stem_steps = self.current_pattern.stems[stem]
-                candidate_sref = stem_steps[step] if step < len(stem_steps) else None
+                candidate_sref = stem_steps[step_in_bar % len(stem_steps)]
             else:
                 candidate_sref = None
 
@@ -412,7 +501,10 @@ class GrooveboxConductor:
             if pat:
                 pattern_titles[s] = pat.pattern_name[:28]
                 pattern_grooves[s] = pat.groove_type
-                pattern_grids[s] = [1 if step_i < len(pat.steps) and pat.steps[step_i] is not None else 0 for step_i in range(16)]
+                pattern_grids[s] = [
+                    1 if step_i < len(pat.steps) and pat.steps[step_i] is not None else 0
+                    for step_i in range(self.steps_per_pattern)
+                ]
                 pattern_track_ids[s] = pat.track_id
                 pattern_ids[s] = pat.id
                 pattern_ratings[s] = self.feedback_data.get(s, {}).get(pat.track_id, 0)
@@ -420,22 +512,25 @@ class GrooveboxConductor:
                 pattern_titles[s] = f"{self.current_pattern.track_title[:24]} Bar {self.current_pattern.bar_num}"
                 pattern_grooves[s] = self.current_pattern.groove_types.get(s, "groove")
                 stem_steps = self.current_pattern.stems[s]
-                pattern_grids[s] = [1 if step_i < len(stem_steps) and stem_steps[step_i] is not None else 0 for step_i in range(16)]
+                pattern_grids[s] = [
+                    1 if step_i < len(stem_steps) and stem_steps[step_i] is not None else 0
+                    for step_i in range(self.steps_per_pattern)
+                ]
                 pattern_track_ids[s] = self.current_pattern.track_id
                 pattern_ids[s] = f"pat_{s}_{self.current_pattern.track_id[:6]}_{self.current_pattern.bar_num:03d}"
                 pattern_ratings[s] = self.feedback_data.get(s, {}).get(self.current_pattern.track_id, 0)
             else:
                 pattern_titles[s] = "Rest"
                 pattern_grooves[s] = "none"
-                pattern_grids[s] = [0] * 16
+                pattern_grids[s] = [0] * self.steps_per_pattern
                 pattern_track_ids[s] = ""
                 pattern_ids[s] = ""
                 pattern_ratings[s] = 0
 
         meta = {
             "section": sec,
-            "phrase_bar": self.state.phrase_bar + 1,
-            "step_in_bar": step + 1,
+            "phrase_bar": (pattern_in_cycle % 8) + 1,
+            "step_in_bar": step_in_bar + 1,
             "total_bars": self.state.total_bars,
             "is_fill": self.state.is_fill_bar,
             "key": camelot_str,
@@ -444,6 +539,13 @@ class GrooveboxConductor:
             "section_total_bars": sec_total_bars,
             "next_section": next_sec,
             "section_bars_left": sec_bars_left,
+            "cycle_mode": self.cycle_mode,
+            "pattern_in_cycle": pattern_in_cycle + 1,
+            "patterns_per_cycle": self.patterns_per_cycle,
+            "step_in_pattern": step_in_pattern + 1,
+            "steps_per_pattern": self.steps_per_pattern,
+            "cycle_total_steps": self.cycle_total_steps,
+            "cycle_progress": round((pattern_in_cycle * self.steps_per_pattern + step_in_pattern) / float(self.cycle_total_steps), 3),
             "patterns": pattern_titles,
             "pattern_grooves": pattern_grooves,
             "pattern_grids": pattern_grids,
@@ -453,9 +555,8 @@ class GrooveboxConductor:
         }
 
         # Advance step counter
-        self.state.step_in_bar = (step + 1) % 16
         self.state.total_steps += 1
-        if self.state.step_in_bar == 0:
+        if self.state.total_steps % 16 == 0:
             self.state.total_bars += 1
 
         return slices, meta
