@@ -254,54 +254,20 @@
       box-shadow: 0 0 10px rgba(234, 179, 8, 0.3);
     }
 
-    #backend-config {
+    .ml-standalone-badge {
       margin-left: auto;
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: 0.8rem;
+      gap: 6px;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      color: var(--neon-cyan);
       background: #0d1017;
       padding: 5px 12px;
       border-radius: 6px;
-      border: 1px solid var(--mc-border);
-      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
-    }
-    #backend-status-dot {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #64748b;
-      box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
-      transition: background 0.2s ease;
-    }
-    #backend-host-input {
-      background: #171c26;
-      border: 1px solid #333d52;
-      border-radius: 4px;
-      color: #00ffaa;
-      padding: 4px 8px;
-      font-family: monospace;
-      font-size: 0.8rem;
-      width: 175px;
-      box-shadow: inset 0 1px 3px rgba(0,0,0,0.7);
-    }
-    #backend-host-input:focus {
-      outline: none;
-      border-color: var(--neon-cyan);
-      box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
-    }
-    #btn-backend-connect {
-      padding: 4px 10px;
-      font-size: 0.75rem;
-    }
-    #btn-backend-help {
-      padding: 3px 6px;
-      font-size: 0.75rem;
-      border-radius: 50%;
-      width: 22px;
-      height: 22px;
-      line-height: 1;
+      border: 1px solid rgba(0, 243, 255, 0.4);
+      box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
     }
 
     /* --- MC-505 RETRO BACKLIT LCD MATRIX DISPLAY --- */
@@ -1474,39 +1440,17 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.48 <span class="mc-build-num">#48</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.49 <span class="mc-build-num">#49</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
         <button id="btn-stop" type="button">Stop</button>
       </div>
-      <div style="display: flex; align-items: center; margin-left: 14px;">
-        <button id="btn-engine-mode" type="button" class="mc-mode-toggle" title="Click to toggle between In-Browser Direct ML and WebSocket Server Stream">
-          🧠 In-Browser Direct ML
-        </button>
-      </div>
-      <div id="backend-config">
-        <span id="backend-status-dot"></span>
-        <span id="backend-label" style="opacity: 0.85;">Server:</span>
-        <input id="backend-host-input" type="text" placeholder="localhost:8123" />
-        <button id="btn-backend-connect" type="button">Connect</button>
-        <button id="btn-backend-help" type="button" title="How to connect backend">?</button>
+      <div class="ml-standalone-badge" title="100% Client-Side In-Browser ML Inference Engine (Zero Server Dependency)">
+        🧠 100% STANDALONE IN-BROWSER ML
       </div>
     </header>
-
-    <dialog id="backend-help-dialog">
-      <h3 style="margin-top: 0; color: var(--neon-cyan); letter-spacing: 0.08em; text-transform: uppercase;">Connecting to Wub Backend</h3>
-      <p style="line-height: 1.6; font-size: 0.88rem;">Stream directly from your running Python server to the MC-505 groovebox engine:</p>
-      <ul style="padding-left: 20px; line-height: 1.6; font-size: 0.85rem;">
-        <li><b>Local LAN Direct (Recommended):</b> Open <code>http://192.168.1.136:8123</code> directly in your browser. (The backend server serves this entire UI natively without mixed-content restrictions).</li>
-        <li><b>Cloudflare Tunnel (HTTPS/WSS):</b> Run <code>cloudflared tunnel --url http://127.0.0.1:8123</code> on the host machine and paste the resulting <code>https://...trycloudflare.com</code> URL into the Server box. Works over GitHub Pages without browser warnings!</li>
-        <li><b>GitHub Pages + Insecure Content:</b> If connecting to <code>http://192.168.1.136:8123</code> from <code>https://paulklemstine.github.io/Wub/</code>, your browser will block mixed content by default. In Chrome/Edge: click the icon next to the URL in the address bar &rarr; <i>Site Settings</i> &rarr; set <i>Insecure content</i> to <b>Allow</b>.</li>
-      </ul>
-      <div style="text-align: right; margin-top: 16px;">
-        <button id="btn-close-dialog" type="button">Close</button>
-      </div>
-    </dialog>
 
     <!-- BACKLIT MC-505 LCD MATRIX SCREEN -->
     <section id="master" aria-label="Master controls">
@@ -1898,7 +1842,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.48 (Build #48 • rev d174744)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.49 (Build #49 • rev d65cc66)</span>
     </div>
   </div>
 

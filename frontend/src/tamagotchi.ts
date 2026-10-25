@@ -172,7 +172,8 @@ export class TamagotchiAvatar {
     audioNow: number,
     rmsLevel: number,
     stepIndex: number,
-    bpm: number = 126
+    bpm: number = 126,
+    waveform?: Uint8Array | null
   ): void {
     const dt = this.lastRenderSec > 0 ? Math.max(0.001, audioNow - this.lastRenderSec) : 0.016;
     this.lastRenderSec = audioNow;
@@ -263,15 +264,76 @@ export class TamagotchiAvatar {
       this.speechBubble = `"${meta.vocalLyric}"`;
     }
 
-    this.renderASCII(meta, isDropGap);
+    this.renderASCII(meta, isDropGap, waveform);
     this.updateDashboard();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Live Waveform Animated Singing Mouth
+  // ---------------------------------------------------------------------------
+
+  private extractWaveformMouth(
+    waveform: Uint8Array | null | undefined,
+    isSinging: boolean,
+    vowel: string,
+    isDropGap: boolean
+  ): string {
+    if (isDropGap) return " O ";
+
+    const WAVE_CHARS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+    if (!waveform || waveform.length === 0) {
+      if (isSinging) {
+        if (vowel === "AH") return " ▃█▃ ";
+        if (vowel === "EE") return " ▄▇▄ ";
+        if (vowel === "OH") return " ▅█▅ ";
+        if (vowel === "OO") return "  █  ";
+        return " ▃▅▃ ";
+      }
+      return " ‿ ";
+    }
+
+    // Sample 5 points across the center of the waveform buffer
+    const len = waveform.length;
+    const startIdx = Math.floor(len * 0.25);
+    const endIdx = Math.floor(len * 0.75);
+    const step = Math.floor((endIdx - startIdx) / 4);
+
+    let maxAmp = 0;
+    const amps: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const idx = Math.min(len - 1, startIdx + i * step);
+      const val = Math.abs(waveform[idx] - 128) / 128; // 0..1
+      amps.push(val);
+      if (val > maxAmp) maxAmp = val;
+    }
+
+    // If completely quiet / resting
+    if (maxAmp < 0.030) {
+      return isSinging ? " ‿ " : " · ";
+    }
+
+    // Boost sensitivity for animated singing visibility
+    const boost = isSinging ? 3.4 : 2.6;
+    const chars = amps.map((a, i) => {
+      let mod = a * boost;
+      if (vowel === "AH" || vowel === "OH") {
+        if (i === 2) mod *= 1.35; // taller center mouth opening
+      } else if (vowel === "EE") {
+        mod *= 0.95; // wide teeth spread
+      }
+      const charIdx = Math.min(WAVE_CHARS.length - 1, Math.floor(mod * (WAVE_CHARS.length - 1)));
+      return WAVE_CHARS[Math.max(1, charIdx)];
+    });
+
+    return chars.join("");
   }
 
   // ---------------------------------------------------------------------------
   // ASCII Rendering Engine
   // ---------------------------------------------------------------------------
 
-  private renderASCII(meta: GrooveboxMeta | null, isDropGap: boolean): void {
+  private renderASCII(meta: GrooveboxMeta | null, isDropGap: boolean, waveform?: Uint8Array | null): void {
     if (!this.asciiEl) return;
 
     const sec = meta?.section ?? "GROOVE_A";
@@ -297,85 +359,70 @@ export class TamagotchiAvatar {
       eyes = "■   ■"; // Cyber shades
     }
 
-    // Determine Mouth (Shaped by singing vowel!)
-    let mouth = ".";
-    if (isDropGap) {
-      mouth = "o";
-    } else if (isSinging) {
-      if (vowel === "AH") mouth = "O";
-      else if (vowel === "EE") mouth = "▽";
-      else if (vowel === "OH") mouth = "o";
-      else if (vowel === "OO") mouth = "ε";
-      else if (vowel === "AY") mouth = "‿";
-      else mouth = "▽";
-    } else {
-      if (sec === "DROP") mouth = "∀";
-      else if (sec === "BUILDUP") mouth = "O";
-      else if (sec === "BREAKDOWN") mouth = "3";
-      else mouth = "‿";
-    }
+    // Determine Live Animated Waveform Mouth!
+    const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap);
 
     // Render by Stage
     let faceLines: string[] = [];
     const noteChar = this.noteFloating.length > 0 ? this.noteFloating[0].char : " ";
 
     if (this.stage === 1) {
-      // Stage 1: Baby Blob
+      // Stage 1: Baby Blob (live singing mouth)
       faceLines = bob ? [
         `       .---.       `,
         `      /     \\      `,
-        `     ( ${eyes[0]} ${mouth} ${eyes[eyes.length - 1]} )    ${noteChar}`,
+        `     (${eyes[0]}${mouth}${eyes[eyes.length - 1]})    ${noteChar}`,
         `      \\  w  /      `,
         `       \`---\`       `,
       ] : [
         `      .-----.      `,
         `     /       \\     `,
-        `    (  ${eyes[0]} ${mouth} ${eyes[eyes.length - 1]}  )   ${noteChar}`,
+        `    ( ${eyes[0]}${mouth}${eyes[eyes.length - 1]} )   ${noteChar}`,
         `     \\   w   /     `,
         `      \`-----\`      `,
       ];
     } else if (this.stage === 2) {
-      // Stage 2: Beat Kid (with DJ Headphones)
+      // Stage 2: Beat Kid (DJ Headphones + live waveform mouth)
       faceLines = bob ? [
         `      .-------.    `,
-        `   [o(  ${eyes[0]} ${mouth} ${eyes[eyes.length - 1]}  )o]  ${noteChar}`,
+        `   [o(${eyes[0]}${mouth}${eyes[eyes.length - 1]})o]  ${noteChar}`,
         `     <)  WUB  (>   `,
         `       /     \\     `,
         `      '--' '--'    `,
       ] : [
         `      .-------.    `,
-        `   [o(  ${eyes[0]} ${mouth} ${eyes[eyes.length - 1]}  )o]  ${noteChar}`,
+        `   [o(${eyes[0]}${mouth}${eyes[eyes.length - 1]})o]  ${noteChar}`,
         `     \\)  WUB  (/   `,
         `       |     |     `,
         `      '--' '--'    `,
       ];
     } else if (this.stage === 3) {
-      // Stage 3: Cyber Raver (Antenna + Rave Shades + Dancing Hands)
+      // Stage 3: Cyber Raver (Antenna + Rave Shades + Live Waveform Singing Mouth)
       faceLines = bob ? [
         `       ~|^|~       `,
         `    / (⌐${eyes[0]}_${eyes[eyes.length - 1]}■) \\    ${noteChar}`,
-        `   <[~   ${mouth}   ~]>   `,
+        `   <[~ ${mouth} ~]>   `,
         `     /   WUB   \\   `,
         `    /___/ \\___\\    `,
       ] : [
         `       ~|^|~       `,
         `   \\  (⌐${eyes[0]}_${eyes[eyes.length - 1]}■)  /   ${noteChar}`,
-        `    \\[~  ${mouth}  ~]/    `,
+        `    \\[~ ${mouth} ~]/    `,
         `      |  WUB  |    `,
         `     /___/ \\___\\   `,
       ];
     } else {
-      // Stage 4: Synth Deity (Quantum Halo + Angel Wings)
+      // Stage 4: Synth Deity (Quantum Halo + Angel Wings + Live Formant Mouth)
       faceLines = bob ? [
         `  . : * { 505 } * : .  `,
-        `   {\\(  ${eyes[0]} ${mouth} ${eyes[eyes.length - 1]}  )/}  ${noteChar}`,
-        `  <[~   ✦ WUB ✦   ~]>  `,
+        `   {\\(  ${eyes[0]}   ${eyes[eyes.length - 1]}  )/}  ${noteChar}`,
+        `  <[~ ✦${mouth}✦ ~]>  `,
         `     /     |     \\     `,
         `    (____/   \\____)    `,
       ] : [
         `  . : * { 505 } * : .  `,
-        `   {/(  ${eyes[0]} ${mouth} ${eyes[eyes.length - 1]}  )\\}  ${noteChar}`,
-        `  \\[~   ✦ WUB ✦   ~]/  `,
+        `   {/(  ${eyes[0]}   ${eyes[eyes.length - 1]}  )\\}  ${noteChar}`,
+        `  \\[~ ✦${mouth}✦ ~]/  `,
         `     |     |     |     `,
         `    (____/   \\____)    `,
       ];

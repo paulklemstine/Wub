@@ -1,29 +1,16 @@
-// Phase 3 entry: AudioEngine + NebulaRenderer + WebSocket client wiring.
+// Wub KG-505 Autonomous Generative Electronic Groovebox
+// 100% Standalone In-Browser ML Audio Engine & Sequencer
 //
-// Expected DOM ids (must stay in sync with frontend/index.html):
+// Expected DOM ids (in sync with frontend/index.html):
 //   Playback:        btn-play, btn-stop, status-line
 //   Master:          bpm-slider (80-175), bpm-value, key-select
-//   Canvases:        rings-canvas, nebula-canvas
+//   Canvases:        rings-canvas, master-canvas, nebula-canvas, psychedelic-bg
 //   Per stem <s>:    <s>-mute, <s>-solo, <s>-volume, <s>-vol-val,
-//                    <s>-chaos, <s>-chaos-val
+//                    <s>-chaos, <s>-chaos-val, <s>-synth, <s>-synth-val
 //   where <s> is one of drums | bass | vocals | other.
-//
-// Server protocol (JSON over /ws/stream):
-//   inbound  {type:"hello", stems:[...], bpm, sample_rate}
-//   inbound  {type:"tatum", tatum_index, start_time, bpm, slices:
-//             {stem: {track_id, segment_id, start, duration, url,
-//                     detune_cents, rate} | null}}
-//   outbound {type:"set", stem, chaos}
-//   outbound {type:"set_bpm", bpm}
-//   outbound {type:"set_key", key}            (provisional, for key-select)
-//   outbound {type:"set_gravity", stem, x, y} (provisional, for reticles)
-//
-// Timing assumption: `start_time` is an audio-clock-relative offset in
-// seconds from message receipt, i.e. play at ctx.currentTime + start_time.
-// Late (negative/small) values are clamped to now + 10 ms so slices still
-// sound instead of throwing.
+
 import { AudioEngine, STEMS } from "./audio_engine";
-import { NebulaRenderer, drawRings, drawWaveformAnalysis, drawMasterAnalysis } from "./visualizer";
+import { NebulaRenderer, drawWaveformAnalysis, drawMasterAnalysis } from "./visualizer";
 import type { SliceArcEvent, NebulaPoint, WaveformStemData } from "./visualizer";
 import type { StemName } from "./types";
 import { PsychedelicBackground } from "./psychedelic_bg";
@@ -31,12 +18,6 @@ import type { TripMode, TripPalette } from "./psychedelic_bg";
 import { VERSION_INFO } from "./version";
 import { ClientGrooveboxConductor } from "./client_ml_sequencer";
 import { TamagotchiAvatar } from "./tamagotchi";
-
-interface BackendConfig {
-  httpBase: string;
-  wsUrl: string;
-  raw: string;
-}
 
 export interface StemState {
   stem: StemName;
@@ -50,33 +31,8 @@ export interface StemState {
 const BPM_MIN = 80;
 const BPM_MAX = 175;
 const DEFAULT_BPM = 96;
-const CACHE_CAP = 300;
-const WS_PATH = "/ws/stream";
-const RECONNECT_BASE_MS = 500;
-const RECONNECT_MAX_MS = 8000;
 const RING_EVENT_CAP = 240;
 const RING_WINDOW_SEC = 8;
-
-// ---------------------------------------------------------------------------
-// Inbound message types (narrowed from unknown at the socket boundary).
-// ---------------------------------------------------------------------------
-
-interface HelloMessage {
-  type: "hello";
-  stems: StemName[];
-  bpm: number;
-  sampleRate: number;
-}
-
-interface SliceSpec {
-  trackId: string;
-  segmentId: string;
-  start: number;
-  duration: number;
-  url: string;
-  detuneCents: number;
-  rate: number;
-}
 
 export interface GrooveboxMeta {
   section: string;
@@ -118,13 +74,18 @@ interface UIEvent {
   totalSteps: number;
 }
 
-interface TatumMessage {
-  type: "tatum";
-  tatumIndex: number;
-  startTime: number;
-  bpm: number;
-  slices: Record<StemName, SliceSpec | null>;
-  groovebox?: GrooveboxMeta;
+// ---------------------------------------------------------------------------
+// DOM helpers.
+// ---------------------------------------------------------------------------
+
+function el<T extends HTMLElement>(id: string): T {
+  const node = document.getElementById(id);
+  if (node === null) throw new Error(`Missing element #${id}`);
+  return node as T;
+}
+
+function visualNow(): number {
+  return performance.now() / 1000;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -143,120 +104,7 @@ function asStem(v: unknown): StemName | null {
   return v === "drums" || v === "bass" || v === "vocals" || v === "other" ? v : null;
 }
 
-function parseSliceSpec(v: unknown): SliceSpec | null {
-  if (!isRecord(v)) return null;
-  const trackId = asString(v["track_id"], "");
-  const segmentId = asString(v["segment_id"], "");
-  const url = asString(v["url"], "");
-  if (trackId === "" || segmentId === "" || url === "") return null;
-  return {
-    trackId,
-    segmentId,
-    start: asNumber(v["start"], 0),
-    duration: asNumber(v["duration"], 0),
-    url,
-    detuneCents: asNumber(v["detune_cents"], 0),
-    rate: asNumber(v["rate"], 1),
-  };
-}
-
-function parseServerMessage(raw: string): HelloMessage | TatumMessage | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed)) return null;
-  const kind = parsed["type"];
-  if (kind === "hello") {
-    const seen: StemName[] = [];
-    const stems = parsed["stems"];
-    if (Array.isArray(stems)) {
-      for (const s of stems) {
-        const stem = asStem(s as unknown);
-        if (stem !== null && !seen.includes(stem)) seen.push(stem);
-      }
-    }
-    return {
-      type: "hello",
-      stems: seen,
-      bpm: asNumber(parsed["bpm"], DEFAULT_BPM),
-      sampleRate: asNumber(parsed["sample_rate"], 44100),
-    };
-  }
-  if (kind === "tatum") {
-    const slicesRaw: unknown = parsed["slices"];
-    const slices = {} as Record<StemName, SliceSpec | null>;
-    for (const stem of STEMS) {
-      const spec = isRecord(slicesRaw) ? parseSliceSpec(slicesRaw[stem]) : null;
-      slices[stem] = spec;
-    }
-    let gb: GrooveboxMeta | undefined = undefined;
-    const gbRaw = parsed["groovebox"];
-    if (isRecord(gbRaw)) {
-      gb = {
-        section: asString(gbRaw["section"], "GROOVE_A"),
-        phraseBar: asNumber(gbRaw["phrase_bar"], 1),
-        stepInBar: asNumber(gbRaw["step_in_bar"], 1),
-        totalBars: asNumber(gbRaw["total_bars"], 0),
-        isFill: Boolean(gbRaw["is_fill"]),
-        key: asString(gbRaw["key"], "8B (C major)"),
-        energy: asNumber(gbRaw["energy"], 0.6),
-        sectionBarsElapsed: asNumber(gbRaw["section_bars_elapsed"], 1),
-        sectionTotalBars: asNumber(gbRaw["section_total_bars"], 16),
-        nextSection: asString(gbRaw["next_section"], "BUILDUP"),
-        sectionBarsLeft: asNumber(gbRaw["section_bars_left"], 15),
-        cycleMode: asString(gbRaw["cycle_mode"], "8x16"),
-        patternInCycle: asNumber(gbRaw["pattern_in_cycle"], 1),
-        patternsPerCycle: asNumber(gbRaw["patterns_per_cycle"], 8),
-        stepInPattern: asNumber(gbRaw["step_in_pattern"], 1),
-        stepsPerPattern: asNumber(gbRaw["steps_per_pattern"], 16),
-        cycleTotalSteps: asNumber(gbRaw["cycle_total_steps"], 128),
-        cycleProgress: asNumber(gbRaw["cycle_progress"], 0.0),
-        patterns: isRecord(gbRaw["patterns"]) ? (gbRaw["patterns"] as Record<string, string>) : {},
-        patternGrooves: isRecord(gbRaw["pattern_grooves"]) ? (gbRaw["pattern_grooves"] as Record<string, string>) : {},
-        patternGrids: isRecord(gbRaw["pattern_grids"]) ? (gbRaw["pattern_grids"] as Record<string, number[]>) : {},
-        patternTrackIds: isRecord(gbRaw["pattern_track_ids"]) ? (gbRaw["pattern_track_ids"] as Record<string, string>) : {},
-        patternIds: isRecord(gbRaw["pattern_ids"]) ? (gbRaw["pattern_ids"] as Record<string, string>) : {},
-        patternRatings: isRecord(gbRaw["pattern_ratings"]) ? (gbRaw["pattern_ratings"] as Record<string, number>) : {},
-        patternAudioScores: isRecord(gbRaw["pattern_audio_scores"]) ? (gbRaw["pattern_audio_scores"] as Record<string, number>) : {},
-        vocalLyric: asString(gbRaw["vocal_lyric"] || gbRaw["vocalLyric"], ""),
-        vocalSongTitle: asString(gbRaw["vocal_song_title"] || gbRaw["vocalSongTitle"], ""),
-        vocalSyllable: asString(gbRaw["vocal_syllable"] || gbRaw["vocalSyllable"], ""),
-        vocalVowel: asString(gbRaw["vocal_vowel"] || gbRaw["vocalVowel"], ""),
-        vocalNote: asString(gbRaw["vocal_note"] || gbRaw["vocalNote"], ""),
-      };
-    }
-    return {
-      type: "tatum",
-      tatumIndex: Math.round(asNumber(parsed["tatum_index"], 0)),
-      startTime: asNumber(parsed["start_time"], 0),
-      bpm: asNumber(parsed["bpm"], DEFAULT_BPM),
-      slices,
-      groovebox: gb,
-    };
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// DOM helpers.
-// ---------------------------------------------------------------------------
-
-function el<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (node === null) throw new Error(`Missing element #${id}`);
-  return node as T;
-}
-
-function visualNow(): number {
-  return performance.now() / 1000;
-}
-
-// Deterministic demo projection so the nebula is populated before the
-// server streams real UMAP coordinates (Phase 4). Seeded PRNG, one gaussian
-// cluster per stem.
+// Deterministic projection seeded PRNG for demo nebula points before static indices load
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -306,24 +154,11 @@ class WubApp {
   };
 
   private bpm: number = DEFAULT_BPM;
-  private userSetBpm = false;
   private musicalKey: string = "C";
   private playing = false;
-  private ws: WebSocket | null = null;
-  private manualClose = false;
-  private reconnectDelay = RECONNECT_BASE_MS;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private tatumCount = 0;
-  private localStepCount = 0;
-  private nextTatumTime = 0;
-  private tatumQueue: TatumMessage[] = [];
-  private schedulerTimer: ReturnType<typeof setInterval> | null = null;
 
-  // AudioBuffer cache keyed by track_id + segment_id, insertion-ordered LRU.
-  private bufferCache = new Map<string, Promise<AudioBuffer>>();
   private segmentPositions = new Map<string, { x: number; y: number }>();
   private trackStemPositions = new Map<string, { x: number; y: number }>();
-  private activeSlices: Partial<Record<StemName, SliceSpec>> = {};
   private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private masterTimeScratch: Uint8Array<ArrayBuffer> | null = null;
@@ -334,7 +169,6 @@ class WubApp {
   private lastGrooveboxMeta: GrooveboxMeta | null = null;
   private clientConductor: ClientGrooveboxConductor | null = null;
   private tamagotchi: TamagotchiAvatar | null = null;
-  private engineMode: "direct_ml" | "websocket_cloud" = "direct_ml";
   private uiEventQueue: UIEvent[] = [];
   private currentStepIndex: number = 0;
   private currentStepAudioTime: number = 0;
@@ -366,8 +200,8 @@ class WubApp {
     this.masterCtx = master;
 
     this.nebula = new NebulaRenderer(el<HTMLCanvasElement>("nebula-canvas"), {
-      onReticleMove: (stem, x, y) => {
-        this.send({ type: "set_gravity", stem, x, y });
+      onReticleMove: (_stem, _x, _y) => {
+        // Local direct positioning in standalone mode
       },
     });
     this.nebula.setPoints(demoPoints());
@@ -388,7 +222,6 @@ class WubApp {
     }
 
     this.bindTransport();
-    this.bindBackendConfig();
     this.bindMaster();
     for (const stem of STEMS) this.bindStem(stem);
     this.bindFeedbackControls();
@@ -406,7 +239,6 @@ class WubApp {
           totalSteps: totalSteps || 16,
         });
       });
-      this.bindEngineModeToggle();
     } catch (e) {
       console.warn("Client ML sequencer init failed:", e);
     }
@@ -417,7 +249,6 @@ class WubApp {
       const parsed = Number(savedBpm);
       if (Number.isFinite(parsed) && parsed >= BPM_MIN && parsed <= BPM_MAX) {
         this.bpm = parsed;
-        this.userSetBpm = true;
         const slider = document.getElementById("bpm-slider");
         if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
         const label = document.getElementById("bpm-value");
@@ -426,7 +257,6 @@ class WubApp {
       }
     } else {
       this.bpm = DEFAULT_BPM;
-      this.userSetBpm = true;
     }
 
     window.addEventListener("resize", () => {
@@ -434,201 +264,30 @@ class WubApp {
     });
     window.addEventListener("beforeunload", () => this.teardown());
 
-    this.setStatus("Ready — press Play (" + Math.round(this.bpm) + " BPM)");
+    this.setStatus(`KG-505 In-Browser ML Ready • 24,068 Patterns • Offline Standalone (${Math.round(this.bpm)} BPM)`);
     el<HTMLButtonElement>("btn-play").classList.remove("active");
     el<HTMLButtonElement>("btn-stop").classList.add("active");
     requestAnimationFrame((t) => this.frame(t));
   }
 
-  private bindBackendConfig(): void {
-    const input = document.getElementById("backend-host-input") as HTMLInputElement | null;
-    const btn = document.getElementById("btn-backend-connect") as HTMLButtonElement | null;
-    const helpBtn = document.getElementById("btn-backend-help") as HTMLButtonElement | null;
-    const dialog = document.getElementById("backend-help-dialog") as HTMLDialogElement | null;
-    const closeBtn = document.getElementById("btn-close-dialog") as HTMLButtonElement | null;
-
-    const cfg = this.getBackendConfig();
-    if (input) {
-      input.value = cfg.raw;
-      input.placeholder = window.location.hostname.endsWith("github.io") ? "192.168.1.136:8123" : window.location.host;
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") btn?.click();
-      });
-    }
-
-    if (helpBtn && dialog) {
-      helpBtn.addEventListener("click", () => dialog.showModal());
-    }
-    if (closeBtn && dialog) {
-      closeBtn.addEventListener("click", () => dialog.close());
-    }
-    if (dialog) {
-      dialog.addEventListener("click", (e) => {
-        if (e.target === dialog) dialog.close();
-      });
-    }
-
-    if (btn && input) {
-      btn.addEventListener("click", () => {
-        const val = input.value.trim();
-        if (val) {
-          localStorage.setItem("wub_backend", val);
-        } else {
-          localStorage.removeItem("wub_backend");
-        }
-        this.updateBackendStatus("connecting");
-        if (this.playing) {
-          if (this.ws) {
-            this.manualClose = true;
-            this.ws.close();
-            this.ws = null;
-          }
-          this.connectWs();
-        }
-        void this.loadUmapPoints();
-      });
-    }
-  }
-
-  private bindEngineModeToggle(): void {
-    const btn = document.getElementById("btn-engine-mode") as HTMLButtonElement | null;
-    if (!btn) return;
-
-    const updateBtn = () => {
-      if (this.engineMode === "direct_ml") {
-        btn.innerHTML = "🧠 In-Browser Direct ML";
-        btn.classList.remove("cloud-mode");
-        btn.title = "Mode: In-Browser Direct ML (100% standalone, zero server required). Click to switch to WebSocket Cloud Sync.";
-      } else {
-        btn.innerHTML = "⚡ WebSocket Cloud Sync";
-        btn.classList.add("cloud-mode");
-        btn.title = "Mode: WebSocket Cloud Sync (streaming from Python backend). Click to switch to In-Browser Direct ML.";
-      }
-    };
-    updateBtn();
-
-    btn.addEventListener("click", () => {
-      const wasPlaying = this.playing;
-      if (wasPlaying) {
-        void this.stop();
-      }
-      this.engineMode = (this.engineMode === "direct_ml") ? "websocket_cloud" : "direct_ml";
-      updateBtn();
-      if (this.engineMode === "direct_ml") {
-        this.setStatus("Mode: 🧠 Direct In-Browser ML Engine (Offline Ready — press Play)");
-      } else {
-        this.setStatus("Mode: ⚡ WebSocket Cloud Sync (requires Python server running)");
-      }
-      if (wasPlaying) {
-        void this.play();
-      }
-    });
-  }
-
-  private updateBackendStatus(state: "connected" | "connecting" | "disconnected"): void {
-    const dot = document.getElementById("backend-status-dot");
-    if (!dot) return;
-    if (state === "connected") dot.style.background = "#22c55e";
-    else if (state === "connecting") dot.style.background = "#eab308";
-    else dot.style.background = "#ef4444";
-  }
-
-  private getBackendConfig(): BackendConfig {
-    const params = new URLSearchParams(window.location.search);
-    let raw = params.get("backend") || localStorage.getItem("wub_backend") || "";
-    raw = raw.trim();
-
-    if (!raw) {
-      if (window.location.hostname.endsWith("github.io")) {
-        raw = "https://lamb-programmes-basis-api.trycloudflare.com";
-      } else if (
-        window.location.hostname === "localhost" ||
-        window.location.hostname === "127.0.0.1" ||
-        window.location.hostname.startsWith("192.168.") ||
-        window.location.hostname.startsWith("10.")
-      ) {
-        raw = window.location.host;
-      }
-    }
-
-    if (!raw) {
-      return { httpBase: "", wsUrl: "", raw: "" };
-    }
-
-    let httpBase = "";
-    let wsUrl = "";
-
-    if (/^https?:\/\//i.test(raw)) {
-      httpBase = raw.replace(/\/+$/, "");
-      const wsProto = raw.toLowerCase().startsWith("https:") ? "wss:" : "ws:";
-      wsUrl = httpBase.replace(/^https?:/i, wsProto) + WS_PATH;
-    } else if (/^wss?:\/\//i.test(raw)) {
-      wsUrl = raw.replace(/\/+$/, "");
-      if (!wsUrl.endsWith(WS_PATH)) wsUrl += WS_PATH;
-      const httpProto = raw.toLowerCase().startsWith("wss:") ? "https:" : "http:";
-      httpBase = raw.replace(/^wss?:/i, httpProto).replace(new RegExp(WS_PATH + "$"), "").replace(/\/+$/, "");
-    } else {
-      const cleanHost = raw.replace(/\/+$/, "");
-      const isCloudflareOrSecure = cleanHost.includes("trycloudflare.com") || cleanHost.includes("ngrok");
-      const isLocal =
-        cleanHost.startsWith("192.168.") ||
-        cleanHost.startsWith("10.") ||
-        cleanHost.startsWith("localhost") ||
-        cleanHost.startsWith("127.");
-
-      let httpProto = "http:";
-      let wsProto = "ws:";
-
-      if (isCloudflareOrSecure) {
-        httpProto = "https:";
-        wsProto = "wss:";
-      } else if (window.location.protocol === "https:" && !isLocal) {
-        httpProto = "https:";
-        wsProto = "wss:";
-      } else {
-        httpProto = "http:";
-        wsProto = "ws:";
-      }
-
-      httpBase = `${httpProto}//${cleanHost}`;
-      wsUrl = `${wsProto}//${cleanHost}${WS_PATH}`;
-    }
-
-    return { httpBase, wsUrl, raw };
-  }
-
   private async loadUmapPoints(): Promise<void> {
     try {
-      let data: unknown = null;
-      const cfg = this.getBackendConfig();
-      if (cfg.httpBase) {
+      const fallbackPts: unknown[] = [];
+      for (const s of STEMS) {
         try {
-          const res = await fetch(`${cfg.httpBase}/api/umap`);
-          if (res.ok) data = (await res.json()) as unknown;
-        } catch {
-          // Fall back to bundled static coordinates
-        }
-      }
-
-      if (!Array.isArray(data) || data.length === 0) {
-        const fallbackPts: unknown[] = [];
-        for (const s of STEMS) {
-          try {
-            const fres = await fetch(`./data/indices/umap_${s}.json`);
-            if (fres.ok) {
-              const rows = (await fres.json()) as unknown;
-              if (Array.isArray(rows)) fallbackPts.push(...rows);
-            }
-          } catch {
-            // ignore
+          const fres = await fetch(`./data/indices/umap_${s}.json`);
+          if (fres.ok) {
+            const rows = (await fres.json()) as unknown;
+            if (Array.isArray(rows)) fallbackPts.push(...rows);
           }
+        } catch {
+          // ignore
         }
-        data = fallbackPts;
       }
 
-      if (!Array.isArray(data) || data.length === 0) return;
+      if (fallbackPts.length === 0) return;
       const pts: NebulaPoint[] = [];
-      for (const item of data) {
+      for (const item of fallbackPts) {
         if (!isRecord(item)) continue;
         const stem = asStem(item["stem"]);
         const x = asNumber(item["x"], -1);
@@ -697,7 +356,6 @@ class WubApp {
   private async play(): Promise<void> {
     if (this.playing) return;
     this.playing = true;
-    this.manualClose = false;
     el<HTMLButtonElement>("btn-play").classList.add("active");
     el<HTMLButtonElement>("btn-stop").classList.remove("active");
     try {
@@ -709,80 +367,29 @@ class WubApp {
       this.setStatus(`Audio failed: ${err instanceof Error ? err.message : "unknown error"}`);
       return;
     }
-    this.nextTatumTime = 0;
-    this.tatumQueue = [];
     this.uiEventQueue = [];
     this.currentStepIndex = 0;
     this.currentStepAudioTime = 0;
 
     this.applyAllMixerState();
 
-    if (this.engineMode === "direct_ml") {
-      // Direct ML: Ensure any existing WebSocket / cloud scheduler is cleanly deactivated
-      if (this.ws !== null) {
-        try { this.ws.close(); } catch {}
-        this.ws = null;
-      }
-      this.clearReconnect();
-      if (this.schedulerTimer !== null) {
-        clearInterval(this.schedulerTimer);
-        this.schedulerTimer = null;
-      }
-      this.setStatus(`Playing — 🧠 Direct In-Browser ML Engine (Sample-Accurate Sequencer @ ${Math.round(this.bpm)} BPM)`);
-      this.clientConductor?.start(this.bpm);
-    } else {
-      // WebSocket cloud mode: Stop client sequencer
-      this.clientConductor?.stop();
-      if (this.schedulerTimer !== null) clearInterval(this.schedulerTimer);
-      this.schedulerTimer = setInterval(() => this.scheduleLoop(), 20);
-      this.connectWs();
-      this.setStatus("Playing — streaming synchronized stems via WebSocket…");
-    }
+    this.setStatus(`Playing — 🧠 Direct In-Browser ML Engine (Sample-Accurate Sequencer @ ${Math.round(this.bpm)} BPM)`);
+    this.clientConductor?.start(this.bpm);
   }
 
   private async stop(): Promise<void> {
     this.playing = false;
-    this.manualClose = true;
     el<HTMLButtonElement>("btn-play").classList.remove("active");
     el<HTMLButtonElement>("btn-stop").classList.add("active");
-    this.clearReconnect();
-    if (this.schedulerTimer !== null) {
-      clearInterval(this.schedulerTimer);
-      this.schedulerTimer = null;
-    }
     this.clientConductor?.stop();
-    this.tatumQueue = [];
     this.uiEventQueue = [];
     this.currentStepIndex = 0;
     this.currentStepAudioTime = 0;
-    this.nextTatumTime = 0;
-    this.activeSlices = {};
-    if (this.ws !== null) {
-      try {
-        this.ws.close();
-      } catch {
-        // Ignore close failures.
-      }
-      this.ws = null;
-    }
     await this.engine.suspend();
     this.setStatus("Stopped.");
   }
 
   private teardown(): void {
-    this.clearReconnect();
-    if (this.schedulerTimer !== null) {
-      clearInterval(this.schedulerTimer);
-      this.schedulerTimer = null;
-    }
-    if (this.ws !== null) {
-      try {
-        this.ws.close();
-      } catch {
-        // Ignore.
-      }
-      this.ws = null;
-    }
     if (this.nebula !== null) this.nebula.dispose();
     this.engine.dispose();
   }
@@ -795,17 +402,15 @@ class WubApp {
     slider.min = String(BPM_MIN);
     slider.max = String(BPM_MAX);
     slider.value = String(this.bpm);
-    value.textContent = `${this.bpm} BPM`;
+    value.textContent = `${Math.round(this.bpm)} BPM`;
     slider.addEventListener("input", () => {
       const next = Math.min(BPM_MAX, Math.max(BPM_MIN, Number(slider.value)));
       if (!Number.isFinite(next)) return;
-      this.userSetBpm = true;
       this.bpm = next;
       localStorage.setItem("wub_bpm", String(next));
       value.textContent = `${Math.round(next)} BPM`;
       this.engine.setTargetBpm(next);
-      this.send({ type: "set_bpm", bpm: next });
-      if (this.playing && this.engineMode === "direct_ml" && this.clientConductor) {
+      if (this.playing && this.clientConductor) {
         this.clientConductor.setBpm(next);
       }
     });
@@ -814,7 +419,6 @@ class WubApp {
     this.musicalKey = key.value !== "" ? key.value : "C";
     key.addEventListener("change", () => {
       this.musicalKey = key.value;
-      this.send({ type: "set_key", key: key.value });
     });
   }
 
@@ -914,34 +518,11 @@ class WubApp {
     }
     if (this.clientConductor) {
       this.clientConductor.recordFeedback(stem, rating);
+      if (rating < 0) {
+        this.clientConductor.rerollStem(stem);
+      }
     }
 
-    const trackId = this.lastGrooveboxMeta?.patternTrackIds?.[stem] || this.activeSlices[stem]?.trackId || "";
-    const patternId = this.lastGrooveboxMeta?.patternIds?.[stem] || "";
-
-    // 1. Send via active WebSocket connection
-    this.send({
-      type: "feedback",
-      stem,
-      rating,
-      track_id: trackId,
-      pattern_id: patternId,
-    });
-
-    // 2. Fallback REST POST
-    const cfg = this.getBackendConfig();
-    fetch(`${cfg.httpBase}/api/feedback`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        stem,
-        rating,
-        track_id: trackId,
-        pattern_id: patternId,
-      }),
-    }).catch(() => {});
-
-    // 3. User feedback message
     const stemName = stem.toUpperCase();
     if (rating > 0) {
       this.setStatus(`👍 ${stemName} approved! Reinforced in training preference model.`);
@@ -959,15 +540,6 @@ class WubApp {
         if (this.clientConductor) {
           this.clientConductor.setCycleMode(mode);
         }
-        this.send({ type: "set_cycle_mode", mode });
-
-        const cfg = this.getBackendConfig();
-        fetch(`${cfg.httpBase}/api/groovebox/cycle_mode`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode }),
-        }).catch(() => {});
-
         cycleBtns.forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         this.setStatus(`Sequencer cycle set to ${mode.replace("x", " × ")} architecture`);
@@ -1017,14 +589,12 @@ class WubApp {
       if (!Number.isFinite(c)) return;
       st.chaos = Math.min(1, Math.max(0, c));
       chaosVal.textContent = st.chaos.toFixed(2);
-      this.send({ type: "set", stem, chaos: st.chaos });
     });
     synth.addEventListener("input", () => {
       const s = Number(synth.value);
       if (!Number.isFinite(s)) return;
       st.synthBlend = Math.min(1, Math.max(0, s));
       synthVal.textContent = st.synthBlend.toFixed(2);
-      this.send({ type: "set_synth", stem, blend: st.synthBlend });
     });
   }
 
@@ -1036,188 +606,6 @@ class WubApp {
       this.engine.setSolo(stem, st.solo);
     }
     this.engine.setTargetBpm(this.bpm);
-  }
-
-  // -- websocket -----------------------------------------------------------
-
-  private connectWs(): void {
-    if (!this.playing || this.ws !== null) return;
-    const cfg = this.getBackendConfig();
-    if (!cfg.wsUrl) {
-      this.updateBackendStatus("disconnected");
-      this.setStatus("Offline demo mode — enter backend address in Server box to stream.");
-      return;
-    }
-
-    this.updateBackendStatus("connecting");
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(cfg.wsUrl);
-    } catch (err: unknown) {
-      this.updateBackendStatus("disconnected");
-      const isMixed = window.location.protocol === "https:" && cfg.wsUrl.startsWith("ws:");
-      if (isMixed) {
-        this.setStatus(
-          "⚠️ Mixed Content Blocked: Browser refused unencrypted ws:// from HTTPS. " +
-          "Fix: In Chrome, click 🔒 next to URL → Site Settings → Insecure content: Allow, " +
-          "or connect directly at http://192.168.1.136:8123"
-        );
-      } else {
-        this.setStatus(`Connection error: ${(err as Error)?.message || "Failed"}`);
-      }
-      this.scheduleReconnect();
-      return;
-    }
-    this.ws = ws;
-    this.setStatus(`Connecting to ${cfg.wsUrl}…`);
-
-    ws.onopen = () => {
-      this.reconnectDelay = RECONNECT_BASE_MS;
-      this.setStatus("Streaming.");
-      this.updateBackendStatus("connected");
-      // Re-sync server-side steering state after (re)connect.
-      this.send({ type: "set_bpm", bpm: this.bpm });
-      this.send({ type: "set_key", key: this.musicalKey });
-      for (const stem of STEMS) {
-        this.send({ type: "set", stem, chaos: this.states[stem].chaos });
-      }
-    };
-    ws.onmessage = (ev: MessageEvent) => {
-      const data: unknown = ev.data;
-      if (typeof data !== "string") return;
-      const msg = parseServerMessage(data);
-      if (msg === null) return;
-      if (msg.type === "hello") this.onHello(msg);
-      else this.onTatum(msg);
-    };
-    ws.onerror = () => {
-      this.updateBackendStatus("disconnected");
-      const isMixed = window.location.protocol === "https:" && cfg.wsUrl.startsWith("ws:");
-      if (isMixed) {
-        this.setStatus(
-          "⚠️ Mixed Content Blocked: Browser refused unencrypted connection from HTTPS. " +
-          "Fix: Click 🔒 in address bar → Site Settings → Insecure content: Allow, " +
-          "or open http://192.168.1.136:8123 directly."
-        );
-      } else {
-        this.setStatus("Stream error — retrying…");
-      }
-    };
-    ws.onclose = () => {
-      if (this.ws === ws) this.ws = null;
-      this.updateBackendStatus("disconnected");
-      if (this.playing && !this.manualClose) {
-        this.setStatus("Stream closed — reconnecting…");
-        this.scheduleReconnect();
-      }
-    };
-  }
-
-  private clearReconnect(): void {
-    if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-  }
-
-  private scheduleReconnect(): void {
-    if (!this.playing || this.manualClose || this.reconnectTimer !== null) return;
-    const delay = this.reconnectDelay;
-    this.reconnectDelay = Math.min(RECONNECT_MAX_MS, this.reconnectDelay * 2);
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connectWs();
-    }, delay);
-  }
-
-  private send(payload: Record<string, string | number>): void {
-    if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return;
-    try {
-      this.ws.send(JSON.stringify(payload));
-    } catch {
-      // Send failures surface via onclose/onerror; ignore here.
-    }
-  }
-
-  private onHello(msg: HelloMessage): void {
-    if (!this.userSetBpm && Number.isFinite(msg.bpm) && msg.bpm > 0) {
-      this.bpm = Math.min(BPM_MAX, Math.max(BPM_MIN, msg.bpm));
-      const slider = document.getElementById("bpm-slider");
-      if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
-      const label = document.getElementById("bpm-value");
-      if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
-      this.engine.setTargetBpm(this.bpm);
-    }
-    const stems = msg.stems.length > 0 ? msg.stems.join(", ") : "none";
-    this.setStatus(`Streaming — stems: ${stems}.`);
-  }
-
-  private onTatum(msg: TatumMessage): void {
-    this.tatumCount += 1;
-    if (!this.userSetBpm && Number.isFinite(msg.bpm) && msg.bpm > 0) {
-      this.bpm = msg.bpm;
-      this.engine.setTargetBpm(msg.bpm);
-      const slider = document.getElementById("bpm-slider");
-      if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
-      const label = document.getElementById("bpm-value");
-      if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
-    }
-    for (const stem of STEMS) {
-      const spec = msg.slices[stem];
-      if (spec !== null) {
-        this.prefetchSlice(spec);
-      }
-    }
-    this.tatumQueue.push(msg);
-    if (this.tatumQueue.length > 64) {
-      this.tatumQueue.splice(0, this.tatumQueue.length - 64);
-    }
-  }
-
-  private prefetchSlice(spec: SliceSpec): void {
-    const key = `${spec.trackId}:${spec.segmentId}`;
-    if (this.cacheGet(key) === undefined) {
-      const pending = this.fetchAndDecode(spec.url);
-      this.cacheSet(key, pending);
-    }
-  }
-
-  private scheduleLoop(): void {
-    if (!this.playing) return;
-    const now = this.engine.now();
-    if (now <= 0) return;
-
-    const lookAheadSec = 0.25;
-    const tatumDur = 60.0 / this.bpm / 4.0;
-
-    if (this.nextTatumTime < now) {
-      this.nextTatumTime = now + 0.12;
-    }
-
-    while (this.nextTatumTime < now + lookAheadSec && this.tatumQueue.length > 0) {
-      const msg = this.tatumQueue.shift()!;
-      const when = this.nextTatumTime;
-
-      if (msg.groovebox) {
-        const step = (msg.groovebox.stepInPattern ?? 1) - 1;
-        const totalSteps = msg.groovebox.stepsPerPattern ?? 16;
-        this.enqueueUIEvent({
-          atAudioSec: when,
-          meta: msg.groovebox,
-          step,
-          totalSteps,
-        });
-      }
-
-      for (const stem of STEMS) {
-        const spec = msg.slices[stem];
-        if (spec !== null) {
-          this.pushRingEvent({ stem, trackId: spec.trackId, atSec: when });
-          void this.loadAndScheduleAt(stem, spec, when, msg.bpm);
-        }
-      }
-      this.nextTatumTime += tatumDur;
-    }
   }
 
   private enqueueUIEvent(ev: UIEvent): void {
@@ -1450,96 +838,6 @@ class WubApp {
     this.lastGrooveboxMeta = gb;
   }
 
-  private cacheGet(key: string): Promise<AudioBuffer> | undefined {
-    const hit = this.bufferCache.get(key);
-    if (hit !== undefined) {
-      // Refresh LRU position.
-      this.bufferCache.delete(key);
-      this.bufferCache.set(key, hit);
-    }
-    return hit;
-  }
-
-  private cacheSet(key: string, pending: Promise<AudioBuffer>): void {
-    this.bufferCache.set(key, pending);
-    while (this.bufferCache.size > CACHE_CAP) {
-      const oldest = this.bufferCache.keys().next();
-      if (oldest.done === true) break;
-      this.bufferCache.delete(oldest.value);
-    }
-  }
-
-  private async loadAndScheduleAt(
-    stem: StemName,
-    spec: SliceSpec,
-    when: number,
-    serverBpm?: number
-  ): Promise<void> {
-    const key = `${spec.trackId}:${spec.segmentId}`;
-    let pending = this.cacheGet(key);
-    if (pending === undefined) {
-      pending = this.fetchAndDecode(spec.url);
-      this.cacheSet(key, pending);
-    }
-    let buffer: AudioBuffer;
-    try {
-      buffer = await pending;
-    } catch {
-      // Evict poisoned entries so a retry refetches.
-      this.bufferCache.delete(key);
-      return;
-    }
-    if (!this.playing) return;
-    const pos = this.getSliceCoordinates(stem, spec.trackId, spec.segmentId);
-    const delayMs = Math.max(0, (when - this.engine.now()) * 1000);
-    if (delayMs <= 10) {
-      this.activeSlices[stem] = spec;
-      if (this.nebula !== null) {
-        this.nebula.setActiveSlice(stem, pos.x, pos.y, visualNow());
-      }
-    } else {
-      setTimeout(() => {
-        if (!this.playing) return;
-        this.activeSlices[stem] = spec;
-        if (this.nebula !== null) {
-          this.nebula.setActiveSlice(stem, pos.x, pos.y, visualNow());
-        }
-      }, delayMs);
-    }
-    try {
-      const origRate = spec.rate ?? 1.0;
-      const sBpm = serverBpm && serverBpm > 0 ? serverBpm : 126.0;
-      const tempoRatio = this.bpm / sBpm;
-      const finalRate = origRate * tempoRatio;
-
-      this.engine.scheduleSlice(stem, buffer, when, {
-        rate: finalRate,
-        detuneCents: spec.detuneCents,
-        fadeMs: 4,
-      });
-    } catch {
-      // Scheduling races (e.g. dispose during stop); safe to drop.
-    }
-  }
-
-  private async fetchAndDecode(url: string): Promise<AudioBuffer> {
-    const cfg = this.getBackendConfig();
-    const fullUrl = url.startsWith("http") ? url : `${cfg.httpBase}${url}`;
-    try {
-      const res = await fetch(fullUrl);
-      if (!res.ok) throw new Error(`Slice fetch failed: ${res.status}`);
-      const bytes = await res.arrayBuffer();
-      return await this.engine.decodeWav(bytes);
-    } catch (err) {
-      if (window.location.protocol === "https:" && fullUrl.startsWith("http:")) {
-        this.setStatus(
-          "⚠️ Mixed Content Blocked: Browser blocked slice fetch. In Chrome: Site Settings → Insecure Content: Allow."
-        );
-      }
-      throw err;
-    }
-  }
-
   // -- render loop ---------------------------------------------------------
 
   private analyserLevel(stem: StemName): number {
@@ -1582,11 +880,16 @@ class WubApp {
       const curStep = latestUIEvent.step % 16;
       for (const stem of STEMS) {
         if (latestUIEvent.meta.patternGrids?.[stem]?.[curStep] === 1) {
+          const trackId = latestUIEvent.meta.patternTrackIds?.[stem] || "kg505_ml";
           this.pushRingEvent({
             stem,
-            trackId: "kg505_ml",
+            trackId,
             atSec: t,
           });
+          if (this.nebula !== null) {
+            const pos = this.getSliceCoordinates(stem, trackId, "");
+            this.nebula.setActiveSlice(stem, pos.x, pos.y, t);
+          }
         }
       }
     }
@@ -1626,13 +929,12 @@ class WubApp {
         } catch {
           // Analyser not initialised yet pre-gesture
         }
-        const active = this.activeSlices[stem];
+        const activeTrackId = this.lastGrooveboxMeta?.patternTrackIds?.[stem] || this.lastGrooveboxMeta?.patterns?.[stem];
         stemsData[stem] = {
           timeDomain: time,
           frequency: freq,
           level,
-          activeTrackId: active?.trackId,
-          activeSegmentId: active?.segmentId,
+          activeTrackId: activeTrackId || undefined,
           isMuted: this.engine.isMuted(stem),
           isSolo: this.engine.isSolo(stem),
         };
@@ -1715,7 +1017,10 @@ class WubApp {
       const vocalsLvl = this.analyserLevel("vocals");
       const otherLvl = this.analyserLevel("other");
       const masterLvl = Math.max(drumsLvl, bassLvl, vocalsLvl, otherLvl);
-      this.tamagotchi.update(this.lastGrooveboxMeta, audioNow, masterLvl, this.currentStepIndex, this.bpm);
+      const vocalWaveform = (vocalsLvl > 0.02)
+        ? this.timeScratch.get("vocals")
+        : (this.masterTimeScratch || this.timeScratch.get("drums"));
+      this.tamagotchi.update(this.lastGrooveboxMeta, audioNow, masterLvl, this.currentStepIndex, this.bpm, vocalWaveform);
     }
 
     requestAnimationFrame((next) => this.frame(next));
