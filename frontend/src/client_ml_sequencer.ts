@@ -124,6 +124,7 @@ export interface StandaloneManifest {
   vocal_patterns?: Record<string, any>;
   style_kits?: Record<string, any>;
   stem_cohesion_weights?: StemCohesionWeights;
+  song_composition_scores?: Record<string, any>;
 }
 
 export interface StemCohesionWeights {
@@ -141,6 +142,7 @@ export interface StemCohesionWeights {
   };
   grooves?: Record<string, Record<string, number>>;
   trained_slice_scores?: Record<string, number>;
+  song_composition_scores?: Record<string, any>;
 }
 
 export interface ComposingMLWeights {
@@ -149,6 +151,26 @@ export interface ComposingMLWeights {
   section_transitions: Record<string, Record<string, number>>;
   section_energy_targets: Record<string, number>;
   stem_cohesion_weights?: StemCohesionWeights;
+  song_composition_scores?: Record<string, any>;
+}
+
+export interface CuratedSongKit {
+  territory: StyleTerritory;
+  keyRoot: number;
+  kick: { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null;
+  snare: { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null;
+  hatClosed: { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null;
+  hatOpen: { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null;
+  percussion: { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null;
+  fill: { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null;
+  bassSubAsset: SliceAsset | null;
+  bassRollingAsset: SliceAsset | null;
+  chordAsset: SliceAsset | null;
+  padAsset: SliceAsset | null;
+  arpAsset: SliceAsset | null;
+  vocalHookAsset: SliceAsset | null;
+  vocalCallAsset: SliceAsset | null;
+  vocalChopAsset: SliceAsset | null;
 }
 
 // Semitone pitch constants: 0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B
@@ -1601,6 +1623,9 @@ export class ClientGrooveboxConductor {
   private nextStepTime: number = 0;
   private currentBpm: number = 126;
   private onMetaCallback?: (meta: any, atAudioSec: number, step: number, totalSteps: number) => void;
+  private activeSongKit: CuratedSongKit | null = null;
+  private kitKeyRoot: number = -1;
+  private kitTerritory: StyleTerritory | null = null;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -1784,6 +1809,8 @@ export class ClientGrooveboxConductor {
         }
       }
     }
+    // Initialize default curated song kit with preloaded slices
+    this.initSongKit("house", 0);
   }
 
   private async preloadPatternLoops(basePath: string): Promise<void> {
@@ -2069,6 +2096,110 @@ export class ClientGrooveboxConductor {
     return { buffer: best.buffer, rate, asset: best };
   }
 
+  private selectBestAsset(stemCategory: string, territory?: StyleTerritory, targetPitch?: number): SliceAsset | null {
+    let list: SliceAsset[] | undefined;
+    if (territory) {
+      list = this.sliceRegistry.get(`${stemCategory}:${territory}`) ||
+             this.sliceRegistry.get(`${stemCategory}_${territory}`);
+    }
+    if (!list || list.length === 0) {
+      list = this.sliceRegistry.get(stemCategory);
+    }
+    if (!list || list.length === 0) {
+      // Fallback within stem
+      const [stem, cat] = stemCategory.split(":");
+      if (stem === "drums") {
+        for (const alt of ["kick", "snare", "hat_closed", "hat_open", "percussion", "fill"]) {
+          if (alt !== cat) {
+            const altList = (territory ? (this.sliceRegistry.get(`drums:${alt}:${territory}`) || this.sliceRegistry.get(`drums:${alt}_${territory}`)) : undefined) ||
+              this.sliceRegistry.get(`drums:${alt}`);
+            if (altList && altList.length > 0) {
+              list = altList;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (!list || list.length === 0) {
+      return null;
+    }
+
+    const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
+    let bestAsset = list[0];
+    let bestScore = -999;
+
+    for (const item of list) {
+      let score = (trainedScores && trainedScores[item.name]) ? trainedScores[item.name] : 0.8;
+      if (targetPitch !== undefined) {
+        let diff = (targetPitch - item.pitch) % 12;
+        if (diff > 6) diff -= 12;
+        if (diff < -6) diff += 12;
+        score -= Math.abs(diff) * 0.05;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestAsset = item;
+      }
+    }
+    return bestAsset;
+  }
+
+  public initSongKit(territory: StyleTerritory, keyRoot: number): void {
+    const kickAsset = this.selectBestAsset("drums:kick", territory);
+    const snareAsset = this.selectBestAsset("drums:snare", territory);
+    const hatClosedAsset = this.selectBestAsset("drums:hat_closed", territory);
+    const hatOpenAsset = this.selectBestAsset("drums:hat_open", territory);
+    const percAsset = this.selectBestAsset("drums:percussion", territory);
+    const fillAsset = this.selectBestAsset("drums:fill", territory);
+
+    const kickBuf = kickAsset ? kickAsset.buffer : this.synth.getSliceBuffer(`drums:kick:${territory}`) || this.synth.getSliceBuffer("drums:kick");
+    const snareBuf = snareAsset ? snareAsset.buffer : this.synth.getSliceBuffer(`drums:snare:${territory}`) || this.synth.getSliceBuffer("drums:snare");
+    const hatClosedBuf = hatClosedAsset ? hatClosedAsset.buffer : this.synth.getSliceBuffer(`drums:hat_closed:${territory}`) || this.synth.getSliceBuffer("drums:hat_closed");
+    const hatOpenBuf = hatOpenAsset ? hatOpenAsset.buffer : this.synth.getSliceBuffer(`drums:hat_open:${territory}`) || this.synth.getSliceBuffer("drums:hat_open");
+    const percBuf = percAsset ? percAsset.buffer : this.synth.getSliceBuffer(`drums:percussion:${territory}`) || this.synth.getSliceBuffer("drums:percussion");
+    const fillBuf = fillAsset ? fillAsset.buffer : this.synth.getSliceBuffer(`drums:fill:${territory}`) || this.synth.getSliceBuffer("drums:fill");
+
+    this.activeSongKit = {
+      territory,
+      keyRoot,
+      kick: kickBuf ? { buffer: kickBuf, rate: 1.0, asset: kickAsset || undefined } : null,
+      snare: snareBuf ? { buffer: snareBuf, rate: 1.0, asset: snareAsset || undefined } : null,
+      hatClosed: hatClosedBuf ? { buffer: hatClosedBuf, rate: 1.0, asset: hatClosedAsset || undefined } : null,
+      hatOpen: hatOpenBuf ? { buffer: hatOpenBuf, rate: 1.0, asset: hatOpenAsset || undefined } : null,
+      percussion: percBuf ? { buffer: percBuf, rate: 1.0, asset: percAsset || undefined } : null,
+      fill: fillBuf ? { buffer: fillBuf, rate: 1.0, asset: fillAsset || undefined } : null,
+
+      bassSubAsset: this.selectBestAsset("bass:sub", territory, keyRoot) || this.selectBestAsset("bass:sub", undefined, keyRoot),
+      bassRollingAsset: this.selectBestAsset("bass:rolling", territory, keyRoot) || this.selectBestAsset("bass:rolling", undefined, keyRoot),
+
+      chordAsset: this.selectBestAsset("other:chord", territory, keyRoot) || this.selectBestAsset("other:chord", undefined, keyRoot),
+      padAsset: this.selectBestAsset("other:pad", territory, keyRoot) || this.selectBestAsset("other:pad", undefined, keyRoot),
+      arpAsset: this.selectBestAsset("other:arp", territory, keyRoot) || this.selectBestAsset("other:arp", undefined, keyRoot),
+
+      vocalHookAsset: this.selectBestAsset("vocals:hook", territory, keyRoot) || this.selectBestAsset("vocals:hook", undefined, keyRoot),
+      vocalCallAsset: this.selectBestAsset("vocals:call", territory, keyRoot) || this.selectBestAsset("vocals:call", undefined, keyRoot),
+      vocalChopAsset: this.selectBestAsset("vocals:chop", territory, keyRoot) || this.selectBestAsset("vocals:chop", undefined, keyRoot),
+    };
+    this.kitKeyRoot = keyRoot;
+    this.kitTerritory = territory;
+    console.info(`[Client ML] Curated unified song kit locked in for territory: ${territory.toUpperCase()}, key root: ${ROOT_NAMES[keyRoot % 12]}`);
+  }
+
+  private getPitchedSliceFromAsset(
+    asset: SliceAsset | null | undefined,
+    targetPitch: number,
+    maxShift: number = 3
+  ): { buffer: AudioBuffer; rate: number; asset: SliceAsset } | null {
+    if (!asset || !asset.buffer) return null;
+    let diff = (targetPitch - asset.pitch) % 12;
+    if (diff > 6) diff -= 12;
+    if (diff < -6) diff += 12;
+    const clampedShift = Math.max(-maxShift, Math.min(maxShift, diff));
+    const rate = Math.pow(2, clampedShift / 12);
+    return { buffer: asset.buffer, rate, asset };
+  }
+
   public setPlaybackMode(mode: "jukebox" | "slices" | "phrase_blocks"): void {
     this.playbackMode = mode;
     this.activePhraseBlock = null;
@@ -2231,7 +2362,12 @@ export class ClientGrooveboxConductor {
     // 3. Randomize initial vocal persona/song theme
     this.vocalSongArranger.randomizeSong();
 
-    // 4. Initial filter staging for starting section
+    // 4. Prime curated unified song kit for starting territory and key
+    const startTerritory = getStyleTerritory(this.steering.drums.x, this.steering.drums.y);
+    const startKey = (this.activeProgression && this.activeProgression.length > 0) ? this.activeProgression[0].rootPitch : 0;
+    this.initSongKit(startTerritory, startKey);
+
+    // 5. Initial filter staging for starting section
     if (startingSec === "INTRO") {
       this.engine.setStemFilter("drums", 2800, 1.0);
       this.engine.setStemFilter("other", 3600, 1.0);
@@ -2526,6 +2662,11 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     // 1. DRUMS (Section-Aware Arrangement with Real Acoustic Slices & Reticule Steering)
     // -------------------------------------------------------------------------
+    // Ensure unified CuratedSongKit is locked in for active territory & chord progression
+    if (!this.activeSongKit || this.kitTerritory !== dTerr || ((phraseBar === 0 && (step % 16 === 0)) && this.kitKeyRoot !== chord.rootPitch && this.totalBarsPlayed % 16 === 0)) {
+      this.initSongKit(dTerr, chord.rootPitch);
+    }
+
     const dPat = this.activePatterns.drums;
     const dSteer = this.steering.drums;
     const isLoopDrumActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activePhraseBlock || this.activeLoops.drums));
@@ -2581,7 +2722,7 @@ export class ClientGrooveboxConductor {
       if (isBreakdown) {
         // Breakdown: Kicks completely muted, gentle closed hats on 2, 6, 10, 14
         if ([2, 6, 10, 14].includes(step % 16)) {
-          const hatSlice = this.getBestSlice("drums:hat_closed", undefined, dSteer.y, dTerr);
+          const hatSlice = this.activeSongKit?.hatClosed || this.getBestSlice("drums:hat_closed", undefined, 0, dTerr);
           if (hatSlice) {
             this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
               rate: 1.0,
@@ -2612,7 +2753,7 @@ export class ClientGrooveboxConductor {
         }
 
         if (playSnare) {
-          const snareSlice = this.getBestSlice("drums:snare", undefined, dSteer.y, dTerr);
+          const snareSlice = this.activeSongKit?.snare || this.getBestSlice("drums:snare", undefined, 0, dTerr);
           if (snareSlice) {
             this.engine.scheduleSlice("drums", snareSlice.buffer, when, {
               rate: 1.0,
@@ -2627,7 +2768,7 @@ export class ClientGrooveboxConductor {
 
         // Downbeat Kick pulse (bars 1-5 only)
         if (step % 4 === 0 && barInSec < 6) {
-          const kickSlice = this.getBestSlice("drums:kick", undefined, dSteer.y, dTerr);
+          const kickSlice = this.activeSongKit?.kick || this.getBestSlice("drums:kick", undefined, 0, dTerr);
           if (kickSlice) {
             this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
               rate: 1.0,
@@ -2667,7 +2808,7 @@ export class ClientGrooveboxConductor {
         }
 
         if (isKickStep && (hasHit || isKickStep)) {
-          const kickSlice = this.getBestSlice("drums:kick", undefined, dSteer.y, dTerr);
+          const kickSlice = this.activeSongKit?.kick || this.getBestSlice("drums:kick", undefined, 0, dTerr);
           if (kickSlice) {
             this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
               rate: 1.0,
@@ -2694,7 +2835,7 @@ export class ClientGrooveboxConductor {
         }
 
         if (isSnareStep) {
-          const snareSlice = this.getBestSlice("drums:snare", undefined, dSteer.y, dTerr);
+          const snareSlice = this.activeSongKit?.snare || this.getBestSlice("drums:snare", undefined, 0, dTerr);
           if (snareSlice) {
             this.engine.scheduleSlice("drums", snareSlice.buffer, when, {
               rate: 1.0,
@@ -2709,7 +2850,7 @@ export class ClientGrooveboxConductor {
 
         // Hi-Hats: Open hat on upbeats (2, 6, 10, 14) + closed 16th hats with choking
         if ([2, 6, 10, 14].includes(step % 16)) {
-          const hatSlice = this.getBestSlice("drums:hat_open", undefined, dSteer.y, dTerr);
+          const hatSlice = this.activeSongKit?.hatOpen || this.getBestSlice("drums:hat_open", undefined, 0, dTerr);
           if (hatSlice) {
             this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
               rate: 1.0,
@@ -2721,7 +2862,7 @@ export class ClientGrooveboxConductor {
             this.synth.playHat(when, 0.90, true, dInput, dTerr);
           }
         } else if (step % 2 === 1 && sec !== "INTRO" && (dSteer.y > 0.25 || dTerr === "cyber")) {
-          const hatSlice = this.getBestSlice("drums:hat_closed", undefined, dSteer.y, dTerr);
+          const hatSlice = this.activeSongKit?.hatClosed || this.getBestSlice("drums:hat_closed", undefined, 0, dTerr);
           const hatVel = (step % 4 === 1 || step % 4 === 3) ? 0.72 : 0.58;
           if (hatSlice) {
             this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
@@ -2738,7 +2879,7 @@ export class ClientGrooveboxConductor {
 
         // Syncopated Percussion
         if ([3, 7, 11].includes(step % 16) && (sec === "DROP" || sec === "GROOVE_A" || dSteer.y > 0.60 || dTerr === "cyber")) {
-          const percSlice = this.getBestSlice("drums:percussion", undefined, dSteer.y, dTerr);
+          const percSlice = this.activeSongKit?.percussion || this.getBestSlice("drums:percussion", undefined, 0, dTerr);
           if (percSlice) {
             this.engine.scheduleSlice("drums", percSlice.buffer, when, {
               rate: 1.0,
@@ -2754,7 +2895,7 @@ export class ClientGrooveboxConductor {
 
         // Dramatic Turnaround Fill on Bar 7
         if (phraseBar === 7 && step === 14) {
-          const fillSlice = this.getBestSlice("drums:fill", undefined, dSteer.y, dTerr);
+          const fillSlice = this.activeSongKit?.fill || this.getBestSlice("drums:fill", undefined, 0, dTerr);
           if (fillSlice) {
             this.engine.scheduleSlice("drums", fillSlice.buffer, when, {
               rate: 1.0,
@@ -2790,7 +2931,9 @@ export class ClientGrooveboxConductor {
         if (bTerr === "wave") dur = 0.38; // Spacious 808 sub
         else if (bTerr === "cyber") dur = 0.12; // Snappy acid/reese rolling
 
-        const subSlice = this.getBestSlice(bassCat, chord.rootPitch, bSteer.y, bTerr);
+        const subSlice = (bassCat === "bass:rolling")
+          ? (this.getPitchedSliceFromAsset(this.activeSongKit?.bassRollingAsset, chord.rootPitch, 3) || this.getBestSlice(bassCat, chord.rootPitch, 0, bTerr))
+          : (this.getPitchedSliceFromAsset(this.activeSongKit?.bassSubAsset, chord.rootPitch, 3) || this.getBestSlice(bassCat, chord.rootPitch, 0, bTerr));
         if (subSlice) {
           this.engine.scheduleSlice("bass", subSlice.buffer, when, {
             rate: subSlice.rate,
@@ -2823,7 +2966,7 @@ export class ClientGrooveboxConductor {
         const vel = oPat.velocities ? (oPat.velocities[step] || 0.85) : 0.85;
 
         if (isArpMode) {
-          const arpSlice = this.getBestSlice("other:arp", chord.rootPitch, oSteer.y, oTerr);
+          const arpSlice = this.getPitchedSliceFromAsset(this.activeSongKit?.arpAsset, chord.rootPitch, 3) || this.getBestSlice("other:arp", chord.rootPitch, 0, oTerr);
           if (arpSlice) {
             this.engine.scheduleSlice("other", arpSlice.buffer, when, {
               rate: arpSlice.rate,
@@ -2852,8 +2995,12 @@ export class ClientGrooveboxConductor {
         } else {
           const dur = (sec === "BREAKDOWN" || sec === "INTRO" || isSparsePad || oTerr === "wave") ? 0.45 : 0.28;
           const targetSliceCat = isSparsePad ? "other:pad" : "other:chord";
-          const chordSlice = this.getBestSlice(targetSliceCat, chord.rootPitch, oSteer.y, oTerr) ||
-                             this.getBestSlice("other:chord", chord.rootPitch, oSteer.y, oTerr);
+          const chordSlice = isSparsePad
+            ? (this.getPitchedSliceFromAsset(this.activeSongKit?.padAsset, chord.rootPitch, 3) ||
+               this.getPitchedSliceFromAsset(this.activeSongKit?.chordAsset, chord.rootPitch, 3) ||
+               this.getBestSlice(targetSliceCat, chord.rootPitch, 0, oTerr))
+            : (this.getPitchedSliceFromAsset(this.activeSongKit?.chordAsset, chord.rootPitch, 3) ||
+               this.getBestSlice("other:chord", chord.rootPitch, 0, oTerr));
           if (chordSlice) {
             this.engine.scheduleSlice("other", chordSlice.buffer, when, {
               rate: chordSlice.rate,
@@ -2918,11 +3065,15 @@ export class ClientGrooveboxConductor {
         // Wub sings the current melody in voices from good slices most of the time (~75%),
         // with synthesized vocaloid vocalizations on turnaround accent steps or breakdown solos (~25%)
         const preferVocaloid = (step % 8 === 6 || (sec === "BREAKDOWN" && phraseBar % 2 === 1) || (sec === "BUILDUP" && phraseBar === 6));
+        const lockedVocalAsset = (vocalCat === "vocals:chop")
+          ? (this.activeSongKit?.vocalChopAsset || this.activeSongKit?.vocalHookAsset)
+          : (this.activeSongKit?.vocalHookAsset || this.activeSongKit?.vocalCallAsset);
         const slice = (!preferVocaloid)
-          ? (this.getBestSlice(vocalCat, melodyPitch, vSteer.y, vTerr) ||
-             this.getBestSlice("vocals:hook", melodyPitch, vSteer.y, vTerr) ||
-             this.getBestSlice("vocals:call", melodyPitch, vSteer.y, vTerr) ||
-             this.getBestSlice("vocals:chop", melodyPitch, vSteer.y, vTerr))
+          ? (this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
+             this.getBestSlice(vocalCat, melodyPitch, 0, vTerr) ||
+             this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr) ||
+             this.getBestSlice("vocals:call", melodyPitch, 0, vTerr) ||
+             this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr))
           : null;
 
         if (slice) {

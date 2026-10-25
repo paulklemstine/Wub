@@ -13,12 +13,14 @@ from wub_core.pattern_audio_trainer import (
     GenericPatternOptimizer,
     MultiStemCohesionMetrics,
     PatternAudioFeedbackEngine,
+    SongCompositionEconomyScorer,
+    SongCompositionMetrics,
     assemble_multistem_waveform,
     assemble_pattern_waveform,
     compute_audio_similarity,
     compute_multistem_cohesion,
 )
-from wub_core.patterns import PatternBank, SequencerPattern
+from wub_core.patterns import MultiStemPattern, PatternBank, SequencerPattern, SongPhrase
 
 
 def _make_dummy_slice(tid: str = "t1", seg_id: str = "s1", start: float = 0.0, dur: float = 0.25) -> SliceRef:
@@ -253,4 +255,92 @@ def test_export_locked_feedback_weights(tmp_path: Path):
     assert "stem_cohesion_weights" in pat_data
     assert pat_data["patterns"]["drums"][0]["audio_similarity_score"] == 0.92
     assert pat_data["patterns"]["drums"][0]["cohesion_score"] == 0.94
+
+
+def test_song_composition_economy_scorer():
+    scorer = SongCompositionEconomyScorer()
+
+    # Create a compact song (16 bars composed of 2 recurring patterns and 8 unique slices)
+    s_kick = _make_dummy_slice(tid="track_a", seg_id="k1")
+    s_snare = _make_dummy_slice(tid="track_a", seg_id="s1")
+    s_hat = _make_dummy_slice(tid="track_a", seg_id="h1")
+    s_bass = _make_dummy_slice(tid="track_a", seg_id="b1")
+
+    # 16 bars
+    bars = []
+    for b in range(16):
+        d_steps = [s_kick if i in (0, 8) else (s_snare if i in (4, 12) else (s_hat if i in (2, 6, 10, 14) else None)) for i in range(16)]
+        b_steps = [s_bass if i in (2, 6, 10, 14) else None for i in range(16)]
+        mp = MultiStemPattern(
+            id=f"mp_{b}",
+            track_id="track_a",
+            track_title="Groovy Minimal Track",
+            bar_num=b,
+            phrase_bar=b % 8,
+            section="GROOVE_A",
+            stems={"drums": d_steps, "bass": b_steps},
+            groove_types={"drums": "four_on_floor_hats", "bass": "offbeat"},
+        )
+        bars.append(mp)
+
+    metrics = scorer.evaluate_song("track_a", "Groovy Minimal Track", bars, acoustic_fidelity=0.88)
+    assert isinstance(metrics, SongCompositionMetrics)
+    assert metrics.unique_slices_count == 4
+    # With 16 bars * 32 stem steps = 512 tatums and only 4 unique slices, compression should be very high
+    assert metrics.slice_compression_ratio >= 0.95
+    # Only 1 unique pattern signature across 16 bars -> very high economy
+    assert metrics.pattern_subset_economy >= 0.90
+    assert metrics.composite_song_score >= 0.85
+    assert metrics.to_dict()["unique_slices_count"] == 4
+
+
+def test_feedback_engine_evaluate_song_composition_economy(tmp_path: Path):
+    fb_path = tmp_path / "pattern_audio_feedback.json"
+    engine = PatternAudioFeedbackEngine(feedback_path=fb_path)
+
+    # Mock corpus store and bank
+    class MockTrack:
+        track_id = "tr_001"
+        title = "Deep Electronic"
+
+    class MockCorpusStore:
+        analyses = {"tr_001": None}
+        tracks = [MockTrack()]
+
+    s_kick = _make_dummy_slice(tid="tr_001", seg_id="k1")
+    bars = [
+        MultiStemPattern(
+            id=f"mp_{b}",
+            track_id="tr_001",
+            track_title="Deep Electronic",
+            bar_num=b,
+            phrase_bar=b % 8,
+            section="GROOVE_A",
+            stems={"drums": [s_kick if i % 4 == 0 else None for i in range(16)]},
+            groove_types={"drums": "four_on_floor"},
+        )
+        for b in range(8)
+    ]
+    phrase = SongPhrase(
+        id="phr_001",
+        track_id="tr_001",
+        track_title="Deep Electronic",
+        phrase_index=0,
+        section="GROOVE_A",
+        bpm=126.0,
+        key="C major",
+        energy=0.8,
+        bars=bars,
+    )
+
+    class MockBank:
+        phrases = [phrase]
+
+    res = engine.evaluate_song_composition_economy(MockCorpusStore(), MockBank(), max_tracks=5)
+    assert res["status"] == "ok"
+    assert res["scored_tracks"] == 1
+    assert "song_composition_scores" in engine.feedback_data
+    assert "tr_001" in engine.feedback_data["song_composition_scores"]
+    assert engine.feedback_data["song_composition_scores"]["tr_001"]["slice_compression_ratio"] > 0.80
+
 

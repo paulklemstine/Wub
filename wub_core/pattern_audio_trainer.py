@@ -83,6 +83,134 @@ class MultiStemCohesionMetrics:
         }
 
 
+@dataclass
+class SongCompositionMetrics:
+    """Metrics quantifying how compactly and cohesively a song is composed
+    from a minimal subset of recurring patterns and unique slices.
+    """
+    track_id: str
+    track_title: str
+    slice_compression_ratio: float  # (total_tatums - unique_slices) / total_tatums (0.0 .. 1.0)
+    pattern_subset_economy: float   # 1.0 - (distinct_patterns / total_bars) (0.0 .. 1.0)
+    acoustic_fidelity: float        # Multi-stem log-Mel spectrogram fidelity (0.0 .. 1.0)
+    composite_song_score: float     # Weighted composite quality score
+    unique_slices_count: int
+    total_tatums_count: int
+    core_pattern_count: int
+    total_bars_count: int
+    evaluated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "track_id": self.track_id,
+            "track_title": self.track_title,
+            "slice_compression_ratio": round(self.slice_compression_ratio, 4),
+            "pattern_subset_economy": round(self.pattern_subset_economy, 4),
+            "acoustic_fidelity": round(self.acoustic_fidelity, 4),
+            "composite_song_score": round(self.composite_song_score, 4),
+            "unique_slices_count": self.unique_slices_count,
+            "total_tatums_count": self.total_tatums_count,
+            "core_pattern_count": self.core_pattern_count,
+            "total_bars_count": self.total_bars_count,
+            "evaluated_at": self.evaluated_at,
+        }
+
+
+class SongCompositionEconomyScorer:
+    """Evaluates how effectively an entire song or phrase structure is composed
+    from a minimal subset of recurring patterns and unique slices.
+
+    Provides feedback to prioritize models, tracks, and pattern subsets that achieve:
+    1. Maximum slice compression: using a tight codebook of <= 8 slices per stem (32 total),
+       reducing memory footprint, speeding up training/inference, and eliminating acoustic timbre jitter.
+    2. High pattern subset economy: using 3-6 core recurring patterns across bars rather
+       than erratic bar-to-bar randomness.
+    3. Multi-stem acoustic fidelity: preserving full frequency separation and groove pocket.
+    """
+
+    def __init__(self, target_slices_per_stem: int = 8, target_core_patterns: int = 5) -> None:
+        self.target_slices_per_stem = target_slices_per_stem
+        self.target_core_patterns = target_core_patterns
+
+    def score_slice_compression(self, unique_slices_count: int, total_tatums_count: int) -> float:
+        """Calculate slice compression ratio.
+        Higher score means more compact slice palette (less slice fragmentation).
+        """
+        if total_tatums_count <= 0:
+            return 0.5
+        ratio = max(0.0, min(1.0, 1.0 - (unique_slices_count / total_tatums_count)))
+        # Bonus if unique slices is within tight kit target (<= 32 total across all stems, or <= 8 per stem)
+        if unique_slices_count <= self.target_slices_per_stem * 4:
+            ratio = min(1.0, ratio * 1.15)
+        return float(round(ratio, 4))
+
+    def score_pattern_economy(self, distinct_patterns_count: int, total_bars_count: int) -> float:
+        """Calculate pattern subset economy.
+        Rewards songs where bars are arranged from 3-6 recurring core patterns rather than chaotic novelty.
+        """
+        if total_bars_count <= 1:
+            return 0.70
+        ratio = max(0.0, min(1.0, 1.0 - (distinct_patterns_count / total_bars_count)))
+        # Target sweet spot: 3 to 6 patterns for a 16-32 bar section
+        if 2 <= distinct_patterns_count <= max(6, self.target_core_patterns + 2):
+            ratio = min(1.0, ratio * 1.10)
+        return float(round(ratio, 4))
+
+    def evaluate_song(
+        self,
+        track_id: str,
+        track_title: str,
+        multi_stem_patterns: List[MultiStemPattern],
+        acoustic_fidelity: float = 0.80,
+    ) -> SongCompositionMetrics:
+        """Score an entire sequence of multi-stem patterns representing a song or extended phrase."""
+        all_slice_ids = set()
+        total_tatums = 0
+        pattern_signatures = set()
+
+        for mpat in multi_stem_patterns:
+            total_tatums += 16 * len(mpat.stems)
+            # Create a signature for this bar's pattern combination
+            stem_sigs = []
+            for stem in sorted(mpat.stems.keys()):
+                steps = mpat.stems[stem]
+                onsets = tuple(i for i, s in enumerate(steps) if s is not None)
+                for s in steps:
+                    if s is not None and getattr(s, "segment_id", None):
+                        all_slice_ids.add((stem, s.segment_id))
+                stem_sigs.append((stem, mpat.groove_types.get(stem, "none"), onsets))
+            pattern_signatures.add(tuple(stem_sigs))
+
+        unique_slices = len(all_slice_ids)
+        distinct_patterns = len(pattern_signatures)
+        total_bars = len(multi_stem_patterns)
+
+        slice_comp = self.score_slice_compression(unique_slices, total_tatums)
+        pat_econ = self.score_pattern_economy(distinct_patterns, total_bars)
+
+        # Composite score: 40% acoustic fidelity, 35% slice compression, 25% pattern economy
+        composite = float(
+            np.clip(
+                0.40 * acoustic_fidelity + 0.35 * slice_comp + 0.25 * pat_econ,
+                0.0,
+                1.0,
+            )
+        )
+
+        return SongCompositionMetrics(
+            track_id=track_id,
+            track_title=track_title,
+            slice_compression_ratio=slice_comp,
+            pattern_subset_economy=pat_econ,
+            acoustic_fidelity=acoustic_fidelity,
+            composite_song_score=composite,
+            unique_slices_count=unique_slices,
+            total_tatums_count=total_tatums,
+            core_pattern_count=distinct_patterns,
+            total_bars_count=total_bars,
+        )
+
+
 class SliceAudioCache:
     """Fast in-memory cache for loaded audio slices to accelerate synthesis and search."""
 
@@ -751,6 +879,7 @@ class PatternAudioFeedbackEngine:
             "slices": {},    # slice_id -> score float
             "tracks": {},    # track_id -> score float
             "grooves": {},   # stem -> {groove_type: mean_score}
+            "song_composition_scores": {},  # track_id -> SongCompositionMetrics dict
             "eval_count": 0,
             "last_updated": time.time(),
         }
@@ -1052,6 +1181,61 @@ class PatternAudioFeedbackEngine:
             "mean_multistem_cohesion": mean_c,
         }
 
+    def evaluate_song_composition_economy(
+        self,
+        corpus_store: Any,
+        bank: PatternBank,
+        max_tracks: int = 40,
+    ) -> Dict[str, Any]:
+        """Score all corpus tracks and pattern phrases by how economically an entire song
+        can be composed from a tight subset of recurring patterns and unique slices.
+        """
+        scorer = SongCompositionEconomyScorer()
+        analyses = corpus_store.analyses
+        if not analyses:
+            return {"status": "empty_corpus", "scored_tracks": 0}
+
+        song_scores: Dict[str, Any] = {}
+        total_score = 0.0
+
+        phrases_by_track: Dict[str, List[Any]] = {}
+        for phr in getattr(bank, "phrases", []):
+            phrases_by_track.setdefault(phr.track_id, []).append(phr)
+
+        for tr in corpus_store.tracks[:max_tracks]:
+            tid = tr.track_id
+            phrases = phrases_by_track.get(tid, [])
+            if not phrases:
+                continue
+
+            all_bars: List[MultiStemPattern] = []
+            for phr in phrases:
+                all_bars.extend(phr.bars)
+
+            if not all_bars:
+                continue
+
+            track_feedback_score = self.feedback_data.get("tracks", {}).get(tid, 0.80)
+            metrics = scorer.evaluate_song(
+                track_id=tid,
+                track_title=getattr(tr, "title", tid),
+                multi_stem_patterns=all_bars,
+                acoustic_fidelity=track_feedback_score,
+            )
+            song_scores[tid] = metrics.to_dict()
+            total_score += metrics.composite_song_score
+
+        self.feedback_data["song_composition_scores"] = song_scores
+        self._save()
+        self.export_locked_feedback_weights()
+
+        mean_score = round(total_score / max(1, len(song_scores)), 4)
+        return {
+            "status": "ok",
+            "scored_tracks": len(song_scores),
+            "mean_song_composition_score": mean_score,
+        }
+
     def export_locked_feedback_weights(
         self,
         weights_path: Path = ROOT_DIR / "data" / "composing_ml_weights.json",
@@ -1072,6 +1256,7 @@ class PatternAudioFeedbackEngine:
             },
             "grooves": self.feedback_data.get("grooves", {}),
             "trained_slice_scores": slice_scores,
+            "song_composition_scores": self.feedback_data.get("song_composition_scores", {}),
         }
 
         for p in (weights_path, public_weights_path):
@@ -1093,6 +1278,7 @@ class PatternAudioFeedbackEngine:
             try:
                 manifest = json.loads(standalone_patterns_path.read_text())
                 manifest["stem_cohesion_weights"] = cohesion_weights
+                manifest["song_composition_scores"] = self.feedback_data.get("song_composition_scores", {})
                 pat_scores = self.feedback_data.get("patterns", {})
                 for stem, pats in manifest.get("patterns", {}).items():
                     for p in pats:
@@ -1182,6 +1368,9 @@ class PatternAudioFeedbackEngine:
         # 3. Multi-stem cohesion training across phrase combinations
         cohesion_res = self.train_inter_stem_cohesion(corpus_store=corpus_store, bank=bank, max_tracks=15, sr=sr)
 
+        # 4. Song composition economy evaluation
+        economy_res = self.evaluate_song_composition_economy(corpus_store=corpus_store, bank=bank, max_tracks=25)
+
         self._save()
         self.export_locked_feedback_weights()
 
@@ -1193,4 +1382,5 @@ class PatternAudioFeedbackEngine:
             "mean_audio_similarity": mean_sim,
             "feedback_db_entries": len(self.feedback_data.get("patterns", {})),
             "multistem_cohesion_status": cohesion_res,
+            "song_composition_economy": economy_res,
         }
