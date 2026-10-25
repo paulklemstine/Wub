@@ -1029,7 +1029,7 @@ class WubApp {
       const masterLvl = Math.max(drumsLvl, bassLvl, vocalsLvl, otherLvl);
       // Mouth animation is strictly for the voice instrument only
       const vocalWaveform = (vocalsLvl > 0.015) ? (this.timeScratch.get("vocals") ?? null) : null;
-      this.tamagotchi.update(this.lastGrooveboxMeta, audioNow, masterLvl, this.currentStepIndex, this.bpm, vocalWaveform);
+      this.tamagotchi.update(this.lastGrooveboxMeta, audioNow, masterLvl, this.currentStepIndex, this.bpm, vocalWaveform, vocalsLvl);
     }
 
     requestAnimationFrame((next) => this.frame(next));

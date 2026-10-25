@@ -82,9 +82,15 @@ def test_slices_manifest_and_files():
             bass_sub = slices_dir / f"bass_sub_{s}_p{p}.wav"
             assert bass_sub.exists(), f"Missing chromatic slice {bass_sub.name}"
 
+        # Check chromatic vocal coverage for chop, hook, and call across all styles
+        for cat in ["chop", "hook", "call"]:
+            for p in range(12):
+                vocal_slice = slices_dir / f"vocals_{cat}_{s}_p{p}.wav"
+                assert vocal_slice.exists(), f"Missing chromatic vocal slice {vocal_slice.name}"
+
 
 def test_standalone_patterns_manifest_style_kits():
-    """Verify standalone_patterns.json has valid style kits and multi-genre pattern banks."""
+    """Verify standalone_patterns.json has valid style kits, multi-genre pattern banks, and vocal patterns."""
     patterns_json = Path("frontend/public/data/standalone_patterns.json")
     assert patterns_json.exists()
 
@@ -94,6 +100,16 @@ def test_standalone_patterns_manifest_style_kits():
     assert "style_kits" in data
     assert "patterns_by_style" in data
     assert "slices" in data
+    assert "vocal_patterns" in data
+    assert "vocal_themes" in data
+
+    # Check learned vocal patterns structure
+    vp = data["vocal_patterns"]
+    assert "themes" in vp
+    assert len(vp["themes"]) == 4
+    assert "corpus_stats" in vp
+    assert "vowel_transitions" in vp["corpus_stats"]
+    assert "pitch_contour_transitions" in vp["corpus_stats"]
 
     for s in STYLES:
         assert s in data["style_kits"]
@@ -104,9 +120,53 @@ def test_standalone_patterns_manifest_style_kits():
         assert "other" in kit["stems"]
         assert "vocals" in kit["stems"]
 
-        # Check bass sub has 12 chromatic pitches
+        # Check chromatic pitches for bass sub
         assert len(kit["stems"]["bass"]["sub"]) == 12
+        # Check chromatic pitches for vocals: chop, hook, call
+        assert len(kit["stems"]["vocals"]["chop"]) == 12
+        assert len(kit["stems"]["vocals"]["hook"]) == 12
+        assert len(kit["stems"]["vocals"]["call"]) == 12
 
     # Check patterns_by_style has all styles
     for s in STYLES:
         assert s in data["patterns_by_style"]
+        assert len(data["patterns_by_style"][s]["vocals"]) > 0
+
+
+def test_vocal_patterns_and_weights_export():
+    """Verify dedicated vocal_patterns.json and composing_ml_weights.json exports."""
+    vocal_json = Path("frontend/public/data/vocal_patterns.json")
+    assert vocal_json.exists()
+
+    with open(vocal_json) as f:
+        vd = json.load(f)
+
+    assert "themes" in vd
+    assert len(vd["themes"]) == 4
+    assert "vowel_formants" in vd
+    for v in ["AH", "EE", "OH", "OO", "AY"]:
+        assert v in vd["vowel_formants"]
+
+    weights_json = Path("frontend/public/data/composing_ml_weights.json")
+    assert weights_json.exists()
+
+    with open(weights_json) as wf:
+        wd = json.load(wf)
+
+    assert "vocal_vowel_transitions" in wd
+    assert "vocal_pitch_transitions" in wd
+    assert "vocal_step_onset_priors" in wd
+
+
+def test_vocal_pattern_extractor_dsp():
+    """Test vocal formant centroid classifier."""
+    from wub_core.vocal_pattern_extractor import classify_vowel, choose_syllable
+
+    assert classify_vowel(800.0) == "OO"
+    assert classify_vowel(1500.0) == "OH"
+    assert classify_vowel(2300.0) == "AH"
+    assert classify_vowel(3200.0) == "AY"
+    assert classify_vowel(4500.0) == "EE"
+
+    syl = choose_syllable("wave", "EE", seed=0)
+    assert isinstance(syl, str) and len(syl) > 0

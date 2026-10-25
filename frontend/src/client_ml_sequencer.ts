@@ -115,6 +115,9 @@ export interface StandaloneManifest {
   slices: Record<StemName, Record<string, SliceManifestItem[]>>;
   loops?: Record<StemName, LoopManifestItem[]>;
   phrase_blocks?: CohesivePhraseManifestItem[];
+  vocal_themes?: VocalSongTheme[];
+  vocal_patterns?: Record<string, any>;
+  style_kits?: Record<string, any>;
 }
 
 export interface ComposingMLWeights {
@@ -534,6 +537,25 @@ export class VocalSongArranger {
       ],
     },
   ];
+
+  public addThemes(newThemes: VocalSongTheme[]): void {
+    if (!newThemes || newThemes.length === 0) return;
+    for (const nt of newThemes) {
+      const idx = this.themes.findIndex((t) => t.territory === nt.territory && t.title === nt.title);
+      if (idx >= 0) {
+        this.themes[idx] = nt;
+      } else {
+        this.themes.push(nt);
+      }
+    }
+  }
+
+  public setThemes(newThemes: VocalSongTheme[]): void {
+    if (newThemes && newThemes.length > 0) {
+      this.themes = newThemes;
+      this.currentThemeIndex = 0;
+    }
+  }
 
   public getPersonaForTerritory(territory: StyleTerritory): VocalSongTheme {
     const idx = this.themes.findIndex((t) => t.territory === territory);
@@ -1539,6 +1561,12 @@ export class ClientGrooveboxConductor {
           }
           this.activeProgression = steps;
         }
+        // Load corpus-trained dynamic vocal song themes if available
+        const vThemes = this.manifest.vocal_themes || (this.manifest.vocal_patterns?.themes as VocalSongTheme[]);
+        if (vThemes && vThemes.length > 0) {
+          this.vocalSongArranger.addThemes(vThemes);
+          console.info(`[Client ML] Loaded ${vThemes.length} corpus-trained vocal themes.`);
+        }
         // Pre-decode high-priority static audio slice WAVs
         void this.preloadAudioSlices(basePath);
         // Preload authentic 1-bar studio whole-pattern stem loops
@@ -1560,7 +1588,8 @@ export class ClientGrooveboxConductor {
       if (!stemSlices) continue;
       for (const [cat, list] of Object.entries(stemSlices)) {
         const assets: SliceAsset[] = [];
-        for (let i = 0; i < Math.min(8, list.length); i++) {
+        // Load up to 16 slices per category (guarantees full p0..p11 chromatic coverage)
+        for (let i = 0; i < Math.min(16, list.length); i++) {
           const item = list[i];
           try {
             const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
@@ -1588,6 +1617,10 @@ export class ClientGrooveboxConductor {
         }
         if (assets.length > 0) {
           this.sliceRegistry.set(`${stem}:${cat}`, assets);
+          // Also alias underscore style keys (e.g. 'bass:sub_wave' <-> 'bass:sub:wave')
+          if (cat.includes("_")) {
+            this.sliceRegistry.set(`${stem}:${cat.replace("_", ":")}`, assets);
+          }
         }
       }
     }
@@ -1736,10 +1769,11 @@ export class ClientGrooveboxConductor {
     variationFraction?: number,
     territory?: StyleTerritory
   ): { buffer: AudioBuffer; rate: number } | null {
-    // 1. Look for style-specific slices first (e.g. drums:kick:wave, bass:sub:cyber)
+    // 1. Look for style-specific slices first (e.g. drums:kick:wave / drums:kick_wave)
     let list: SliceAsset[] | undefined;
     if (territory) {
-      list = this.sliceRegistry.get(`${stemCategory}:${territory}`);
+      list = this.sliceRegistry.get(`${stemCategory}:${territory}`) ||
+             this.sliceRegistry.get(`${stemCategory}_${territory}`);
     }
     // Fallback to general stem category
     if (!list || list.length === 0) {
@@ -1751,7 +1785,7 @@ export class ClientGrooveboxConductor {
       if (stem === "vocals") {
         for (const alt of ["hook", "call", "chop"]) {
           if (alt !== cat) {
-            const altList = (territory ? this.sliceRegistry.get(`vocals:${alt}:${territory}`) : undefined) ||
+            const altList = (territory ? (this.sliceRegistry.get(`vocals:${alt}:${territory}`) || this.sliceRegistry.get(`vocals:${alt}_${territory}`)) : undefined) ||
               this.sliceRegistry.get(`vocals:${alt}`);
             if (altList && altList.length > 0) {
               list = altList;
@@ -1762,7 +1796,7 @@ export class ClientGrooveboxConductor {
       } else if (stem === "bass") {
         for (const alt of ["sub", "rolling", "stab"]) {
           if (alt !== cat) {
-            const altList = (territory ? this.sliceRegistry.get(`bass:${alt}:${territory}`) : undefined) ||
+            const altList = (territory ? (this.sliceRegistry.get(`bass:${alt}:${territory}`) || this.sliceRegistry.get(`bass:${alt}_${territory}`)) : undefined) ||
               this.sliceRegistry.get(`bass:${alt}`);
             if (altList && altList.length > 0) {
               list = altList;
@@ -1773,7 +1807,7 @@ export class ClientGrooveboxConductor {
       } else if (stem === "other") {
         for (const alt of ["chord", "arp", "pad"]) {
           if (alt !== cat) {
-            const altList = (territory ? this.sliceRegistry.get(`other:${alt}:${territory}`) : undefined) ||
+            const altList = (territory ? (this.sliceRegistry.get(`other:${alt}:${territory}`) || this.sliceRegistry.get(`other:${alt}_${territory}`)) : undefined) ||
               this.sliceRegistry.get(`other:${alt}`);
             if (altList && altList.length > 0) {
               list = altList;
@@ -1827,8 +1861,10 @@ export class ClientGrooveboxConductor {
     }
 
     // If exact chromatic pitch exists (bestDiff == 0), rate is 1.0 (zero drift!).
-    // Otherwise clamp shift to +/- 1 semitone max.
-    const clampedShift = Math.max(-1, Math.min(1, bestShift));
+    // For vocals and melodic stems, allow up to +/- 6 semitones (Rule 6: Harmonic pitch shift)
+    // to sing exact target melody notes while preserving timbre.
+    const maxShift = stemCategory.startsWith("vocals") ? 6 : 3;
+    const clampedShift = Math.max(-maxShift, Math.min(maxShift, bestShift));
     const rate = Math.pow(2, clampedShift / 12);
     return { buffer: best.buffer, rate };
   }
@@ -2474,12 +2510,18 @@ export class ClientGrooveboxConductor {
           sectionName: sec,
         };
 
-        const slice = this.getBestSlice(vocalCat, melodyPitch, vSteer.y, vTerr) ||
-                      this.getBestSlice("vocals:hook", melodyPitch, vSteer.y, vTerr) ||
-                      this.getBestSlice("vocals:call", melodyPitch, vSteer.y, vTerr) ||
-                      this.getBestSlice("vocals:chop", melodyPitch, vSteer.y, vTerr);
+        // Wub sings the current melody in voices from good slices most of the time (~75%),
+        // with synthesized vocaloid vocalizations on turnaround accent steps or breakdown solos (~25%)
+        const preferVocaloid = (step % 8 === 6 || (sec === "BREAKDOWN" && phraseBar % 2 === 1) || (sec === "BUILDUP" && phraseBar === 6));
+        const slice = (!preferVocaloid)
+          ? (this.getBestSlice(vocalCat, melodyPitch, vSteer.y, vTerr) ||
+             this.getBestSlice("vocals:hook", melodyPitch, vSteer.y, vTerr) ||
+             this.getBestSlice("vocals:call", melodyPitch, vSteer.y, vTerr) ||
+             this.getBestSlice("vocals:chop", melodyPitch, vSteer.y, vTerr))
+          : null;
 
         if (slice) {
+          // Sing current melody note using authentic acoustic vocal slice
           this.engine.scheduleSlice("vocals", slice.buffer, when, {
             rate: slice.rate,
             fadeMs: 6,
@@ -2487,6 +2529,7 @@ export class ClientGrooveboxConductor {
             voiceKey: "vocals",
           });
         } else {
+          // Sing expressive vocaloid vocalization
           this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vel, vInput, vTerr);
         }
       }

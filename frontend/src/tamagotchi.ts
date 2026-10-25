@@ -173,10 +173,22 @@ export class TamagotchiAvatar {
     rmsLevel: number,
     stepIndex: number,
     bpm: number = 126,
-    waveform?: Uint8Array | null
+    waveform?: Uint8Array | null,
+    vocalsLevel?: number
   ): void {
     const dt = this.lastRenderSec > 0 ? Math.max(0.001, audioNow - this.lastRenderSec) : 0.016;
     this.lastRenderSec = audioNow;
+
+    // Real-time Audio and Vocal Reactivity for Electric Rave Glow
+    if (this.asciiEl) {
+      this.asciiEl.style.setProperty("--audio-lvl", rmsLevel.toFixed(3));
+      this.asciiEl.style.setProperty("--vocal-lvl", (vocalsLevel ?? 0).toFixed(3));
+      const screenEl = this.asciiEl.parentElement;
+      if (screenEl) {
+        screenEl.style.setProperty("--audio-lvl", rmsLevel.toFixed(3));
+        screenEl.style.setProperty("--vocal-lvl", (vocalsLevel ?? 0).toFixed(3));
+      }
+    }
 
     // Decay timers
     if (this.actionTimer > 0) {
@@ -377,72 +389,74 @@ export class TamagotchiAvatar {
     if (this.stage === 1) {
       // Stage 1: Baby Unicorn (spiral horn, sparkly star gaze, sweet smile)
       faceLines = bob ? [
-        `       . \\▲/ .       `,
-        `      (\\_/)   ${noteChar}    `,
-        `     ( ${eyes} )     `,
-        `     (  ${mouth}  ) ~♡  `,
-        `      /     \\       `,
+        `       . <span class="rave-horn">\\▲/</span> .       `,
+        `      (\\_/)   <span class="rave-spark">${noteChar}</span>    `,
+        `     ( <span class="rave-eyes">${eyes}</span> )     `,
+        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~♡</span>  `,
+        `      <span class="rave-body">/     \\</span>       `,
       ] : [
-        `       . \\▲/ .       `,
-        `      (\\_/)   ${noteChar}    `,
-        `     ( ${eyes} )     `,
-        `     (  ${mouth}  ) ~~* `,
-        `      |     |       `,
+        `       . <span class="rave-horn">\\▲/</span> .       `,
+        `      (\\_/)   <span class="rave-spark">${noteChar}</span>    `,
+        `     ( <span class="rave-eyes">${eyes}</span> )     `,
+        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~~*</span> `,
+        `      <span class="rave-body">|     |</span>       `,
       ];
     } else if (this.stage === 2) {
       // Stage 2: Disco Unicorn (rave shades/headphones, glitter horn, rainbow mane)
       faceLines = bob ? [
-        `      . : \\▲/ : .     `,
-        `     (\\\\___/)   ${noteChar}  `,
-        `    [o( ⌐■_■ )o]    `,
-        `     (  ${mouth}  ) ~🌈 `,
-        `      /| WUB |\\     `,
+        `      . : <span class="rave-horn">\\▲/</span> : .     `,
+        `     (\\\\___/)   <span class="rave-spark">${noteChar}</span>  `,
+        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>    `,
+        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~🌈</span> `,
+        `      <span class="rave-body">/| WUB |\\</span>     `,
       ] : [
-        `      . : \\▲/ : .     `,
-        `     (\\\\___/)   ${noteChar}  `,
-        `    [o( ⌐■_■ )o]    `,
-        `     (  ${mouth}  ) ~~✨`,
-        `      \\| WUB |/     `,
+        `      . : <span class="rave-horn">\\▲/</span> : .     `,
+        `     (\\\\___/)   <span class="rave-spark">${noteChar}</span>  `,
+        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>    `,
+        `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~~✨</span>`,
+        `      <span class="rave-body">\\| WUB |/</span>     `,
       ];
     } else if (this.stage === 3) {
       // Stage 3: Cyber Pegasus (sleek cyber horn, electric wings, star gaze)
       faceLines = bob ? [
-        `      *   \\⚡/   *     `,
-        `    ~/(\\ (★   ★) /\\)~ ${noteChar}`,
-        `     <[~  ${mouth}  ~]>   `,
-        `      /  | WUB |  \\    `,
-        `     (____/   \\____)   `,
+        `      *   <span class="rave-horn">\\⚡/</span>   *     `,
+        `    <span class="rave-wings">~/(\\</span> (<span class="rave-eyes">★   ★</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
+        `     <span class="rave-body">&lt;[~</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-body">~]&gt;</span>   `,
+        `      <span class="rave-body">/  | WUB |  \\</span>    `,
+        `     <span class="rave-body">(____/   \\____)</span>   `,
       ] : [
-        `      *   \\⚡/   *     `,
-        `    ~/\\( (★   ★) /\\)~ ${noteChar}`,
-        `     \\[~  ${mouth}  ~]/   `,
-        `      |  | WUB |  |    `,
-        `     (____/   \\____)   `,
+        `      *   <span class="rave-horn">\\⚡/</span>   *     `,
+        `    <span class="rave-wings">~/\\(</span> (<span class="rave-eyes">★   ★</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
+        `     <span class="rave-body">\\[~</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-body">~]/</span>   `,
+        `      <span class="rave-body">|  | WUB |  |</span>    `,
+        `     <span class="rave-body">(____/   \\____)</span>   `,
       ];
     } else {
       // Stage 4: Astral Goddess (celestial glowing horn, nebula wings, divine sparkle)
       faceLines = bob ? [
-        `     . : * \\✦/ * : .   `,
-        `   ~/{\\( (♥   ♥) /\\}~ ${noteChar}`,
-        `    <[~ ✧${mouth}✧ ~]>   `,
-        `     /    | 505 |    \\   `,
-        `    (____/       \\____)  `,
+        `     . : * <span class="rave-horn">\\✦/</span> * : .   `,
+        `   <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">♥   ♥</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
+        `    <span class="rave-body">&lt;[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]&gt;</span>   `,
+        `     <span class="rave-body">/    | 505 |    \\</span>   `,
+        `    <span class="rave-body">(____/       \\____)</span>  `,
       ] : [
-        `     . : * \\✦/ * : .   `,
-        `   ~/{\\( (♥   ♥) /\\}~ ${noteChar}`,
-        `    \\[~ ✧${mouth}✧ ~]/   `,
-        `     |    | 505 |    |   `,
-        `    (____/       \\____)  `,
+        `     . : * <span class="rave-horn">\\✦/</span> * : .   `,
+        `   <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">♥   ♥</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
+        `    <span class="rave-body">\\[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]/</span>   `,
+        `     <span class="rave-body">|    | 505 |    |</span>   `,
+        `    <span class="rave-body">(____/       \\____)</span>  `,
       ];
     }
 
     // Build borderless psychedelic LCD output
-    const speech = this.speechBubble ? `🗨 ${this.truncate(this.speechBubble, 30)}` : "✨ WUB UNICORN ✨";
+    const speech = this.speechBubble
+      ? `<span class="rave-speech">🗨 ${this.truncate(this.speechBubble, 30)}</span>`
+      : `<span class="rave-speech">✨ WUB UNICORN ✨</span>`;
     const songNote = meta?.vocalNote
-      ? `♪ SING: ${meta.vocalNote} [${vowel || "--"}] ♪`
-      : `♫ BEAT: ${sec} ♫`;
+      ? `<span class="rave-note">♪ SING: ${meta.vocalNote} [${vowel || "--"}] ♪</span>`
+      : `<span class="rave-note">♫ BEAT: ${sec} ♫</span>`;
 
-    const screenText = [
+    const screenHtml = [
       speech,
       "",
       ...faceLines,
@@ -450,7 +464,7 @@ export class TamagotchiAvatar {
       songNote,
     ].join("\n");
 
-    this.asciiEl.textContent = screenText;
+    this.asciiEl.innerHTML = screenHtml;
   }
 
   private updateDashboard(): void {

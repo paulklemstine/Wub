@@ -680,6 +680,7 @@ export class NebulaRenderer {
 
   private onReticleMove?: ReticleMoveHandler;
   private dragStem: StemName | null = null;
+  private dragOffset: { x: number; y: number } = { x: 0, y: 0 };
   private activeSliceMarkers: Partial<Record<StemName, { x: number; y: number; timeSec: number }>> = {};
 
   setActiveSlice(stem: StemName, x: number, y: number, timeSec: number): void {
@@ -707,7 +708,13 @@ export class NebulaRenderer {
         } catch {
           // setPointerCapture may throw for mouse; dragging still works.
         }
-        this.moveReticleFromEvent(hit, e);
+        const p = this.toNormalized(e);
+        const curr = this.reticleMap[hit];
+        // Calculate grab offset from reticle center to pointer to eliminate sudden snapping
+        this.dragOffset = {
+          x: curr.x - p.x,
+          y: curr.y - p.y,
+        };
         e.preventDefault();
       }
     };
@@ -719,7 +726,9 @@ export class NebulaRenderer {
     };
     this.handlePointerUp = (e: PointerEvent) => {
       if (this.dragStem !== null) {
+        this.moveReticleFromEvent(this.dragStem, e);
         this.dragStem = null;
+        this.dragOffset = { x: 0, y: 0 };
         try {
           canvas.releasePointerCapture(e.pointerId);
         } catch {
@@ -784,7 +793,14 @@ export class NebulaRenderer {
   setReticle(stem: StemName, x: number, y: number): void {
     const p = { x: clamp01(x), y: clamp01(y) };
     this.reticleMap[stem] = p;
-    this.basePositions[stem] = { ...p };
+    const t = performance.now() / 1000;
+    const prof = NebulaRenderer.DRIFT_PROFILES[stem];
+    const dx = Math.sin(t * prof.sx * 2 * Math.PI + prof.px) * prof.r;
+    const dy = Math.cos(t * prof.sy * 2 * Math.PI + prof.py) * prof.r;
+    this.basePositions[stem] = {
+      x: clamp01(p.x - dx),
+      y: clamp01(p.y - dy),
+    };
   }
 
   render(frame: NebulaFrame): void {
@@ -980,10 +996,23 @@ export class NebulaRenderer {
 
   private moveReticleFromEvent(stem: StemName, e: PointerEvent): void {
     const p = this.toNormalized(e);
-    this.reticleMap[stem] = p;
-    this.basePositions[stem] = { ...p };
+    const targetX = clamp01(p.x + this.dragOffset.x);
+    const targetY = clamp01(p.y + this.dragOffset.y);
+    this.reticleMap[stem] = { x: targetX, y: targetY };
+
+    // Align base position with drift equation so at release time t: base + drift(t) == target
+    // This completely prevents the reticle from jumping or offsetting when dropped!
+    const t = performance.now() / 1000;
+    const prof = NebulaRenderer.DRIFT_PROFILES[stem];
+    const dx = Math.sin(t * prof.sx * 2 * Math.PI + prof.px) * prof.r;
+    const dy = Math.cos(t * prof.sy * 2 * Math.PI + prof.py) * prof.r;
+    this.basePositions[stem] = {
+      x: clamp01(targetX - dx),
+      y: clamp01(targetY - dy),
+    };
+
     if (this.onReticleMove !== undefined) {
-      this.onReticleMove(stem, p.x, p.y);
+      this.onReticleMove(stem, targetX, targetY);
     }
   }
 

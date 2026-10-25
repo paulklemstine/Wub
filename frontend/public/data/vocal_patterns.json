@@ -1,0 +1,8775 @@
+{
+  "version": 1,
+  "themes": [
+    {
+      "title": "DREAM BEYOND",
+      "personaName": "Ethereal Diva",
+      "territory": "wave",
+      "chorusHook": [
+        {
+          "text": "DREAM",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.95
+        },
+        {
+          "text": "BEYOND",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 4,
+          "durationSteps": 3,
+          "velocity": 0.9
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "LIGHT",
+          "vowel": "AY",
+          "semitoneOffset": 12,
+          "step": 10,
+          "durationSteps": 3,
+          "velocity": 0.96
+        },
+        {
+          "text": "FLOAT",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 13,
+          "durationSteps": 3,
+          "velocity": 0.92
+        }
+      ],
+      "verseLineA": [
+        {
+          "text": "STARS",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.88
+        },
+        {
+          "text": "DRIFT",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 4,
+          "durationSteps": 3,
+          "velocity": 0.85
+        },
+        {
+          "text": "A",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.82
+        },
+        {
+          "text": "WAY",
+          "vowel": "AY",
+          "semitoneOffset": 3,
+          "step": 11,
+          "durationSteps": 4,
+          "velocity": 0.9
+        }
+      ],
+      "verseLineB": [
+        {
+          "text": "PEACE",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.88
+        },
+        {
+          "text": "IN",
+          "vowel": "EE",
+          "semitoneOffset": 10,
+          "step": 4,
+          "durationSteps": 3,
+          "velocity": 0.85
+        },
+        {
+          "text": "MY",
+          "vowel": "AY",
+          "semitoneOffset": 7,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.85
+        },
+        {
+          "text": "SOUL",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 11,
+          "durationSteps": 4,
+          "velocity": 0.9
+        }
+      ],
+      "buildupChant": [
+        {
+          "text": "FLOAT",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 0,
+          "durationSteps": 3,
+          "velocity": 0.85
+        },
+        {
+          "text": "HIGH",
+          "vowel": "AY",
+          "semitoneOffset": 7,
+          "step": 4,
+          "durationSteps": 3,
+          "velocity": 0.88
+        },
+        {
+          "text": "SOAR",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "FREE",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 0.96
+        },
+        {
+          "text": "NOW",
+          "vowel": "AH",
+          "semitoneOffset": 14,
+          "step": 14,
+          "durationSteps": 1,
+          "velocity": 1.0
+        }
+      ],
+      "breakdownSolo": [
+        {
+          "text": "OOH",
+          "vowel": "OO",
+          "semitoneOffset": 12,
+          "step": 0,
+          "durationSteps": 6,
+          "velocity": 0.95
+        },
+        {
+          "text": "BEYOND",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 6,
+          "durationSteps": 4,
+          "velocity": 0.9
+        },
+        {
+          "text": "CALM",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 10,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "PEACE",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 13,
+          "durationSteps": 3,
+          "velocity": 0.9
+        }
+      ]
+    },
+    {
+      "title": "NEON SYSTEM OVERRIDE",
+      "personaName": "Cyberpunk Vocoder",
+      "territory": "cyber",
+      "chorusHook": [
+        {
+          "text": "NE",
+          "vowel": "EE",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 1,
+          "velocity": 1.0
+        },
+        {
+          "text": "ON",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 1,
+          "durationSteps": 1,
+          "velocity": 0.95
+        },
+        {
+          "text": "SYS",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 3,
+          "durationSteps": 1,
+          "velocity": 0.95
+        },
+        {
+          "text": "TEM",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 4,
+          "durationSteps": 1,
+          "velocity": 0.95
+        },
+        {
+          "text": "O",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 6,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "VER",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 7,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "RIDE",
+          "vowel": "AY",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 3,
+          "velocity": 1.0
+        },
+        {
+          "text": "GLITCH",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "PULSE",
+          "vowel": "OO",
+          "semitoneOffset": 0,
+          "step": 14,
+          "durationSteps": 2,
+          "velocity": 0.96
+        }
+      ],
+      "verseLineA": [
+        {
+          "text": "DARK",
+          "vowel": "AH",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "MA",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 3,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "TRIX",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 4,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "FEED",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "BURN",
+          "vowel": "OO",
+          "semitoneOffset": 0,
+          "step": 12,
+          "durationSteps": 3,
+          "velocity": 0.95
+        }
+      ],
+      "verseLineB": [
+        {
+          "text": "SYN",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "APSE",
+          "vowel": "AH",
+          "semitoneOffset": 5,
+          "step": 3,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "CRACK",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "CODE",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 11,
+          "durationSteps": 4,
+          "velocity": 0.96
+        }
+      ],
+      "buildupChant": [
+        {
+          "text": "O",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 1,
+          "velocity": 0.85
+        },
+        {
+          "text": "VER",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 2,
+          "durationSteps": 1,
+          "velocity": 0.88
+        },
+        {
+          "text": "LOAD",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 4,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 6,
+          "durationSteps": 1,
+          "velocity": 0.92
+        },
+        {
+          "text": "SYS",
+          "vowel": "EE",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 1,
+          "velocity": 0.95
+        },
+        {
+          "text": "TEM",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 10,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "GO",
+          "vowel": "OH",
+          "semitoneOffset": 14,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 1.0
+        },
+        {
+          "text": "HARD",
+          "vowel": "AH",
+          "semitoneOffset": 15,
+          "step": 14,
+          "durationSteps": 1,
+          "velocity": 1.0
+        }
+      ],
+      "breakdownSolo": [
+        {
+          "text": "LOST",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.95
+        },
+        {
+          "text": "IN",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 5,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "WIRE",
+          "vowel": "AY",
+          "semitoneOffset": 0,
+          "step": 11,
+          "durationSteps": 4,
+          "velocity": 0.95
+        }
+      ]
+    },
+    {
+      "title": "FEEL THE LOVE",
+      "personaName": "Soulful House",
+      "territory": "house",
+      "chorusHook": [
+        {
+          "text": "FEEL",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 1.0
+        },
+        {
+          "text": "THE",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 3,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "LOVE",
+          "vowel": "AH",
+          "semitoneOffset": 12,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.98
+        },
+        {
+          "text": "DEEP",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "IN",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 10,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "YOUR",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 0.96
+        },
+        {
+          "text": "SOUL",
+          "vowel": "OH",
+          "semitoneOffset": 3,
+          "step": 14,
+          "durationSteps": 2,
+          "velocity": 1.0
+        }
+      ],
+      "verseLineA": [
+        {
+          "text": "BABY",
+          "vowel": "AY",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "LET",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 4,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "IT",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 7,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "SHINE",
+          "vowel": "AY",
+          "semitoneOffset": 0,
+          "step": 10,
+          "durationSteps": 4,
+          "velocity": 0.95
+        }
+      ],
+      "verseLineB": [
+        {
+          "text": "HEART",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "BEAT",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 4,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "SO",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 7,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "RIGHT",
+          "vowel": "AY",
+          "semitoneOffset": 3,
+          "step": 10,
+          "durationSteps": 4,
+          "velocity": 0.95
+        }
+      ],
+      "buildupChant": [
+        {
+          "text": "HIGH",
+          "vowel": "AY",
+          "semitoneOffset": 5,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.82
+        },
+        {
+          "text": "ER",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 2,
+          "durationSteps": 2,
+          "velocity": 0.85
+        },
+        {
+          "text": "TAKE",
+          "vowel": "AY",
+          "semitoneOffset": 8,
+          "step": 4,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "ME",
+          "vowel": "EE",
+          "semitoneOffset": 10,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "HIGH",
+          "vowel": "AY",
+          "semitoneOffset": 12,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.94
+        },
+        {
+          "text": "ER",
+          "vowel": "AH",
+          "semitoneOffset": 12,
+          "step": 10,
+          "durationSteps": 2,
+          "velocity": 0.96
+        },
+        {
+          "text": "LOVE",
+          "vowel": "AH",
+          "semitoneOffset": 14,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 0.98
+        },
+        {
+          "text": "YEAH",
+          "vowel": "AY",
+          "semitoneOffset": 15,
+          "step": 14,
+          "durationSteps": 1,
+          "velocity": 1.0
+        }
+      ],
+      "breakdownSolo": [
+        {
+          "text": "OOH",
+          "vowel": "OO",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 5,
+          "velocity": 0.95
+        },
+        {
+          "text": "HOLD",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "ON",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 8,
+          "durationSteps": 4,
+          "velocity": 0.92
+        },
+        {
+          "text": "LOVE",
+          "vowel": "AH",
+          "semitoneOffset": 0,
+          "step": 12,
+          "durationSteps": 4,
+          "velocity": 0.96
+        }
+      ]
+    },
+    {
+      "title": "GET DOWN DROP THE BASS",
+      "personaName": "Phonk Hype Chant",
+      "territory": "breaks",
+      "chorusHook": [
+        {
+          "text": "GET",
+          "vowel": "EE",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 1,
+          "velocity": 1.0
+        },
+        {
+          "text": "DOWN",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 2,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "DROP",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 5,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 6,
+          "durationSteps": 1,
+          "velocity": 0.92
+        },
+        {
+          "text": "BASS",
+          "vowel": "AY",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 1.0
+        },
+        {
+          "text": "HIT",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 10,
+          "durationSteps": 1,
+          "velocity": 0.94
+        },
+        {
+          "text": "THAT",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 12,
+          "durationSteps": 1,
+          "velocity": 0.96
+        },
+        {
+          "text": "BREAK",
+          "vowel": "AY",
+          "semitoneOffset": 0,
+          "step": 14,
+          "durationSteps": 2,
+          "velocity": 1.0
+        }
+      ],
+      "verseLineA": [
+        {
+          "text": "ROLL",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 3,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "DRUM",
+          "vowel": "AH",
+          "semitoneOffset": 5,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "JUMP",
+          "vowel": "AH",
+          "semitoneOffset": 0,
+          "step": 11,
+          "durationSteps": 3,
+          "velocity": 0.98
+        }
+      ],
+      "verseLineB": [
+        {
+          "text": "FEEL",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 3,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "PUNCH",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "ROCK",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 11,
+          "durationSteps": 3,
+          "velocity": 0.98
+        }
+      ],
+      "buildupChant": [
+        {
+          "text": "DROP",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 1,
+          "velocity": 0.88
+        },
+        {
+          "text": "IT",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 2,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "DROP",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 4,
+          "durationSteps": 1,
+          "velocity": 0.92
+        },
+        {
+          "text": "IT",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 6,
+          "durationSteps": 1,
+          "velocity": 0.94
+        },
+        {
+          "text": "DROP",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 1,
+          "velocity": 0.96
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 10,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "BASS",
+          "vowel": "AY",
+          "semitoneOffset": 14,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 1.0
+        },
+        {
+          "text": "NOW",
+          "vowel": "AH",
+          "semitoneOffset": 15,
+          "step": 14,
+          "durationSteps": 1,
+          "velocity": 1.0
+        }
+      ],
+      "breakdownSolo": [
+        {
+          "text": "HOLD",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.95
+        },
+        {
+          "text": "UP",
+          "vowel": "AH",
+          "semitoneOffset": 5,
+          "step": 5,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "READY",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 8,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "GO",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 12,
+          "durationSteps": 3,
+          "velocity": 0.98
+        }
+      ]
+    }
+  ],
+  "themes_by_style": {
+    "wave": {
+      "title": "DREAM BEYOND",
+      "personaName": "Ethereal Diva",
+      "territory": "wave",
+      "chorusHook": [
+        {
+          "text": "DREAM",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.95
+        },
+        {
+          "text": "BEYOND",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 4,
+          "durationSteps": 3,
+          "velocity": 0.9
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "LIGHT",
+          "vowel": "AY",
+          "semitoneOffset": 12,
+          "step": 10,
+          "durationSteps": 3,
+          "velocity": 0.96
+        },
+        {
+          "text": "FLOAT",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 13,
+          "durationSteps": 3,
+          "velocity": 0.92
+        }
+      ],
+      "verseLineA": [
+        {
+          "text": "STARS",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.88
+        },
+        {
+          "text": "DRIFT",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 4,
+          "durationSteps": 3,
+          "velocity": 0.85
+        },
+        {
+          "text": "A",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.82
+        },
+        {
+          "text": "WAY",
+          "vowel": "AY",
+          "semitoneOffset": 3,
+          "step": 11,
+          "durationSteps": 4,
+          "velocity": 0.9
+        }
+      ],
+      "verseLineB": [
+        {
+          "text": "PEACE",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.88
+        },
+        {
+          "text": "IN",
+          "vowel": "EE",
+          "semitoneOffset": 10,
+          "step": 4,
+          "durationSteps": 3,
+          "velocity": 0.85
+        },
+        {
+          "text": "MY",
+          "vowel": "AY",
+          "semitoneOffset": 7,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.85
+        },
+        {
+          "text": "SOUL",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 11,
+          "durationSteps": 4,
+          "velocity": 0.9
+        }
+      ],
+      "buildupChant": [
+        {
+          "text": "FLOAT",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 0,
+          "durationSteps": 3,
+          "velocity": 0.85
+        },
+        {
+          "text": "HIGH",
+          "vowel": "AY",
+          "semitoneOffset": 7,
+          "step": 4,
+          "durationSteps": 3,
+          "velocity": 0.88
+        },
+        {
+          "text": "SOAR",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "FREE",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 0.96
+        },
+        {
+          "text": "NOW",
+          "vowel": "AH",
+          "semitoneOffset": 14,
+          "step": 14,
+          "durationSteps": 1,
+          "velocity": 1.0
+        }
+      ],
+      "breakdownSolo": [
+        {
+          "text": "OOH",
+          "vowel": "OO",
+          "semitoneOffset": 12,
+          "step": 0,
+          "durationSteps": 6,
+          "velocity": 0.95
+        },
+        {
+          "text": "BEYOND",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 6,
+          "durationSteps": 4,
+          "velocity": 0.9
+        },
+        {
+          "text": "CALM",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 10,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "PEACE",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 13,
+          "durationSteps": 3,
+          "velocity": 0.9
+        }
+      ]
+    },
+    "cyber": {
+      "title": "NEON SYSTEM OVERRIDE",
+      "personaName": "Cyberpunk Vocoder",
+      "territory": "cyber",
+      "chorusHook": [
+        {
+          "text": "NE",
+          "vowel": "EE",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 1,
+          "velocity": 1.0
+        },
+        {
+          "text": "ON",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 1,
+          "durationSteps": 1,
+          "velocity": 0.95
+        },
+        {
+          "text": "SYS",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 3,
+          "durationSteps": 1,
+          "velocity": 0.95
+        },
+        {
+          "text": "TEM",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 4,
+          "durationSteps": 1,
+          "velocity": 0.95
+        },
+        {
+          "text": "O",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 6,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "VER",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 7,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "RIDE",
+          "vowel": "AY",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 3,
+          "velocity": 1.0
+        },
+        {
+          "text": "GLITCH",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "PULSE",
+          "vowel": "OO",
+          "semitoneOffset": 0,
+          "step": 14,
+          "durationSteps": 2,
+          "velocity": 0.96
+        }
+      ],
+      "verseLineA": [
+        {
+          "text": "DARK",
+          "vowel": "AH",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "MA",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 3,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "TRIX",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 4,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "FEED",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "BURN",
+          "vowel": "OO",
+          "semitoneOffset": 0,
+          "step": 12,
+          "durationSteps": 3,
+          "velocity": 0.95
+        }
+      ],
+      "verseLineB": [
+        {
+          "text": "SYN",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "APSE",
+          "vowel": "AH",
+          "semitoneOffset": 5,
+          "step": 3,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "CRACK",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "CODE",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 11,
+          "durationSteps": 4,
+          "velocity": 0.96
+        }
+      ],
+      "buildupChant": [
+        {
+          "text": "O",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 1,
+          "velocity": 0.85
+        },
+        {
+          "text": "VER",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 2,
+          "durationSteps": 1,
+          "velocity": 0.88
+        },
+        {
+          "text": "LOAD",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 4,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 6,
+          "durationSteps": 1,
+          "velocity": 0.92
+        },
+        {
+          "text": "SYS",
+          "vowel": "EE",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 1,
+          "velocity": 0.95
+        },
+        {
+          "text": "TEM",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 10,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "GO",
+          "vowel": "OH",
+          "semitoneOffset": 14,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 1.0
+        },
+        {
+          "text": "HARD",
+          "vowel": "AH",
+          "semitoneOffset": 15,
+          "step": 14,
+          "durationSteps": 1,
+          "velocity": 1.0
+        }
+      ],
+      "breakdownSolo": [
+        {
+          "text": "LOST",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.95
+        },
+        {
+          "text": "IN",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 5,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "WIRE",
+          "vowel": "AY",
+          "semitoneOffset": 0,
+          "step": 11,
+          "durationSteps": 4,
+          "velocity": 0.95
+        }
+      ]
+    },
+    "house": {
+      "title": "FEEL THE LOVE",
+      "personaName": "Soulful House",
+      "territory": "house",
+      "chorusHook": [
+        {
+          "text": "FEEL",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 1.0
+        },
+        {
+          "text": "THE",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 3,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "LOVE",
+          "vowel": "AH",
+          "semitoneOffset": 12,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.98
+        },
+        {
+          "text": "DEEP",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "IN",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 10,
+          "durationSteps": 2,
+          "velocity": 0.92
+        },
+        {
+          "text": "YOUR",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 0.96
+        },
+        {
+          "text": "SOUL",
+          "vowel": "OH",
+          "semitoneOffset": 3,
+          "step": 14,
+          "durationSteps": 2,
+          "velocity": 1.0
+        }
+      ],
+      "verseLineA": [
+        {
+          "text": "BABY",
+          "vowel": "AY",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "LET",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 4,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "IT",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 7,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "SHINE",
+          "vowel": "AY",
+          "semitoneOffset": 0,
+          "step": 10,
+          "durationSteps": 4,
+          "velocity": 0.95
+        }
+      ],
+      "verseLineB": [
+        {
+          "text": "HEART",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "BEAT",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 4,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "SO",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 7,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "RIGHT",
+          "vowel": "AY",
+          "semitoneOffset": 3,
+          "step": 10,
+          "durationSteps": 4,
+          "velocity": 0.95
+        }
+      ],
+      "buildupChant": [
+        {
+          "text": "HIGH",
+          "vowel": "AY",
+          "semitoneOffset": 5,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.82
+        },
+        {
+          "text": "ER",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 2,
+          "durationSteps": 2,
+          "velocity": 0.85
+        },
+        {
+          "text": "TAKE",
+          "vowel": "AY",
+          "semitoneOffset": 8,
+          "step": 4,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "ME",
+          "vowel": "EE",
+          "semitoneOffset": 10,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "HIGH",
+          "vowel": "AY",
+          "semitoneOffset": 12,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 0.94
+        },
+        {
+          "text": "ER",
+          "vowel": "AH",
+          "semitoneOffset": 12,
+          "step": 10,
+          "durationSteps": 2,
+          "velocity": 0.96
+        },
+        {
+          "text": "LOVE",
+          "vowel": "AH",
+          "semitoneOffset": 14,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 0.98
+        },
+        {
+          "text": "YEAH",
+          "vowel": "AY",
+          "semitoneOffset": 15,
+          "step": 14,
+          "durationSteps": 1,
+          "velocity": 1.0
+        }
+      ],
+      "breakdownSolo": [
+        {
+          "text": "OOH",
+          "vowel": "OO",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 5,
+          "velocity": 0.95
+        },
+        {
+          "text": "HOLD",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.88
+        },
+        {
+          "text": "ON",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 8,
+          "durationSteps": 4,
+          "velocity": 0.92
+        },
+        {
+          "text": "LOVE",
+          "vowel": "AH",
+          "semitoneOffset": 0,
+          "step": 12,
+          "durationSteps": 4,
+          "velocity": 0.96
+        }
+      ]
+    },
+    "breaks": {
+      "title": "GET DOWN DROP THE BASS",
+      "personaName": "Phonk Hype Chant",
+      "territory": "breaks",
+      "chorusHook": [
+        {
+          "text": "GET",
+          "vowel": "EE",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 1,
+          "velocity": 1.0
+        },
+        {
+          "text": "DOWN",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 2,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "DROP",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 5,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 6,
+          "durationSteps": 1,
+          "velocity": 0.92
+        },
+        {
+          "text": "BASS",
+          "vowel": "AY",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 2,
+          "velocity": 1.0
+        },
+        {
+          "text": "HIT",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 10,
+          "durationSteps": 1,
+          "velocity": 0.94
+        },
+        {
+          "text": "THAT",
+          "vowel": "AH",
+          "semitoneOffset": 7,
+          "step": 12,
+          "durationSteps": 1,
+          "velocity": 0.96
+        },
+        {
+          "text": "BREAK",
+          "vowel": "AY",
+          "semitoneOffset": 0,
+          "step": 14,
+          "durationSteps": 2,
+          "velocity": 1.0
+        }
+      ],
+      "verseLineA": [
+        {
+          "text": "ROLL",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 3,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "DRUM",
+          "vowel": "AH",
+          "semitoneOffset": 5,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "JUMP",
+          "vowel": "AH",
+          "semitoneOffset": 0,
+          "step": 11,
+          "durationSteps": 3,
+          "velocity": 0.98
+        }
+      ],
+      "verseLineB": [
+        {
+          "text": "FEEL",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 5,
+          "step": 3,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "PUNCH",
+          "vowel": "AH",
+          "semitoneOffset": 3,
+          "step": 6,
+          "durationSteps": 2,
+          "velocity": 0.95
+        },
+        {
+          "text": "ROCK",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 11,
+          "durationSteps": 3,
+          "velocity": 0.98
+        }
+      ],
+      "buildupChant": [
+        {
+          "text": "DROP",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 0,
+          "durationSteps": 1,
+          "velocity": 0.88
+        },
+        {
+          "text": "IT",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 2,
+          "durationSteps": 1,
+          "velocity": 0.9
+        },
+        {
+          "text": "DROP",
+          "vowel": "OH",
+          "semitoneOffset": 5,
+          "step": 4,
+          "durationSteps": 1,
+          "velocity": 0.92
+        },
+        {
+          "text": "IT",
+          "vowel": "EE",
+          "semitoneOffset": 7,
+          "step": 6,
+          "durationSteps": 1,
+          "velocity": 0.94
+        },
+        {
+          "text": "DROP",
+          "vowel": "OH",
+          "semitoneOffset": 10,
+          "step": 8,
+          "durationSteps": 1,
+          "velocity": 0.96
+        },
+        {
+          "text": "THE",
+          "vowel": "EE",
+          "semitoneOffset": 12,
+          "step": 10,
+          "durationSteps": 1,
+          "velocity": 0.98
+        },
+        {
+          "text": "BASS",
+          "vowel": "AY",
+          "semitoneOffset": 14,
+          "step": 12,
+          "durationSteps": 2,
+          "velocity": 1.0
+        },
+        {
+          "text": "NOW",
+          "vowel": "AH",
+          "semitoneOffset": 15,
+          "step": 14,
+          "durationSteps": 1,
+          "velocity": 1.0
+        }
+      ],
+      "breakdownSolo": [
+        {
+          "text": "HOLD",
+          "vowel": "OH",
+          "semitoneOffset": 7,
+          "step": 0,
+          "durationSteps": 4,
+          "velocity": 0.95
+        },
+        {
+          "text": "UP",
+          "vowel": "AH",
+          "semitoneOffset": 5,
+          "step": 5,
+          "durationSteps": 2,
+          "velocity": 0.9
+        },
+        {
+          "text": "READY",
+          "vowel": "EE",
+          "semitoneOffset": 3,
+          "step": 8,
+          "durationSteps": 3,
+          "velocity": 0.92
+        },
+        {
+          "text": "GO",
+          "vowel": "OH",
+          "semitoneOffset": 0,
+          "step": 12,
+          "durationSteps": 3,
+          "velocity": 0.98
+        }
+      ]
+    }
+  },
+  "patterns_by_style": {
+    "wave": [
+      {
+        "id": "pat_vocals_d22d5e_006",
+        "name": "CHVRN - Alone.mp3 Bar 6 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          0
+        ],
+        "velocities": [
+          0.78,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "AWAY"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_009",
+        "name": "CHVRN - Alone.mp3 Bar 9 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.71,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "STRAY"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_011",
+        "name": "CHVRN - Alone.mp3 Bar 11 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.84,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "LIGHT"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_013",
+        "name": "CHVRN - Alone.mp3 Bar 13 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.96
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "HOLD"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_015",
+        "name": "CHVRN - Alone.mp3 Bar 15 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.8
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "FLOW"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_016",
+        "name": "CHVRN - Alone.mp3 Bar 16 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          8,
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.86,
+          0.0,
+          0.0,
+          0.74,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8,
+          8
+        ],
+        "vowels": [
+          "OH",
+          "OH"
+        ],
+        "syllables": [
+          "FLOW",
+          "SLOW"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_017",
+        "name": "CHVRN - Alone.mp3 Bar 17 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          0
+        ],
+        "velocities": [
+          0.95,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "FLOAT"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_019",
+        "name": "CHVRN - Alone.mp3 Bar 19 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          7,
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.94,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.97
+        ],
+        "pitch_contour": [
+          7,
+          8
+        ],
+        "vowels": [
+          "OH",
+          "AY"
+        ],
+        "syllables": [
+          "SOUL",
+          "SPACE"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_020",
+        "name": "CHVRN - Alone.mp3 Bar 20 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.85,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          10
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "LIGHT"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_021",
+        "name": "CHVRN - Alone.mp3 Bar 21 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.96,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "DAWN"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_023",
+        "name": "CHVRN - Alone.mp3 Bar 23 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          13
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.93,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "FLOW"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_026",
+        "name": "CHVRN - Alone.mp3 Bar 26 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          2
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "HOLD"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_028",
+        "name": "CHVRN - Alone.mp3 Bar 28 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "OCEAN"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_029",
+        "name": "CHVRN - Alone.mp3 Bar 29 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "DREAM"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_030",
+        "name": "CHVRN - Alone.mp3 Bar 30 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          1
+        ],
+        "velocities": [
+          0.0,
+          0.89,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "STARS"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_031",
+        "name": "CHVRN - Alone.mp3 Bar 31 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          6,
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.98,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8,
+          8
+        ],
+        "vowels": [
+          "AH",
+          "OH"
+        ],
+        "syllables": [
+          "STARS",
+          "SOUL"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_033",
+        "name": "CHVRN - Alone.mp3 Bar 33 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.76,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "SLOW"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_034",
+        "name": "CHVRN - Alone.mp3 Bar 34 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          0
+        ],
+        "velocities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "HOLD"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_036",
+        "name": "CHVRN - Alone.mp3 Bar 36 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "DREAM"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_038",
+        "name": "CHVRN - Alone.mp3 Bar 38 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.9,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "STARS"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_041",
+        "name": "CHVRN - Alone.mp3 Bar 41 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          0
+        ],
+        "velocities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "FLOAT"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_043",
+        "name": "CHVRN - Alone.mp3 Bar 43 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "STARS"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_045",
+        "name": "CHVRN - Alone.mp3 Bar 45 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          13
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.93,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "DAWN"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_048",
+        "name": "CHVRN - Alone.mp3 Bar 48 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          2
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "SEEK"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_050",
+        "name": "CHVRN - Alone.mp3 Bar 50 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FREE"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_052",
+        "name": "CHVRN - Alone.mp3 Bar 52 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.74,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "PEACE"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_055",
+        "name": "CHVRN - Alone.mp3 Bar 55 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          2
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.78,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "LIGHT"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_057",
+        "name": "CHVRN - Alone.mp3 Bar 57 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.88,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "DAWN"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_058",
+        "name": "CHVRN - Alone.mp3 Bar 58 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.91,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "SOUL"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_059",
+        "name": "CHVRN - Alone.mp3 Bar 59 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.91,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "OCEAN"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_060",
+        "name": "CHVRN - Alone.mp3 Bar 60 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.81,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "SOUL"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_061",
+        "name": "CHVRN - Alone.mp3 Bar 61 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          2
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.73,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "LIGHT"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_063",
+        "name": "CHVRN - Alone.mp3 Bar 63 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FEEL"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_083",
+        "name": "CHVRN - Alone.mp3 Bar 83 (vocal_call_response)",
+        "groove_type": "vocal_call_response",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0
+        ],
+        "pitch_contour": [
+          4
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "DEEP"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_084",
+        "name": "CHVRN - Alone.mp3 Bar 84 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          1
+        ],
+        "velocities": [
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "DEEP"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_086",
+        "name": "CHVRN - Alone.mp3 Bar 86 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          9
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "SKIES"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_090",
+        "name": "CHVRN - Alone.mp3 Bar 90 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          9
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          5
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "HAZE"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_097",
+        "name": "CHVRN - Alone.mp3 Bar 97 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          9
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "PEACE"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_099",
+        "name": "CHVRN - Alone.mp3 Bar 99 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "SKIES"
+        ],
+        "length": 16,
+        "key": "G minor"
+      },
+      {
+        "id": "pat_vocals_d22d5e_102",
+        "name": "CHVRN - Alone.mp3 Bar 102 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "wave",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          4
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "PEACE"
+        ],
+        "length": 16,
+        "key": "G minor"
+      }
+    ],
+    "cyber": [
+      {
+        "id": "pat_vocals_2911a0_010",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 10 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "GRID"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_012",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 12 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "CRACK"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_014",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 14 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          4
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "TEM"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_015",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 15 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.99,
+          0.0
+        ],
+        "pitch_contour": [
+          4
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "BREAK"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_016",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 16 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.481,
+        "density": 0.188,
+        "onset_grid": [
+          2,
+          10,
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0
+        ],
+        "pitch_contour": [
+          2,
+          0,
+          4
+        ],
+        "vowels": [
+          "AY",
+          "AH",
+          "OH"
+        ],
+        "syllables": [
+          "RIDE",
+          "TOXIC",
+          "CODE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_017",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 17 (vocal_call_response)",
+        "groove_type": "vocal_call_response",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          2,
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0,
+          4
+        ],
+        "vowels": [
+          "OH",
+          "AH"
+        ],
+        "syllables": [
+          "GHOST",
+          "DARK"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_018",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 18 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.481,
+        "density": 0.188,
+        "onset_grid": [
+          3,
+          6,
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.77,
+          0.0,
+          0.0,
+          0.0,
+          0.75,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0,
+          4,
+          1
+        ],
+        "vowels": [
+          "EE",
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "GRID",
+          "SYS",
+          "FEED"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_020",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 20 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.84,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          1
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "GLITCH"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_022",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 22 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          6,
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.84,
+          0.83,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          5,
+          0
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "FEED",
+          "CRACK"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_024",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 24 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          7,
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.81,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.8,
+          0.0
+        ],
+        "pitch_contour": [
+          4,
+          0
+        ],
+        "vowels": [
+          "AY",
+          "EE"
+        ],
+        "syllables": [
+          "CYBER",
+          "GLITCH"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_026",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 26 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.481,
+        "density": 0.188,
+        "onset_grid": [
+          7,
+          8,
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.97,
+          0.86,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.96
+        ],
+        "pitch_contour": [
+          6,
+          11,
+          1
+        ],
+        "vowels": [
+          "EE",
+          "AY",
+          "EE"
+        ],
+        "syllables": [
+          "GRID",
+          "FADE",
+          "CRACK"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_028",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 28 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          8,
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.87,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.99
+        ],
+        "pitch_contour": [
+          11,
+          1
+        ],
+        "vowels": [
+          "AY",
+          "EE"
+        ],
+        "syllables": [
+          "RIDE",
+          "TEM"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_030",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 30 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.88
+        ],
+        "pitch_contour": [
+          1
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "GRID"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_032",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 32 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.98,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FEED"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_034",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 34 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "SYS"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_036",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 36 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "BLADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_037",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 37 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "TEM"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_038",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 38 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "FADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_039",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 39 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "BLADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_040",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 40 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          9,
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.99,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6,
+          4
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "TEM",
+          "GLITCH"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_041",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 41 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "GRID"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_042",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 42 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.97,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          4
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "FADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_043",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 43 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          2,
+          9
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11,
+          11
+        ],
+        "vowels": [
+          "AY",
+          "AY"
+        ],
+        "syllables": [
+          "TRACE",
+          "FADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_044",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 44 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.669,
+        "density": 0.312,
+        "onset_grid": [
+          2,
+          9,
+          10,
+          13,
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.98,
+          0.0,
+          0.0,
+          0.7,
+          0.7,
+          0.0
+        ],
+        "pitch_contour": [
+          11,
+          4,
+          11,
+          11,
+          11
+        ],
+        "vowels": [
+          "AY",
+          "EE",
+          "AY",
+          "AH",
+          "AY"
+        ],
+        "syllables": [
+          "FADE",
+          "CRACK",
+          "RIDE",
+          "PULSE",
+          "FADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_045",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 45 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "CYBER"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_046",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 46 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          9,
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.98,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3,
+          11
+        ],
+        "vowels": [
+          "EE",
+          "AY"
+        ],
+        "syllables": [
+          "TEM",
+          "BLADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_047",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 47 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          2,
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          4,
+          11
+        ],
+        "vowels": [
+          "AY",
+          "AY"
+        ],
+        "syllables": [
+          "CYBER",
+          "FADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_049",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 49 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          3,
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.76,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11,
+          11
+        ],
+        "vowels": [
+          "OH",
+          "AY"
+        ],
+        "syllables": [
+          "SLOW",
+          "BLADE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_050",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 50 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "HARD"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_052",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 52 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          11,
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.99,
+          0.0,
+          0.0,
+          0.0,
+          0.7
+        ],
+        "pitch_contour": [
+          4,
+          11
+        ],
+        "vowels": [
+          "AY",
+          "EE"
+        ],
+        "syllables": [
+          "TRACE",
+          "TEM"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_053",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 53 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          3,
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.75,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.78,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11,
+          11
+        ],
+        "vowels": [
+          "AY",
+          "EE"
+        ],
+        "syllables": [
+          "BLADE",
+          "FEED"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_054",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 54 (vocal_call_response)",
+        "groove_type": "vocal_call_response",
+        "style": "cyber",
+        "energy": 0.575,
+        "density": 0.25,
+        "onset_grid": [
+          3,
+          10,
+          11,
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.72,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.97,
+          0.0,
+          0.0,
+          0.0,
+          0.7
+        ],
+        "pitch_contour": [
+          11,
+          11,
+          4,
+          8
+        ],
+        "vowels": [
+          "AH",
+          "EE",
+          "AY",
+          "EE"
+        ],
+        "syllables": [
+          "PULSE",
+          "FEED",
+          "BREAK",
+          "GRID"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_055",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 55 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.481,
+        "density": 0.188,
+        "onset_grid": [
+          4,
+          8,
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.79,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.8,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11,
+          11,
+          7
+        ],
+        "vowels": [
+          "EE",
+          "EE",
+          "AY"
+        ],
+        "syllables": [
+          "CRACK",
+          "GRID",
+          "CYBER"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_056",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 56 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          4,
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.76,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11,
+          11
+        ],
+        "vowels": [
+          "AH",
+          "AY"
+        ],
+        "syllables": [
+          "DARK",
+          "RIDE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_071",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 71 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          4
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "TRACE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_072",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 72 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          2,
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.79,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2,
+          7
+        ],
+        "vowels": [
+          "AY",
+          "AY"
+        ],
+        "syllables": [
+          "BLADE",
+          "BREAK"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_073",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 73 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          5,
+          10
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8,
+          1
+        ],
+        "vowels": [
+          "AH",
+          "EE"
+        ],
+        "syllables": [
+          "DARK",
+          "CRACK"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_074",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 74 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          4
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "CYBER"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_075",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 75 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "GLITCH"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      },
+      {
+        "id": "pat_vocals_2911a0_076",
+        "name": "Boris Brejcha - Game OverGame OverGame Over.mp3 Bar 76 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "cyber",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          2,
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7,
+          4
+        ],
+        "vowels": [
+          "EE",
+          "AH"
+        ],
+        "syllables": [
+          "SYS",
+          "PULSE"
+        ],
+        "length": 16,
+        "key": "D# minor"
+      }
+    ],
+    "house": [
+      {
+        "id": "pat_vocals_8c7537_031",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 31 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.94,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "DEEP"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_048",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 48 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          3,
+          4
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2,
+          2
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "SEE",
+          "SWEET"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_050",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 50 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "DEEP"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_052",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 52 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          3
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "DEEP"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_053",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 53 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          3
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "MAKE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_054",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 54 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          3
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "SEE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_055",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 55 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "BABY"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_057",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 57 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "STAY"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_059",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 59 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          13
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "LOVE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_061",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 61 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "DANCE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_063",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 63 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FEEL"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_065",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 65 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "GROOVE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_066",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 66 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.481,
+        "density": 0.188,
+        "onset_grid": [
+          0,
+          3,
+          11
+        ],
+        "velocities": [
+          0.82,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.9,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2,
+          2,
+          2
+        ],
+        "vowels": [
+          "OH",
+          "AH",
+          "OH"
+        ],
+        "syllables": [
+          "SOUL",
+          "DANCE",
+          "FLOW"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_067",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 67 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.575,
+        "density": 0.25,
+        "onset_grid": [
+          0,
+          1,
+          4,
+          12
+        ],
+        "velocities": [
+          0.92,
+          0.79,
+          0.0,
+          0.0,
+          0.94,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.98,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          1,
+          2,
+          0,
+          11
+        ],
+        "vowels": [
+          "AH",
+          "OH",
+          "AH",
+          "OH"
+        ],
+        "syllables": [
+          "HEART",
+          "GROOVE",
+          "SHINE",
+          "HOLD"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_068",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 68 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.669,
+        "density": 0.312,
+        "onset_grid": [
+          2,
+          3,
+          6,
+          7,
+          13
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.95,
+          0.89,
+          0.0,
+          0.0,
+          0.92,
+          0.97,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          1,
+          9,
+          0,
+          0,
+          0
+        ],
+        "vowels": [
+          "OH",
+          "AH",
+          "OH",
+          "AH",
+          "OH"
+        ],
+        "syllables": [
+          "GO",
+          "SHINE",
+          "GROOVE",
+          "DANCE",
+          "MOVE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_069",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 69 (vocal_call_response)",
+        "groove_type": "vocal_call_response",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          0
+        ],
+        "velocities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8
+        ],
+        "vowels": [
+          "OO"
+        ],
+        "syllables": [
+          "ROOM"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_070",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 70 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          1,
+          3
+        ],
+        "velocities": [
+          0.0,
+          0.99,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6,
+          2
+        ],
+        "vowels": [
+          "OH",
+          "AY"
+        ],
+        "syllables": [
+          "FLOW",
+          "TAKE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_072",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 72 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          1
+        ],
+        "velocities": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "DEEP"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_131",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 131 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          3
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.71,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_132",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 132 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.79,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FEEL"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_134",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 134 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          13
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.9,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          5
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "SEE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_136",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 136 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          13
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FREE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_138",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 138 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_139",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 139 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_141",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 141 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FREE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_143",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 143 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          9
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_145",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 145 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          9
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.84,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "DAY"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_146",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 146 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "DAY"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_147",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 147 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FREE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_149",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 149 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          9
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.82,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_150",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 150 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_8c7537_151",
+        "name": "Booka Shade - P.I.N. 4.mp3 Bar 151 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "SEE"
+        ],
+        "length": 16,
+        "key": "C major"
+      },
+      {
+        "id": "pat_vocals_b18471_004",
+        "name": "Booka Shade - Outlandos.mp3 Bar 4 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          3
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.84,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          10
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "HEART"
+        ],
+        "length": 16,
+        "key": "A minor"
+      },
+      {
+        "id": "pat_vocals_b18471_006",
+        "name": "Booka Shade - Outlandos.mp3 Bar 6 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "SHINE"
+        ],
+        "length": 16,
+        "key": "A minor"
+      },
+      {
+        "id": "pat_vocals_b18471_008",
+        "name": "Booka Shade - Outlandos.mp3 Bar 8 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.82,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "TOUCH"
+        ],
+        "length": 16,
+        "key": "A minor"
+      },
+      {
+        "id": "pat_vocals_b18471_010",
+        "name": "Booka Shade - Outlandos.mp3 Bar 10 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.98,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "LOVE"
+        ],
+        "length": 16,
+        "key": "A minor"
+      },
+      {
+        "id": "pat_vocals_b18471_017",
+        "name": "Booka Shade - Outlandos.mp3 Bar 17 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "HEART"
+        ],
+        "length": 16,
+        "key": "A minor"
+      },
+      {
+        "id": "pat_vocals_b18471_019",
+        "name": "Booka Shade - Outlandos.mp3 Bar 19 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.78
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "SUN"
+        ],
+        "length": 16,
+        "key": "A minor"
+      },
+      {
+        "id": "pat_vocals_b18471_021",
+        "name": "Booka Shade - Outlandos.mp3 Bar 21 (vocal_call_response)",
+        "groove_type": "vocal_call_response",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          8
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "PLAY"
+        ],
+        "length": 16,
+        "key": "A minor"
+      },
+      {
+        "id": "pat_vocals_b18471_027",
+        "name": "Booka Shade - Outlandos.mp3 Bar 27 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "house",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "PLAY"
+        ],
+        "length": 16,
+        "key": "A minor"
+      }
+    ],
+    "breaks": [
+      {
+        "id": "pat_vocals_e067e6_006",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 6 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          0
+        ],
+        "velocities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "BREAK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_009",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 9 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          0,
+          5
+        ],
+        "velocities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9,
+          7
+        ],
+        "vowels": [
+          "AY",
+          "AY"
+        ],
+        "syllables": [
+          "MAKE",
+          "SHAKE"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_011",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 11 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          2,
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6,
+          7
+        ],
+        "vowels": [
+          "AY",
+          "EE"
+        ],
+        "syllables": [
+          "RAVE",
+          "HIT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_012",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 12 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          2
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "PEAK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_013",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 13 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          2,
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6,
+          6
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "KICK",
+          "PEAK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_015",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 15 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          4
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_016",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 16 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_019",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 19 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          5
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "HIT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_021",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 21 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          10,
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.87,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "pitch_contour": [
+          1,
+          9
+        ],
+        "vowels": [
+          "OH",
+          "EE"
+        ],
+        "syllables": [
+          "GO",
+          "HIT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_024",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 24 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          4
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "ACE"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_026",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 26 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "KICK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_029",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 29 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.481,
+        "density": 0.188,
+        "onset_grid": [
+          3,
+          9,
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          0,
+          0,
+          11
+        ],
+        "vowels": [
+          "EE",
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "PEAK",
+          "PEAK",
+          "TRIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_030",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 30 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          13
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          4
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_031",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 31 (vocal_call_response)",
+        "groove_type": "vocal_call_response",
+        "style": "breaks",
+        "energy": 0.669,
+        "density": 0.312,
+        "onset_grid": [
+          1,
+          7,
+          11,
+          13,
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.7,
+          0.7,
+          0.0
+        ],
+        "pitch_contour": [
+          3,
+          1,
+          11,
+          4,
+          10
+        ],
+        "vowels": [
+          "EE",
+          "EE",
+          "EE",
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "PEAK",
+          "PEAK",
+          "HIT",
+          "PEAK",
+          "KICK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_032",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 32 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          3,
+          13
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.88,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.97,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          4,
+          7
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "FLIP",
+          "KICK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_033",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 33 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          3,
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.79,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11,
+          4
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "HIT",
+          "TRIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_034",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 34 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          4
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FLIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_035",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 35 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          3,
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.77,
+          0.0,
+          0.0,
+          0.92,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          2,
+          0
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "PEAK",
+          "FLIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_036",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 36 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          7,
+          15
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.99,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "pitch_contour": [
+          5,
+          4
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "BEAT",
+          "KICK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_037",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 37 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          3,
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0,
+          0.84,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          5,
+          6
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "TRIP",
+          "PEAK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_038",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 38 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "MAKE"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_039",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 39 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.481,
+        "density": 0.188,
+        "onset_grid": [
+          3,
+          5,
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.7,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          8,
+          11,
+          3
+        ],
+        "vowels": [
+          "EE",
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "HIT",
+          "PEAK",
+          "KICK"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_040",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 40 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FLIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_042",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 42 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "HIT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_045",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 45 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          7
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          3
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "TRIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_046",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 46 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "TRIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_048",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 48 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          12
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.7,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          10
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "DROP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_051",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 51 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          1
+        ],
+        "velocities": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "OH"
+        ],
+        "syllables": [
+          "STONE"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_053",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 53 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          6,
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9,
+          9
+        ],
+        "vowels": [
+          "OH",
+          "OH"
+        ],
+        "syllables": [
+          "ZONE",
+          "GO"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_054",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 54 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          6,
+          14
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9,
+          9
+        ],
+        "vowels": [
+          "AH",
+          "AY"
+        ],
+        "syllables": [
+          "DROP",
+          "SHAKE"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_055",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 55 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "RAVE"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_056",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 56 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "SHAKE"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_058",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 58 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6
+        ],
+        "vowels": [
+          "AY"
+        ],
+        "syllables": [
+          "MAKE"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_061",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 61 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          0,
+          6
+        ],
+        "velocities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6,
+          6
+        ],
+        "vowels": [
+          "AY",
+          "EE"
+        ],
+        "syllables": [
+          "RAVE",
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_062",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 62 (vocal_call_response)",
+        "groove_type": "vocal_call_response",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          0
+        ],
+        "velocities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          11
+        ],
+        "vowels": [
+          "AH"
+        ],
+        "syllables": [
+          "PUNCH"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_063",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 63 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          2
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "FLIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_065",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 65 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.388,
+        "density": 0.125,
+        "onset_grid": [
+          2,
+          6
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.75,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          6,
+          9
+        ],
+        "vowels": [
+          "EE",
+          "EE"
+        ],
+        "syllables": [
+          "BEAT",
+          "FLIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_067",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 67 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          11
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          7
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "HIT"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_069",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 69 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          1
+        ],
+        "velocities": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "TRIP"
+        ],
+        "length": 16,
+        "key": "F major"
+      },
+      {
+        "id": "pat_vocals_e067e6_070",
+        "name": "Bassnectar - Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix)Take You Down (West Coast Lo Fi Remix).mp3 Bar 70 (vocal_sustained)",
+        "groove_type": "vocal_sustained",
+        "style": "breaks",
+        "energy": 0.3,
+        "density": 0.062,
+        "onset_grid": [
+          9
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pitch_contour": [
+          9
+        ],
+        "vowels": [
+          "EE"
+        ],
+        "syllables": [
+          "BEAT"
+        ],
+        "length": 16,
+        "key": "F major"
+      }
+    ]
+  },
+  "vowel_formants": {
+    "AH": {
+      "f1": 820,
+      "f2": 1240,
+      "f3": 2500
+    },
+    "EE": {
+      "f1": 280,
+      "f2": 2280,
+      "f3": 2950
+    },
+    "OH": {
+      "f1": 520,
+      "f2": 950,
+      "f3": 2400
+    },
+    "OO": {
+      "f1": 320,
+      "f2": 850,
+      "f3": 2200
+    },
+    "AY": {
+      "f1": 540,
+      "f2": 1850,
+      "f3": 2550
+    }
+  },
+  "corpus_stats": {
+    "vocal_tracks_analyzed": 119,
+    "vocal_segments_analyzed": 8632,
+    "vowel_transitions": {
+      "AH": {
+        "AH": 0.4293,
+        "EE": 0.1134,
+        "OH": 0.2241,
+        "OO": 0.0157,
+        "AY": 0.2176
+      },
+      "EE": {
+        "AH": 0.0897,
+        "EE": 0.6296,
+        "OH": 0.0378,
+        "OO": 0.0064,
+        "AY": 0.2364
+      },
+      "OH": {
+        "AH": 0.2056,
+        "EE": 0.0411,
+        "OH": 0.6021,
+        "OO": 0.0773,
+        "AY": 0.0739
+      },
+      "OO": {
+        "AH": 0.0535,
+        "EE": 0.019,
+        "OH": 0.2919,
+        "OO": 0.6114,
+        "AY": 0.0242
+      },
+      "AY": {
+        "AH": 0.2183,
+        "EE": 0.2766,
+        "OH": 0.076,
+        "OO": 0.0112,
+        "AY": 0.4179
+      }
+    },
+    "pitch_contour_transitions": {
+      "0": {
+        "0": 0.616,
+        "1": 0.0411,
+        "2": 0.0472,
+        "3": 0.0511,
+        "4": 0.023,
+        "5": 0.0373,
+        "6": 0.0131,
+        "7": 0.0565,
+        "8": 0.0238,
+        "9": 0.0131,
+        "10": 0.0411,
+        "11": 0.0369
+      },
+      "1": {
+        "0": 0.3025,
+        "1": 0.2887,
+        "2": 0.0647,
+        "3": 0.0531,
+        "4": 0.0323,
+        "5": 0.0439,
+        "6": 0.0277,
+        "7": 0.0485,
+        "8": 0.0531,
+        "9": 0.0162,
+        "10": 0.0277,
+        "11": 0.0416
+      },
+      "2": {
+        "0": 0.1547,
+        "1": 0.0248,
+        "2": 0.4522,
+        "3": 0.1086,
+        "4": 0.0224,
+        "5": 0.0342,
+        "6": 0.0153,
+        "7": 0.0838,
+        "8": 0.0118,
+        "9": 0.0319,
+        "10": 0.046,
+        "11": 0.0142
+      },
+      "3": {
+        "0": 0.1408,
+        "1": 0.0326,
+        "2": 0.1213,
+        "3": 0.3651,
+        "4": 0.0352,
+        "5": 0.0874,
+        "6": 0.0156,
+        "7": 0.0939,
+        "8": 0.0248,
+        "9": 0.013,
+        "10": 0.0548,
+        "11": 0.0156
+      },
+      "4": {
+        "0": 0.1048,
+        "1": 0.048,
+        "2": 0.0371,
+        "3": 0.0633,
+        "4": 0.3974,
+        "5": 0.1397,
+        "6": 0.0153,
+        "7": 0.0633,
+        "8": 0.0328,
+        "9": 0.0197,
+        "10": 0.0284,
+        "11": 0.0502
+      },
+      "5": {
+        "0": 0.1519,
+        "1": 0.0253,
+        "2": 0.0478,
+        "3": 0.083,
+        "4": 0.0802,
+        "5": 0.3924,
+        "6": 0.0352,
+        "7": 0.0844,
+        "8": 0.0253,
+        "9": 0.0211,
+        "10": 0.0436,
+        "11": 0.0098
+      },
+      "6": {
+        "0": 0.1326,
+        "1": 0.0417,
+        "2": 0.053,
+        "3": 0.0455,
+        "4": 0.072,
+        "5": 0.0682,
+        "6": 0.2955,
+        "7": 0.1174,
+        "8": 0.0341,
+        "9": 0.0303,
+        "10": 0.072,
+        "11": 0.0379
+      },
+      "7": {
+        "0": 0.1496,
+        "1": 0.0281,
+        "2": 0.0552,
+        "3": 0.0612,
+        "4": 0.0321,
+        "5": 0.0693,
+        "6": 0.0351,
+        "7": 0.4076,
+        "8": 0.0803,
+        "9": 0.0231,
+        "10": 0.0422,
+        "11": 0.0161
+      },
+      "8": {
+        "0": 0.1244,
+        "1": 0.0522,
+        "2": 0.0473,
+        "3": 0.0522,
+        "4": 0.0199,
+        "5": 0.0423,
+        "6": 0.0398,
+        "7": 0.1716,
+        "8": 0.3333,
+        "9": 0.0299,
+        "10": 0.0672,
+        "11": 0.0199
+      },
+      "9": {
+        "0": 0.1885,
+        "1": 0.0246,
+        "2": 0.1066,
+        "3": 0.041,
+        "4": 0.0287,
+        "5": 0.0533,
+        "6": 0.0492,
+        "7": 0.1025,
+        "8": 0.0451,
+        "9": 0.2664,
+        "10": 0.082,
+        "11": 0.0123
+      },
+      "10": {
+        "0": 0.1976,
+        "1": 0.0405,
+        "2": 0.0541,
+        "3": 0.0642,
+        "4": 0.0169,
+        "5": 0.0507,
+        "6": 0.0186,
+        "7": 0.076,
+        "8": 0.0253,
+        "9": 0.0372,
+        "10": 0.3463,
+        "11": 0.0726
+      },
+      "11": {
+        "0": 0.2419,
+        "1": 0.0678,
+        "2": 0.056,
+        "3": 0.0472,
+        "4": 0.0649,
+        "5": 0.0236,
+        "6": 0.0295,
+        "7": 0.0708,
+        "8": 0.0147,
+        "9": 0.0177,
+        "10": 0.1003,
+        "11": 0.2655
+      }
+    },
+    "step_onset_priors": [
+      0.0726,
+      0.0624,
+      0.0637,
+      0.0583,
+      0.0639,
+      0.0583,
+      0.0616,
+      0.0591,
+      0.067,
+      0.0622,
+      0.0638,
+      0.059,
+      0.0596,
+      0.0622,
+      0.0637,
+      0.0626
+    ],
+    "duration_priors": {
+      "1": 0.0433,
+      "2": 0.1065,
+      "3": 0.0359,
+      "4": 0.1316,
+      "5": 0.0153,
+      "6": 0.0407,
+      "7": 0.0123,
+      "8": 0.6145
+    }
+  }
+}
