@@ -157,7 +157,7 @@ class PatternBank:
             if n_tatums < 16:
                 continue
 
-            # Map from (stem, segment_id) -> SliceRef
+            # Map from (stem, segment_id) -> SliceRef and pre-populate slice palette
             seg_lookup: Dict[Tuple[str, str], SliceRef] = {}
             for stem in tr.stems_available:
                 stem_pool = pools.get(stem)
@@ -165,6 +165,27 @@ class PatternBank:
                     for s in stem_pool.slices:
                         if s.track_id == tr.track_id:
                             seg_lookup[(stem, s.segment_id)] = s
+                            if stem == "drums":
+                                cent = getattr(s, "spectral_centroid", 1500.0)
+                                if cent < 1200.0 and s.loud_max > -32.0:
+                                    self.slice_palette["drums"]["kick"].append(s)
+                                elif 1200.0 <= cent <= 3500.0 and s.loud_max > -35.0:
+                                    self.slice_palette["drums"]["snare"].append(s)
+                                elif cent > 2500.0:
+                                    self.slice_palette["drums"]["hat"].append(s)
+                                else:
+                                    self.slice_palette["drums"]["fill"].append(s)
+                            elif stem == "bass":
+                                if s.duration > 0.15:
+                                    self.slice_palette["bass"]["sub"].append(s)
+                                else:
+                                    self.slice_palette["bass"]["stab"].append(s)
+                            elif stem == "other":
+                                self.slice_palette["other"]["chord"].append(s)
+                                self.slice_palette["other"]["pad"].append(s)
+                            elif stem == "vocals":
+                                self.slice_palette["vocals"]["chop"].append(s)
+                                self.slice_palette["vocals"]["phrase"].append(s)
 
             # Find downbeat bars (every 16 tatums starting from a downbeat)
             downbeat_indices = [
@@ -197,8 +218,11 @@ class PatternBank:
                         seg_ids = tat.stem_segments.get(stem, [])
                         curr_seg = seg_ids[-1] if seg_ids else None
 
-                        # TRUE ONSET: a new segment starts on this tatum step
-                        if curr_seg is not None and curr_seg != prev_stem_seg.get(stem):
+                        # TRUE ONSET: step 0 (downbeat) or a new segment starts on this tatum step
+                        is_onset = (step_idx == 0 and curr_seg is not None) or (
+                            curr_seg is not None and curr_seg != prev_stem_seg.get(stem)
+                        )
+                        if is_onset:
                             sref = seg_lookup.get((stem, curr_seg))
                             if sref is not None and sref.loud_max > -48.0:
                                 bar_stems[stem][step_idx] = sref
@@ -206,7 +230,71 @@ class PatternBank:
                                 bar_loudness.append(max(0.0, sref.loud_max + 60.0) / 60.0)
                         prev_stem_seg[stem] = curr_seg
 
-                # Classify groove types for each stem
+                # --- PATTERN SNIPPETS FEEDBACK & RECONSTRUCTION LOOP ---
+                # Feedback check 1: Drum rhythm integrity
+                # Real dance drums must hold the rhythm without dropouts or awkward silence.
+                drum_onsets = bar_onsets["drums"]
+                has_downbeat = any(s in drum_onsets for s in (0, 8))
+                has_backbeat = any(s in drum_onsets for s in (4, 12))
+                is_rhythm_broken = (len(drum_onsets) < 4) or not (has_downbeat and has_backbeat)
+
+                track_kicks = [s for s in self.slice_palette["drums"]["kick"] if s.track_id == tr.track_id]
+                track_snares = [s for s in self.slice_palette["drums"]["snare"] if s.track_id == tr.track_id]
+                track_hats = [s for s in self.slice_palette["drums"]["hat"] if s.track_id == tr.track_id]
+                track_fills = [s for s in self.slice_palette["drums"]["fill"] if s.track_id == tr.track_id]
+
+                k_ref = track_kicks[0] if track_kicks else (track_fills[0] if track_fills else (self.slice_palette["drums"]["kick"][0] if self.slice_palette["drums"]["kick"] else None))
+                s_ref = track_snares[0] if track_snares else (track_fills[0] if track_fills else (self.slice_palette["drums"]["snare"][0] if self.slice_palette["drums"]["snare"] else k_ref))
+                h_ref = track_hats[0] if track_hats else (self.slice_palette["drums"]["hat"][0] if self.slice_palette["drums"]["hat"] else s_ref)
+
+                if is_rhythm_broken and k_ref is not None:
+                    # Anchor downbeats 0 and 8
+                    if bar_stems["drums"][0] is None:
+                        bar_stems["drums"][0] = k_ref
+                    if bar_stems["drums"][8] is None:
+                        bar_stems["drums"][8] = k_ref
+                    # Anchor backbeats 4 and 12
+                    if s_ref is not None:
+                        if bar_stems["drums"][4] is None:
+                            bar_stems["drums"][4] = s_ref
+                        if bar_stems["drums"][12] is None:
+                            bar_stems["drums"][12] = s_ref
+                    else:
+                        if bar_stems["drums"][4] is None:
+                            bar_stems["drums"][4] = k_ref
+                        if bar_stems["drums"][12] is None:
+                            bar_stems["drums"][12] = k_ref
+                    # Anchor offbeat driving hi-hats 2, 6, 10, 14
+                    if h_ref is not None:
+                        for ob in (2, 6, 10, 14):
+                            if bar_stems["drums"][ob] is None:
+                                bar_stems["drums"][ob] = h_ref
+
+                    bar_onsets["drums"] = [i for i, s in enumerate(bar_stems["drums"]) if s is not None]
+
+                # Feedback check 2: Bass pocket integrity
+                if len(bar_onsets["bass"]) == 0:
+                    track_bass = [s for pool in self.slice_palette["bass"].values() for s in pool if s.track_id == tr.track_id]
+                    if not track_bass:
+                        track_bass = [s for pool in self.slice_palette["bass"].values() for s in pool]
+                    if track_bass:
+                        b_ref = track_bass[0]
+                        for ob in (2, 6, 10, 14):
+                            bar_stems["bass"][ob] = b_ref
+                        bar_onsets["bass"] = [2, 6, 10, 14]
+
+                # Feedback check 3: Synths/Other melodic groove integrity
+                if len(bar_onsets["other"]) == 0:
+                    track_other = [s for pool in self.slice_palette["other"].values() for s in pool if s.track_id == tr.track_id]
+                    if not track_other:
+                        track_other = [s for pool in self.slice_palette["other"].values() for s in pool]
+                    if track_other:
+                        o_ref = track_other[0]
+                        for ob in (2, 10):
+                            bar_stems["other"][ob] = o_ref
+                        bar_onsets["other"] = [2, 10]
+
+                # Classify groove types for each stem after reinforcement
                 bar_grooves["drums"] = classify_drum_groove(bar_onsets["drums"], 16)
                 bar_grooves["bass"] = classify_bass_groove(bar_onsets["bass"], 16)
                 d_density = len(bar_onsets["other"]) / 16.0
@@ -214,7 +302,7 @@ class PatternBank:
                 v_density = len(bar_onsets["vocals"]) / 16.0
                 bar_grooves["vocals"] = classify_vocal_groove(bar_onsets["vocals"], v_density)
 
-                energy = float(np.mean(bar_loudness)) if bar_loudness else 0.0
+                energy = float(np.mean(bar_loudness)) if bar_loudness else 0.5
                 is_turnaround = (phrase_bar == 7) or (bar_grooves["drums"] == "fill")
 
                 # Build MultiStemPattern
