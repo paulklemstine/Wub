@@ -849,32 +849,28 @@
     }
     .tamagotchi-screen {
       position: relative;
-      background: #07130b;
-      border: 3px inset #10381e;
+      background: radial-gradient(circle at center, #1b092a 0%, #06020e 100%);
+      border: 1.5px solid rgba(255, 119, 233, calc(0.35 + 0.65 * var(--audio-lvl, 0)));
       border-radius: 8px;
-      padding: 8px;
+      padding: 12px 8px;
       overflow: hidden;
       display: flex;
       justify-content: center;
       align-items: center;
       min-height: 240px;
-      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.9), 0 0 10px rgba(57, 255, 20, 0.15);
+      box-shadow:
+        inset 0 0 calc(18px + 36px * var(--audio-lvl, 0)) rgba(255, 0, 128, calc(0.25 + 0.55 * var(--audio-lvl, 0))),
+        0 0 calc(12px + 30px * var(--vocal-lvl, 0)) rgba(0, 255, 255, calc(0.35 + 0.65 * var(--vocal-lvl, 0))),
+        0 0 calc(25px + 50px * var(--vocal-lvl, 0)) rgba(255, 0, 200, calc(0.25 + 0.65 * var(--vocal-lvl, 0)));
+      transition: border-color 0.08s ease, box-shadow 0.08s ease;
     }
-    .tamagotchi-scanlines {
+    .tamagotchi-screen::before {
+      content: "";
       position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: repeating-linear-gradient(
-        0deg,
-        rgba(0, 0, 0, 0.25) 0px,
-        rgba(0, 0, 0, 0.25) 1px,
-        transparent 1px,
-        transparent 3px
-      );
+      inset: 0;
+      background: radial-gradient(circle at 50% 50%, rgba(0, 255, 255, calc(0.06 + 0.28 * var(--vocal-lvl, 0))) 0%, transparent 75%);
       pointer-events: none;
-      z-index: 2;
+      z-index: 0;
     }
     @keyframes rainbow-shimmer {
       0% {
@@ -889,26 +885,6 @@
         background-position: 0% 50%;
         filter: drop-shadow(0 0 10px rgba(255, 0, 128, 0.75));
       }
-    }
-    .tamagotchi-screen {
-      position: relative;
-      background: radial-gradient(circle at center, #1b092a 0%, #06020e 100%);
-      border: 1.5px solid rgba(255, 119, 233, calc(0.35 + 0.65 * var(--audio-lvl, 0)));
-      border-radius: 6px;
-      box-shadow:
-        inset 0 0 calc(18px + 36px * var(--audio-lvl, 0)) rgba(255, 0, 128, calc(0.25 + 0.55 * var(--audio-lvl, 0))),
-        0 0 calc(12px + 30px * var(--vocal-lvl, 0)) rgba(0, 255, 255, calc(0.35 + 0.65 * var(--vocal-lvl, 0))),
-        0 0 calc(25px + 50px * var(--vocal-lvl, 0)) rgba(255, 0, 200, calc(0.25 + 0.65 * var(--vocal-lvl, 0)));
-      transition: border-color 0.08s ease, box-shadow 0.08s ease;
-      overflow: hidden;
-    }
-    .tamagotchi-screen::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: radial-gradient(circle at 50% 50%, rgba(0, 255, 255, calc(0.06 + 0.28 * var(--vocal-lvl, 0))) 0%, transparent 75%);
-      pointer-events: none;
-      z-index: 0;
     }
     .tamagotchi-ascii {
       position: relative;
@@ -1571,7 +1547,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.60 <span class="mc-build-num">#60</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.61 <span class="mc-build-num">#61</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -1940,7 +1916,7 @@
       <!-- Panel 3: Neural ASCII Tamagotchi Avatar ("WubGotchi") -->
       <div class="stage-card tamagotchi-card">
         <div class="stage-header">
-          <span style="color: #ff77e9;">🦄 Wub • Psychedelic Unicorn Pet</span>
+          <span style="color: #ff77e9;">Wub • Psychedelic Unicorn Pet</span>
           <span id="tamagotchi-stage-badge">LVL 1 • BABY UNICORN</span>
         </div>
         <div class="tamagotchi-container">
@@ -1973,7 +1949,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.60 (Build #60 • rev 6d98311)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.61 (Build #61 • rev 1d51725)</span>
     </div>
   </div>
 

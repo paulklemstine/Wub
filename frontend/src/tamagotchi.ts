@@ -510,16 +510,11 @@ export class TamagotchiAvatar {
     }
 
     // Build borderless psychedelic LCD output
-    const speech = this.speechBubble
-      ? `<span class="rave-speech">🗨 ${this.truncate(this.speechBubble, 30)}</span>`
-      : `<span class="rave-speech">✨ WUB UNICORN ✨</span>`;
     const songNote = meta?.vocalNote
       ? `<span class="rave-note">♪ SING: ${meta.vocalNote} [${vowel || "--"}] ♪</span>`
       : `<span class="rave-note">♫ BEAT: ${sec} ♫</span>`;
 
     const screenHtml = [
-      speech,
-      "",
       ...faceLines,
       "",
       songNote,
