@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from wub_core.composer import SongArranger
+from wub_core.composer import PatternComposer, SongArranger
 from wub_core.model_markov import SliceRef
 from wub_core.patterns import MultiStemPattern, PatternBank, SequencerPattern, SongPhrase
 from wub_core.schema import STEMS, TrackAnalysis
@@ -70,7 +70,10 @@ class GrooveboxConductor:
     def __init__(self, pattern_bank: PatternBank, seed: int = 42, cross_stem_mashup: bool = True) -> None:
         self.bank = pattern_bank
         self.rng = np.random.default_rng(seed)
-        self.arranger = SongArranger(pattern_bank, seed=seed)
+        self.arranger = getattr(pattern_bank, "arranger_model", None) or SongArranger(pattern_bank, seed=seed)
+        self.composer = PatternComposer(pattern_bank, seed=seed)
+        if getattr(pattern_bank, "phrase_model", None) and pattern_bank.phrase_model.trained:
+            self.composer.model = pattern_bank.phrase_model
         self.cycle_mode = DEFAULT_CYCLE_MODE
         self.patterns_per_cycle = CYCLE_PRESETS[self.cycle_mode]["patterns"]
         self.steps_per_pattern = CYCLE_PRESETS[self.cycle_mode]["steps"]
@@ -399,7 +402,7 @@ class GrooveboxConductor:
                         self.current_pattern.stems["drums"] = list(fill_drums.steps)
             return
 
-        # Fallback single-stem mode (used in tests with small synthetic tracks or dynamic mashups)
+        # Fallback single-stem / cross-stem mashup mode using trained PatternComposer ML
         if is_turnaround:
             fill_pat = (
                 self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
@@ -409,29 +412,19 @@ class GrooveboxConductor:
                 self.active_patterns["drums"] = fill_pat
         elif pattern_in_cycle == 0:
             self._init_section_patterns()
-        elif pattern_in_cycle % 4 == 3 and self.rng.random() < 0.6:
-            var_drums = self.bank.pick_pattern("drums", min_energy=0.4, preferred_track_id=self.lead_track_id, rng=self.rng)
-            if var_drums:
-                self.active_patterns["drums"] = var_drums
-        elif pattern_in_cycle % 4 == 2:
-            lift_drums = self.bank.pick_pattern("drums", groove_type="four_on_floor_hats", preferred_track_id=self.lead_track_id, rng=self.rng)
-            if lift_drums:
-                self.active_patterns["drums"] = lift_drums
-            lift_bass = self.bank.pick_pattern("bass", groove_type="rolling", preferred_track_id=self.lead_track_id, rng=self.rng)
-            if lift_bass:
-                self.active_patterns["bass"] = lift_bass
         else:
-            if self.lead_track_id:
-                track_bar = self.lead_base_bar + (pattern_in_cycle % 8)
-                lead_drum_pat = self.bank.get_track_pattern(self.lead_track_id, "drums", track_bar)
-                if lead_drum_pat and lead_drum_pat.energy >= 0.2:
-                    self.active_patterns["drums"] = lead_drum_pat
-                lead_bass_pat = self.bank.get_track_pattern(self.lead_track_id, "bass", track_bar)
-                if lead_bass_pat:
-                    self.active_patterns["bass"] = lead_bass_pat
-                lead_other_pat = self.bank.get_track_pattern(self.lead_track_id, "other", track_bar)
-                if lead_other_pat:
-                    self.active_patterns["other"] = lead_other_pat
+            composed = self.composer.compose_bar(
+                phrase_bar=phrase_bar,
+                section=self.state.section,
+                target_energy=0.7 if self.state.section == "DROP" else 0.5,
+                lead_track_id=self.lead_track_id,
+                target_key=self.current_phrase.key if self.current_phrase else None,
+                feedback_weights=self.feedback_data,
+                densify=True,
+            )
+            for s in STEMS:
+                if composed.get(s):
+                    self.active_patterns[s] = composed[s]
 
         if self.active_patterns.get("drums") is None:
             self.active_patterns["drums"] = self.bank.create_groove_pattern("drums", "four_on_floor_hats", rng=self.rng)

@@ -7,8 +7,10 @@ and energy envelopes) and the Tier 1 Micro Pattern Generator (which provides
 """
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -22,8 +24,12 @@ from wub_core.patterns import (
     classify_drum_groove,
     classify_bass_groove,
     classify_synth_groove,
+    classify_vocal_groove,
 )
 from wub_core.schema import STEMS, TrackAnalysis
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+COMPOSING_WEIGHTS_FILE = ROOT_DIR / "data" / "composing_ml_weights.json"
 
 
 @dataclass
@@ -40,7 +46,7 @@ class BarState:
 class PhraseComposerModel:
     """Trained Markov model of bar-to-bar musical phrase progressions."""
 
-    def __init__(self) -> None:
+    def __init__(self, weights_path: Optional[Path] = None) -> None:
         # Transitions: (phrase_bar, stem, current_groove) -> {next_groove: count}
         self.transitions: Dict[Tuple[int, str, str], Dict[str, float]] = defaultdict(
             lambda: defaultdict(float)
@@ -48,9 +54,11 @@ class PhraseComposerModel:
         # Empirical energy distribution per phrase bar: phrase_bar -> list of energies
         self.energy_by_bar: Dict[int, List[float]] = defaultdict(list)
         self.trained = False
+        self.weights_path = weights_path or COMPOSING_WEIGHTS_FILE
+        self.load(self.weights_path)
 
     def train_on_tracks(self, tracks: List[TrackAnalysis], bank: PatternBank) -> int:
-        """Train bar-to-bar transition probabilities from consecutive track bars."""
+        """Train bar-to-bar transition probabilities from consecutive track bars weighted by acoustic quality."""
         n_transitions = 0
 
         for tr in tracks:
@@ -66,18 +74,63 @@ class PhraseComposerModel:
                 p_bar_curr = bar % 8
                 p_bar_next = (bar + 1) % 8
 
-                for stem in ("drums", "bass", "other"):
+                for stem in STEMS:
                     pat_curr = bank.get_track_pattern(tr.track_id, stem, bar)
                     pat_next = bank.get_track_pattern(tr.track_id, stem, bar + 1)
 
                     if pat_curr and pat_next:
                         key = (p_bar_curr, stem, pat_curr.groove_type)
-                        self.transitions[key][pat_next.groove_type] += 1.0
+                        # Weight transitions by the acoustic similarity of the destination pattern
+                        sim_score = getattr(pat_next, "audio_similarity_score", 0.5)
+                        w = float(np.exp(2.0 * (sim_score - 0.5)))
+                        self.transitions[key][pat_next.groove_type] += w
                         self.energy_by_bar[p_bar_curr].append(pat_curr.energy)
                         n_transitions += 1
 
         self.trained = True
         return n_transitions
+
+    def save(self, path: Optional[Path] = None) -> None:
+        p = path or self.weights_path
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            existing = {}
+            if p.exists():
+                try:
+                    existing = json.loads(p.read_text())
+                except Exception:
+                    pass
+            serializable_transitions = {
+                f"{k[0]}:{k[1]}:{k[2]}": dict(v) for k, v in self.transitions.items()
+            }
+            avg_energy = {
+                str(k): round(float(np.mean(v)), 3) for k, v in self.energy_by_bar.items() if v
+            }
+            existing["version"] = 1
+            existing["phrase_transitions"] = serializable_transitions
+            existing["energy_by_bar"] = avg_energy
+            p.write_text(json.dumps(existing, indent=2))
+        except Exception:
+            pass
+
+    def load(self, path: Optional[Path] = None) -> bool:
+        p = path or self.weights_path
+        if not p.exists():
+            return False
+        try:
+            data = json.loads(p.read_text())
+            raw_t = data.get("phrase_transitions") or data.get("transitions", {})
+            for key_str, counts in raw_t.items():
+                parts = key_str.split(":")
+                if len(parts) == 3:
+                    bar_idx = int(parts[0])
+                    stem = parts[1]
+                    groove = parts[2]
+                    self.transitions[(bar_idx, stem, groove)].update({k: float(v) for k, v in counts.items()})
+            self.trained = len(self.transitions) > 0
+            return self.trained
+        except Exception:
+            return False
 
     def sample_next_groove(
         self,
@@ -108,6 +161,8 @@ class PhraseComposerModel:
                 return "four_on_floor_hats" if phrase_bar in (4, 5, 6) else "four_on_floor"
             elif stem == "bass":
                 return "rolling" if phrase_bar in (4, 5) else "offbeat"
+            elif stem == "vocals":
+                return "chop" if phrase_bar in (1, 3, 5, 7) else "phrase"
             else:
                 return "riff" if phrase_bar in (4, 5) else "hook"
 
@@ -139,17 +194,20 @@ class PatternComposer:
         section: str,
         target_energy: float = 0.5,
         lead_track_id: Optional[str] = None,
+        target_key: Optional[str] = None,
+        feedback_weights: Optional[Dict[str, float]] = None,
+        densify: bool = False,
     ) -> Dict[str, Optional[SequencerPattern]]:
-        """Compose the 16-step patterns for all stems for the upcoming bar."""
+        """Compose the 16-step patterns for all stems for the upcoming bar with harmonic and groove ML alignment."""
         if lead_track_id:
             self.lead_track_id = lead_track_id
 
         is_turnaround = (phrase_bar == 7)  # Bar 8 of 8-bar phrase
 
-        # 1. Determine target groove types per stem using Tier 2 Phrase Model
+        # 1. Determine target groove types per stem using Tier 2 Phrase Model ML
         target_grooves: Dict[str, str] = {}
-        for stem in ("drums", "bass", "other"):
-            curr_g = getattr(self.current_bar_state, f"{stem}_type", "four_on_floor")
+        for stem in ("drums", "bass", "other", "vocals"):
+            curr_g = getattr(self.current_bar_state, f"{stem}_type", "four_on_floor" if stem == "drums" else "offbeat")
             target_grooves[stem] = self.model.sample_next_groove(
                 phrase_bar, stem, curr_g, rng=self.rng
             )
@@ -160,16 +218,21 @@ class PatternComposer:
         if is_turnaround:
             # Bar 8: Guaranteed high-energy drum fill
             fill_pat = (
-                self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
+                self.bank.pick_pattern(
+                    "drums", groove_type="fill", min_energy=0.5,
+                    feedback_weights=feedback_weights, densify=densify, rng=self.rng,
+                )
                 or self.bank.create_groove_pattern("drums", "fill", preferred_track_id=self.lead_track_id, rng=self.rng)
             )
-            new_patterns["drums"] = fill_pat
+            new_patterns["drums"] = self.bank.densify_pattern(fill_pat, rng=self.rng) if densify and fill_pat else fill_pat
             # Cut/stab bass on turnaround
             new_patterns["bass"] = self.bank.pick_pattern(
-                "bass", groove_type="stabs", preferred_track_id=self.lead_track_id, rng=self.rng
+                "bass", groove_type="stabs", preferred_track_id=self.lead_track_id,
+                target_key=target_key, feedback_weights=feedback_weights, densify=densify, rng=self.rng,
             )
             new_patterns["other"] = self.bank.pick_pattern(
-                "other", preferred_track_id=self.lead_track_id, rng=self.rng
+                "other", preferred_track_id=self.lead_track_id,
+                target_key=target_key, feedback_weights=feedback_weights, densify=densify, rng=self.rng,
             )
             new_patterns["vocals"] = self.bank.create_groove_pattern(
                 "vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng
@@ -181,25 +244,33 @@ class PatternComposer:
             for stem in STEMS:
                 tr_pat = self.bank.get_track_pattern(self.lead_track_id, stem, track_bar)
                 if tr_pat:
-                    new_patterns[stem] = tr_pat
+                    new_patterns[stem] = self.bank.densify_pattern(tr_pat, rng=self.rng) if densify else tr_pat
                 else:
+                    k_target = target_key if stem in ("bass", "other", "vocals") else None
                     new_patterns[stem] = self.bank.pick_pattern(
                         stem, groove_type=target_grooves.get(stem),
-                        preferred_track_id=self.lead_track_id, rng=self.rng
+                        preferred_track_id=self.lead_track_id,
+                        target_key=k_target, feedback_weights=feedback_weights,
+                        densify=densify, rng=self.rng,
                     )
 
         else:
             # Bar 1 (phrase_bar 0) or Bar 5 (phrase_bar 4): Pick solid thematic anchor
             for stem in ("drums", "bass", "other"):
+                k_target = target_key if stem in ("bass", "other") else None
                 new_patterns[stem] = self.bank.pick_pattern(
                     stem,
                     groove_type=target_grooves.get(stem),
                     min_energy=target_energy * 0.7,
                     preferred_track_id=self.lead_track_id,
+                    target_key=k_target,
+                    feedback_weights=feedback_weights,
+                    densify=densify,
                     rng=self.rng,
                 )
             new_patterns["vocals"] = self.bank.pick_pattern(
-                "vocals", preferred_track_id=self.lead_track_id, rng=self.rng
+                "vocals", target_key=target_key, preferred_track_id=self.lead_track_id,
+                feedback_weights=feedback_weights, densify=densify, rng=self.rng,
             )
             if new_patterns.get("drums") and phrase_bar == 0:
                 self.lead_track_id = new_patterns["drums"].track_id
@@ -304,15 +375,26 @@ class SongArranger:
     rules to assemble multi-phrase tracks that flow with natural tension and release.
     """
 
-    def __init__(self, bank: PatternBank, seed: int = 42) -> None:
+    def __init__(self, bank: PatternBank, seed: int = 42, weights_path: Optional[Path] = None) -> None:
         self.bank = bank
         self.rng = np.random.default_rng(seed)
         self.section_transition_counts: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        self.section_energy_targets: Dict[str, float] = {
+            "INTRO": 0.25,
+            "GROOVE_A": 0.45,
+            "BUILDUP": 0.65,
+            "DROP": 0.85,
+            "BREAKDOWN": 0.20,
+        }
         self.trained = False
+        self.weights_path = weights_path or COMPOSING_WEIGHTS_FILE
+        self.load(self.weights_path)
 
     def train_on_corpus(self, tracks: List[TrackAnalysis]) -> int:
-        """Learn section-to-section transitions and phrase durations from corpus."""
+        """Learn section-to-section transitions, phrase durations, and energy profiles from corpus."""
         n_transitions = 0
+        section_energies: Dict[str, List[float]] = defaultdict(list)
+
         for tr in tracks:
             phrases = self.bank.phrases_by_track.get(tr.track_id, [])
             if len(phrases) < 2:
@@ -320,8 +402,15 @@ class SongArranger:
             for i in range(len(phrases) - 1):
                 s_curr = phrases[i].section
                 s_next = phrases[i + 1].section
-                self.section_transition_counts[s_curr][s_next] += 1.0
+                w = 1.0 + float(phrases[i + 1].energy)
+                self.section_transition_counts[s_curr][s_next] += w
+                section_energies[s_curr].append(phrases[i].energy)
                 n_transitions += 1
+
+        for sec, energies in section_energies.items():
+            if energies:
+                self.section_energy_targets[sec] = float(np.mean(energies))
+
         self.trained = True
         return n_transitions
 
@@ -331,7 +420,23 @@ class SongArranger:
         bars_in_section: int,
         total_bars: int,
     ) -> str:
-        """Determine whether to stay in current section or transition to next."""
+        """Determine whether to stay in current section or transition to next using trained transitions."""
+        if bars_in_section < 8:
+            return current_section
+
+        # If trained transitions exist and section elapsed >= 8 bars, sample from learned distribution
+        if self.trained and current_section in self.section_transition_counts:
+            transition_prob = 0.50 if bars_in_section == 8 else (0.85 if bars_in_section == 16 else 1.0)
+            if self.rng.random() < transition_prob:
+                trans = self.section_transition_counts[current_section]
+                total = sum(trans.values())
+                if total > 0:
+                    choices = list(trans.keys())
+                    probs = [v / total for v in trans.values()]
+                    sampled = str(self.rng.choice(choices, p=probs))
+                    if sampled != current_section or bars_in_section >= 24:
+                        return sampled
+
         if current_section == "INTRO":
             if bars_in_section >= 8:
                 return "GROOVE_A"
@@ -341,7 +446,6 @@ class SongArranger:
             if bars_in_section >= 16:
                 return "BUILDUP"
             elif bars_in_section >= 8:
-                # 45% chance to build, 55% chance to extend groove
                 return "BUILDUP" if self.rng.random() < 0.45 else "GROOVE_A"
             return "GROOVE_A"
 
@@ -354,7 +458,6 @@ class SongArranger:
             if bars_in_section >= 16:
                 return "BREAKDOWN"
             elif bars_in_section >= 8:
-                # 65% chance to sustain peak drop for a 2nd 8-bar phrase
                 return "BREAKDOWN" if self.rng.random() < 0.35 else "DROP"
             return "DROP"
 
@@ -374,13 +477,15 @@ class SongArranger:
         bars_in_section: int,
         total_bars: int,
     ) -> Tuple[SongPhrase, str, bool]:
-        """Select the next optimal 8-bar phrase and macro section using harmonic compatibility scoring."""
+        """Select the next optimal 8-bar phrase and macro section using harmonic compatibility and real-audio quality scoring."""
         next_section = self.decide_next_section(current_section, bars_in_section, total_bars)
         is_sec_change = (next_section != current_section)
 
         candidates = list(self.bank.phrases)
         if not candidates:
             raise ValueError("No phrases available in PatternBank")
+
+        target_energy = self.section_energy_targets.get(next_section, 0.5)
 
         # Compute weights for each candidate phrase
         scores = []
@@ -401,25 +506,32 @@ class SongArranger:
 
             # 2. Harmonic Key Compatibility
             k_dist = camelot_distance(current_key, p.key)
-            key_score = float(np.exp(-1.2 * k_dist))
+            key_score = float(np.exp(-1.4 * k_dist))
 
             # 3. BPM Compatibility
-            bpm_diff = abs(p.bpm - current_bpm) / current_bpm
+            bpm_diff = abs(p.bpm - current_bpm) / max(1.0, current_bpm)
             bpm_score = float(np.exp(-25.0 * (bpm_diff ** 2)))
 
-            # 4. Track Narrative Continuity
+            # 4. Energy Profile Match
+            energy_diff = abs(p.energy - target_energy)
+            energy_score = float(np.exp(-3.0 * (energy_diff ** 2)))
+
+            # 5. Acoustic Similarity to Real Audio Training Data
+            sim_scores = [getattr(b, "audio_similarity_score", 0.5) for b in p.bars] if p.bars else [0.5]
+            avg_sim = float(np.mean(sim_scores))
+            audio_score = float(np.exp(2.5 * (avg_sim - 0.5)))
+
+            # 6. Track Narrative Continuity
             narrative_score = 1.0
             if current_phrase is not None and p.track_id == current_phrase.track_id:
                 if p.phrase_index == current_phrase.phrase_index + 1:
-                    # Consecutive next phrase in the same track: strong continuity bonus!
                     narrative_score = 3.0 if not is_sec_change else 1.8
                 elif p.phrase_index == current_phrase.phrase_index:
-                    # Loop back to same phrase
                     narrative_score = 0.2
                 else:
                     narrative_score = 1.2
 
-            total_score = sec_score * key_score * bpm_score * narrative_score
+            total_score = sec_score * key_score * bpm_score * energy_score * audio_score * narrative_score
             scores.append(max(1e-6, total_score))
 
         scores_arr = np.array(scores, dtype=np.float64)
@@ -428,3 +540,39 @@ class SongArranger:
         chosen_idx = int(self.rng.choice(len(candidates), p=probs))
         chosen_phrase = candidates[chosen_idx]
         return chosen_phrase, next_section, is_sec_change
+
+    def save(self, path: Optional[Path] = None) -> None:
+        p = path or self.weights_path
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            serializable_sec = {
+                k: dict(v) for k, v in self.section_transition_counts.items()
+            }
+            existing = {}
+            if p.exists():
+                try:
+                    existing = json.loads(p.read_text())
+                except Exception:
+                    pass
+            existing["section_transitions"] = serializable_sec
+            existing["section_energy_targets"] = self.section_energy_targets
+            p.write_text(json.dumps(existing, indent=2))
+        except Exception:
+            pass
+
+    def load(self, path: Optional[Path] = None) -> bool:
+        p = path or self.weights_path
+        if not p.exists():
+            return False
+        try:
+            data = json.loads(p.read_text())
+            raw_sec = data.get("section_transitions", {})
+            for sec, trans in raw_sec.items():
+                self.section_transition_counts[sec].update({k: float(v) for k, v in trans.items()})
+            targets = data.get("section_energy_targets", {})
+            for sec, target in targets.items():
+                self.section_energy_targets[sec] = float(target)
+            self.trained = len(self.section_transition_counts) > 0
+            return self.trained
+        except Exception:
+            return False

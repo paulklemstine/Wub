@@ -140,6 +140,8 @@ class PatternBank:
         }
         self.phrases_by_track: Dict[str, List[SongPhrase]] = {}
         self.groove_model: Optional[Any] = None
+        self.phrase_model: Optional[Any] = None
+        self.arranger_model: Optional[Any] = None
         self.slice_palette: Dict[str, Dict[str, List[SliceRef]]] = {
             "drums": {"kick": [], "snare": [], "hat": [], "fill": []},
             "bass": {"sub": [], "stab": [], "rolling": []},
@@ -439,6 +441,18 @@ class PatternBank:
             from wub_core.groove_miner import StatisticalGrooveModel
             self.groove_model = StatisticalGrooveModel()
             self.groove_model.fit_from_tracks(tracks)
+        except Exception:
+            pass
+
+        # Train Tier 2 Phrase Composer ML model and Tier 3 Song Arranger on authentic progressions
+        try:
+            from wub_core.composer import PhraseComposerModel, SongArranger
+            self.phrase_model = PhraseComposerModel()
+            self.phrase_model.train_on_tracks(tracks, self)
+            self.phrase_model.save()
+            self.arranger_model = SongArranger(self)
+            self.arranger_model.train_on_corpus(tracks)
+            self.arranger_model.save()
         except Exception:
             pass
 
