@@ -4891,13 +4891,49 @@ export class ClientGrooveboxConductor {
     const vTerr = this.getStemTerritory("vocals");
     const activePersona = this.vocalSongArranger.getPersonaName(vTerr);
 
+    // Master Scale & Harmonic Information
+    const camelotInfo = CAMELOT_KEYS[this.currentCamelotCode] || CAMELOT_KEYS["8B"];
+    const isMinor = camelotInfo.isMinor;
+    const scaleRoot = camelotInfo.rootPitch;
+    const scaleIntervals = isMinor
+      ? [0, 2, 3, 5, 7, 8, 10] // Natural Minor (Aeolian)
+      : [0, 2, 4, 5, 7, 9, 11]; // Major (Ionian)
+    const scalePitchClasses = scaleIntervals.map((iv) => (scaleRoot + iv) % 12);
+    const scaleNoteNames = scalePitchClasses.map((p) => ROOT_NAMES[p]);
+
+    const chordRoot = chord.rootPitch;
+    const chordThird = (chordRoot + (chord.isMinor ? 3 : 4)) % 12;
+    const chordFifth = (chordRoot + 7) % 12;
+    const chordSeventh = (chordRoot + (chord.isMinor ? 10 : 11)) % 12;
+    const chordPitchClasses = [chordRoot, chordThird, chordFifth, chordSeventh];
+    const chordNoteNames = [ROOT_NAMES[chordRoot], ROOT_NAMES[chordThird], ROOT_NAMES[chordFifth], ROOT_NAMES[chordSeventh]];
+
+    const musicScale = {
+      keyName: `${camelotInfo.name} ${isMinor ? "Minor" : "Major"}`,
+      modeName: isMinor ? "AEOLIAN (NATURAL MINOR)" : "IONIAN (MAJOR)",
+      camelot: this.currentCamelotCode,
+      scaleRoot,
+      scalePitches: scalePitchClasses,
+      scaleNotes: scaleNoteNames,
+      chordName: chord.name,
+      chordRoot,
+      chordPitches: chordPitchClasses,
+      chordNotes: chordNoteNames,
+      bassHz: chord.bassHz,
+      chordHz: chord.chordHz,
+      chordIndex: chordIndex + 1,
+      totalChords: this.activeProgression.length,
+    };
+
     const patterns: Record<string, string> = {};
     const patternGrooves: Record<string, string> = {};
     const patternGrids: Record<string, number[]> = {};
     const patternAudioScores: Record<string, number> = {};
+    const patternDetails: Record<string, any> = {};
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       const p = this.activePatterns[stem];
+      const stemTerr = this.getStemTerritory(stem);
       if (p) {
         patterns[stem] = p.name ? `${p.name}` : `KG-505 [${chord.name}] (${p.groove_type})`;
         patternGrooves[stem] = p.groove_type;
@@ -4906,7 +4942,21 @@ export class ClientGrooveboxConductor {
           if (idx < this.stepsPerPattern) grid[idx] = 1;
         }
         patternGrids[stem] = grid;
-        patternAudioScores[stem] = 0.88;
+        const score = p.audio_similarity_score ?? 0.92;
+        patternAudioScores[stem] = score;
+
+        patternDetails[stem] = {
+          id: p.id || `pat_${stem}_${stemTerr}`,
+          name: p.name || `KG-505 ${stem.toUpperCase()} [${chord.name}]`,
+          grooveType: p.groove_type,
+          territory: stemTerr,
+          energy: p.energy ?? 0.85,
+          density: p.density ?? (p.onset_grid.length / 16),
+          similarity: score,
+          cohesion: this.computeInterStemAffinity(stem, p.groove_type),
+          onsetCount: p.onset_grid.length,
+          velocities: p.velocities ?? new Array(16).fill(0.9),
+        };
       }
     }
 
@@ -5000,6 +5050,10 @@ export class ClientGrooveboxConductor {
       },
       stem_mix_levels: { ...this.stemMixLevels },
       stemMixLevels: { ...this.stemMixLevels },
+      music_scale: musicScale,
+      musicScale,
+      pattern_details: patternDetails,
+      patternDetails,
       direct_ml_engine: true,
     };
   }

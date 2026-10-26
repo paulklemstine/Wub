@@ -865,75 +865,11 @@ export class TamagotchiAvatar {
     this.drawDynamicNose(ctx, noseX, noseY, drumLevel, bassLevel, vocalsLevel, rmsLevel, isSinging, waveform, accentColor);
 
     // -------------------------------------------------------------------------
-    // 3. THE MINI LOOP AUDIO REACTIVE MOUTH (MOVED DOWN)
+    // 3. DYNAMIC ANIME RED LIPSTICK MOUTH (SENSUAL ROUND SHAPES, AUDIO REACTIVE)
     // -------------------------------------------------------------------------
     const mouthY = cy + 34;
     const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
-
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
-    const mouthSteps = 64;
-    const mouthColor = isSinging ? "#ffff00" : "#00ff88";
-    const mouthGlow = isSinging ? "#ffea00" : "#00ffcc";
-
-    ctx.shadowBlur = isSinging ? (14 + 18 * mouthAperture) : 8;
-    ctx.shadowColor = mouthGlow;
-    ctx.strokeStyle = mouthColor;
-    ctx.fillStyle = isSinging ? "rgba(255, 234, 0, 0.15)" : "transparent";
-    ctx.lineWidth = 2.4;
-
-    ctx.beginPath();
-    if (!isSinging && vocalsLevel < 0.006) {
-      // Resting / Breathing cute smiling mini loop
-      const breathe = Math.sin(t * 2.5) * 1.2;
-      const rx = 10 + breathe;
-      const ry = 4 + breathe * 0.5;
-      for (let j = 0; j <= mouthSteps; j++) {
-        const phi = (j / mouthSteps) * Math.PI * 2;
-        const mx = cx + rx * Math.cos(phi);
-        const my = mouthY + ry * Math.sin(phi) + 1.8 * Math.pow(Math.cos(phi), 2);
-        if (j === 0) ctx.moveTo(mx, my);
-        else ctx.lineTo(mx, my);
-      }
-    } else {
-      // Live Audio Waveform Voice Instrument Singing Mini Loop!
-      let baseW = 14;
-      let baseH = 12;
-      const upVowel = (vowel || "AH").toUpperCase();
-      if (upVowel === "EE") { baseW = 18; baseH = 6; }
-      else if (upVowel === "OH") { baseW = 11; baseH = 16; }
-      else if (upVowel === "OO") { baseW = 8; baseH = 8; }
-      else if (upVowel === "AY") { baseW = 16; baseH = 10; }
-
-      const curW = baseW * (0.6 + 0.9 * mouthAperture);
-      const curH = baseH * (0.6 + 1.1 * mouthAperture);
-
-      const waveLen = waveform ? waveform.length : 0;
-      for (let j = 0; j <= mouthSteps; j++) {
-        const phi = (j / mouthSteps) * Math.PI * 2;
-        let sampleNorm = 0;
-        if (waveform && waveLen > 0) {
-          const wIdx = Math.floor((j / mouthSteps) * (waveLen - 1));
-          sampleNorm = (waveform[wIdx] - 128) / 128.0;
-        } else {
-          sampleNorm = Math.sin(phi * 3.0 + t * 14.0) * 0.4;
-        }
-
-        const rad = Math.sqrt(Math.pow(curW * Math.cos(phi), 2) + Math.pow(curH * Math.sin(phi), 2));
-        const waveDisp = sampleNorm * (6.0 * mouthAperture + 1.5);
-        const mx = cx + (rad + waveDisp * 0.7) * Math.cos(phi);
-        const my = mouthY + (rad + waveDisp) * Math.sin(phi);
-
-        if (j === 0) ctx.moveTo(mx, my);
-        else ctx.lineTo(mx, my);
-      }
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+    this.drawAnimeLipstickMouth(ctx, cx, mouthY, mouthAperture, isSinging, vocalsLevel, vowel, waveform, t);
 
     // -------------------------------------------------------------------------
     // 4. FLOATING SPARKS & MUSICAL PARTICLES
@@ -1264,6 +1200,259 @@ export class TamagotchiAvatar {
     ctx.closePath();
     ctx.fill();
 
+    ctx.restore();
+  }
+
+  /**
+   * Dynamic anime mouth with red lipstick, sensual round curves, and audio-reactive aperture.
+   */
+  private drawAnimeLipstickMouth(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    mouthY: number,
+    mouthAperture: number,
+    isSinging: boolean,
+    vocalsLevel: number,
+    vowel: string,
+    waveform: Uint8Array | null | undefined,
+    t: number
+  ): void {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    const upVowel = (vowel || "AH").toUpperCase();
+    const isVoiceActive = isSinging || vocalsLevel > 0.01 || mouthAperture > 0.04;
+
+    // Vowel-specific mouth proportions and sensual roundness
+    let baseW = 18;
+    let baseOpenH = 14;
+    let roundness = 1.0;
+
+    if (upVowel === "EE") {
+      baseW = 24;       // Sensual wide smile
+      baseOpenH = 9;
+      roundness = 0.8;
+    } else if (upVowel === "OH") {
+      baseW = 14;       // Voluptuous round tall "O"
+      baseOpenH = 18;
+      roundness = 1.35;
+    } else if (upVowel === "OO") {
+      baseW = 12;       // Luscious round kissy pout
+      baseOpenH = 11;
+      roundness = 1.45;
+    } else if (upVowel === "AY") {
+      baseW = 21;
+      baseOpenH = 13;
+      roundness = 0.95;
+    } else { // "AH"
+      baseW = 19;
+      baseOpenH = 16;
+      roundness = 1.15;
+    }
+
+    // Gentle breathing motion when resting
+    const breath = Math.sin(t * 2.6) * 0.8;
+    const audioBoost = mouthAperture * (isVoiceActive ? 1.0 : 0.0);
+    const halfW = (baseW * (0.8 + 0.35 * audioBoost)) + (isVoiceActive ? 0 : breath * 0.5);
+    const openH = isVoiceActive ? (baseOpenH * audioBoost) : 0;
+
+    // Live audio reactive waveform ripple on lip contour
+    let waveDev = 0;
+    if (waveform && waveform.length > 0 && isVoiceActive) {
+      const midSample = (waveform[Math.floor(waveform.length / 2)] - 128) / 128.0;
+      waveDev = midSample * 2.5 * audioBoost;
+    }
+
+    // Sensual Red Lipstick Palette:
+    // Ruby Red / Crimson Velvet with neon gloss
+    const lipstickLip = "#ff0055";       // Primary vibrant cherry red
+    const lipstickShadow = "#a60033";    // Deep sensual burgundy shadow
+    const mouthCavityBg = "#22000c";     // Deep velvet wine inner mouth
+    const tongueColor = "#ff4d79";       // Cute anime tongue
+    const teethColor = "#fff5f8";        // Pearly white anime teeth rim
+
+    const glowBlur = isVoiceActive ? (12 + 18 * audioBoost) : 8;
+    ctx.shadowBlur = glowBlur;
+    ctx.shadowColor = "#ff0055";
+
+    const leftX = cx - halfW;
+    const rightX = cx + halfW;
+    const cupidPeakOffset = halfW * 0.38;
+    const cupidDip = 1.8;
+    const cupidPeakH = 2.4;
+    const upperLipThickness = 3.6 + (isVoiceActive ? 1.0 : 0.5);
+    const lowerLipThickness = (5.2 + 2.0 * roundness) + waveDev * 0.5;
+
+    // -------------------------------------------------------------------------
+    // A. INNER MOUTH CAVITY & TEETH/TONGUE (WHEN MOUTH IS OPEN)
+    // -------------------------------------------------------------------------
+    if (openH > 1.8) {
+      ctx.save();
+      ctx.beginPath();
+      // Upper inner contour
+      ctx.moveTo(leftX, mouthY);
+      ctx.quadraticCurveTo(cx, mouthY - openH * 0.3, rightX, mouthY);
+      // Lower inner contour
+      ctx.quadraticCurveTo(cx + waveDev * 0.5, mouthY + openH + waveDev, leftX, mouthY);
+      ctx.closePath();
+
+      // Deep wine inner mouth fill
+      ctx.fillStyle = mouthCavityBg;
+      ctx.shadowBlur = 0;
+      ctx.fill();
+
+      // Clip inside the mouth to render pearly teeth and tongue
+      ctx.clip();
+
+      // 1. Upper Pearly Teeth Rim
+      ctx.beginPath();
+      ctx.fillStyle = teethColor;
+      ctx.moveTo(leftX + 2, mouthY - 1);
+      ctx.quadraticCurveTo(cx, mouthY - openH * 0.25, rightX - 2, mouthY - 1);
+      ctx.quadraticCurveTo(cx, mouthY + openH * 0.28, leftX + 2, mouthY - 1);
+      ctx.closePath();
+      ctx.fill();
+
+      // 2. Luscious Anime Tongue at bottom of cavity
+      const tongueY = mouthY + openH * 0.45;
+      ctx.beginPath();
+      const tongueGrad = ctx.createRadialGradient(cx, mouthY + openH, 1, cx, mouthY + openH * 0.7, openH * 0.8);
+      tongueGrad.addColorStop(0, "#ff6b93");
+      tongueGrad.addColorStop(1, tongueColor);
+      ctx.fillStyle = tongueGrad;
+      ctx.moveTo(cx - halfW * 0.55, mouthY + openH);
+      ctx.quadraticCurveTo(cx, tongueY + waveDev * 0.6, cx + halfW * 0.55, mouthY + openH);
+      ctx.quadraticCurveTo(cx, mouthY + openH + 2, cx - halfW * 0.55, mouthY + openH);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // -------------------------------------------------------------------------
+    // B. SENSUAL UPPER LIP (CUPID'S BOW WITH ROUNDED LOBES)
+    // -------------------------------------------------------------------------
+    ctx.save();
+    ctx.beginPath();
+    // Top boundary of upper lip (Cupid's bow: left corner -> peak 1 -> center dip -> peak 2 -> right corner)
+    ctx.moveTo(leftX, mouthY);
+    ctx.bezierCurveTo(
+      cx - cupidPeakOffset * 1.3, mouthY - cupidPeakH * 0.6,
+      cx - cupidPeakOffset * 0.8, mouthY - upperLipThickness - cupidPeakH,
+      cx - cupidPeakOffset * 0.3, mouthY - upperLipThickness
+    );
+    // Center dip
+    ctx.quadraticCurveTo(cx, mouthY - upperLipThickness + cupidDip, cx + cupidPeakOffset * 0.3, mouthY - upperLipThickness);
+    // Second peak -> right corner
+    ctx.bezierCurveTo(
+      cx + cupidPeakOffset * 0.8, mouthY - upperLipThickness - cupidPeakH,
+      cx + cupidPeakOffset * 1.3, mouthY - cupidPeakH * 0.6,
+      rightX, mouthY
+    );
+
+    // Bottom boundary of upper lip
+    if (openH > 1.8) {
+      ctx.quadraticCurveTo(cx, mouthY - openH * 0.3, leftX, mouthY);
+    } else {
+      // Gentle sensual resting seam
+      ctx.quadraticCurveTo(cx - cupidPeakOffset * 0.4, mouthY + 0.8, cx, mouthY + 0.4);
+      ctx.quadraticCurveTo(cx + cupidPeakOffset * 0.4, mouthY + 0.8, leftX, mouthY);
+    }
+    ctx.closePath();
+
+    // Upper Lip Gradient
+    const upperGrad = ctx.createLinearGradient(cx, mouthY - upperLipThickness - cupidPeakH, cx, mouthY);
+    upperGrad.addColorStop(0, "#ff1a66");
+    upperGrad.addColorStop(0.5, lipstickLip);
+    upperGrad.addColorStop(1, lipstickShadow);
+    ctx.fillStyle = upperGrad;
+    ctx.shadowColor = "#ff0055";
+    ctx.shadowBlur = glowBlur * 0.75;
+    ctx.fill();
+
+    // Upper lip Cupid's bow subtle gloss glints
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.ellipse(cx - cupidPeakOffset * 0.65, mouthY - upperLipThickness * 0.65, 2.2, 1.0, -0.3, 0, Math.PI * 2);
+    ctx.ellipse(cx + cupidPeakOffset * 0.65, mouthY - upperLipThickness * 0.65, 2.2, 1.0, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // C. SENSUAL LOWER LIP (FULL, PLUMP ROUND VOLUME WITH SPECULAR GLOSS)
+    // -------------------------------------------------------------------------
+    ctx.save();
+    ctx.beginPath();
+    // Upper boundary of lower lip (follows mouth opening or resting line)
+    if (openH > 1.8) {
+      ctx.moveTo(leftX, mouthY);
+      ctx.quadraticCurveTo(cx + waveDev * 0.5, mouthY + openH + waveDev, rightX, mouthY);
+    } else {
+      ctx.moveTo(leftX, mouthY);
+      ctx.quadraticCurveTo(cx, mouthY + 0.6, rightX, mouthY);
+    }
+
+    // Outer full rounded sensual lower lip curve
+    const bottomLipY = mouthY + Math.max(openH, 0) + lowerLipThickness;
+    ctx.bezierCurveTo(
+      rightX - halfW * 0.15, bottomLipY + waveDev * 0.4,
+      cx + halfW * 0.5, bottomLipY,
+      cx, bottomLipY
+    );
+    ctx.bezierCurveTo(
+      cx - halfW * 0.5, bottomLipY,
+      leftX + halfW * 0.15, bottomLipY + waveDev * 0.4,
+      leftX, mouthY
+    );
+    ctx.closePath();
+
+    // Lower Lip Voluptuous Gradient
+    const lowerGrad = ctx.createLinearGradient(cx, mouthY, cx, bottomLipY);
+    lowerGrad.addColorStop(0, lipstickShadow);
+    lowerGrad.addColorStop(0.4, lipstickLip);
+    lowerGrad.addColorStop(0.85, "#ff1a66");
+    lowerGrad.addColorStop(1, lipstickShadow);
+    ctx.fillStyle = lowerGrad;
+    ctx.shadowColor = "#ff0055";
+    ctx.shadowBlur = glowBlur;
+    ctx.fill();
+
+    // Sensual Specular Gloss Reflection on Plump Lower Lip (Round Oval High-Gloss Shine)
+    const glossY = mouthY + Math.max(openH, 0) + lowerLipThickness * 0.48;
+    const glossW = halfW * 0.42;
+    const glossH = lowerLipThickness * 0.32;
+
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(255, 255, 255, 0.70)";
+    ctx.shadowColor = "#ffffff";
+    ctx.shadowBlur = 6;
+    ctx.ellipse(cx, glossY, glossW, glossH, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Secondary subtle lower rim gloss
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(255, 180, 210, 0.45)";
+    ctx.shadowBlur = 0;
+    ctx.ellipse(cx - glossW * 0.35, glossY - 0.8, glossW * 0.45, glossH * 0.55, -0.15, 0, Math.PI * 2);
+    ctx.ellipse(cx + glossW * 0.35, glossY - 0.8, glossW * 0.45, glossH * 0.55, 0.15, 0, Math.PI * 2);
+    ctx.fill();
+
+    // -------------------------------------------------------------------------
+    // D. SENSUAL MOUTH CORNER DIMPLES & OUTLINE
+    // -------------------------------------------------------------------------
+    ctx.beginPath();
+    ctx.strokeStyle = "#800020"; // Deep burgundy lip contour
+    ctx.lineWidth = 1.2;
+    ctx.shadowBlur = 0;
+    // Tiny subtle anime corner shadow lines
+    ctx.moveTo(leftX - 1.5, mouthY - 0.5);
+    ctx.lineTo(leftX + 1.5, mouthY + 0.8);
+    ctx.moveTo(rightX - 1.5, mouthY + 0.8);
+    ctx.lineTo(rightX + 1.5, mouthY - 0.5);
+    ctx.stroke();
+
+    ctx.restore();
     ctx.restore();
   }
 

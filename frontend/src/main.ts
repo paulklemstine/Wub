@@ -72,6 +72,34 @@ export interface GrooveboxMeta {
   vocalNote?: string;
   activeSliceCoords?: Partial<Record<StemName, { x: number; y: number }>>;
   stemMixLevels?: Record<StemName, number>;
+  musicScale?: {
+    keyName: string;
+    modeName: string;
+    camelot: string;
+    scaleRoot: number;
+    scalePitches: number[];
+    scaleNotes: string[];
+    chordName: string;
+    chordRoot: number;
+    chordPitches: number[];
+    chordNotes: string[];
+    bassHz?: number;
+    chordHz?: number;
+    chordIndex?: number;
+    totalChords?: number;
+  };
+  patternDetails?: Record<string, {
+    id: string;
+    name: string;
+    grooveType: string;
+    territory: string;
+    energy: number;
+    density: number;
+    similarity: number;
+    cohesion: number;
+    onsetCount: number;
+    velocities?: number[];
+  }>;
 }
 
 interface UIEvent {
@@ -906,6 +934,128 @@ class WubApp {
           if (volVal && document.activeElement !== volSlider) {
             volVal.textContent = targetLvl.toFixed(2);
           }
+        }
+      }
+    }
+
+    // 10. Neon Trippy Modular Sequencer Rack & Harmonic Matrix
+    if (gb.musicScale) {
+      const ms = gb.musicScale;
+      const camelotBadge = document.getElementById("rack-camelot-badge");
+      if (camelotBadge && ms.camelot) {
+        camelotBadge.textContent = ms.camelot;
+      }
+      const scaleNameEl = document.getElementById("rack-scale-name");
+      if (scaleNameEl && ms.keyName) {
+        scaleNameEl.textContent = ms.keyName.toUpperCase();
+      }
+      const scaleModeEl = document.getElementById("rack-scale-mode");
+      if (scaleModeEl && ms.modeName) {
+        scaleModeEl.textContent = ms.modeName;
+      }
+      const chordNameEl = document.getElementById("rack-chord-name");
+      if (chordNameEl && ms.chordName) {
+        chordNameEl.textContent = ms.chordName;
+      }
+      const chordNotesEl = document.getElementById("rack-chord-notes");
+      if (chordNotesEl && ms.chordNotes) {
+        chordNotesEl.textContent = ms.chordNotes.join(" • ");
+      }
+      const bassHzEl = document.getElementById("rack-bass-hz");
+      if (bassHzEl && ms.bassHz !== undefined) {
+        bassHzEl.textContent = `${ms.bassHz.toFixed(1)} Hz`;
+      }
+      const chordHzEl = document.getElementById("rack-chord-hz");
+      if (chordHzEl && ms.chordHz !== undefined) {
+        chordHzEl.textContent = `${ms.chordHz.toFixed(1)} Hz`;
+      }
+
+      // Update 7 Scale Degree Pads
+      if (ms.scaleNotes && ms.scalePitches) {
+        const chordPitches = ms.chordPitches || [];
+        for (let i = 0; i < 7; i++) {
+          const padEl = document.getElementById(`rack-scale-pad-${i}`);
+          const noteEl = document.getElementById(`rack-scale-note-${i}`);
+          const noteName = ms.scaleNotes[i] || "";
+          const pitch = ms.scalePitches[i];
+          if (noteEl) noteEl.textContent = noteName;
+          if (padEl) {
+            const isChordTone = chordPitches.includes(pitch);
+            if (isChordTone) {
+              padEl.classList.add("active-chord-tone");
+            } else {
+              padEl.classList.remove("active-chord-tone");
+            }
+          }
+        }
+      }
+    }
+
+    // Update 4-Stem Modular Rack Units
+    const activeStepIdx = (curStep - 1) % 16;
+    for (const stem of STEMS) {
+      const details = gb.patternDetails?.[stem];
+      const patNameEl = document.getElementById(`rack-stem-patname-${stem}`);
+      if (patNameEl) {
+        patNameEl.textContent = details?.name || gb.patterns?.[stem] || `PART ${stem.toUpperCase()}`;
+      }
+
+      const territoryEl = document.getElementById(`rack-stem-territory-${stem}`);
+      if (territoryEl && details?.territory) {
+        territoryEl.textContent = details.territory.toUpperCase();
+      }
+
+      const grooveEl = document.getElementById(`rack-stem-groove-${stem}`);
+      if (grooveEl) {
+        const gName = details?.grooveType || gb.patternGrooves?.[stem] || "PATTERN";
+        grooveEl.textContent = gName.replace(/_/g, " ").toUpperCase();
+      }
+
+      // Gauges: Similarity Match, Energy, Density
+      const simVal = details?.similarity ?? gb.patternAudioScores?.[stem] ?? 0.94;
+      const simPct = Math.round(simVal * 100);
+      const simBarEl = document.getElementById(`rack-stem-simbar-${stem}`);
+      const simValEl = document.getElementById(`rack-stem-simval-${stem}`);
+      if (simBarEl) simBarEl.style.width = `${simPct}%`;
+      if (simValEl) simValEl.textContent = `${simPct}%`;
+
+      const energyVal = details?.energy ?? gb.energy ?? 0.85;
+      const energyPct = Math.round(energyVal * 100);
+      const enBarEl = document.getElementById(`rack-stem-enbar-${stem}`);
+      const enValEl = document.getElementById(`rack-stem-enval-${stem}`);
+      if (enBarEl) enBarEl.style.width = `${energyPct}%`;
+      if (enValEl) enValEl.textContent = `${energyPct}%`;
+
+      const densityVal = details?.density ?? 0.5;
+      const onsetCount = details?.onsetCount ?? (gb.patternGrids?.[stem]?.filter((v) => v === 1).length ?? 8);
+      const denBarEl = document.getElementById(`rack-stem-denbar-${stem}`);
+      const denValEl = document.getElementById(`rack-stem-denval-${stem}`);
+      if (denBarEl) denBarEl.style.width = `${Math.min(100, Math.round(densityVal * 100))}%`;
+      if (denValEl) denValEl.textContent = `${onsetCount}/16`;
+
+      // 16-Step Pads: Onset LEDs, Velocity Level, and Sweeping Playhead
+      const gridData = gb.patternGrids?.[stem];
+      const velocities = details?.velocities;
+      for (let s = 0; s < 16; s++) {
+        const stepPad = document.getElementById(`rack-step-pad-${stem}-${s}`);
+        if (!stepPad) continue;
+        const hasOnset = Boolean(gridData && gridData[s] === 1);
+        if (hasOnset) {
+          stepPad.classList.add("has-onset");
+        } else {
+          stepPad.classList.remove("has-onset");
+        }
+
+        const vel = (velocities && velocities[s] !== undefined) ? velocities[s] : (hasOnset ? 0.9 : 0);
+        const velBar = stepPad.querySelector(".rack-vel-bar") as HTMLElement | null;
+        if (velBar) {
+          velBar.style.height = `${Math.round(vel * 100)}%`;
+        }
+
+        if (s === activeStepIdx) {
+          stepPad.classList.add("playhead");
+        } else {
+          stepPad.classList.remove("playhead");
         }
       }
     }
