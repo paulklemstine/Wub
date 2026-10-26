@@ -1542,12 +1542,25 @@ class PatternAudioFeedbackEngine:
             tid = tr.track_id
             try:
                 rep = compressor.compress_song(tr, k_per_stem=target_vocab_per_stem)
-                # Format intrinsic patterns for the client sequencer
+                # Format intrinsic patterns for the client sequencer with next-pattern continuation links
                 client_intrinsic_patterns = {}
                 for stem, p_list in rep.intrinsic_patterns.items():
-                    client_intrinsic_patterns[stem] = [
-                        {
+                    stem_trans = rep.transition_matrices.get(stem, {})
+                    formatted_list = []
+                    for idx_p, p in enumerate(p_list):
+                        next_map = stem_trans.get(p.id, {})
+                        # Pick dominant non-self successor if available, else next rank pattern or self
+                        non_self = {k: v for k, v in next_map.items() if k != p.id and not k.endswith("_var")}
+                        if non_self:
+                            best_next = max(non_self.items(), key=lambda kv: kv[1])[0]
+                        elif next_map:
+                            best_next = max(next_map.items(), key=lambda kv: kv[1])[0]
+                        else:
+                            best_next = p_list[(idx_p + 1) % len(p_list)].id if p_list else p.id
+
+                        formatted_list.append({
                             "id": p.id,
+                            "track_id": rep.track_id,
                             "name": f"{rep.track_title} [{p.groove_type}]",
                             "groove_type": p.groove_type,
                             "energy": float(np.clip(p.density * 1.5, 0.25, 0.98)),
@@ -1559,10 +1572,11 @@ class PatternAudioFeedbackEngine:
                             "audio_similarity_score": round(float(p.reconstruction_fidelity), 4),
                             "cohesion_score": round(float(p.reconstruction_fidelity), 4),
                             "recurrence_ratio": round(float(p.recurrence_ratio), 4),
+                            "matching_bars": p.matching_bars,
+                            "next_pattern_id": best_next,
                             "slice_categories": [s.category if s is not None else None for s in p.steps],
-                        }
-                        for p in p_list
-                    ]
+                        })
+                    client_intrinsic_patterns[stem] = formatted_list
 
                 compressed_models[tid] = {
                     "track_id": rep.track_id,
@@ -1575,6 +1589,7 @@ class PatternAudioFeedbackEngine:
                     "total_vocab_slices": rep.vocabulary.total_slices,
                     "pattern_counts": {s: len(p) for s, p in rep.intrinsic_patterns.items()},
                     "intrinsic_patterns": client_intrinsic_patterns,
+                    "bar_pattern_sequence": rep.bar_pattern_sequence,
                     "transition_matrices": rep.transition_matrices,
                 }
                 total_compression += rep.compression_ratio
@@ -1595,11 +1610,18 @@ class PatternAudioFeedbackEngine:
 
     def export_locked_feedback_weights(
         self,
-        weights_path: Path = ROOT_DIR / "data" / "composing_ml_weights.json",
-        public_weights_path: Path = ROOT_DIR / "frontend" / "public" / "data" / "composing_ml_weights.json",
-        standalone_patterns_path: Optional[Path] = ROOT_DIR / "frontend" / "public" / "data" / "standalone_patterns.json",
+        weights_path: Optional[Path] = None,
+        public_weights_path: Optional[Path] = None,
+        standalone_patterns_path: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Lock in multi-stem audio feedback weights and export for in-browser client sequencing."""
+        is_default_feedback = (self.feedback_path.resolve() == FEEDBACK_FILE.resolve())
+        if weights_path is None:
+            weights_path = (ROOT_DIR / "data" / "composing_ml_weights.json") if is_default_feedback else (self.feedback_path.parent / "composing_ml_weights.json")
+        if public_weights_path is None:
+            public_weights_path = (ROOT_DIR / "frontend" / "public" / "data" / "composing_ml_weights.json") if is_default_feedback else (self.feedback_path.parent / "public_composing_ml_weights.json")
+        if standalone_patterns_path is None and is_default_feedback:
+            standalone_patterns_path = ROOT_DIR / "frontend" / "public" / "data" / "standalone_patterns.json"
         stem_compat = self.feedback_data.get("stem_pair_compatibility", {})
         slice_scores = self.feedback_data.get("slices", {})
 

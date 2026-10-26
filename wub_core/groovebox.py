@@ -288,8 +288,9 @@ class GrooveboxConductor:
             min_energy = 0.35
 
         self.active_patterns["drums"] = self.bank.pick_pattern(
-            "drums", groove_type=drum_type, min_energy=min_energy, rng=self.rng
-        ) or self.bank.create_groove_pattern("drums", "four_on_floor", rng=self.rng)
+            "drums", groove_type=drum_type, min_energy=min_energy,
+            preferred_track_id=self.lead_track_id, rng=self.rng
+        ) or self.bank.create_groove_pattern("drums", "four_on_floor", preferred_track_id=self.lead_track_id, rng=self.rng)
 
         if self.active_patterns["drums"]:
             self.lead_track_id = self.active_patterns["drums"].track_id
@@ -418,12 +419,12 @@ class GrooveboxConductor:
         # Fallback single-stem / cross-stem mashup mode using trained PatternComposer ML
         if is_turnaround:
             fill_pat = (
-                self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, rng=self.rng)
+                self.bank.pick_pattern("drums", groove_type="fill", min_energy=0.5, preferred_track_id=self.lead_track_id, rng=self.rng)
                 or self.bank.create_groove_pattern("drums", "fill", preferred_track_id=self.lead_track_id, rng=self.rng)
             )
             if fill_pat:
                 self.active_patterns["drums"] = fill_pat
-        elif pattern_in_cycle == 0:
+        elif pattern_in_cycle == 0 and not self.lead_track_id:
             self._init_section_patterns()
         else:
             composed = self.composer.compose_bar(

@@ -51,6 +51,14 @@ class PhraseComposerModel:
         self.transitions: Dict[Tuple[int, str, str], Dict[str, float]] = defaultdict(
             lambda: defaultdict(float)
         )
+        # Direct pattern-to-next-pattern continuation learned from consecutive bars of songs
+        self.pattern_continuations: Dict[str, Dict[str, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )
+        # Direct phrase-to-next-phrase continuation learned from consecutive 8-bar phrases of songs
+        self.phrase_continuations: Dict[str, Dict[str, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )
         # Empirical energy distribution per phrase bar: phrase_bar -> list of energies
         self.energy_by_bar: Dict[int, List[float]] = defaultdict(list)
         self.trained = False
@@ -58,7 +66,7 @@ class PhraseComposerModel:
         self.load(self.weights_path)
 
     def train_on_tracks(self, tracks: List[TrackAnalysis], bank: PatternBank) -> int:
-        """Train bar-to-bar transition probabilities from consecutive track bars weighted by acoustic quality."""
+        """Train bar-to-bar transition probabilities and consecutive pattern/phrase continuations from songs."""
         n_transitions = 0
 
         for tr in tracks:
@@ -72,7 +80,6 @@ class PhraseComposerModel:
 
             for bar in range(n_bars - 1):
                 p_bar_curr = bar % 8
-                p_bar_next = (bar + 1) % 8
 
                 for stem in STEMS:
                     pat_curr = bank.get_track_pattern(tr.track_id, stem, bar)
@@ -84,11 +91,57 @@ class PhraseComposerModel:
                         sim_score = getattr(pat_next, "audio_similarity_score", 0.5)
                         w = float(np.exp(2.0 * (sim_score - 0.5)))
                         self.transitions[key][pat_next.groove_type] += w
+                        self.pattern_continuations[pat_curr.id][pat_next.id] += w * 10.0
                         self.energy_by_bar[p_bar_curr].append(pat_curr.energy)
                         n_transitions += 1
 
+            # Also learn consecutive phrase-to-phrase continuations within the same song
+            track_phrases = bank.phrases_by_track.get(tr.track_id, [])
+            if len(track_phrases) >= 2:
+                sorted_phrases = sorted(track_phrases, key=lambda p: p.phrase_index)
+                for i in range(len(sorted_phrases) - 1):
+                    p_curr = sorted_phrases[i]
+                    p_next = sorted_phrases[i + 1]
+                    self.phrase_continuations[p_curr.id][p_next.id] += 15.0
+
         self.trained = True
         return n_transitions
+
+    def predict_next_pattern_id(
+        self,
+        current_pattern_id: str,
+        rng: Optional[np.random.Generator] = None,
+    ) -> Optional[str]:
+        """Predict the next consecutive pattern ID learned from the song's arrangement."""
+        cont = self.pattern_continuations.get(current_pattern_id)
+        if not cont:
+            return None
+        if rng is None:
+            return max(cont.items(), key=lambda kv: kv[1])[0]
+        choices = list(cont.keys())
+        total = sum(cont.values())
+        if total <= 0:
+            return choices[0]
+        probs = [v / total for v in cont.values()]
+        return str(rng.choice(choices, p=probs))
+
+    def predict_next_phrase_id(
+        self,
+        current_phrase_id: str,
+        rng: Optional[np.random.Generator] = None,
+    ) -> Optional[str]:
+        """Predict the next consecutive phrase ID learned from the song's macro structure."""
+        cont = self.phrase_continuations.get(current_phrase_id)
+        if not cont:
+            return None
+        if rng is None:
+            return max(cont.items(), key=lambda kv: kv[1])[0]
+        choices = list(cont.keys())
+        total = sum(cont.values())
+        if total <= 0:
+            return choices[0]
+        probs = [v / total for v in cont.values()]
+        return str(rng.choice(choices, p=probs))
 
     def save(self, path: Optional[Path] = None) -> None:
         p = path or self.weights_path
@@ -103,11 +156,21 @@ class PhraseComposerModel:
             serializable_transitions = {
                 f"{k[0]}:{k[1]}:{k[2]}": dict(v) for k, v in self.transitions.items()
             }
+            serializable_pat_cont = {
+                k: {nk: round(float(nv), 3) for nk, nv in v.items()}
+                for k, v in list(self.pattern_continuations.items())[:2500]
+            }
+            serializable_phr_cont = {
+                k: {nk: round(float(nv), 3) for nk, nv in v.items()}
+                for k, v in self.phrase_continuations.items()
+            }
             avg_energy = {
                 str(k): round(float(np.mean(v)), 3) for k, v in self.energy_by_bar.items() if v
             }
-            existing["version"] = 1
+            existing["version"] = 2
             existing["phrase_transitions"] = serializable_transitions
+            existing["pattern_continuations"] = serializable_pat_cont
+            existing["phrase_continuations"] = serializable_phr_cont
             existing["energy_by_bar"] = avg_energy
             p.write_text(json.dumps(existing, indent=2))
         except Exception:
@@ -127,6 +190,14 @@ class PhraseComposerModel:
                     stem = parts[1]
                     groove = parts[2]
                     self.transitions[(bar_idx, stem, groove)].update({k: float(v) for k, v in counts.items()})
+            raw_pc = data.get("pattern_continuations", {})
+            for pid, nxt_map in raw_pc.items():
+                if isinstance(nxt_map, dict):
+                    self.pattern_continuations[pid].update({k: float(v) for k, v in nxt_map.items()})
+            raw_phc = data.get("phrase_continuations", {})
+            for phid, nxt_map in raw_phc.items():
+                if isinstance(nxt_map, dict):
+                    self.phrase_continuations[phid].update({k: float(v) for k, v in nxt_map.items()})
             self.trained = len(self.transitions) > 0
             return self.trained
         except Exception:
@@ -212,37 +283,58 @@ class PatternComposer:
                 phrase_bar, stem, curr_g, rng=self.rng
             )
 
-        # 2. Select patterns from Tier 1 PatternBank
+        # 2. Select patterns from Tier 1 PatternBank with Song Continuation Priority
         new_patterns: Dict[str, Optional[SequencerPattern]] = {}
 
+        if self.lead_track_id and phrase_bar == 0 and any(self.active_patterns.values()):
+            # Advance lead_base_bar to the next consecutive 8-bar block of the current song!
+            self.lead_base_bar += 8
+
         if is_turnaround:
-            # Bar 8: Guaranteed high-energy drum fill
+            # Bar 8: Prefer the current song's consecutive bar 7 pattern or a same-track fill!
+            track_bar = self.lead_base_bar + phrase_bar
             fill_pat = (
-                self.bank.pick_pattern(
+                (self.bank.get_track_pattern(self.lead_track_id, "drums", track_bar) if self.lead_track_id else None)
+                or self.bank.pick_pattern(
                     "drums", groove_type="fill", min_energy=0.5,
+                    preferred_track_id=self.lead_track_id,
                     feedback_weights=feedback_weights, densify=densify, rng=self.rng,
                 )
                 or self.bank.create_groove_pattern("drums", "fill", preferred_track_id=self.lead_track_id, rng=self.rng)
             )
             new_patterns["drums"] = self.bank.densify_pattern(fill_pat, rng=self.rng) if densify and fill_pat else fill_pat
-            # Cut/stab bass on turnaround
-            new_patterns["bass"] = self.bank.pick_pattern(
-                "bass", groove_type="stabs", preferred_track_id=self.lead_track_id,
-                target_key=target_key, feedback_weights=feedback_weights, densify=densify, rng=self.rng,
-            )
-            new_patterns["other"] = self.bank.pick_pattern(
-                "other", preferred_track_id=self.lead_track_id,
-                target_key=target_key, feedback_weights=feedback_weights, densify=densify, rng=self.rng,
-            )
-            new_patterns["vocals"] = self.bank.create_groove_pattern(
-                "vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng
-            )
+            for s in ("bass", "other", "vocals"):
+                tr_pat = self.bank.get_track_pattern(self.lead_track_id, s, track_bar) if self.lead_track_id else None
+                if tr_pat:
+                    new_patterns[s] = self.bank.densify_pattern(tr_pat, rng=self.rng) if densify else tr_pat
+                elif s == "bass":
+                    new_patterns["bass"] = self.bank.pick_pattern(
+                        "bass", groove_type="stabs", preferred_track_id=self.lead_track_id,
+                        target_key=target_key, feedback_weights=feedback_weights, densify=densify, rng=self.rng,
+                    )
+                elif s == "other":
+                    new_patterns["other"] = self.bank.pick_pattern(
+                        "other", preferred_track_id=self.lead_track_id,
+                        target_key=target_key, feedback_weights=feedback_weights, densify=densify, rng=self.rng,
+                    )
+                else:
+                    new_patterns["vocals"] = self.bank.create_groove_pattern(
+                        "vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng
+                    )
 
-        elif self.lead_track_id and phrase_bar in (1, 2, 3, 5, 6):
-            # Follow natural track progression for mid-phrase continuity
+        elif self.lead_track_id:
+            # Follow natural consecutive bar progression of the current song across ALL bars (including bars 0 and 4)!
             track_bar = self.lead_base_bar + phrase_bar
             for stem in STEMS:
                 tr_pat = self.bank.get_track_pattern(self.lead_track_id, stem, track_bar)
+                if not tr_pat and self.active_patterns.get(stem):
+                    # Try trained pattern_continuations for the active pattern
+                    next_pid = self.model.predict_next_pattern_id(self.active_patterns[stem].id, rng=self.rng)
+                    if next_pid:
+                        for cand in self.bank.patterns_by_stem.get(stem, []):
+                            if cand.id == next_pid:
+                                tr_pat = cand
+                                break
                 if tr_pat:
                     new_patterns[stem] = self.bank.densify_pattern(tr_pat, rng=self.rng) if densify else tr_pat
                 else:
@@ -255,7 +347,7 @@ class PatternComposer:
                     )
 
         else:
-            # Bar 1 (phrase_bar 0) or Bar 5 (phrase_bar 4): Pick solid thematic anchor
+            # Initial Bar 1 (when no lead_track_id is active yet): Pick solid thematic anchor
             for stem in ("drums", "bass", "other"):
                 k_target = target_key if stem in ("bass", "other") else None
                 new_patterns[stem] = self.bank.pick_pattern(
@@ -272,7 +364,7 @@ class PatternComposer:
                 "vocals", target_key=target_key, preferred_track_id=self.lead_track_id,
                 feedback_weights=feedback_weights, densify=densify, rng=self.rng,
             )
-            if new_patterns.get("drums") and phrase_bar == 0:
+            if new_patterns.get("drums"):
                 self.lead_track_id = new_patterns["drums"].track_id
                 self.lead_base_bar = new_patterns["drums"].bar_num
 
@@ -556,15 +648,17 @@ class SongArranger:
             avg_sim = float(np.mean(sim_scores))
             audio_score = float(np.exp(2.5 * (avg_sim - 0.5)))
 
-            # 6. Track Narrative Continuity
+            # 6. Track Narrative Continuity (Strongly prefer playing the next consecutive part of the active song!)
             narrative_score = 1.0
             if current_phrase is not None and p.track_id == current_phrase.track_id:
                 if p.phrase_index == current_phrase.phrase_index + 1:
-                    narrative_score = 3.0 if not is_sec_change else 1.8
+                    narrative_score = 250.0 if not is_sec_change else 120.0
+                elif p.phrase_index > current_phrase.phrase_index:
+                    narrative_score = 35.0
                 elif p.phrase_index == current_phrase.phrase_index:
-                    narrative_score = 0.2
+                    narrative_score = 2.0
                 else:
-                    narrative_score = 1.2
+                    narrative_score = 8.0
 
             total_score = sec_score * key_score * bpm_score * energy_score * audio_score * narrative_score
             scores.append(max(1e-6, total_score))

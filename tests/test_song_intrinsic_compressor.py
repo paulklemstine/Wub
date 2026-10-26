@@ -249,4 +249,81 @@ def test_train_song_intrinsic_compression_includes_client_intrinsic_patterns(tmp
     assert "length" in p0
     assert p0["length"] == 16
     assert "energy" in p0
+    assert "next_pattern_id" in p0
+    assert "bar_pattern_sequence" in model
+    assert len(model["bar_pattern_sequence"]) == 16
+
+
+def test_phrase_composer_and_arranger_next_pattern_and_part_continuity():
+    """Verify PhraseComposerModel and SongArranger learn and follow consecutive pattern & phrase chains."""
+    from pathlib import Path
+    from wub_core.composer import PhraseComposerModel, SongArranger, PatternComposer
+    from wub_core.patterns import PatternBank
+
+    song = _make_mock_song(n_bars=16)
+    bank = PatternBank()
+    bank.load_from_tracks([song])
+
+    model = PhraseComposerModel()
+    model.train_on_tracks([song], bank)
+
+    # Verify pattern_continuations and phrase_continuations were learned
+    assert len(model.pattern_continuations) > 0
+    assert len(model.phrase_continuations) > 0
+
+    first_pat_id = next(iter(model.pattern_continuations.keys()))
+    predicted_next_pat = model.predict_next_pattern_id(first_pat_id)
+    assert predicted_next_pat is not None
+
+    first_phr_id = next(iter(model.phrase_continuations.keys()))
+    predicted_next_phr = model.predict_next_phrase_id(first_phr_id)
+    assert predicted_next_phr is not None
+
+    # Verify SongArranger.plan_next_phrase strongly prioritizes the consecutive next phrase (phrase_index + 1)
+    arranger = SongArranger(bank)
+    track_phrases = sorted(
+        [p for p in bank.phrases if p.track_id == song.track_id],
+        key=lambda p: p.phrase_index,
+    )
+    if len(track_phrases) >= 2:
+        p0 = track_phrases[0]
+        next_planned, _, _ = arranger.plan_next_phrase(
+            current_phrase=p0,
+            current_section="GROOVE_A",
+            current_key="8A",
+            current_bpm=126.0,
+            bars_in_section=4,
+            total_bars=4,
+        )
+        assert next_planned is not None
+        assert next_planned.track_id == song.track_id
+        assert next_planned.phrase_index == p0.phrase_index + 1
+
+    # Verify PatternComposer advances through consecutive patterns of the active song
+    composer = PatternComposer(bank)
+    composer.train([song])
+    b0_pats = composer.compose_bar(
+        phrase_bar=0,
+        section="GROOVE_A",
+        target_energy=0.8,
+        lead_track_id=song.track_id,
+    )
+    b1_pats = composer.compose_bar(
+        phrase_bar=1,
+        section="GROOVE_A",
+        target_energy=0.8,
+        lead_track_id=song.track_id,
+    )
+    assert b0_pats["drums"] is not None
+    assert b1_pats["drums"] is not None
+    assert b0_pats["drums"].track_id == song.track_id
+    assert b1_pats["drums"].track_id == song.track_id
+
+    # Verify client_ml_sequencer.ts wires next_phrase_id, bar_onset_grids, and predictNextPatternId
+    seq_ts = (Path(__file__).resolve().parent.parent / "frontend" / "src" / "client_ml_sequencer.ts").read_text()
+    assert "next_phrase_id" in seq_ts
+    assert "bar_onset_grids" in seq_ts
+    assert "updatePhraseBlockBarPatterns" in seq_ts
+    assert "predictNextPatternId" in seq_ts
+    assert "predictNextPhraseId" in seq_ts
 
