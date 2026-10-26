@@ -50,22 +50,36 @@ def test_index_html_contains_neon_sequencer_rack():
             assert f'id="rack-step-pad-{stem}-{s}"' in content
 
 
-def test_tamagotchi_anime_lipstick_mouth():
-    """Verify that tamagotchi.ts implements the sensual dynamic anime red lipstick mouth."""
+def test_tamagotchi_live_vocal_waveform_mouth():
+    """Verify that tamagotchi.ts animates the mouth directly using the vocal waveform."""
     tg_path = Path("frontend/src/tamagotchi.ts")
     assert tg_path.exists(), "frontend/src/tamagotchi.ts must exist"
     content = tg_path.read_text(encoding="utf-8")
 
-    assert "drawAnimeLipstickMouth" in content
-    assert "#ff0055" in content  # Neon cherry red lipstick
-    assert "#a60033" in content  # Ruby shadow
-    assert "cupid" in content.lower()  # Cupid's bow
-    assert "gloss" in content.lower()  # Voluptuous lower lip gloss reflection
+    # Live vocal waveform canvas mouth loop
+    assert "THE LIVE VOCAL WAVEFORM AUDIO REACTIVE MOUTH" in content
+    assert "mouthSteps = 64" in content
+    assert "waveDisp = sampleNorm" in content
+    assert "mouthAperture" in content
+    assert "smoothedVocalAmp" in content
+    assert "vowel" in content
+
+    # Waveform-modulated ASCII singing mouth
+    assert "extractWaveformMouth" in content
+    assert "MOUTH_SHAPES" in content
+    assert "singingLoopPhase" in content
+    assert "zeroCrossings" in content
+    assert "zcr" in content
+
+    # HTML contains .rave-mouth styling
+    html_path = Path("frontend/index.html")
+    assert html_path.exists()
+    html_content = html_path.read_text(encoding="utf-8")
+    assert ".rave-mouth" in html_content
 
 
-def test_tamagotchi_round_orb_and_pregenerated_mouth_sprites():
-    """Verify that the wub creature has a round orb outline instead of ears,
-    and a pregenerated sprite bank with 13 distinct singing sound shapes for dynamic vocal waveforms."""
+def test_tamagotchi_round_orb_creature():
+    """Verify that the wub creature has a round orb outline instead of ears."""
     tg_path = Path("frontend/src/tamagotchi.ts")
     assert tg_path.exists(), "frontend/src/tamagotchi.ts must exist"
     content = tg_path.read_text(encoding="utf-8")
@@ -82,32 +96,6 @@ def test_tamagotchi_round_orb_and_pregenerated_mouth_sprites():
     assert "leftEarPeak" not in content
     assert "rightEarPeak" not in content
     assert "foreheadDip" not in content
-
-    # Pregenerated mouth sprite bank
-    assert "PregeneratedMouthSpriteBank" in content
-    assert "mouthSpriteBank" in content
-    assert "SingingSoundShape" in content
-    assert "resolveSoundShape" in content
-    assert "drawWaveformLipReaction" in content
-
-    # 13 Singing Sound shapes for realistic singing
-    sound_shapes = [
-        "REST",
-        "BILABIAL",
-        "LABIODENTAL",
-        "DENTAL",
-        "SIBILANT",
-        "VOWEL_AA",
-        "VOWEL_EE",
-        "VOWEL_OH",
-        "VOWEL_OO",
-        "VOWEL_EH",
-        "VOWEL_AW",
-        "BELT",
-        "GASP",
-    ]
-    for shape in sound_shapes:
-        assert shape in content, f"Sound shape {shape} must exist in tamagotchi.ts"
 
     # HTML contains .rave-orb styling
     html_path = Path("frontend/index.html")
@@ -140,52 +128,4 @@ def test_harmonic_scale_pitch_math():
     cmaj7_tones = [0, 4, 7, 11]
     for tone in cmaj7_tones:
         assert tone in c_major_pitches, f"Chord tone {tone} must be in C major scale"
-
-
-def test_vocal_timbre_mouth_sprites_and_glyphs():
-    """Verify that different mouth sprites and visual styling exist for all vocal timbres:
-    SOULFUL, CYBER, ETHEREAL, GRITTY, and BELT.
-    """
-    tg_path = Path("frontend/src/tamagotchi.ts")
-    assert tg_path.exists(), "frontend/src/tamagotchi.ts must exist"
-    tg_content = tg_path.read_text(encoding="utf-8")
-
-    # VocalTimbre type definition
-    assert "VocalTimbre" in tg_content
-    expected_timbres = ["SOULFUL", "CYBER", "ETHEREAL", "GRITTY", "BELT"]
-    for timbre in expected_timbres:
-        assert f'"{timbre}"' in tg_content, f"Timbre {timbre} must be defined in VocalTimbre"
-
-    # Multi-timbre sprite bank initialization and lookup
-    assert "resolveVocalTimbre" in tg_content
-    assert "spectralRoughness" in tg_content
-    assert "getSprite" in tg_content
-
-    # Timbre-specific aesthetic palettes & reactions in tamagotchi.ts
-    assert "SOULFUL_SHAPES" in tg_content
-    assert "CYBER_SHAPES" in tg_content
-    assert "ETHEREAL_SHAPES" in tg_content
-    assert "GRITTY_SHAPES" in tg_content
-    assert "BELT_SHAPES" in tg_content
-
-    # CSS classes for all timbres in frontend/index.html
-    html_path = Path("frontend/index.html")
-    assert html_path.exists()
-    html_content = html_path.read_text(encoding="utf-8")
-
-    for timbre in ["soulful", "cyber", "ethereal", "gritty", "belt"]:
-        assert f".rave-mouth.mouth-{timbre}" in html_content, f"CSS class .rave-mouth.mouth-{timbre} must exist"
-        assert f".tamagotchi-ascii.singing .rave-mouth.mouth-{timbre}" in html_content
-
-    # Main & Sequencer pass timbre metadata
-    main_path = Path("frontend/src/main.ts")
-    assert main_path.exists()
-    main_content = main_path.read_text(encoding="utf-8")
-    assert "vocalTimbre" in main_content
-    assert "vocalPersona" in main_content
-
-    seq_path = Path("frontend/src/client_ml_sequencer.ts")
-    assert seq_path.exists()
-    seq_content = seq_path.read_text(encoding="utf-8")
-    assert "vocalTimbre" in seq_content
 
