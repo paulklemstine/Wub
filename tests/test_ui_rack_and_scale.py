@@ -63,6 +63,59 @@ def test_tamagotchi_anime_lipstick_mouth():
     assert "gloss" in content.lower()  # Voluptuous lower lip gloss reflection
 
 
+def test_tamagotchi_round_orb_and_pregenerated_mouth_sprites():
+    """Verify that the wub creature has a round orb outline instead of ears,
+    and a pregenerated sprite bank with 13 distinct singing sound shapes for dynamic vocal waveforms."""
+    tg_path = Path("frontend/src/tamagotchi.ts")
+    assert tg_path.exists(), "frontend/src/tamagotchi.ts must exist"
+    content = tg_path.read_text(encoding="utf-8")
+
+    # Round Orb stages and outline
+    assert "RAVE ORB" in content
+    assert "DISCO ORB" in content
+    assert "CYBER ORB" in content
+    assert "ASTRAL ORB" in content
+    assert "CREATURE ROUND ORB OUTLINE" in content
+    assert "rave-orb" in content
+
+    # Cat ears replaced
+    assert "leftEarPeak" not in content
+    assert "rightEarPeak" not in content
+    assert "foreheadDip" not in content
+
+    # Pregenerated mouth sprite bank
+    assert "PregeneratedMouthSpriteBank" in content
+    assert "mouthSpriteBank" in content
+    assert "SingingSoundShape" in content
+    assert "resolveSoundShape" in content
+    assert "drawWaveformLipReaction" in content
+
+    # 13 Singing Sound shapes for realistic singing
+    sound_shapes = [
+        "REST",
+        "BILABIAL",
+        "LABIODENTAL",
+        "DENTAL",
+        "SIBILANT",
+        "VOWEL_AA",
+        "VOWEL_EE",
+        "VOWEL_OH",
+        "VOWEL_OO",
+        "VOWEL_EH",
+        "VOWEL_AW",
+        "BELT",
+        "GASP",
+    ]
+    for shape in sound_shapes:
+        assert shape in content, f"Sound shape {shape} must exist in tamagotchi.ts"
+
+    # HTML contains .rave-orb styling
+    html_path = Path("frontend/index.html")
+    assert html_path.exists()
+    html_content = html_path.read_text(encoding="utf-8")
+    assert ".rave-orb" in html_content
+
+
 def test_harmonic_scale_pitch_math():
     """Verify chromatic pitch math and diatonic intervals for Camelot keys."""
     # A Minor (8A): Root = 9 (A), Aeolian = [0, 2, 3, 5, 7, 8, 10]
