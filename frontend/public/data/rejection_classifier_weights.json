@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "feature_weights": {
+    "spectral": 0.35,
+    "temporal": 0.25,
+    "crest": 0.15,
+    "harmonic": 0.15,
+    "structural": 0.1
+  },
+  "rejection_threshold": 0.7,
+  "updated_at": 1792987362.4623003
+}

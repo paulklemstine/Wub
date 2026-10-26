@@ -1729,7 +1729,7 @@
     /* Telemetry & Gauges Row */
     .rack-telemetry-row {
       display: grid;
-      grid-template-columns: 1fr auto auto auto;
+      grid-template-columns: 1fr auto auto auto auto;
       gap: 12px;
       align-items: center;
       background: #080b11;
@@ -2102,7 +2102,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.101 <span class="mc-build-num">#101</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.102 <span class="mc-build-num">#102</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -2321,6 +2321,11 @@
               <span class="rack-pat-label">PATTERN:</span>
               <span class="rack-pat-title" id="rack-stem-patname-drums">KG505_DRM_FOUR_FLOOR</span>
             </div>
+            <div class="rack-gauge-item" title="Adversarial Rejection Classifier Goodness Score vs Master Audio">
+              <span class="rack-gauge-lbl">GOODNESS:</span>
+              <div class="rack-gauge-track"><div class="rack-gauge-fill" id="rack-stem-goodbar-drums" style="width: 96%;"></div></div>
+              <span class="rack-gauge-val" id="rack-stem-goodval-drums">96% [✓]</span>
+            </div>
             <div class="rack-gauge-item" title="Acoustic Log-Mel Spectrogram Similarity to Training Corpus">
               <span class="rack-gauge-lbl">MATCH:</span>
               <div class="rack-gauge-track"><div class="rack-gauge-fill" id="rack-stem-simbar-drums" style="width: 95%;"></div></div>
@@ -2373,6 +2378,11 @@
             <div class="rack-pat-info">
               <span class="rack-pat-label">PATTERN:</span>
               <span class="rack-pat-title" id="rack-stem-patname-bass">KG505_BAS_OFFBEAT_SUB</span>
+            </div>
+            <div class="rack-gauge-item" title="Adversarial Rejection Classifier Goodness Score vs Master Audio">
+              <span class="rack-gauge-lbl">GOODNESS:</span>
+              <div class="rack-gauge-track"><div class="rack-gauge-fill" id="rack-stem-goodbar-bass" style="width: 94%;"></div></div>
+              <span class="rack-gauge-val" id="rack-stem-goodval-bass">94% [✓]</span>
             </div>
             <div class="rack-gauge-item" title="Acoustic Log-Mel Spectrogram Similarity to Training Corpus">
               <span class="rack-gauge-lbl">MATCH:</span>
@@ -2427,6 +2437,11 @@
               <span class="rack-pat-label">PATTERN:</span>
               <span class="rack-pat-title" id="rack-stem-patname-vocals">KG505_VOC_PROGRESSIVE_01</span>
             </div>
+            <div class="rack-gauge-item" title="Adversarial Rejection Classifier Goodness Score vs Master Audio">
+              <span class="rack-gauge-lbl">GOODNESS:</span>
+              <div class="rack-gauge-track"><div class="rack-gauge-fill" id="rack-stem-goodbar-vocals" style="width: 98%;"></div></div>
+              <span class="rack-gauge-val" id="rack-stem-goodval-vocals">98% [✓]</span>
+            </div>
             <div class="rack-gauge-item" title="Acoustic Log-Mel Spectrogram Similarity to Training Corpus">
               <span class="rack-gauge-lbl">MATCH:</span>
               <div class="rack-gauge-track"><div class="rack-gauge-fill" id="rack-stem-simbar-vocals" style="width: 96%;"></div></div>
@@ -2479,6 +2494,11 @@
             <div class="rack-pat-info">
               <span class="rack-pat-label">PATTERN:</span>
               <span class="rack-pat-title" id="rack-stem-patname-other">KG505_SYN_MELODIC_HOOK</span>
+            </div>
+            <div class="rack-gauge-item" title="Adversarial Rejection Classifier Goodness Score vs Master Audio">
+              <span class="rack-gauge-lbl">GOODNESS:</span>
+              <div class="rack-gauge-track"><div class="rack-gauge-fill" id="rack-stem-goodbar-other" style="width: 95%;"></div></div>
+              <span class="rack-gauge-val" id="rack-stem-goodval-other">95% [✓]</span>
             </div>
             <div class="rack-gauge-item" title="Acoustic Log-Mel Spectrogram Similarity to Training Corpus">
               <span class="rack-gauge-lbl">MATCH:</span>
@@ -2826,7 +2846,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.101 (Build #101 • rev 1c41373)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.102 (Build #102 • rev d562082)</span>
     </div>
   </div>
 

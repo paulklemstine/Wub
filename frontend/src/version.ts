@@ -12,9 +12,9 @@ export interface VersionInfo {
 export const VERSION_INFO: VersionInfo = {
   major: 0,
   minor: 2,
-  patch: 101,
-  build: 101,
-  version: "0.2.101",
-  commit: "1c41373",
-  timestamp: "2026-10-26T03:54:41Z",
+  patch: 102,
+  build: 102,
+  version: "0.2.102",
+  commit: "d562082",
+  timestamp: "2026-10-26T04:15:09Z",
 } as const;

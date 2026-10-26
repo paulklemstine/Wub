@@ -40,6 +40,8 @@ def test_index_html_contains_neon_sequencer_rack():
         assert f'id="rack-stem-groove-{stem}"' in content
         assert f'id="rack-stem-patname-{stem}"' in content
         assert f'id="rack-stem-simbar-{stem}"' in content
+        assert f'id="rack-stem-goodbar-{stem}"' in content
+        assert f'id="rack-stem-goodval-{stem}"' in content
         assert f'id="rack-stem-enbar-{stem}"' in content
         assert f'id="rack-stem-denbar-{stem}"' in content
         assert f'id="rack-stem-steps-{stem}"' in content

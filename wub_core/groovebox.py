@@ -74,6 +74,8 @@ class GrooveboxConductor:
         self.composer = PatternComposer(pattern_bank, seed=seed)
         if getattr(pattern_bank, "phrase_model", None) and pattern_bank.phrase_model.trained:
             self.composer.model = pattern_bank.phrase_model
+        from wub_core.adversarial_rejection_classifier import PatternAudioGoodnessDiscriminator
+        self.discriminator = PatternAudioGoodnessDiscriminator(rejection_threshold=0.65)
         self.cycle_mode = DEFAULT_CYCLE_MODE
         self.patterns_per_cycle = CYCLE_PRESETS[self.cycle_mode]["patterns"]
         self.steps_per_pattern = CYCLE_PRESETS[self.cycle_mode]["steps"]
@@ -309,10 +311,21 @@ class GrooveboxConductor:
             preferred_track_id=self.lead_track_id, rng=self.rng
         ) or self.bank.create_groove_pattern("vocals", "chop", preferred_track_id=self.lead_track_id, rng=self.rng)
 
-        # Infill and densify all fallback section patterns
+        # Infill, densify, and adversarially score all active patterns
         for s in STEMS:
             if self.active_patterns.get(s):
-                self.active_patterns[s] = self.bank.densify_pattern(self.active_patterns[s], rng=self.rng)
+                pat = self.bank.densify_pattern(self.active_patterns[s], rng=self.rng)
+                eval_res = self.discriminator.evaluate(
+                    rendered_wave=np.zeros(256, dtype=np.float32),
+                    master_wave=None,
+                    pattern=pat,
+                    stem=s,
+                    groove_type=pat.groove_type,
+                )
+                pat.audio_similarity_score = eval_res.goodness_score
+                if not eval_res.is_accepted:
+                    pat = self.bank.densify_pattern(pat, rng=self.rng)
+                self.active_patterns[s] = pat
 
     def _on_pattern_start(self, pattern_in_cycle: int) -> None:
         """Triggered on Step 0 of each pattern in the cycle."""
@@ -435,10 +448,19 @@ class GrooveboxConductor:
         if self.active_patterns.get("vocals") is None:
             self.active_patterns["vocals"] = self.bank.create_groove_pattern("vocals", "chop", rng=self.rng)
 
-        # Infill and densify all active patterns to guarantee full driving rhythm
+        # Infill, densify, and evaluate active patterns with goodness discriminator
         for s in STEMS:
             if self.active_patterns.get(s):
-                self.active_patterns[s] = self.bank.densify_pattern(self.active_patterns[s], rng=self.rng)
+                pat = self.bank.densify_pattern(self.active_patterns[s], rng=self.rng)
+                eval_res = self.discriminator.evaluate(
+                    rendered_wave=np.zeros(256, dtype=np.float32),
+                    master_wave=None,
+                    pattern=pat,
+                    stem=s,
+                    groove_type=pat.groove_type,
+                )
+                pat.audio_similarity_score = eval_res.goodness_score
+                self.active_patterns[s] = pat
 
     def _on_bar_start(self, pattern_in_cycle: int, step_in_pattern: int) -> None:
         """Triggered on Step 0 of each bar (every 16 tatums)."""

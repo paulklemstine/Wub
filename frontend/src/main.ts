@@ -99,6 +99,21 @@ export interface GrooveboxMeta {
     cohesion: number;
     onsetCount: number;
     velocities?: number[];
+    goodnessScore?: number;
+    isAccepted?: boolean;
+    rejectionReasons?: string[];
+  }>;
+  adversarialGoodness?: Record<string, {
+    score: number;
+    isAccepted: boolean;
+    threshold: number;
+    spectralMatch: number;
+    temporalMatch: number;
+    crestMatch: number;
+    harmonicMatch: number;
+    structuralMatch: number;
+    status: string;
+    rejectionReasons: string[];
   }>;
 }
 
@@ -1011,7 +1026,22 @@ class WubApp {
         grooveEl.textContent = gName.replace(/_/g, " ").toUpperCase();
       }
 
-      // Gauges: Similarity Match, Energy, Density
+      // Gauges: Similarity Match, Adversarial Goodness, Energy, Density
+      const gRes = gb.adversarialGoodness?.[stem];
+      const gScore = gRes ? gRes.score : (details?.goodnessScore ?? details?.similarity ?? 0.94);
+      const isAccepted = gRes ? gRes.isAccepted : (details?.isAccepted ?? true);
+      const gPct = Math.round(gScore * 100);
+      const goodBarEl = document.getElementById(`rack-stem-goodbar-${stem}`);
+      const goodValEl = document.getElementById(`rack-stem-goodval-${stem}`);
+      if (goodBarEl) {
+        goodBarEl.style.width = `${gPct}%`;
+        goodBarEl.style.background = isAccepted ? "" : "linear-gradient(90deg, #ef4444, #f97316)";
+      }
+      if (goodValEl) {
+        goodValEl.textContent = isAccepted ? `${gPct}% [✓]` : `${gPct}% [MUTATED]`;
+        goodValEl.style.color = isAccepted ? "" : "#ef4444";
+      }
+
       const simVal = details?.similarity ?? gb.patternAudioScores?.[stem] ?? 0.94;
       const simPct = Math.round(simVal * 100);
       const simBarEl = document.getElementById(`rack-stem-simbar-${stem}`);

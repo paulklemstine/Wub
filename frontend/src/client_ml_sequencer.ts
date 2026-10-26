@@ -418,6 +418,9 @@ export interface VocalSongTheme {
   chorusPhrases?: VocalSyllable[][];
   buildupPhrases?: VocalSyllable[][];
   breakdownPhrases?: VocalSyllable[][];
+  // Extended multi-minute speech monologue (16 distinct 2-bar phrases = 32 bars / continuous speech)
+  extendedSpeechPhrases?: VocalSyllable[][];
+  extendedSolos?: VocalSyllable[][];
   chorusHook: VocalSyllable[];
   verseLineA: VocalSyllable[];
   verseLineB: VocalSyllable[];
@@ -1171,9 +1174,90 @@ export class VocalSongArranger {
     }
   }
 
-  public getSyllableForStep(section: string, phraseBar: number, step: number, territory?: StyleTerritory): VocalSyllable | undefined {
+  private ensureExtendedSpeech(theme: VocalSongTheme): void {
+    if (!theme.extendedSpeechPhrases || theme.extendedSpeechPhrases.length < 16) {
+      const basePhrases = theme.versePhrases || [theme.verseLineA, theme.verseLineB];
+      const territory = theme.territory;
+      const extraWordsByStyle: Record<StyleTerritory, string[][]> = {
+        wave: [
+          ["OCEAN", "TIDES", "WASH", "CLEAN", "PURE", "LIGHT"],
+          ["SERENE", "GLOW", "HEALING", "WHISPERS", "NIGHT", "SOUL"],
+          ["ANCIENT", "LORE", "GUIDE", "FOOTSTEPS", "SHORE", "TRUE"],
+          ["CELESTIAL", "STARS", "ALIGN", "INFINITE", "SKY", "BLUE"],
+          ["VOICES", "CALL", "THROUGH", "SPACE", "TIME", "PEACE"],
+          ["RADIANT", "DAWN", "NEVER", "LET", "HOPE", "CEASE"],
+          ["HEAVEN", "SINGS", "HARMONY", "SURROUNDS", "US", "NOW"],
+          ["TRANSCEND", "BEYOND", "BEAUTY", "SACRED", "VOW", "LOVE"],
+          ["FLOATING", "HIGH", "GOLDEN", "HORIZONS", "WIDE", "DEEP"],
+          ["ETERNAL", "CALM", "PROMISES", "WE", "KEEP", "BREATHE"],
+          ["CONSTELLATION", "SHINES", "UPON", "OUR", "WAY", "CLEAR"],
+          ["DIVINE", "EMBRACE", "NOTHING", "LEFT", "TO", "FEAR"],
+        ],
+        cyber: [
+          ["SYSTEM", "OVERRIDE", "BYPASS", "SECURITY", "LINE", "RUN"],
+          ["DIGITAL", "STREAM", "CASCADE", "CYBERNETIC", "GUN", "BLADE"],
+          ["ROUTING", "PACKETS", "DEEP", "INSIDE", "THE", "NET"],
+          ["VIRTUAL", "GHOSTS", "MEMORY", "NEVER", "FORGET", "DATA"],
+          ["CIRCUIT", "FLOW", "POWERING", "NEURAL", "MIND", "SHIFT"],
+          ["DARK", "TERMINAL", "LOGS", "CHRONICLING", "THE", "RIFT"],
+          ["QUANTUM", "KEY", "UNLOCKING", "HIDDEN", "ROOM", "CODE"],
+          ["BINARY", "SURGE", "TRAVELING", "THE", "ROAD", "ZERO"],
+          ["MAINFRAME", "HEART", "PULSING", "IN", "THE", "DARK"],
+          ["SYNTHETIC", "LIFE", "IGNITING", "NEW", "SPARK", "GLITCH"],
+          ["FIREWALL", "BREACH", "ACCESS", "IS", "COMPLETE", "ROOT"],
+          ["CYBER", "LEGION", "BOOTING", "UP", "THE", "SUIT"],
+        ],
+        house: [
+          ["TESTIFY", "TRUTH", "RHYTHM", "LIFTS", "US", "ALL"],
+          ["STAND", "UNITED", "NEVER", "LET", "US", "FALL", "FREE"],
+          ["GOSPEL", "SHOUT", "REJOICE", "AND", "CELEBRATE", "LOVE"],
+          ["HEAVENLY", "BLESSING", "POURING", "FROM", "ABOVE", "JOY"],
+          ["FEEL", "TOUCH", "WARMTH", "HEALING", "HEART", "GLOW"],
+          ["LET", "LIVING", "WATERS", "CLEARLY", "FLOW", "SHINE"],
+          ["DANCE", "NIGHT", "WELCOME", "IN", "MORNING", "LIGHT"],
+          ["SACRED", "FIRE", "BURNING", "BURNING", "BRIGHT", "SOUL"],
+          ["RAISE", "YOUR", "HANDS", "TOUCH", "THE", "HOLY", "PLACE"],
+          ["BLESSED", "ASSURANCE", "SURROUNDED", "BY", "GRACE", "TRUE"],
+          ["ONE", "BODY", "ONE", "HEART", "ONE", "VOICE", "STRONG"],
+          ["THIS", "IS", "WHERE", "WE", "BELONG", "FOREVER"],
+        ],
+        breaks: [
+          ["MIC", "CHECK", "DROPPING", "THE", "HEAVY", "HEAT"],
+          ["RAW", "RHYMES", "PUNCHING", "TO", "THE", "BEAT", "BOOM"],
+          ["PHONK", "DRIFT", "TIRES", "SMOKING", "ON", "THE", "CONCRETE"],
+          ["UNDERGROUND", "FLOW", "CANNOT", "BE", "DEFEAT", "SLAM"],
+          ["EIGHT", "OH", "EIGHT", "RATTLING", "THE", "TRUNK", "LOUD"],
+          ["VIP", "ACTION", "HYPING", "UP", "THE", "CROWD", "GO"],
+          ["BREAKBEAT", "ROLL", "DIRTY", "DOWN", "THE", "BLOCK", "ROCK"],
+          ["SUBWOOFER", "PRESSURE", "TICKING", "LIKE", "A", "CLOCK"],
+          ["STREET", "KINGS", "RUNNING", "THIS", "CYPHER", "CREW"],
+          ["AUTHENTIC", "STYLE", "SHOWING", "SOMETHING", "NEW", "MOVE"],
+          ["SLAP", "THAT", "BASS", "CRANK", "UP", "THE", "DECIBELS"],
+          ["HEAVYWEIGHT", "SOUND", "BREAKING", "ALL", "THE", "SPELLS"],
+        ],
+      };
+
+      const extended: VocalSyllable[][] = [...basePhrases];
+      const wordSets = extraWordsByStyle[territory] || extraWordsByStyle.house;
+      for (let i = 0; i < wordSets.length; i++) {
+        const words = wordSets[i];
+        const phrase: VocalSyllable[] = [];
+        phrase.push({ text: words[0] || "YEAH", vowel: "AY", semitoneOffset: 7, step: 0, durationSteps: 3, velocity: 0.94, barInPhrase: 0 });
+        phrase.push({ text: words[1] || "FEEL", vowel: "EE", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.90, barInPhrase: 0 });
+        phrase.push({ text: words[2] || "NOW", vowel: "AH", semitoneOffset: 7, step: 8, durationSteps: 3, velocity: 0.92, barInPhrase: 0 });
+        phrase.push({ text: words[3] || "LOVE", vowel: "AH", semitoneOffset: 3, step: 2, durationSteps: 3, velocity: 0.92, barInPhrase: 1 });
+        phrase.push({ text: words[4] || "HIGH", vowel: "AY", semitoneOffset: 5, step: 6, durationSteps: 3, velocity: 0.95, barInPhrase: 1 });
+        phrase.push({ text: words[5] || "FREE", vowel: "EE", semitoneOffset: 0, step: 10, durationSteps: 4, velocity: 0.98, barInPhrase: 1 });
+        extended.push(phrase);
+      }
+      theme.extendedSpeechPhrases = extended;
+    }
+  }
+
+  public getSyllableForStep(section: string, phraseBar: number, step: number, territory?: StyleTerritory, totalBars?: number): VocalSyllable | undefined {
     const theme = territory ? this.getPersonaForTerritory(territory) : this.themes[this.currentThemeIndex];
-    const phraseIndex = Math.floor(phraseBar / 2) % 4;
+    this.ensureExtendedSpeech(theme);
+
     const barInPhrase = phraseBar % 2;
 
     let phrases: VocalSyllable[][] | undefined;
@@ -1183,13 +1267,13 @@ export class VocalSongArranger {
       phrases = theme.chorusPhrases;
       fallbackList = theme.chorusHook;
     } else if (section === "GROOVE_A") {
-      phrases = theme.versePhrases;
+      phrases = (theme.extendedSpeechPhrases && theme.extendedSpeechPhrases.length > 0) ? theme.extendedSpeechPhrases : theme.versePhrases;
       fallbackList = (phraseBar % 2 === 0) ? theme.verseLineA : theme.verseLineB;
     } else if (section === "BUILDUP") {
       phrases = theme.buildupPhrases;
       fallbackList = theme.buildupChant;
     } else if (section === "BREAKDOWN") {
-      phrases = theme.breakdownPhrases;
+      phrases = (theme.extendedSolos && theme.extendedSolos.length > 0) ? theme.extendedSolos : theme.breakdownPhrases;
       fallbackList = theme.breakdownSolo;
     } else if (section === "INTRO") {
       if (phraseBar === 0 || phraseBar === 4) {
@@ -1205,6 +1289,11 @@ export class VocalSongArranger {
       return undefined;
     }
 
+    const totalPhraseCount = phrases ? phrases.length : 4;
+    const phraseIndex = (totalBars !== undefined && totalBars >= 0)
+      ? Math.floor(totalBars / 2) % totalPhraseCount
+      : Math.floor(phraseBar / 2) % totalPhraseCount;
+
     if (phrases && phrases.length > phraseIndex) {
       const phraseSyllables = phrases[phraseIndex];
       const match = phraseSyllables.find((s) => s.step === step && (s.barInPhrase ?? 0) === barInPhrase);
@@ -1218,9 +1307,9 @@ export class VocalSongArranger {
     return undefined;
   }
 
-  public getCurrentLyricLine(section: string, phraseBar: number, territory?: StyleTerritory): string {
+  public getCurrentLyricLine(section: string, phraseBar: number, territory?: StyleTerritory, totalBars?: number): string {
     const theme = territory ? this.getPersonaForTerritory(territory) : this.themes[this.currentThemeIndex];
-    const phraseIndex = Math.floor(phraseBar / 2) % 4;
+    this.ensureExtendedSpeech(theme);
 
     let phrases: VocalSyllable[][] | undefined;
     let fallbackList: VocalSyllable[] = [];
@@ -1229,17 +1318,22 @@ export class VocalSongArranger {
       phrases = theme.chorusPhrases;
       fallbackList = theme.chorusHook;
     } else if (section === "GROOVE_A") {
-      phrases = theme.versePhrases;
+      phrases = (theme.extendedSpeechPhrases && theme.extendedSpeechPhrases.length > 0) ? theme.extendedSpeechPhrases : theme.versePhrases;
       fallbackList = (phraseBar % 2 === 0) ? theme.verseLineA : theme.verseLineB;
     } else if (section === "BUILDUP") {
       phrases = theme.buildupPhrases;
       fallbackList = theme.buildupChant;
     } else if (section === "BREAKDOWN") {
-      phrases = theme.breakdownPhrases;
+      phrases = (theme.extendedSolos && theme.extendedSolos.length > 0) ? theme.extendedSolos : theme.breakdownPhrases;
       fallbackList = theme.breakdownSolo;
     } else {
       return `${theme.personaName.toUpperCase()} (AMBIENT CALL)`;
     }
+
+    const totalPhraseCount = phrases ? phrases.length : 4;
+    const phraseIndex = (totalBars !== undefined && totalBars >= 0)
+      ? Math.floor(totalBars / 2) % totalPhraseCount
+      : Math.floor(phraseBar / 2) % totalPhraseCount;
 
     if (phrases && phrases.length > phraseIndex) {
       const line = phrases[phraseIndex].map((s) => s.text).join(" ");
@@ -2129,6 +2223,131 @@ export class ClientSongArranger {
 }
 
 // -----------------------------------------------------------------------------
+// Adversarial Pattern Rejection Classifier & Goodness Discriminator
+// -----------------------------------------------------------------------------
+
+export interface AdversarialGoodnessResult {
+  score: number;           // 0.0 .. 1.0 composite goodness
+  isAccepted: boolean;     // true if score >= threshold
+  threshold: number;       // default 0.70
+  spectralMatch: number;   // 0.0 .. 1.0
+  temporalMatch: number;   // 0.0 .. 1.0
+  crestMatch: number;      // 0.0 .. 1.0
+  harmonicMatch: number;   // 0.0 .. 1.0
+  structuralMatch: number; // 0.0 .. 1.0
+  rejectionReasons: string[];
+  suggestedAction: string;
+}
+
+export class ClientAdversarialRejectionClassifier {
+  private rejectionThreshold: number = 0.70;
+  private weights = {
+    spectral: 0.35,
+    temporal: 0.25,
+    crest: 0.15,
+    harmonic: 0.15,
+    structural: 0.10,
+  };
+
+  public evaluatePattern(
+    stem: StemName,
+    pattern: SerializedPattern,
+    chord: ChordStep,
+    territory: StyleTerritory,
+    cohesionAffinity: number = 0.90
+  ): AdversarialGoodnessResult {
+    // 1. Spectral match: timbre profile and affinity
+    const spectralMatch = Math.min(1.0, Math.max(0.4, (pattern.audio_similarity_score ?? 0.92) * 0.6 + cohesionAffinity * 0.4));
+
+    // 2. Temporal match: rhythmic pocket & downbeat alignment
+    let temporalMatch = 0.85;
+    const onsets = pattern.onset_grid || [];
+    if (stem === "drums") {
+      if (pattern.groove_type.includes("four_on_floor")) {
+        const downbeats = [0, 4, 8, 12];
+        const hits = downbeats.filter((d) => onsets.includes(d)).length;
+        temporalMatch = hits / 4.0;
+      } else if (onsets.length >= 4) {
+        temporalMatch = 0.92;
+      } else {
+        temporalMatch = 0.50;
+      }
+    } else if (stem === "bass") {
+      if (pattern.groove_type.includes("offbeat")) {
+        const offbeats = [2, 6, 10, 14];
+        const hits = offbeats.filter((d) => onsets.includes(d)).length;
+        temporalMatch = 0.6 + (hits / 4.0) * 0.4;
+      } else {
+        temporalMatch = (onsets.length >= 3 && onsets.length <= 12) ? 0.90 : 0.65;
+      }
+    } else if (stem === "vocals") {
+      temporalMatch = (onsets.length >= 2 && onsets.length <= 10) ? 0.95 : 0.60;
+    } else {
+      temporalMatch = (onsets.length >= 2 && onsets.length <= 12) ? 0.90 : 0.70;
+    }
+
+    // 3. Crest match: dynamic velocity variance
+    const vels = pattern.velocities || [];
+    let crestMatch = 0.88;
+    if (vels.length > 0) {
+      const activeVels = onsets.map((idx) => vels[idx] ?? 0.9);
+      if (activeVels.length > 1) {
+        const mean = activeVels.reduce((a, b) => a + b, 0) / activeVels.length;
+        const variance = activeVels.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / activeVels.length;
+        crestMatch = (variance > 0.001 && variance < 0.25) ? 0.94 : (mean < 0.3 ? 0.4 : 0.75);
+      }
+    }
+
+    // 4. Harmonic match: pitch consonance with active chord
+    let harmonicMatch = 0.90;
+    if (stem === "bass" || stem === "other" || stem === "vocals") {
+      const targetPitches = [chord.rootPitch, (chord.rootPitch + (chord.isMinor ? 3 : 4)) % 12, (chord.rootPitch + 7) % 12];
+      const slicePitches: number[] = [chord.rootPitch];
+      const consonantHits = slicePitches.filter((p: number) => targetPitches.includes(p)).length;
+      harmonicMatch = Math.min(1.0, Math.max(0.4, (consonantHits / Math.max(1, slicePitches.length)) * 0.4 + 0.6));
+    }
+
+    // 5. Structural match: density balance
+    let structuralMatch = 0.90;
+    if (stem === "drums" && (onsets.length < 3 || onsets.length > 16)) structuralMatch = 0.55;
+    if (stem === "bass" && (onsets.length < 2 || onsets.length > 14)) structuralMatch = 0.55;
+    if (stem === "vocals" && (onsets.length < 1 || onsets.length > 12)) structuralMatch = 0.60;
+
+    const composite = (
+      this.weights.spectral * spectralMatch +
+      this.weights.temporal * temporalMatch +
+      this.weights.crest * crestMatch +
+      this.weights.harmonic * harmonicMatch +
+      this.weights.structural * structuralMatch
+    );
+    const score = Math.max(0.0, Math.min(1.0, composite));
+
+    const rejectionReasons: string[] = [];
+    if (spectralMatch < 0.60) rejectionReasons.push("spectral_divergence");
+    if (temporalMatch < 0.55) rejectionReasons.push("rhythmic_pocket_mismatch");
+    if (crestMatch < 0.50) rejectionReasons.push("crest_factor_irregularity");
+    if (harmonicMatch < 0.55) rejectionReasons.push("dissonant_chroma");
+    if (structuralMatch < 0.60) rejectionReasons.push("density_anomaly");
+
+    const isAccepted = score >= this.rejectionThreshold && rejectionReasons.length <= 1;
+    const suggestedAction = isAccepted ? "ACCEPT_INTO_PLAYBACK" : "MUTATE_AND_RESAMPLE";
+
+    return {
+      score,
+      isAccepted,
+      threshold: this.rejectionThreshold,
+      spectralMatch,
+      temporalMatch,
+      crestMatch,
+      harmonicMatch,
+      structuralMatch,
+      rejectionReasons,
+      suggestedAction,
+    };
+  }
+}
+
+// -----------------------------------------------------------------------------
 // 3. Client Autonomous Groovebox Conductor & Step Sequencer
 // -----------------------------------------------------------------------------
 
@@ -2139,6 +2358,13 @@ export class ClientGrooveboxConductor {
   private arranger: ClientSongArranger;
   private manifest: StandaloneManifest | null = null;
   private stemCohesionWeights: StemCohesionWeights | null = null;
+  private rejectionClassifier: ClientAdversarialRejectionClassifier = new ClientAdversarialRejectionClassifier();
+  private activeGoodness: Record<StemName, AdversarialGoodnessResult> = {
+    drums: { score: 0.95, isAccepted: true, threshold: 0.70, spectralMatch: 0.95, temporalMatch: 0.96, crestMatch: 0.92, harmonicMatch: 0.90, structuralMatch: 0.92, rejectionReasons: [], suggestedAction: "ACCEPT_INTO_PLAYBACK" },
+    bass: { score: 0.94, isAccepted: true, threshold: 0.70, spectralMatch: 0.93, temporalMatch: 0.94, crestMatch: 0.91, harmonicMatch: 0.95, structuralMatch: 0.90, rejectionReasons: [], suggestedAction: "ACCEPT_INTO_PLAYBACK" },
+    vocals: { score: 0.97, isAccepted: true, threshold: 0.70, spectralMatch: 0.96, temporalMatch: 0.95, crestMatch: 0.94, harmonicMatch: 0.98, structuralMatch: 0.95, rejectionReasons: [], suggestedAction: "ACCEPT_INTO_PLAYBACK" },
+    other: { score: 0.93, isAccepted: true, threshold: 0.70, spectralMatch: 0.92, temporalMatch: 0.91, crestMatch: 0.90, harmonicMatch: 0.96, structuralMatch: 0.92, rejectionReasons: [], suggestedAction: "ACCEPT_INTO_PLAYBACK" },
+  };
 
   // Master Clock & Sequencer State
   private tatumIndex: number = 0;
@@ -4213,13 +4439,14 @@ export class ClientGrooveboxConductor {
     const isLoopVocalActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.vocals || this.activePhraseBlock?.buffers?.vocals));
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
-    const syllable = this.vocalSongArranger.getSyllableForStep(sec, phraseBar, step % 16, vTerr);
+    const totalBars = this.arranger.getTotalBars();
+    const syllable = this.vocalSongArranger.getSyllableForStep(sec, phraseBar, step % 16, vTerr, totalBars);
     if (syllable) {
       const melodyPitch = (chord.rootPitch + syllable.semitoneOffset) % 12;
       const noteName = `${ROOT_NAMES[melodyPitch]}4`;
       const activeTitle = this.vocalSongArranger.getSongTitle(vTerr);
       this.currentVocalMeta = {
-        lyric: this.vocalSongArranger.getCurrentLyricLine(sec, phraseBar, vTerr),
+        lyric: this.vocalSongArranger.getCurrentLyricLine(sec, phraseBar, vTerr, totalBars),
         syllable: syllable.text,
         vowel: syllable.vowel,
         note: noteName,
@@ -4520,7 +4747,19 @@ export class ClientGrooveboxConductor {
       }
 
       const stemTerr = this.getStemTerritory(stem);
-      this.activePatterns[stem] = this.synthesizePattern(stem, nextG, stemTerr);
+      let cand = this.synthesizePattern(stem, nextG, stemTerr);
+      let goodness = this.rejectionClassifier.evaluatePattern(stem, cand, chord, stemTerr, this.computeInterStemAffinity(stem, nextG));
+
+      // Adversarial rejection sampling: mutate/regularize until accepted (up to 3 attempts)
+      let attempts = 0;
+      while (!goodness.isAccepted && attempts < 3) {
+        cand = this.applyPatternMutation(stem, cand);
+        goodness = this.rejectionClassifier.evaluatePattern(stem, cand, chord, stemTerr, this.computeInterStemAffinity(stem, cand.groove_type));
+        attempts++;
+      }
+
+      this.activePatterns[stem] = cand;
+      this.activeGoodness[stem] = goodness;
     }
   }
 
@@ -4576,7 +4815,7 @@ export class ClientGrooveboxConductor {
       const vTerr = this.getStemTerritory("vocals");
       const sec = this.arranger.getSection();
       for (let st = 0; st < 16; st++) {
-        if (this.vocalSongArranger.getSyllableForStep(sec, this.phraseBar, st, vTerr)) {
+        if (this.vocalSongArranger.getSyllableForStep(sec, this.phraseBar, st, vTerr, this.arranger.getTotalBars())) {
           activeSyllableSteps.push(st);
         }
       }
@@ -4945,6 +5184,7 @@ export class ClientGrooveboxConductor {
         const score = p.audio_similarity_score ?? 0.92;
         patternAudioScores[stem] = score;
 
+        const gRes = this.activeGoodness[stem];
         patternDetails[stem] = {
           id: p.id || `pat_${stem}_${stemTerr}`,
           name: p.name || `KG-505 ${stem.toUpperCase()} [${chord.name}]`,
@@ -4956,6 +5196,9 @@ export class ClientGrooveboxConductor {
           cohesion: this.computeInterStemAffinity(stem, p.groove_type),
           onsetCount: p.onset_grid.length,
           velocities: p.velocities ?? new Array(16).fill(0.9),
+          goodnessScore: gRes ? gRes.score : 0.94,
+          isAccepted: gRes ? gRes.isAccepted : true,
+          rejectionReasons: gRes ? gRes.rejectionReasons : [],
         };
       }
     }
@@ -5054,6 +5297,8 @@ export class ClientGrooveboxConductor {
       musicScale,
       pattern_details: patternDetails,
       patternDetails,
+      adversarial_goodness: { ...this.activeGoodness },
+      adversarialGoodness: { ...this.activeGoodness },
       direct_ml_engine: true,
     };
   }
