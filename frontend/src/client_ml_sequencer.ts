@@ -54,6 +54,7 @@ export interface SliceManifestItem {
   loudness?: number;
   track_id: string;
   segment_id: string;
+  start?: number;
 }
 
 export interface SliceAsset {
@@ -67,6 +68,7 @@ export interface SliceAsset {
   trackTitle?: string;
   trackId?: string;
   segmentId?: string;
+  start?: number; // chronological timestamp in original song
   x?: number;
   y?: number;
 }
@@ -404,12 +406,18 @@ export interface VocalSyllable {
   step: number;           // 0..15 in pattern
   durationSteps: number;  // 1, 2, 4
   velocity: number;
+  barInPhrase?: number;   // 0 or 1 for 2-bar phrases (default 0)
 }
 
 export interface VocalSongTheme {
   title: string;
   personaName: string;
   territory: StyleTerritory;
+  // Multi-bar forward-moving narrative phrases (each entry is a 2-bar phrase, 4 entries = 8 bars)
+  versePhrases?: VocalSyllable[][];
+  chorusPhrases?: VocalSyllable[][];
+  buildupPhrases?: VocalSyllable[][];
+  breakdownPhrases?: VocalSyllable[][];
   chorusHook: VocalSyllable[];
   verseLineA: VocalSyllable[];
   verseLineB: VocalSyllable[];
@@ -456,6 +464,130 @@ export class VocalSongArranger {
         { text: "BEYOND", vowel: "OH", semitoneOffset: 10, step: 6, durationSteps: 4, velocity: 0.90 },
         { text: "CALM", vowel: "AH", semitoneOffset: 7, step: 10, durationSteps: 3, velocity: 0.92 },
         { text: "PEACE", vowel: "EE", semitoneOffset: 5, step: 13, durationSteps: 3, velocity: 0.90 },
+      ],
+      versePhrases: [
+        [
+          { text: "STARS", vowel: "AH", semitoneOffset: 7, step: 0, durationSteps: 4, velocity: 0.88, barInPhrase: 0 },
+          { text: "DRIFT", vowel: "EE", semitoneOffset: 5, step: 4, durationSteps: 3, velocity: 0.85, barInPhrase: 0 },
+          { text: "A", vowel: "AH", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.82, barInPhrase: 0 },
+          { text: "WAY", vowel: "AY", semitoneOffset: 3, step: 11, durationSteps: 4, velocity: 0.90, barInPhrase: 0 },
+          { text: "SLOW", vowel: "OH", semitoneOffset: 5, step: 4, durationSteps: 3, velocity: 0.82, barInPhrase: 1 },
+          { text: "LIGHT", vowel: "AY", semitoneOffset: 7, step: 10, durationSteps: 4, velocity: 0.86, barInPhrase: 1 },
+        ],
+        [
+          { text: "PEACE", vowel: "EE", semitoneOffset: 12, step: 0, durationSteps: 4, velocity: 0.88, barInPhrase: 0 },
+          { text: "IN", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 3, velocity: 0.85, barInPhrase: 0 },
+          { text: "MY", vowel: "AY", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.85, barInPhrase: 0 },
+          { text: "SOUL", vowel: "OH", semitoneOffset: 5, step: 11, durationSteps: 4, velocity: 0.90, barInPhrase: 0 },
+          { text: "DEEP", vowel: "EE", semitoneOffset: 7, step: 4, durationSteps: 3, velocity: 0.82, barInPhrase: 1 },
+          { text: "GLOW", vowel: "OH", semitoneOffset: 5, step: 10, durationSteps: 4, velocity: 0.86, barInPhrase: 1 },
+        ],
+        [
+          { text: "SHADOWS", vowel: "AH", semitoneOffset: 7, step: 0, durationSteps: 4, velocity: 0.88, barInPhrase: 0 },
+          { text: "FADE", vowel: "AY", semitoneOffset: 8, step: 4, durationSteps: 3, velocity: 0.88, barInPhrase: 0 },
+          { text: "TO", vowel: "OO", semitoneOffset: 10, step: 8, durationSteps: 2, velocity: 0.86, barInPhrase: 0 },
+          { text: "WHITE", vowel: "AY", semitoneOffset: 12, step: 11, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+          { text: "BREATHE", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 3, velocity: 0.85, barInPhrase: 1 },
+          { text: "CLEAR", vowel: "EE", semitoneOffset: 7, step: 10, durationSteps: 4, velocity: 0.88, barInPhrase: 1 },
+        ],
+        [
+          { text: "TOUCH", vowel: "AH", semitoneOffset: 12, step: 0, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 2, velocity: 0.86, barInPhrase: 0 },
+          { text: "ENDLESS", vowel: "EE", semitoneOffset: 12, step: 7, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "SKY", vowel: "AY", semitoneOffset: 14, step: 11, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+          { text: "SOAR", vowel: "OH", semitoneOffset: 12, step: 4, durationSteps: 3, velocity: 0.88, barInPhrase: 1 },
+          { text: "FREE", vowel: "EE", semitoneOffset: 10, step: 10, durationSteps: 4, velocity: 0.90, barInPhrase: 1 },
+        ],
+      ],
+      chorusPhrases: [
+        [
+          { text: "DREAM", vowel: "EE", semitoneOffset: 12, step: 0, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+          { text: "BEYOND", vowel: "OH", semitoneOffset: 10, step: 4, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "LIGHT", vowel: "AY", semitoneOffset: 12, step: 10, durationSteps: 3, velocity: 0.96, barInPhrase: 0 },
+          { text: "FLOAT", vowel: "OH", semitoneOffset: 7, step: 13, durationSteps: 3, velocity: 0.92, barInPhrase: 0 },
+          { text: "HIGH", vowel: "AY", semitoneOffset: 10, step: 4, durationSteps: 3, velocity: 0.88, barInPhrase: 1 },
+          { text: "A", vowel: "AH", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.85, barInPhrase: 1 },
+          { text: "WAY", vowel: "AY", semitoneOffset: 12, step: 10, durationSteps: 4, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "FEEL", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 3, velocity: 0.92, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "FIRE", vowel: "AY", semitoneOffset: 8, step: 7, durationSteps: 3, velocity: 0.95, barInPhrase: 0 },
+          { text: "I", vowel: "AY", semitoneOffset: 10, step: 10, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "GNITE", vowel: "AY", semitoneOffset: 12, step: 12, durationSteps: 3, velocity: 0.98, barInPhrase: 0 },
+          { text: "SOUL", vowel: "OH", semitoneOffset: 10, step: 4, durationSteps: 3, velocity: 0.88, barInPhrase: 1 },
+          { text: "A", vowel: "AH", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.85, barInPhrase: 1 },
+          { text: "LIVE", vowel: "AY", semitoneOffset: 12, step: 10, durationSteps: 4, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "HIGHER", vowel: "AY", semitoneOffset: 12, step: 0, durationSteps: 3, velocity: 0.96, barInPhrase: 0 },
+          { text: "WE", vowel: "EE", semitoneOffset: 14, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "TOUCH", vowel: "AH", semitoneOffset: 15, step: 7, durationSteps: 3, velocity: 0.98, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 14, step: 10, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "STARS", vowel: "AH", semitoneOffset: 12, step: 12, durationSteps: 3, velocity: 0.96, barInPhrase: 0 },
+          { text: "NEVER", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 3, velocity: 0.90, barInPhrase: 1 },
+          { text: "FALL", vowel: "AH", semitoneOffset: 7, step: 10, durationSteps: 4, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "HOLD", vowel: "OH", semitoneOffset: 12, step: 0, durationSteps: 3, velocity: 0.95, barInPhrase: 0 },
+          { text: "ING", vowel: "EE", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "ON", vowel: "AH", semitoneOffset: 7, step: 6, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "TO", vowel: "OO", semitoneOffset: 10, step: 8, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "NIGHT", vowel: "AY", semitoneOffset: 12, step: 11, durationSteps: 4, velocity: 0.98, barInPhrase: 0 },
+          { text: "E", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 1 },
+          { text: "TER", vowel: "EE", semitoneOffset: 7, step: 7, durationSteps: 2, velocity: 0.88, barInPhrase: 1 },
+          { text: "NAL", vowel: "AH", semitoneOffset: 5, step: 10, durationSteps: 4, velocity: 0.92, barInPhrase: 1 },
+        ],
+      ],
+      buildupPhrases: [
+        [
+          { text: "FLOAT", vowel: "OH", semitoneOffset: 5, step: 0, durationSteps: 3, velocity: 0.85, barInPhrase: 0 },
+          { text: "HIGH", vowel: "AY", semitoneOffset: 7, step: 4, durationSteps: 3, velocity: 0.88, barInPhrase: 0 },
+          { text: "SOAR", vowel: "OH", semitoneOffset: 5, step: 4, durationSteps: 3, velocity: 0.85, barInPhrase: 1 },
+          { text: "DEEP", vowel: "EE", semitoneOffset: 7, step: 10, durationSteps: 3, velocity: 0.88, barInPhrase: 1 },
+        ],
+        [
+          { text: "SOAR", vowel: "OH", semitoneOffset: 8, step: 0, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "FREE", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 3, velocity: 0.92, barInPhrase: 0 },
+          { text: "RISE", vowel: "AY", semitoneOffset: 8, step: 4, durationSteps: 3, velocity: 0.90, barInPhrase: 1 },
+          { text: "UP", vowel: "AH", semitoneOffset: 10, step: 10, durationSteps: 3, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "TOUCH", vowel: "AH", semitoneOffset: 10, step: 0, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 12, step: 4, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "SKY", vowel: "AY", semitoneOffset: 14, step: 8, durationSteps: 3, velocity: 0.98, barInPhrase: 0 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 12, step: 4, durationSteps: 2, velocity: 0.95, barInPhrase: 1 },
+          { text: "HOLD", vowel: "OH", semitoneOffset: 14, step: 8, durationSteps: 3, velocity: 0.98, barInPhrase: 1 },
+        ],
+        [
+          { text: "WE", vowel: "EE", semitoneOffset: 12, step: 0, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "ARE", vowel: "AH", semitoneOffset: 14, step: 4, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "ONE", vowel: "AH", semitoneOffset: 15, step: 8, durationSteps: 3, velocity: 1.0, barInPhrase: 0 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 15, step: 12, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+        ],
+      ],
+      breakdownPhrases: [
+        [
+          { text: "OOH", vowel: "OO", semitoneOffset: 12, step: 0, durationSteps: 6, velocity: 0.95, barInPhrase: 0 },
+          { text: "BEYOND", vowel: "OH", semitoneOffset: 10, step: 6, durationSteps: 4, velocity: 0.90, barInPhrase: 0 },
+          { text: "DRIFT", vowel: "EE", semitoneOffset: 7, step: 4, durationSteps: 4, velocity: 0.88, barInPhrase: 1 },
+        ],
+        [
+          { text: "CALM", vowel: "AH", semitoneOffset: 7, step: 0, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+          { text: "PEACE", vowel: "EE", semitoneOffset: 5, step: 6, durationSteps: 4, velocity: 0.90, barInPhrase: 0 },
+          { text: "SOUL", vowel: "OH", semitoneOffset: 7, step: 4, durationSteps: 4, velocity: 0.88, barInPhrase: 1 },
+        ],
+        [
+          { text: "LIGHT", vowel: "AY", semitoneOffset: 10, step: 0, durationSteps: 4, velocity: 0.94, barInPhrase: 0 },
+          { text: "SHINE", vowel: "AY", semitoneOffset: 12, step: 6, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+          { text: "AHEAD", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 4, velocity: 0.90, barInPhrase: 1 },
+        ],
+        [
+          { text: "ETERNAL", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 5, velocity: 0.92, barInPhrase: 0 },
+          { text: "LOVE", vowel: "AH", semitoneOffset: 5, step: 6, durationSteps: 4, velocity: 0.90, barInPhrase: 0 },
+          { text: "BREATHE", vowel: "EE", semitoneOffset: 3, step: 4, durationSteps: 5, velocity: 0.88, barInPhrase: 1 },
+        ],
       ],
     },
 
@@ -504,6 +636,136 @@ export class VocalSongArranger {
         { text: "THE", vowel: "EE", semitoneOffset: 3, step: 8, durationSteps: 2, velocity: 0.88 },
         { text: "WIRE", vowel: "AY", semitoneOffset: 0, step: 11, durationSteps: 4, velocity: 0.95 },
       ],
+      versePhrases: [
+        [
+          { text: "DARK", vowel: "AH", semitoneOffset: 0, step: 0, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "MA", vowel: "AH", semitoneOffset: 3, step: 3, durationSteps: 1, velocity: 0.90, barInPhrase: 0 },
+          { text: "TRIX", vowel: "EE", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "FEED", vowel: "EE", semitoneOffset: 5, step: 8, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "BURN", vowel: "OO", semitoneOffset: 0, step: 12, durationSteps: 3, velocity: 0.95, barInPhrase: 0 },
+          { text: "PULSE", vowel: "OO", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.90, barInPhrase: 1 },
+          { text: "LOCK", vowel: "AH", semitoneOffset: 0, step: 10, durationSteps: 3, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "SYN", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "APSE", vowel: "AH", semitoneOffset: 5, step: 3, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "CRACK", vowel: "AH", semitoneOffset: 3, step: 6, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "CODE", vowel: "OH", semitoneOffset: 0, step: 11, durationSteps: 4, velocity: 0.96, barInPhrase: 0 },
+          { text: "NEO", vowel: "EE", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 1 },
+          { text: "CORE", vowel: "OH", semitoneOffset: 3, step: 10, durationSteps: 3, velocity: 0.90, barInPhrase: 1 },
+        ],
+        [
+          { text: "GHOST", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "IN", vowel: "EE", semitoneOffset: 5, step: 3, durationSteps: 1, velocity: 0.88, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 3, step: 5, durationSteps: 1, velocity: 0.88, barInPhrase: 0 },
+          { text: "WIRE", vowel: "AY", semitoneOffset: 0, step: 8, durationSteps: 3, velocity: 0.94, barInPhrase: 0 },
+          { text: "FLASH", vowel: "AH", semitoneOffset: 3, step: 12, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "DATA", vowel: "AH", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.90, barInPhrase: 1 },
+          { text: "STREAM", vowel: "EE", semitoneOffset: 7, step: 10, durationSteps: 3, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "CY", vowel: "AY", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "BER", vowel: "EE", semitoneOffset: 5, step: 3, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "ZERO", vowel: "EE", semitoneOffset: 3, step: 6, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "BREAK", vowel: "AY", semitoneOffset: 0, step: 11, durationSteps: 4, velocity: 0.98, barInPhrase: 0 },
+          { text: "SYS", vowel: "EE", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "OVER", vowel: "OH", semitoneOffset: 0, step: 10, durationSteps: 3, velocity: 0.95, barInPhrase: 1 },
+        ],
+      ],
+      chorusPhrases: [
+        [
+          { text: "NE", vowel: "EE", semitoneOffset: 0, step: 0, durationSteps: 1, velocity: 1.0, barInPhrase: 0 },
+          { text: "ON", vowel: "OH", semitoneOffset: 0, step: 1, durationSteps: 1, velocity: 0.95, barInPhrase: 0 },
+          { text: "SYS", vowel: "EE", semitoneOffset: 3, step: 3, durationSteps: 1, velocity: 0.95, barInPhrase: 0 },
+          { text: "TEM", vowel: "EE", semitoneOffset: 3, step: 4, durationSteps: 1, velocity: 0.95, barInPhrase: 0 },
+          { text: "O", vowel: "OH", semitoneOffset: 7, step: 6, durationSteps: 1, velocity: 0.98, barInPhrase: 0 },
+          { text: "VER", vowel: "EE", semitoneOffset: 7, step: 7, durationSteps: 1, velocity: 0.98, barInPhrase: 0 },
+          { text: "RIDE", vowel: "AY", semitoneOffset: 10, step: 8, durationSteps: 3, velocity: 1.0, barInPhrase: 0 },
+          { text: "GLITCH", vowel: "EE", semitoneOffset: 3, step: 12, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "PULSE", vowel: "OO", semitoneOffset: 0, step: 14, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "LOCK", vowel: "AH", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "DOWN", vowel: "AH", semitoneOffset: 0, step: 10, durationSteps: 3, velocity: 0.95, barInPhrase: 1 },
+        ],
+        [
+          { text: "PULSE", vowel: "OO", semitoneOffset: 0, step: 0, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "RE", vowel: "EE", semitoneOffset: 3, step: 3, durationSteps: 1, velocity: 0.92, barInPhrase: 0 },
+          { text: "LOAD", vowel: "OH", semitoneOffset: 5, step: 5, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "MAX", vowel: "AH", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "VOLTS", vowel: "OH", semitoneOffset: 10, step: 11, durationSteps: 3, velocity: 1.0, barInPhrase: 0 },
+          { text: "GRID", vowel: "EE", semitoneOffset: 7, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "BURN", vowel: "OO", semitoneOffset: 5, step: 10, durationSteps: 3, velocity: 0.95, barInPhrase: 1 },
+        ],
+        [
+          { text: "POW", vowel: "AH", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "ER", vowel: "EE", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "CRACK", vowel: "AH", semitoneOffset: 12, step: 6, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "HIGH", vowel: "AY", semitoneOffset: 14, step: 9, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "AMPS", vowel: "AH", semitoneOffset: 15, step: 12, durationSteps: 3, velocity: 1.0, barInPhrase: 0 },
+          { text: "SURGE", vowel: "OO", semitoneOffset: 12, step: 4, durationSteps: 2, velocity: 0.95, barInPhrase: 1 },
+          { text: "FLASH", vowel: "AH", semitoneOffset: 10, step: 10, durationSteps: 3, velocity: 0.95, barInPhrase: 1 },
+        ],
+        [
+          { text: "NO", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "VA", vowel: "AH", semitoneOffset: 5, step: 3, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "DIS", vowel: "EE", semitoneOffset: 3, step: 6, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "RUPT", vowel: "AH", semitoneOffset: 0, step: 9, durationSteps: 3, velocity: 0.96, barInPhrase: 0 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 0, step: 13, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "SHUT", vowel: "AH", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "DOWN", vowel: "AH", semitoneOffset: 0, step: 10, durationSteps: 3, velocity: 0.96, barInPhrase: 1 },
+        ],
+      ],
+      buildupPhrases: [
+        [
+          { text: "O", vowel: "OH", semitoneOffset: 0, step: 0, durationSteps: 1, velocity: 0.85, barInPhrase: 0 },
+          { text: "VER", vowel: "EE", semitoneOffset: 3, step: 2, durationSteps: 1, velocity: 0.88, barInPhrase: 0 },
+          { text: "LOAD", vowel: "OH", semitoneOffset: 5, step: 4, durationSteps: 1, velocity: 0.90, barInPhrase: 0 },
+          { text: "CODE", vowel: "OH", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 1 },
+          { text: "BURN", vowel: "OO", semitoneOffset: 5, step: 10, durationSteps: 2, velocity: 0.90, barInPhrase: 1 },
+        ],
+        [
+          { text: "THE", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 1, velocity: 0.92, barInPhrase: 0 },
+          { text: "SYS", vowel: "EE", semitoneOffset: 10, step: 2, durationSteps: 1, velocity: 0.95, barInPhrase: 0 },
+          { text: "TEM", vowel: "EE", semitoneOffset: 12, step: 4, durationSteps: 1, velocity: 0.98, barInPhrase: 0 },
+          { text: "GRID", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "LOCK", vowel: "AH", semitoneOffset: 12, step: 10, durationSteps: 2, velocity: 0.95, barInPhrase: 1 },
+        ],
+        [
+          { text: "GO", vowel: "OH", semitoneOffset: 12, step: 0, durationSteps: 1, velocity: 0.96, barInPhrase: 0 },
+          { text: "HARD", vowel: "AH", semitoneOffset: 14, step: 2, durationSteps: 1, velocity: 0.98, barInPhrase: 0 },
+          { text: "SURGE", vowel: "OO", semitoneOffset: 15, step: 4, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "VOLTS", vowel: "OH", semitoneOffset: 14, step: 4, durationSteps: 2, velocity: 0.96, barInPhrase: 1 },
+          { text: "HIGH", vowel: "AY", semitoneOffset: 15, step: 10, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+        ],
+        [
+          { text: "MAX", vowel: "AH", semitoneOffset: 14, step: 0, durationSteps: 1, velocity: 0.98, barInPhrase: 0 },
+          { text: "OUT", vowel: "AH", semitoneOffset: 15, step: 2, durationSteps: 1, velocity: 1.0, barInPhrase: 0 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 15, step: 4, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "GO", vowel: "OH", semitoneOffset: 15, step: 12, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+        ],
+      ],
+      breakdownPhrases: [
+        [
+          { text: "LOST", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+          { text: "IN", vowel: "EE", semitoneOffset: 5, step: 5, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 3, step: 8, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "WIRE", vowel: "AY", semitoneOffset: 0, step: 11, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+        ],
+        [
+          { text: "COLD", vowel: "OH", semitoneOffset: 5, step: 0, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+          { text: "CODE", vowel: "OH", semitoneOffset: 3, step: 5, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "SLEEP", vowel: "EE", semitoneOffset: 0, step: 10, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+        ],
+        [
+          { text: "ECHO", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 4, velocity: 0.94, barInPhrase: 0 },
+          { text: "PULSE", vowel: "OO", semitoneOffset: 5, step: 5, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "FADE", vowel: "AY", semitoneOffset: 3, step: 10, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+        ],
+        [
+          { text: "RE", vowel: "EE", semitoneOffset: 3, step: 0, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "BOOT", vowel: "OO", semitoneOffset: 0, step: 4, durationSteps: 5, velocity: 0.95, barInPhrase: 0 },
+          { text: "CORE", vowel: "OH", semitoneOffset: 0, step: 11, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+        ],
+      ],
     },
 
     // Persona 2 (House): Soulful House ("FEEL THE LOVE", rich soulful open vowels, driving melodic hooks)
@@ -547,6 +809,142 @@ export class VocalSongArranger {
         { text: "HOLD", vowel: "OH", semitoneOffset: 5, step: 6, durationSteps: 2, velocity: 0.88 },
         { text: "ON", vowel: "AH", semitoneOffset: 3, step: 8, durationSteps: 4, velocity: 0.92 },
         { text: "LOVE", vowel: "AH", semitoneOffset: 0, step: 12, durationSteps: 4, velocity: 0.96 },
+      ],
+      versePhrases: [
+        [
+          { text: "BABY", vowel: "AY", semitoneOffset: 0, step: 0, durationSteps: 3, velocity: 0.92, barInPhrase: 0 },
+          { text: "LET", vowel: "EE", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "IT", vowel: "EE", semitoneOffset: 5, step: 7, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "SHINE", vowel: "AY", semitoneOffset: 0, step: 10, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+          { text: "ALL", vowel: "AH", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 1 },
+          { text: "NIGHT", vowel: "AY", semitoneOffset: 0, step: 10, durationSteps: 3, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "HEART", vowel: "AH", semitoneOffset: 7, step: 0, durationSteps: 3, velocity: 0.92, barInPhrase: 0 },
+          { text: "BEAT", vowel: "EE", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "SO", vowel: "OH", semitoneOffset: 7, step: 7, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "RIGHT", vowel: "AY", semitoneOffset: 3, step: 10, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+          { text: "FEEL", vowel: "EE", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 1 },
+          { text: "FREE", vowel: "EE", semitoneOffset: 3, step: 10, durationSteps: 3, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "MU", vowel: "OO", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "SIC", vowel: "EE", semitoneOffset: 8, step: 3, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "TAKES", vowel: "AY", semitoneOffset: 10, step: 6, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "ME", vowel: "EE", semitoneOffset: 12, step: 9, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "HIGH", vowel: "AY", semitoneOffset: 12, step: 12, durationSteps: 3, velocity: 0.96, barInPhrase: 0 },
+          { text: "SWEET", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 2, velocity: 0.90, barInPhrase: 1 },
+          { text: "LOVE", vowel: "AH", semitoneOffset: 7, step: 10, durationSteps: 3, velocity: 0.94, barInPhrase: 1 },
+        ],
+        [
+          { text: "WE", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "CAN", vowel: "AH", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "TOUCH", vowel: "AH", semitoneOffset: 12, step: 6, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 14, step: 9, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "SKY", vowel: "AY", semitoneOffset: 15, step: 12, durationSteps: 3, velocity: 0.98, barInPhrase: 0 },
+          { text: "YEAH", vowel: "AY", semitoneOffset: 14, step: 4, durationSteps: 2, velocity: 0.94, barInPhrase: 1 },
+          { text: "BABY", vowel: "AY", semitoneOffset: 12, step: 10, durationSteps: 3, velocity: 0.96, barInPhrase: 1 },
+        ],
+      ],
+      chorusPhrases: [
+        [
+          { text: "FEEL", vowel: "EE", semitoneOffset: 12, step: 0, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "THE", vowel: "OH", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "LOVE", vowel: "AH", semitoneOffset: 12, step: 6, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "DEEP", vowel: "EE", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "IN", vowel: "EE", semitoneOffset: 5, step: 10, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "YOUR", vowel: "OH", semitoneOffset: 7, step: 12, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "SOUL", vowel: "OH", semitoneOffset: 3, step: 14, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "RIGHT", vowel: "AY", semitoneOffset: 7, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 5, step: 10, durationSteps: 3, velocity: 0.95, barInPhrase: 1 },
+        ],
+        [
+          { text: "DON'T", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "LET", vowel: "EE", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "GO", vowel: "OH", semitoneOffset: 12, step: 6, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "KEEP", vowel: "EE", semitoneOffset: 10, step: 8, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "MO", vowel: "OO", semitoneOffset: 12, step: 10, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "VING", vowel: "EE", semitoneOffset: 14, step: 12, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "ON", vowel: "AH", semitoneOffset: 12, step: 14, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "SO", vowel: "OH", semitoneOffset: 10, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "STRONG", vowel: "OH", semitoneOffset: 7, step: 10, durationSteps: 3, velocity: 0.95, barInPhrase: 1 },
+        ],
+        [
+          { text: "HIGH", vowel: "AY", semitoneOffset: 12, step: 0, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "ER", vowel: "AH", semitoneOffset: 14, step: 3, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "AND", vowel: "AH", semitoneOffset: 12, step: 6, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "HIGH", vowel: "AY", semitoneOffset: 15, step: 8, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "ER", vowel: "AH", semitoneOffset: 14, step: 10, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "SUN", vowel: "AH", semitoneOffset: 12, step: 12, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "SHINE", vowel: "AY", semitoneOffset: 10, step: 14, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "BRIGHT", vowel: "AY", semitoneOffset: 12, step: 4, durationSteps: 2, velocity: 0.94, barInPhrase: 1 },
+          { text: "DAY", vowel: "AY", semitoneOffset: 10, step: 10, durationSteps: 3, velocity: 0.96, barInPhrase: 1 },
+        ],
+        [
+          { text: "LOVE", vowel: "AH", semitoneOffset: 12, step: 0, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "IS", vowel: "EE", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 7, step: 6, durationSteps: 2, velocity: 0.92, barInPhrase: 0 },
+          { text: "AN", vowel: "AH", semitoneOffset: 10, step: 8, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "SWER", vowel: "AH", semitoneOffset: 12, step: 10, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "TO", vowel: "OO", semitoneOffset: 14, step: 12, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "NIGHT", vowel: "AY", semitoneOffset: 12, step: 14, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "FOR", vowel: "OH", semitoneOffset: 10, step: 4, durationSteps: 2, velocity: 0.94, barInPhrase: 1 },
+          { text: "EV", vowel: "EE", semitoneOffset: 7, step: 8, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "ER", vowel: "AH", semitoneOffset: 5, step: 11, durationSteps: 3, velocity: 0.96, barInPhrase: 1 },
+        ],
+      ],
+      buildupPhrases: [
+        [
+          { text: "HIGH", vowel: "AY", semitoneOffset: 5, step: 0, durationSteps: 2, velocity: 0.82, barInPhrase: 0 },
+          { text: "ER", vowel: "AH", semitoneOffset: 7, step: 2, durationSteps: 2, velocity: 0.85, barInPhrase: 0 },
+          { text: "TAKE", vowel: "AY", semitoneOffset: 8, step: 4, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "LOVE", vowel: "AH", semitoneOffset: 7, step: 4, durationSteps: 2, velocity: 0.86, barInPhrase: 1 },
+          { text: "YEAH", vowel: "AY", semitoneOffset: 8, step: 10, durationSteps: 2, velocity: 0.88, barInPhrase: 1 },
+        ],
+        [
+          { text: "ME", vowel: "EE", semitoneOffset: 10, step: 0, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "HIGH", vowel: "AY", semitoneOffset: 12, step: 2, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "ER", vowel: "AH", semitoneOffset: 12, step: 4, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "FEEL", vowel: "EE", semitoneOffset: 10, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "FREE", vowel: "EE", semitoneOffset: 12, step: 10, durationSteps: 2, velocity: 0.94, barInPhrase: 1 },
+        ],
+        [
+          { text: "LOVE", vowel: "AH", semitoneOffset: 14, step: 0, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "YEAH", vowel: "AY", semitoneOffset: 15, step: 2, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "GET", vowel: "EE", semitoneOffset: 14, step: 4, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "UP", vowel: "AH", semitoneOffset: 15, step: 6, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "MOVE", vowel: "OO", semitoneOffset: 14, step: 4, durationSteps: 2, velocity: 0.98, barInPhrase: 1 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 15, step: 10, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+        ],
+        [
+          { text: "TOUCH", vowel: "AH", semitoneOffset: 14, step: 0, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 15, step: 2, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "SKY", vowel: "AY", semitoneOffset: 15, step: 4, durationSteps: 3, velocity: 1.0, barInPhrase: 0 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 15, step: 12, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+        ],
+      ],
+      breakdownPhrases: [
+        [
+          { text: "OOH", vowel: "OO", semitoneOffset: 7, step: 0, durationSteps: 5, velocity: 0.95, barInPhrase: 0 },
+          { text: "HOLD", vowel: "OH", semitoneOffset: 5, step: 6, durationSteps: 2, velocity: 0.88, barInPhrase: 0 },
+          { text: "ON", vowel: "AH", semitoneOffset: 3, step: 8, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+          { text: "LOVE", vowel: "AH", semitoneOffset: 0, step: 12, durationSteps: 4, velocity: 0.96, barInPhrase: 0 },
+        ],
+        [
+          { text: "SOUL", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+          { text: "WARM", vowel: "OH", semitoneOffset: 5, step: 5, durationSteps: 3, velocity: 0.88, barInPhrase: 0 },
+          { text: "DEEP", vowel: "EE", semitoneOffset: 3, step: 9, durationSteps: 4, velocity: 0.90, barInPhrase: 0 },
+        ],
+        [
+          { text: "SHINE", vowel: "AY", semitoneOffset: 10, step: 0, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+          { text: "YOUR", vowel: "OH", semitoneOffset: 8, step: 5, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "LIGHT", vowel: "AY", semitoneOffset: 7, step: 9, durationSteps: 4, velocity: 0.94, barInPhrase: 0 },
+        ],
+        [
+          { text: "HEART", vowel: "AH", semitoneOffset: 5, step: 0, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+          { text: "BEAT", vowel: "EE", semitoneOffset: 3, step: 5, durationSteps: 3, velocity: 0.88, barInPhrase: 0 },
+          { text: "TRUE", vowel: "OO", semitoneOffset: 0, step: 9, durationSteps: 5, velocity: 0.95, barInPhrase: 0 },
+        ],
       ],
     },
 
@@ -592,6 +990,139 @@ export class VocalSongArranger {
         { text: "UP", vowel: "AH", semitoneOffset: 5, step: 5, durationSteps: 2, velocity: 0.90 },
         { text: "READY", vowel: "EE", semitoneOffset: 3, step: 8, durationSteps: 3, velocity: 0.92 },
         { text: "GO", vowel: "OH", semitoneOffset: 0, step: 12, durationSteps: 3, velocity: 0.98 },
+      ],
+      versePhrases: [
+        [
+          { text: "ROLL", vowel: "OH", semitoneOffset: 0, step: 0, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 3, step: 3, durationSteps: 1, velocity: 0.90, barInPhrase: 0 },
+          { text: "DRUM", vowel: "AH", semitoneOffset: 5, step: 6, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "JUMP", vowel: "AH", semitoneOffset: 0, step: 11, durationSteps: 3, velocity: 0.98, barInPhrase: 0 },
+          { text: "HIT", vowel: "EE", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.90, barInPhrase: 1 },
+          { text: "THAT", vowel: "AH", semitoneOffset: 0, step: 10, durationSteps: 2, velocity: 0.94, barInPhrase: 1 },
+        ],
+        [
+          { text: "FEEL", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 5, step: 3, durationSteps: 1, velocity: 0.90, barInPhrase: 0 },
+          { text: "PUNCH", vowel: "AH", semitoneOffset: 3, step: 6, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "ROCK", vowel: "OH", semitoneOffset: 0, step: 11, durationSteps: 3, velocity: 0.98, barInPhrase: 0 },
+          { text: "SHAKE", vowel: "AY", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "IT", vowel: "EE", semitoneOffset: 0, step: 10, durationSteps: 2, velocity: 0.95, barInPhrase: 1 },
+        ],
+        [
+          { text: "SLAP", vowel: "AH", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 5, step: 3, durationSteps: 1, velocity: 0.90, barInPhrase: 0 },
+          { text: "EIGHT", vowel: "AY", semitoneOffset: 3, step: 6, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "OH", vowel: "OH", semitoneOffset: 5, step: 8, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "EIGHT", vowel: "AY", semitoneOffset: 0, step: 11, durationSteps: 3, velocity: 1.0, barInPhrase: 0 },
+          { text: "DON'T", vowel: "OH", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "WAIT", vowel: "AY", semitoneOffset: 0, step: 10, durationSteps: 2, velocity: 0.96, barInPhrase: 1 },
+        ],
+        [
+          { text: "PHONK", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "IN", vowel: "EE", semitoneOffset: 5, step: 3, durationSteps: 1, velocity: 0.90, barInPhrase: 0 },
+          { text: "YOUR", vowel: "OH", semitoneOffset: 3, step: 6, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "FACE", vowel: "AY", semitoneOffset: 0, step: 11, durationSteps: 4, velocity: 1.0, barInPhrase: 0 },
+          { text: "LET'S", vowel: "EE", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+          { text: "GO", vowel: "OH", semitoneOffset: 0, step: 10, durationSteps: 2, velocity: 0.98, barInPhrase: 1 },
+        ],
+      ],
+      chorusPhrases: [
+        [
+          { text: "GET", vowel: "EE", semitoneOffset: 0, step: 0, durationSteps: 1, velocity: 1.0, barInPhrase: 0 },
+          { text: "DOWN", vowel: "AH", semitoneOffset: 3, step: 2, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "DROP", vowel: "OH", semitoneOffset: 5, step: 5, durationSteps: 1, velocity: 0.98, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 7, step: 6, durationSteps: 1, velocity: 0.92, barInPhrase: 0 },
+          { text: "BASS", vowel: "AY", semitoneOffset: 10, step: 8, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "HIT", vowel: "EE", semitoneOffset: 5, step: 10, durationSteps: 1, velocity: 0.94, barInPhrase: 0 },
+          { text: "THAT", vowel: "AH", semitoneOffset: 7, step: 12, durationSteps: 1, velocity: 0.96, barInPhrase: 0 },
+          { text: "BREAK", vowel: "AY", semitoneOffset: 0, step: 14, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "BOOM", vowel: "OO", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.95, barInPhrase: 1 },
+          { text: "BOOM", vowel: "OO", semitoneOffset: 0, step: 10, durationSteps: 2, velocity: 0.98, barInPhrase: 1 },
+        ],
+        [
+          { text: "SHAKE", vowel: "AY", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "THAT", vowel: "AH", semitoneOffset: 5, step: 2, durationSteps: 2, velocity: 0.94, barInPhrase: 0 },
+          { text: "FLOOR", vowel: "OH", semitoneOffset: 3, step: 5, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "BRING", vowel: "EE", semitoneOffset: 5, step: 8, durationSteps: 2, velocity: 0.95, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 7, step: 10, durationSteps: 1, velocity: 0.92, barInPhrase: 0 },
+          { text: "HEAT", vowel: "EE", semitoneOffset: 10, step: 12, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 0, step: 14, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "HARD", vowel: "AH", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.94, barInPhrase: 1 },
+          { text: "CORE", vowel: "OH", semitoneOffset: 0, step: 10, durationSteps: 2, velocity: 0.98, barInPhrase: 1 },
+        ],
+        [
+          { text: "DROP", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 1, velocity: 0.98, barInPhrase: 0 },
+          { text: "IT", vowel: "EE", semitoneOffset: 10, step: 2, durationSteps: 1, velocity: 0.95, barInPhrase: 0 },
+          { text: "LOW", vowel: "OH", semitoneOffset: 12, step: 5, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "CRANK", vowel: "AH", semitoneOffset: 10, step: 8, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "IT", vowel: "EE", semitoneOffset: 12, step: 10, durationSteps: 1, velocity: 0.95, barInPhrase: 0 },
+          { text: "LOUD", vowel: "AH", semitoneOffset: 14, step: 12, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "HEY", vowel: "AY", semitoneOffset: 0, step: 14, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "SLAM", vowel: "AH", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.95, barInPhrase: 1 },
+          { text: "THAT", vowel: "AH", semitoneOffset: 0, step: 10, durationSteps: 2, velocity: 0.98, barInPhrase: 1 },
+        ],
+        [
+          { text: "WE", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "RUN", vowel: "AH", semitoneOffset: 10, step: 3, durationSteps: 2, velocity: 0.96, barInPhrase: 0 },
+          { text: "THIS", vowel: "EE", semitoneOffset: 12, step: 6, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "TRACK", vowel: "AH", semitoneOffset: 14, step: 9, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "ALL", vowel: "AH", semitoneOffset: 12, step: 12, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "NIGHT", vowel: "AY", semitoneOffset: 0, step: 14, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "LET'S", vowel: "EE", semitoneOffset: 5, step: 4, durationSteps: 2, velocity: 0.94, barInPhrase: 1 },
+          { text: "RIDE", vowel: "AY", semitoneOffset: 0, step: 10, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+        ],
+      ],
+      buildupPhrases: [
+        [
+          { text: "DROP", vowel: "OH", semitoneOffset: 0, step: 0, durationSteps: 1, velocity: 0.88, barInPhrase: 0 },
+          { text: "IT", vowel: "EE", semitoneOffset: 3, step: 2, durationSteps: 1, velocity: 0.90, barInPhrase: 0 },
+          { text: "DROP", vowel: "OH", semitoneOffset: 5, step: 4, durationSteps: 1, velocity: 0.92, barInPhrase: 0 },
+          { text: "ROLL", vowel: "OH", semitoneOffset: 3, step: 4, durationSteps: 2, velocity: 0.90, barInPhrase: 1 },
+          { text: "IT", vowel: "EE", semitoneOffset: 5, step: 10, durationSteps: 2, velocity: 0.92, barInPhrase: 1 },
+        ],
+        [
+          { text: "IT", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 1, velocity: 0.94, barInPhrase: 0 },
+          { text: "DROP", vowel: "OH", semitoneOffset: 10, step: 2, durationSteps: 1, velocity: 0.96, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 12, step: 4, durationSteps: 1, velocity: 0.98, barInPhrase: 0 },
+          { text: "PUNCH", vowel: "AH", semitoneOffset: 10, step: 4, durationSteps: 2, velocity: 0.94, barInPhrase: 1 },
+          { text: "HIT", vowel: "EE", semitoneOffset: 12, step: 10, durationSteps: 2, velocity: 0.96, barInPhrase: 1 },
+        ],
+        [
+          { text: "BASS", vowel: "AY", semitoneOffset: 14, step: 0, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 15, step: 3, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "HIT", vowel: "EE", semitoneOffset: 14, step: 6, durationSteps: 2, velocity: 0.98, barInPhrase: 0 },
+          { text: "ROCK", vowel: "OH", semitoneOffset: 15, step: 4, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+          { text: "HARD", vowel: "AH", semitoneOffset: 15, step: 10, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+        ],
+        [
+          { text: "DROP", vowel: "OH", semitoneOffset: 14, step: 0, durationSteps: 1, velocity: 1.0, barInPhrase: 0 },
+          { text: "THE", vowel: "EE", semitoneOffset: 15, step: 2, durationSteps: 1, velocity: 1.0, barInPhrase: 0 },
+          { text: "BASS", vowel: "AY", semitoneOffset: 15, step: 4, durationSteps: 2, velocity: 1.0, barInPhrase: 0 },
+          { text: "NOW", vowel: "AH", semitoneOffset: 15, step: 12, durationSteps: 2, velocity: 1.0, barInPhrase: 1 },
+        ],
+      ],
+      breakdownPhrases: [
+        [
+          { text: "HOLD", vowel: "OH", semitoneOffset: 7, step: 0, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+          { text: "UP", vowel: "AH", semitoneOffset: 5, step: 5, durationSteps: 2, velocity: 0.90, barInPhrase: 0 },
+          { text: "READY", vowel: "EE", semitoneOffset: 3, step: 8, durationSteps: 3, velocity: 0.92, barInPhrase: 0 },
+          { text: "GO", vowel: "OH", semitoneOffset: 0, step: 12, durationSteps: 3, velocity: 0.98, barInPhrase: 0 },
+        ],
+        [
+          { text: "SLOW", vowel: "OH", semitoneOffset: 5, step: 0, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+          { text: "DOWN", vowel: "AH", semitoneOffset: 3, step: 5, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "BASS", vowel: "AY", semitoneOffset: 0, step: 9, durationSteps: 4, velocity: 0.95, barInPhrase: 0 },
+        ],
+        [
+          { text: "CHILL", vowel: "EE", semitoneOffset: 7, step: 0, durationSteps: 4, velocity: 0.94, barInPhrase: 0 },
+          { text: "OUT", vowel: "AH", semitoneOffset: 5, step: 5, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "GROOVE", vowel: "OO", semitoneOffset: 3, step: 9, durationSteps: 4, velocity: 0.92, barInPhrase: 0 },
+        ],
+        [
+          { text: "GET", vowel: "EE", semitoneOffset: 3, step: 0, durationSteps: 3, velocity: 0.90, barInPhrase: 0 },
+          { text: "SET", vowel: "EE", semitoneOffset: 0, step: 4, durationSteps: 3, velocity: 0.92, barInPhrase: 0 },
+          { text: "GO", vowel: "OH", semitoneOffset: 0, step: 9, durationSteps: 5, velocity: 0.98, barInPhrase: 0 },
+        ],
       ],
     },
   ];
@@ -642,16 +1173,24 @@ export class VocalSongArranger {
 
   public getSyllableForStep(section: string, phraseBar: number, step: number, territory?: StyleTerritory): VocalSyllable | undefined {
     const theme = territory ? this.getPersonaForTerritory(territory) : this.themes[this.currentThemeIndex];
-    let list: VocalSyllable[] = [];
+    const phraseIndex = Math.floor(phraseBar / 2) % 4;
+    const barInPhrase = phraseBar % 2;
+
+    let phrases: VocalSyllable[][] | undefined;
+    let fallbackList: VocalSyllable[] = [];
 
     if (section === "DROP") {
-      list = theme.chorusHook;
+      phrases = theme.chorusPhrases;
+      fallbackList = theme.chorusHook;
     } else if (section === "GROOVE_A") {
-      list = (phraseBar % 2 === 0) ? theme.verseLineA : theme.verseLineB;
+      phrases = theme.versePhrases;
+      fallbackList = (phraseBar % 2 === 0) ? theme.verseLineA : theme.verseLineB;
     } else if (section === "BUILDUP") {
-      list = theme.buildupChant;
+      phrases = theme.buildupPhrases;
+      fallbackList = theme.buildupChant;
     } else if (section === "BREAKDOWN") {
-      list = theme.breakdownSolo;
+      phrases = theme.breakdownPhrases;
+      fallbackList = theme.breakdownSolo;
     } else if (section === "INTRO") {
       if (phraseBar === 0 || phraseBar === 4) {
         if (step === 0) {
@@ -666,25 +1205,47 @@ export class VocalSongArranger {
       return undefined;
     }
 
-    return list.find((s) => s.step === step);
+    if (phrases && phrases.length > phraseIndex) {
+      const phraseSyllables = phrases[phraseIndex];
+      const match = phraseSyllables.find((s) => s.step === step && (s.barInPhrase ?? 0) === barInPhrase);
+      if (match) return match;
+    }
+
+    // Fallback for bar 0 of 2-bar phrase if no 2-bar specific syllable is mapped
+    if (barInPhrase === 0) {
+      return fallbackList.find((s) => s.step === step);
+    }
+    return undefined;
   }
 
   public getCurrentLyricLine(section: string, phraseBar: number, territory?: StyleTerritory): string {
     const theme = territory ? this.getPersonaForTerritory(territory) : this.themes[this.currentThemeIndex];
+    const phraseIndex = Math.floor(phraseBar / 2) % 4;
+
+    let phrases: VocalSyllable[][] | undefined;
+    let fallbackList: VocalSyllable[] = [];
+
     if (section === "DROP") {
-      return theme.chorusHook.map((s) => s.text).join(" ");
+      phrases = theme.chorusPhrases;
+      fallbackList = theme.chorusHook;
+    } else if (section === "GROOVE_A") {
+      phrases = theme.versePhrases;
+      fallbackList = (phraseBar % 2 === 0) ? theme.verseLineA : theme.verseLineB;
+    } else if (section === "BUILDUP") {
+      phrases = theme.buildupPhrases;
+      fallbackList = theme.buildupChant;
+    } else if (section === "BREAKDOWN") {
+      phrases = theme.breakdownPhrases;
+      fallbackList = theme.breakdownSolo;
+    } else {
+      return `${theme.personaName.toUpperCase()} (AMBIENT CALL)`;
     }
-    if (section === "GROOVE_A") {
-      const list = (phraseBar % 2 === 0) ? theme.verseLineA : theme.verseLineB;
-      return list.map((s) => s.text).join(" ");
+
+    if (phrases && phrases.length > phraseIndex) {
+      const line = phrases[phraseIndex].map((s) => s.text).join(" ");
+      if (line) return line;
     }
-    if (section === "BUILDUP") {
-      return theme.buildupChant.map((s) => s.text).join(" ");
-    }
-    if (section === "BREAKDOWN") {
-      return theme.breakdownSolo.map((s) => s.text).join(" ");
-    }
-    return `${theme.personaName.toUpperCase()} (AMBIENT CALL)`;
+    return fallbackList.map((s) => s.text).join(" ");
   }
 }
 
@@ -1884,6 +2445,7 @@ export class ClientGrooveboxConductor {
                 trackTitle: item.track_title,
                 trackId: item.track_id,
                 segmentId: item.segment_id,
+                start: typeof item.start === "number" ? item.start : 0,
                 x,
                 y,
               };
@@ -2269,6 +2831,74 @@ export class ClientGrooveboxConductor {
     const clampedShift = Math.max(-maxShift, Math.min(maxShift, bestShift));
     const rate = Math.pow(2, clampedShift / 12);
     return { buffer: best.buffer, rate, asset: best };
+  }
+
+  public getChronologicalVocalSlice(
+    territory: StyleTerritory,
+    melodyPitch: number,
+    vocalCat: string = "vocals:phrase",
+    targetVowel?: string,
+    advance: boolean = false
+  ): { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null {
+    // 1. Gather all vocal slice assets
+    const pool: SliceAsset[] = [];
+    for (const [key, assets] of this.sliceRegistry) {
+      if (!key.startsWith("vocals")) continue;
+      for (const a of assets) {
+        if (!pool.includes(a)) {
+          pool.push(a);
+        }
+      }
+    }
+
+    if (pool.length === 0) {
+      return this.getBestSlice(vocalCat, melodyPitch, 0, territory, targetVowel, this.activeVocalTrackId);
+    }
+
+    // 2. Filter to slices matching active track or style territory
+    let filtered = pool.filter((a) => {
+      if (this.activeVocalTrackId && a.trackId === this.activeVocalTrackId) return true;
+      return false;
+    });
+
+    if (filtered.length === 0) {
+      filtered = pool.filter((a) => {
+        const catMatch = a.name.includes(territory) || a.trackTitle?.toLowerCase().includes(territory);
+        return catMatch;
+      });
+    }
+
+    if (filtered.length === 0) {
+      filtered = pool;
+    }
+
+    // 3. Sort chronologically by original song start timestamp
+    // When sorted by start time, words sequentially move into the future across bars!
+    filtered.sort((a, b) => {
+      const tA = a.trackId ?? "";
+      const tB = b.trackId ?? "";
+      if (tA !== tB) return tA.localeCompare(tB);
+      return (a.start ?? 0) - (b.start ?? 0);
+    });
+
+    if (advance) {
+      this.activeVocalChainIndex = (this.activeVocalChainIndex + 1) % filtered.length;
+    }
+
+    const chosen = filtered[this.activeVocalChainIndex % filtered.length];
+    if (!chosen) return null;
+
+    if (chosen.trackId) {
+      this.activeVocalTrackId = chosen.trackId;
+    }
+
+    // 4. Rule 6: Harmonic pitch shift within +/- 6 semitones
+    let diff = (melodyPitch - chosen.pitch) % 12;
+    if (diff > 6) diff -= 12;
+    if (diff < -6) diff += 12;
+    const rate = Math.pow(2, diff / 12);
+
+    return { buffer: chosen.buffer, rate, asset: chosen };
   }
 
   private selectBestAsset(
@@ -3644,10 +4274,17 @@ export class ClientGrooveboxConductor {
           this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vel * vocaloidBlend, vInput, vTerr);
         } else {
           // Ready for a new vocal phrase or consecutive slice from the active song!
+          // Words always move into the future: advance to the next chronological vocal slice
+          // every 2 bars or at the beginning of a new vocal phrase block!
+          const isNewVocalPhraseBlock = (step % 16 === 0 && phraseBar % 2 === 0);
+          const shouldAdvance = isNewVocalPhraseBlock || (step % 16 === 0);
+          const chronologicalSlice = this.getChronologicalVocalSlice(vTerr, melodyPitch, vocalCat, syl.vowel, shouldAdvance);
+
           const lockedVocalAsset = (vocalCat === "vocals:chop")
             ? (this.activeSongKit?.vocalChopAsset || this.activeSongKit?.vocalHookAsset)
             : (this.activeSongKit?.vocalHookAsset || this.activeSongKit?.vocalCallAsset);
-          const slice = this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
+          const slice = chronologicalSlice ||
+            this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
             this.getBestSlice(vocalCat, melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
             this.getBestSlice("vocals:phrase", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
             this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
@@ -3858,21 +4495,27 @@ export class ClientGrooveboxConductor {
         } else if (steerY > 0.70) {
           nextG = "vocal_syncopated_chop";
         } else if (sec === "DROP") {
-          nextG = (phraseBar === 7) ? "vocal_hook" : (phraseBar % 2 === 0 ? "vocal_hook" : "vocal_syncopated_chop");
+          // 4-phase progressive chorus narrative across 8 bars:
+          // Bars 0-1: Hook Call
+          // Bars 2-3: Hook Response
+          // Bars 4-5: Hook Climax
+          // Bars 6-7: Anthemic Resolution
+          const dropPhases = ["vocal_hook", "vocal_call_response", "vocal_hook", "vocal_syncopated_chop"];
+          nextG = dropPhases[Math.floor(phraseBar / 2) % 4];
         } else if (sec === "BUILDUP") {
-          nextG = (phraseBar >= 6) ? "vocal_stutter" : "vocal_call_response";
+          // Progressive buildup chant acceleration towards the drop gap
+          const buildPhases = ["vocal_call_response", "vocal_call_response", "vocal_stutter", "vocal_stutter"];
+          nextG = (phraseBar >= 6) ? "vocal_stutter" : buildPhases[Math.floor(phraseBar / 2) % 4];
         } else if (sec === "BREAKDOWN" || sec === "INTRO") {
           nextG = "vocal_sustained";
         } else if (sec === "GROOVE_A") {
-          if (movement === "FOUNDATION") {
-            nextG = "vocal_call_response";
-          } else if (movement === "DEVELOPMENT") {
-            nextG = (phraseBar % 2 === 0) ? "vocal_verse" : "vocal_call_response";
-          } else if (movement === "CLIMAX") {
-            nextG = "vocal_syncopated_chop";
-          } else {
-            nextG = "vocal_call_response";
-          }
+          // 4-phase verse narrative across 8 bars:
+          // Bars 0-1: Verse Statement
+          // Bars 2-3: Verse Response
+          // Bars 4-5: Verse Elevation
+          // Bars 6-7: Verse Turnaround
+          const versePhases = ["vocal_verse", "vocal_call_response", "vocal_verse", "vocal_call_response"];
+          nextG = versePhases[Math.floor(phraseBar / 2) % 4];
         }
       }
 
@@ -3929,7 +4572,21 @@ export class ClientGrooveboxConductor {
         }
       }
     } else if (stem === "vocals") {
-      if (mutated.onset_grid.length <= 1) {
+      const activeSyllableSteps: number[] = [];
+      const vTerr = this.getStemTerritory("vocals");
+      const sec = this.arranger.getSection();
+      for (let st = 0; st < 16; st++) {
+        if (this.vocalSongArranger.getSyllableForStep(sec, this.phraseBar, st, vTerr)) {
+          activeSyllableSteps.push(st);
+        }
+      }
+      if (activeSyllableSteps.length > 0) {
+        mutated.onset_grid = activeSyllableSteps;
+        mutated.density = activeSyllableSteps.length / 16;
+        for (const st of activeSyllableSteps) {
+          mutated.velocities[st] = 0.95;
+        }
+      } else if (mutated.onset_grid.length <= 1) {
         const gt = mutated.groove_type || "vocal_verse";
         if (gt === "vocal_phrase" || gt === "phrase" || gt === "vocal_sustained") {
           // Whole long vocal phrase: start on step 0 and sing uninterrupted through the bar
