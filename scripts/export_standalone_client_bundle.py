@@ -607,9 +607,10 @@ def export_bundle() -> None:
         flush=True,
     )
 
-    # Train Composing ML Models (PhraseComposerModel, SongArranger, and SongIntrinsicCompressor) across catalog
+    # Train Composing ML Models (PhraseComposerModel, SongArranger, and Full-Corpus SongIntrinsicCompressor) across entire 1,724-song catalog
     from wub_core.composer import PhraseComposerModel, SongArranger
     from wub_core.pattern_audio_trainer import PatternAudioFeedbackEngine
+    from wub_core.song_intrinsic_compressor import compress_full_corpus_parallel
     phrase_model = PhraseComposerModel(weights_path=src_weights)
     n_trans = phrase_model.train_on_tracks(all_loaded_tracks, bank)
     phrase_model.save(src_weights)
@@ -617,25 +618,40 @@ def export_bundle() -> None:
     arranger_model.train_on_corpus(all_loaded_tracks)
     arranger_model.save(src_weights)
 
+    print("Compressing ENTIRE corpus of 1,724 songs in parallel across CPU workers...", flush=True)
+    full_corpus_res = compress_full_corpus_parallel(
+        processed_dir=Path("data/processed"),
+        stems_dir=Path("data/stems"),
+        target_vocab_per_stem=4,
+        max_bars=32,
+        max_tracks=None,
+    )
+    compact_corpus_models = full_corpus_res["compact_models"]
+    shard_corpus_models = full_corpus_res["shard_models"]
+    chord_progressions = full_corpus_res["chord_progressions"]
+    umap_by_stem = full_corpus_res["umap_by_stem"]
+    catalog_entries = full_corpus_res["catalog_entries"]
+
     fb_engine = PatternAudioFeedbackEngine()
-    # Purge any test mock song entries if present
-    if "compressed_song_models" in fb_engine.feedback_data:
-        fb_engine.feedback_data["compressed_song_models"].pop("test_song_01", None)
-    comp_res = fb_engine.train_song_intrinsic_compression(all_loaded_tracks, max_tracks=120, target_vocab_per_stem=6)
+    fb_engine.feedback_data["compressed_song_models"] = dict(list(compact_corpus_models.items())[:240])
+    fb_engine._save()
+    fb_engine.export_locked_feedback_weights()
     shutil.copy(src_weights, dst_weights)
     print(
         f"✓ Trained & exported Composing ML weights ({n_trans} bar transitions, "
-        f"{comp_res.get('compressed_songs')} compressed song models across A-Z catalog)",
+        f"{len(compact_corpus_models)} compressed song models across 100% of A-Z corpus)",
         flush=True,
     )
 
-    # 3. Harvest Cohesive 4-Bar Multi-Stem Phrase Blocks (all 28 stemmed artists + diverse E-Z catalog artists)
-    phrase_candidates = multistem_tracks[:30] + [t for t in all_loaded_tracks if len(t.stems_available) < 4][:24]
+    # 3. Harvest Cohesive 4-Bar Multi-Stem Phrase Blocks (all stemmed artists + diverse A-Z catalog artists)
+    phrase_candidates = multistem_tracks[:32] + [t for t in all_loaded_tracks if len(t.stems_available) < 4][:28]
     extracted_phrase_blocks = harvest_cohesive_phrase_blocks(phrase_candidates, phrases_dir, fallback_mp3s=fallback_mp3s)
 
     # Build phrase_part_transitions ML map so the client follows consecutive song parts
     phrase_part_transitions: Dict[str, Dict[str, float]] = {}
+    phrase_track_ids = set()
     for pb in extracted_phrase_blocks:
+        phrase_track_ids.add(pb.get("track_id", ""))
         nxt_id = pb.get("next_phrase_id")
         if nxt_id:
             phrase_part_transitions[pb["id"]] = {nxt_id: 0.96}
@@ -653,9 +669,9 @@ def export_bundle() -> None:
 
     # 4b. Export Song-Intrinsic Vocabulary WAV Slices for Stratified Multi-Stem Songs
     print("Exporting song-intrinsic slice vocabulary WAVs across stratified multi-stem songs...", flush=True)
-    csm_dict = fb_engine.feedback_data.get("compressed_song_models", {})
+    csm_dict = compact_corpus_models
     vocab_wavs_exported = 0
-    stratified_csm_tids = [t.track_id for t in multistem_tracks if t.track_id in csm_dict][:32]
+    stratified_csm_tids = [t.track_id for t in multistem_tracks if t.track_id in csm_dict][:36]
     for tid in stratified_csm_tids:
         cmodel = csm_dict[tid]
         v_by_stem = cmodel.get("vocab_by_stem", {})
@@ -706,7 +722,7 @@ def export_bundle() -> None:
                             "name": vid,
                             "url": rel_url,
                             "pitch": int(vs.get("pitch", 0)),
-                            "centroid": 1200.0,
+                            "centroid": float(vs.get("centroid", 1200.0)),
                             "duration": vs["duration"],
                             "loudness": 0.90,
                             "track_id": tid,
@@ -717,41 +733,111 @@ def export_bundle() -> None:
                         vocab_wavs_exported += 1
             except Exception:
                 continue
-    if vocab_wavs_exported > 0:
-        fb_engine._save()
-        fb_engine.export_locked_feedback_weights()
-        shutil.copy(src_weights, dst_weights)
-        print(f"✓ Exported {vocab_wavs_exported} song-intrinsic vocabulary WAV slices with tatum-aligned crossfade tails", flush=True)
 
-    # 5. Extract authentic harmonic chord progressions from real tracks across the catalog (O(1) segment lookup)
-    chord_progressions: List[dict] = []
-    for tr in all_loaded_tracks[:100]:
-        tatums = getattr(tr, "tatums", [])
-        n_bars = len(tatums) // 16
-        seg_by_id = {s.id: s for s in getattr(tr, "segments", []) if not getattr(s, "is_silent", False)}
-        bar_roots: List[int] = []
-        for b in range(min(8, n_bars)):
-            bar_tats = tatums[b * 16:(b + 1) * 16]
-            chroma_sum = np.zeros(12)
-            for t in bar_tats:
-                for st in ("bass", "other"):
-                    sids = getattr(t, "stem_segments", {}).get(st, [])
-                    for sid in sids:
-                        s = seg_by_id.get(sid)
-                        if s is not None:
-                            chroma_sum += np.array(s.pitches)
-            if np.sum(chroma_sum) > 0.05:
-                bar_roots.append(int(np.argmax(chroma_sum)))
-            else:
-                bar_roots.append(bar_roots[-1] if bar_roots else 0)
-        if len(bar_roots) >= 4:
-            while len(bar_roots) < 8:
-                bar_roots.append(bar_roots[-1])
-            chord_progressions.append({
-                "track_id": tr.track_id,
-                "key": getattr(tr, "key", "C major"),
-                "roots": bar_roots[:8],
-            })
+    # 4c. Bind every vocabulary slice across ALL 1,724 corpus songs to a valid audio slice URL in extracted_slices_manifest
+    flat_slices_by_stem: Dict[str, List[dict]] = {s: [] for s in STEMS}
+    for st, cat_dict in extracted_slices_manifest.items():
+        if isinstance(cat_dict, dict):
+            for cat_key, s_items in cat_dict.items():
+                if isinstance(s_items, list):
+                    for item in s_items:
+                        if isinstance(item, dict) and item.get("url"):
+                            flat_slices_by_stem.setdefault(st, []).append({**item, "_cat": cat_key})
+
+    bound_vocab_count = 0
+    for tid, cmodel in compact_corpus_models.items():
+        smodel = shard_corpus_models.get(tid)
+        for st, v_list in cmodel.get("vocab_by_stem", {}).items():
+            candidates = flat_slices_by_stem.get(st, [])
+            if not candidates:
+                continue
+            s_v_list = smodel.get("vocab_by_stem", {}).get(st, []) if smodel else []
+            for idx_v, vs in enumerate(v_list):
+                if not vs.get("url"):
+                    target_cat = str(vs.get("category", "")).split(":")[-1]
+                    target_pitch = int(vs.get("pitch", 0))
+                    target_cent = float(vs.get("centroid", 1200.0))
+                    best_cand = candidates[0]
+                    best_dist = 1e9
+                    for cand in candidates:
+                        c_cat = str(cand.get("_cat", ""))
+                        cat_pen = 0.0 if (target_cat and target_cat in c_cat) else 2.5
+                        p_diff = abs((target_pitch - int(cand.get("pitch", 0))) % 12)
+                        if p_diff > 6:
+                            p_diff = 12 - p_diff
+                        cent_diff = abs(target_cent - float(cand.get("centroid", 1200.0))) / 2000.0
+                        dist = cat_pen + p_diff * 0.25 + cent_diff * 0.5
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_cand = cand
+                    vs["url"] = best_cand["url"]
+                    vs["matched_slice_name"] = best_cand["name"]
+                if idx_v < len(s_v_list):
+                    s_v_list[idx_v]["url"] = vs["url"]
+                    if "matched_slice_name" in vs:
+                        s_v_list[idx_v]["matched_slice_name"] = vs["matched_slice_name"]
+                bound_vocab_count += 1
+
+    print(
+        f"✓ Exported {vocab_wavs_exported} direct vocab WAVs & bound all {bound_vocab_count} vocabulary slices across {len(compact_corpus_models)} corpus songs",
+        flush=True,
+    )
+
+    # 5. Export Full-Corpus UMAP Nebula Indices (all 1,724 songs = 3,448 points per stem)
+    indices_dir = public_dir / "indices"
+    indices_dir.mkdir(parents=True, exist_ok=True)
+    for st, pts in umap_by_stem.items():
+        umap_path = indices_dir / f"umap_{st}.json"
+        umap_path.write_text(json.dumps(pts, separators=(",", ":")))
+    print(f"✓ Exported full-corpus UMAP Nebula indices across {len(compact_corpus_models)} songs into {indices_dir}", flush=True)
+
+    # 5b. Export Sharded Full-Detail Catalog (frontend/public/data/catalog/shard_00..17.json) & full_catalog_manifest.json
+    catalog_dir = public_dir / "catalog"
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+    shard_size = 100
+    all_tids_ordered = [entry["track_id"] for entry in catalog_entries]
+    num_shards = (len(all_tids_ordered) + shard_size - 1) // shard_size
+    for shard_idx in range(num_shards):
+        batch_tids = all_tids_ordered[shard_idx * shard_size : (shard_idx + 1) * shard_size]
+        shard_payload = {
+            "shard_index": shard_idx,
+            "total_shards": num_shards,
+            "songs": {tid: shard_corpus_models[tid] for tid in batch_tids if tid in shard_corpus_models},
+        }
+        shard_file = catalog_dir / f"shard_{shard_idx:02d}.json"
+        shard_file.write_text(json.dumps(shard_payload, separators=(",", ":")))
+        for tid in batch_tids:
+            if tid in compact_corpus_models:
+                compact_corpus_models[tid]["shard"] = shard_idx
+
+    for idx_e, entry in enumerate(catalog_entries):
+        entry["shard"] = idx_e // shard_size
+        entry["has_phrase_audio"] = entry["track_id"] in phrase_track_ids
+
+    raw_manifest_path = Path("data/processed/_manifest.json")
+    total_catalog_files = len(catalog_entries)
+    if raw_manifest_path.exists():
+        try:
+            raw_m = json.loads(raw_manifest_path.read_text())
+            if isinstance(raw_m, dict):
+                total_catalog_files = len(raw_m)
+        except Exception:
+            pass
+
+    full_catalog_manifest = {
+        "version": 1,
+        "total_unique_songs": len(catalog_entries),
+        "total_catalog_files": total_catalog_files,
+        "total_shards": num_shards,
+        "shard_size": shard_size,
+        "songs": catalog_entries,
+    }
+    full_catalog_path = public_dir / "full_catalog_manifest.json"
+    full_catalog_path.write_text(json.dumps(full_catalog_manifest, separators=(",", ":")))
+    print(
+        f"✓ Exported {full_catalog_path} ({len(catalog_entries)} unique analyzed songs / {total_catalog_files} catalog tracks across {num_shards} shards)",
+        flush=True,
+    )
     print(f"✓ Extracted {len(chord_progressions)} authentic chord progressions across A-Z corpus", flush=True)
 
     # 6. Serialize Curated Pattern Bank for In-Browser ML Sequencing
@@ -911,16 +997,29 @@ def export_bundle() -> None:
         elif key in stem_cohesion_weights:
             standalone_manifest[key] = stem_cohesion_weights[key]
 
-    for key in ("compressed_song_models", "song_composition_scores", "recurrent_song_patterns"):
+    for key in ("song_composition_scores", "recurrent_song_patterns"):
         if key in stem_cohesion_weights and stem_cohesion_weights[key]:
             standalone_manifest[key] = stem_cohesion_weights[key]
         elif key in existing_manifest:
             standalone_manifest[key] = existing_manifest[key]
 
-    if "compressed_song_models" in standalone_manifest and isinstance(standalone_manifest["compressed_song_models"], dict):
-        standalone_manifest["compressed_song_models"].pop("test_song_01", None)
+    # Core compressed song models kept inline (phrase-audio songs + 4-stem songs + direct vocab-WAV songs);
+    # every other corpus song is lazily loaded on demand from data/catalog/shard_XX.json via full_catalog_manifest.json
+    core_tids: List[str] = []
+    for tid in list(phrase_track_ids) + stratified_csm_tids + [t.track_id for t in multistem_tracks]:
+        if tid and tid in compact_corpus_models and tid not in core_tids:
+            core_tids.append(tid)
+    core_tids = core_tids[:240]
+    standalone_manifest["compressed_song_models"] = {tid: compact_corpus_models[tid] for tid in core_tids}
+    standalone_manifest["full_catalog"] = {
+        "manifest_url": "data/full_catalog_manifest.json",
+        "shard_url_pattern": "data/catalog/shard_{shard:02d}.json",
+        "total_unique_songs": len(catalog_entries),
+        "total_catalog_files": total_catalog_files,
+        "total_shards": num_shards,
+    }
 
-    # Merge intrinsic patterns mined from authentic songs into the global patterns bank
+    # Merge intrinsic patterns mined from authentic core songs into the global patterns bank
     csm = standalone_manifest.get("compressed_song_models", {})
     for tid, model in csm.items():
         ipat = model.get("intrinsic_patterns", {})
@@ -951,8 +1050,6 @@ def export_bundle() -> None:
                             s_item.pop("b64", None)
 
     if isinstance(stem_cohesion_weights, dict):
-        if "compressed_song_models" in stem_cohesion_weights and stem_cohesion_weights["compressed_song_models"]:
-            standalone_manifest.setdefault("compressed_song_models", stem_cohesion_weights["compressed_song_models"])
         light_cohesion = {
             k: v for k, v in stem_cohesion_weights.items()
             if k not in ("compressed_song_models", "recurrent_song_patterns")

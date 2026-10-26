@@ -148,6 +148,37 @@ export interface StandaloneManifest {
   song_composition_scores?: Record<string, any>;
   recurrent_song_patterns?: Record<string, any>;
   compressed_song_models?: Record<string, any>;
+  full_catalog?: {
+    manifest_url: string;
+    shard_url_pattern: string;
+    total_unique_songs: number;
+    total_catalog_files: number;
+    total_shards: number;
+  };
+}
+
+// One entry per analyzed song in the full corpus (data/full_catalog_manifest.json)
+export interface FullCatalogEntry {
+  track_id: string;
+  title: string;
+  artist: string;
+  bpm: number;
+  key: string;
+  stems: number;
+  bars: number;
+  x: number;
+  y: number;
+  shard: number;
+  has_phrase_audio?: boolean;
+}
+
+export interface FullCatalogManifest {
+  version: number;
+  total_unique_songs: number;
+  total_catalog_files: number;
+  total_shards: number;
+  shard_size: number;
+  songs: FullCatalogEntry[];
 }
 
 export interface StemCohesionWeights {
@@ -2479,6 +2510,18 @@ export class ClientGrooveboxConductor {
   private activePhraseBlock: LoadedPhraseBlock | null = null;
   private activeTrackId?: string;
   private pendingTrackId?: string;
+  // Full-corpus catalog (all analyzed songs), lazily sharded so GitHub Pages can serve every song
+  private catalogBasePath: string = "data";
+  private catalogEntries: FullCatalogEntry[] = [];
+  private catalogById: Map<string, FullCatalogEntry> = new Map();
+  private loadedCatalogShards: Set<number> = new Set();
+  private catalogShardLoads: Map<number, Promise<boolean>> = new Map();
+  private catalogVocabLoaded: Set<string> = new Set();
+  private nextCatalogSongId?: string;
+  private catalogPrefetching: boolean = false;
+  private catalogSongActive: boolean = false;
+  private catalogSongBarsLeft: number = 0;
+  private pendingCatalogSongId?: string;
   private phraseBarCount: number = 0;
   private totalBarsPlayed: number = 0;
   private recentLoops: Record<StemName, string[]> = {
@@ -2701,12 +2744,217 @@ export class ClientGrooveboxConductor {
           await this.preloadAudioSlices(basePath);
           await this.preloadPatternLoops(basePath);
         })();
+        // 3. Load the full-corpus catalog index (every analyzed song) and prefetch a fresh catalog song
+        this.catalogBasePath = basePath;
+        void this.loadFullCatalog(basePath).then(() => this.prefetchNextCatalogSong());
       }
       return true;
     } catch (err) {
       console.warn("[Client ML] Bundle load failed, using algorithmic synthesizer fallback:", err);
       return false;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Full-Corpus Catalog (all analyzed songs, lazily sharded for static hosting)
+  // ---------------------------------------------------------------------------
+
+  public getCatalogSize(): number {
+    return this.catalogEntries.length;
+  }
+
+  public getCatalogEntries(): FullCatalogEntry[] {
+    return this.catalogEntries;
+  }
+
+  private async loadFullCatalog(basePath: string): Promise<void> {
+    try {
+      const res = await fetch(`${basePath}/full_catalog_manifest.json`);
+      if (!res.ok) return;
+      const cat = (await res.json()) as FullCatalogManifest;
+      if (!cat || !Array.isArray(cat.songs)) return;
+      this.catalogEntries = cat.songs;
+      this.catalogById = new Map(cat.songs.map((s) => [s.track_id, s]));
+      // Seed nebula coordinates for every catalog song so reticle steering can reach the whole corpus
+      for (const s of cat.songs) {
+        for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+          const key = `${s.track_id}:${stem}`;
+          if (!this.trackStemPositions.has(key)) {
+            this.trackStemPositions.set(key, { x: s.x, y: s.y });
+          }
+        }
+      }
+      console.info(`[Client ML] Full corpus catalog ready: ${cat.songs.length} songs across ${cat.total_shards} shards.`);
+    } catch {
+      // Catalog is optional; core bundle still plays
+    }
+  }
+
+  private loadCatalogShard(shard: number): Promise<boolean> {
+    if (this.loadedCatalogShards.has(shard)) return Promise.resolve(true);
+    const existing = this.catalogShardLoads.get(shard);
+    if (existing) return existing;
+    const p = (async (): Promise<boolean> => {
+      try {
+        const name = `shard_${String(shard).padStart(2, "0")}.json`;
+        const res = await fetch(`${this.catalogBasePath}/catalog/${name}`);
+        if (!res.ok) return false;
+        const payload = (await res.json()) as { songs?: Record<string, any> };
+        if (!payload?.songs || !this.manifest) return false;
+        const models = this.manifest.compressed_song_models || (this.manifest.compressed_song_models = {});
+        for (const [tid, model] of Object.entries(payload.songs)) {
+          models[tid] = model;
+        }
+        this.loadedCatalogShards.add(shard);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        this.catalogShardLoads.delete(shard);
+      }
+    })();
+    this.catalogShardLoads.set(shard, p);
+    return p;
+  }
+
+  /** Ensures a catalog song's compressed model and its vocabulary slice audio are in memory. */
+  private async ensureCatalogSong(trackId: string): Promise<boolean> {
+    const entry = this.catalogById.get(trackId);
+    let model = this.manifest?.compressed_song_models?.[trackId];
+    if (!model && entry) {
+      await this.loadCatalogShard(entry.shard);
+      model = this.manifest?.compressed_song_models?.[trackId];
+    }
+    if (!model) return false;
+    if (this.catalogVocabLoaded.has(trackId)) return true;
+
+    const vocab = (model.vocab_by_stem || {}) as Record<string, Array<Record<string, any>>>;
+    const fetches: Promise<void>[] = [];
+    const decodedByUrl = new Map<string, Promise<AudioBuffer | null>>();
+    for (const [stem, list] of Object.entries(vocab)) {
+      for (const vs of list || []) {
+        const vid = String(vs.id || "");
+        if (!vid || this.sliceById.has(vid)) continue;
+        // Reuse an already-decoded matched slice when available
+        const matched = vs.matched_slice_name ? this.sliceById.get(String(vs.matched_slice_name)) : undefined;
+        if (matched) {
+          this.sliceById.set(vid, { ...matched, pitch: typeof vs.pitch === "number" ? vs.pitch : matched.pitch });
+          continue;
+        }
+        const urlStr = typeof vs.url === "string" ? vs.url : "";
+        if (!urlStr) continue;
+        const url = urlStr.startsWith("http") ? urlStr : `${this.catalogBasePath}/${urlStr.replace(/^data\//, "")}`;
+        let dec = decodedByUrl.get(url);
+        if (!dec) {
+          dec = (async () => {
+            try {
+              const res = await fetch(url);
+              if (!res.ok) return null;
+              return await this.engine.decodeWav(await res.arrayBuffer());
+            } catch {
+              return null;
+            }
+          })();
+          decodedByUrl.set(url, dec);
+        }
+        const decP = dec;
+        fetches.push((async () => {
+          const buf = await decP;
+          if (!buf) return;
+          this.sliceById.set(vid, {
+            buffer: buf,
+            pitch: typeof vs.pitch === "number" ? vs.pitch : 0,
+            centroid: typeof vs.centroid === "number" ? vs.centroid : 1200,
+            duration: buf.duration,
+            loudness: 0.9,
+            name: vid,
+            trackTitle: model.title,
+            trackId,
+            segmentId: vs.segment_id,
+            start: typeof vs.start === "number" ? vs.start : 0,
+          });
+          void stem;
+        })());
+      }
+    }
+    await Promise.all(fetches);
+    this.catalogVocabLoaded.add(trackId);
+    return true;
+  }
+
+  /** Picks a fresh, tempo-compatible song from the full corpus that has not been heard recently. */
+  private pickFreshCatalogSongId(): string | undefined {
+    if (this.catalogEntries.length === 0) return undefined;
+    const recent = new Set(this.recentTracksPlayed);
+    const pool = this.catalogEntries.filter(
+      (s) => !recent.has(s.track_id) && s.track_id !== this.activeTrackId && s.bpm >= 85 && s.bpm <= 175
+    );
+    const base = pool.length > 0 ? pool : this.catalogEntries;
+    // Sample a handful at random and keep the closest tempo so DJ transitions stay beat-matched
+    let best: FullCatalogEntry | undefined;
+    let bestScore = Infinity;
+    for (let i = 0; i < 12; i++) {
+      const cand = base[Math.floor(Math.random() * base.length)];
+      const score = Math.abs(cand.bpm - this.currentBpm) / Math.max(60, this.currentBpm) + Math.random() * 0.04;
+      if (score < bestScore) {
+        bestScore = score;
+        best = cand;
+      }
+    }
+    return best?.track_id;
+  }
+
+  private async prefetchNextCatalogSong(preferredId?: string): Promise<void> {
+    if (this.catalogPrefetching) return;
+    this.catalogPrefetching = true;
+    try {
+      const tid = preferredId || this.pickFreshCatalogSongId();
+      if (tid && (await this.ensureCatalogSong(tid))) {
+        this.nextCatalogSongId = tid;
+      }
+    } finally {
+      this.catalogPrefetching = false;
+    }
+  }
+
+  /** Switches playback onto a prefetched full-corpus song, played from its own compressed slice vocabulary & bar sequence. */
+  private beginCatalogSong(trackId: string, phraseBar: number): boolean {
+    const model = this.manifest?.compressed_song_models?.[trackId];
+    if (!model) return false;
+    this.catalogSongActive = true;
+    const bars = Array.isArray(model.bar_pattern_sequence) ? model.bar_pattern_sequence.length : 16;
+    this.catalogSongBarsLeft = Math.max(16, Math.min(32, bars));
+    this.activePhraseBlock = null;
+    this.activeLoops = {};
+    this.activeTrackId = trackId;
+    this.activeVocalTrackId = trackId;
+    this.activeVocalChainIndex = 0;
+    this.trackBarsPlayed = 0;
+    this.lockedCategorySlices.clear();
+    this.recordTrackPlayed(trackId);
+    if (typeof model.bpm === "number" && model.bpm >= 85 && model.bpm <= 175) {
+      const bpmDelta = Math.max(-3, Math.min(3, Math.round(model.bpm - this.currentBpm)));
+      this.currentBpm = Math.max(85, Math.min(175, this.currentBpm + bpmDelta));
+    }
+    // Restart the compressed bar cursor so the song plays its own bar sequence from bar 0
+    this.compressedBarCursor = -1;
+    this.composeBarPatterns(phraseBar, true);
+    if (this.nextCatalogSongId === trackId) this.nextCatalogSongId = undefined;
+    // Push the song's title/artist into the vocal meta immediately so the UI
+    // display updates the moment the compressed song model takes over
+    const catEntry = this.catalogById.get(trackId);
+    const fullTitle = String(model.title || catEntry?.title || trackId);
+    this.currentVocalMeta = {
+      lyric: fullTitle,
+      songTitle: fullTitle,
+      syllable: "",
+      vowel: "",
+      note: "",
+      sectionName: this.arranger.getSection(),
+    };
+    console.info(`[Client ML] Catalog Song: "${model.title || trackId}" from the full ${this.catalogEntries.length}-song corpus.`);
+    void this.prefetchNextCatalogSong();
+    return true;
   }
 
   private async preloadAudioSlices(basePath: string): Promise<void> {
@@ -3129,6 +3377,16 @@ export class ClientGrooveboxConductor {
         const pick = (secMatches.length > 0 ? secMatches : allSameTrack)[0];
         const rate = this.currentBpm / pick.meta.source_bpm;
         return { loop: pick, rate };
+      }
+      // 2b. Authentic song-model lock: the active track owns a valid compressed
+      // song model but has no studio loop for this stem (e.g. activePhraseBlock
+      // is null in jukebox mode). Return null so the caller falls through to the
+      // song's own intrinsic bar sequence instead of grabbing a foreign-track
+      // loop that would destroy the song's acoustic identity!
+      const songModels = this.manifest?.compressed_song_models || (this.manifest?.stem_cohesion_weights as any)?.compressed_song_models;
+      const songModel = songModels?.[activeTrack];
+      if (songModel && (songModel.intrinsic_patterns || songModel.bar_pattern_sequence)) {
+        return null;
       }
     }
 
@@ -3751,8 +4009,18 @@ export class ClientGrooveboxConductor {
     if (isUserDrag && (stem === "drums" || stem === "vocals")) {
       const nearestTrack = this.findNearestTrackForCoord(coord, stem);
       if (nearestTrack && nearestTrack !== this.activeTrackId && this.trackBarsPlayed >= 16) {
-        this.pendingTrackId = nearestTrack;
-        console.info(`[Client ML] User Reticule Steer -> queued track: ${nearestTrack} for next phrase boundary`);
+        if (this.phraseBlocksByTrack.has(nearestTrack)) {
+          this.pendingTrackId = nearestTrack;
+          console.info(`[Client ML] User Reticule Steer -> queued track: ${nearestTrack} for next phrase boundary`);
+        } else if (this.catalogById.has(nearestTrack)) {
+          // Corpus song without studio phrase audio: fetch its compressed model + vocab, then queue it
+          void this.ensureCatalogSong(nearestTrack).then((ok) => {
+            if (ok) {
+              this.pendingCatalogSongId = nearestTrack;
+              console.info(`[Client ML] User Reticule Steer -> queued catalog song: ${this.catalogById.get(nearestTrack)?.title ?? nearestTrack}`);
+            }
+          });
+        }
       }
     }
   }
@@ -3763,6 +4031,9 @@ export class ClientGrooveboxConductor {
       for (const b of blocks) {
         candidateTracks.add(b.meta.track_id);
       }
+    }
+    for (const entry of this.catalogEntries) {
+      candidateTracks.add(entry.track_id);
     }
     if (candidateTracks.size === 0) return null;
 
@@ -3952,6 +4223,8 @@ export class ClientGrooveboxConductor {
     this.recentLoops = { drums: [], bass: [], vocals: [], other: [] };
 
     // Reset previous track locking completely so every Play press starts with a fresh, exciting sound!
+    this.catalogSongActive = false;
+    this.catalogSongBarsLeft = 0;
     this.activeTrackId = undefined;
     this.pendingTrackId = undefined;
     this.activePhraseBlock = null;
@@ -4003,6 +4276,17 @@ export class ClientGrooveboxConductor {
       }
     }
 
+    // 0b. Fresh Play across the full corpus: sometimes open on a prefetched catalog song instead of a studio phrase song
+    const startCatalogId = this.nextCatalogSongId;
+    if (startCatalogId && this.playbackMode !== "slices" && (startPool.length === 0 || Math.random() < 0.35)) {
+      if (this.beginCatalogSong(startCatalogId, 0)) {
+        const cm = this.manifest?.compressed_song_models?.[startCatalogId];
+        if (cm?.bpm && cm.bpm >= 85 && cm.bpm <= 175) {
+          this.currentBpm = Math.round(cm.bpm);
+        }
+      }
+    }
+
     // 1. Align starting section with the selected starting phrase block (or randomize if in slices mode)
     if (this.activePhraseBlock?.meta.section) {
       this.arranger.setSection(this.activePhraseBlock.meta.section);
@@ -4032,6 +4316,9 @@ export class ClientGrooveboxConductor {
       this.engine.setStemFilter(stem, 20000, 0.7);
     }
 
+    if (this.catalogSongActive) {
+      this.compressedBarCursor = -1;
+    }
     this.composeBarPatterns(0, true);
 
     this.timer = window.setInterval(() => this.clockTick(), 20);
@@ -4051,6 +4338,8 @@ export class ClientGrooveboxConductor {
     this.activeLoops = {};
     this.lockedCategorySlices.clear();
     this.trackBarsPlayed = 0;
+    this.catalogSongActive = false;
+    this.catalogSongBarsLeft = 0;
   }
 
   private clockTick(): void {
@@ -4128,7 +4417,9 @@ export class ClientGrooveboxConductor {
     const isSongCycleComplete = this.barsInCurrentKey >= 48 && this.trackBarsPlayed >= 32 && section !== "BUILDUP" && section !== "DROP";
 
     if (isHarmonicResetPoint || isSongCycleComplete) {
-      this.activeTrackId = undefined; // allow a fresh track identity after full 32-bar song arc completes!
+      if (!this.catalogSongActive) {
+        this.activeTrackId = undefined; // allow a fresh track identity after full 32-bar song arc completes!
+      }
       const shouldModulate = Math.random() < 0.65;
       if (shouldModulate) {
         this.currentCamelotCode = getAdjacentCamelotKey(this.currentCamelotCode);
@@ -4389,7 +4680,30 @@ export class ClientGrooveboxConductor {
 
     // 0. Downbeat handling: phrase blocks mode vs jukebox studio loops mode vs live slice mode
     if (this.playbackMode === "phrase_blocks" || this.playbackMode === "jukebox") {
-      if (step % 16 === 0) {
+      if (step % 16 === 0 && this.catalogSongActive) {
+        // Full-corpus catalog song: play its own compressed bar sequence through the slice engine
+        this.trackBarsPlayed++;
+        this.catalogSongBarsLeft--;
+        const queuedPhraseTrack = this.pendingTrackId;
+        const queuedCatalogSong = this.pendingCatalogSongId;
+        if (queuedCatalogSong && !queuedPhraseTrack && this.totalBarsPlayed % 4 === 0 &&
+            this.manifest?.compressed_song_models?.[queuedCatalogSong]) {
+          this.pendingCatalogSongId = undefined;
+          this.beginCatalogSong(queuedCatalogSong, phraseBar);
+        } else if ((this.catalogSongBarsLeft <= 0 || queuedPhraseTrack) && this.totalBarsPlayed % 4 === 0) {
+          this.catalogSongActive = false;
+          this.pendingTrackId = undefined;
+          const nextBlock = this.getBestPhraseBlock(sec, queuedPhraseTrack, !queuedPhraseTrack);
+          if (nextBlock) {
+            this.activePhraseBlock = nextBlock;
+            this.trackBarsPlayed = 4;
+            console.info(`[Client ML] DJ Crossfade: catalog song -> studio phrase song "${nextBlock.meta.track_title}"`);
+            this.schedulePhraseBlock(nextBlock, when, sec, barInSec);
+          } else if (this.nextCatalogSongId) {
+            this.beginCatalogSong(this.nextCatalogSongId, phraseBar);
+          }
+        }
+      } else if (step % 16 === 0) {
         if (this.tatumIndex === 0 && this.activePhraseBlock) {
           // Bar 0 on Play: schedule the starting Part 1 phrase block selected by start() directly
           // so Part 1 plays in full before advancing to Part 2 on bar 4!
@@ -4399,7 +4713,15 @@ export class ClientGrooveboxConductor {
           // Cohesive 4-bar phrase blocks advance continuously across 4-bar boundaries (Part 1 -> Part 2 -> Part 3 -> Part 4)
           this.trackBarsPlayed += 4;
           // Keep the same song playing through its full 32-bar multi-part chain; only DJ crossfade after 32 bars or explicit user reticle drag!
-          const shouldCrossfade = this.trackBarsPlayed > 32 || Boolean(this.pendingTrackId);
+          const shouldCrossfade = this.trackBarsPlayed > 32 || Boolean(this.pendingTrackId) || Boolean(this.pendingCatalogSongId);
+          // Alternate between studio phrase songs and the full corpus so every catalog song gets airtime
+          const catalogCandidate = this.pendingCatalogSongId || this.nextCatalogSongId;
+          const useCatalog = shouldCrossfade && !this.pendingTrackId && Boolean(catalogCandidate) &&
+            (Boolean(this.pendingCatalogSongId) || Math.random() < 0.5);
+          if (useCatalog && catalogCandidate && this.manifest?.compressed_song_models?.[catalogCandidate]) {
+            this.pendingCatalogSongId = undefined;
+            this.beginCatalogSong(catalogCandidate, phraseBar);
+          } else {
           const targetTrack = this.pendingTrackId || (shouldCrossfade ? undefined : this.activeTrackId);
           this.pendingTrackId = undefined;
 
@@ -4412,11 +4734,12 @@ export class ClientGrooveboxConductor {
             }
             this.schedulePhraseBlock(nextBlock, when, sec, barInSec);
           }
+          }
         } else if (this.activePhraseBlock) {
           // Advance to the next bar's onset grid (Part X.1 -> Part X.2 -> Part X.3 -> Part X.4) within the 4-bar phrase block
           this.updatePhraseBlockBarPatterns(this.activePhraseBlock, this.totalBarsPlayed % 4);
         }
-        if (!this.activePhraseBlock) {
+        if (!this.activePhraseBlock && !this.catalogSongActive) {
           this.scheduleBarLoops(when, sec, phraseBar, chord);
         }
       }
@@ -5153,7 +5476,7 @@ export class ClientGrooveboxConductor {
         continue;
       }
 
-      if (this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") {
+      if ((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && !this.catalogSongActive) {
         // 1. Try to select matching 1-bar studio loop from the authentic training corpus
         const loopMatch = this.getBestLoop(stem, sec, phraseBar, stem === "drums" ? undefined : chord.rootPitch);
         if (loopMatch) {
@@ -5773,6 +6096,35 @@ export class ClientGrooveboxConductor {
     const vTerr = this.getStemTerritory("vocals");
     const activePersona = this.vocalSongArranger.getPersonaName(vTerr);
 
+    // Active song title/artist: when a compressed song model owns the active
+    // track (catalog playback or intrinsic-pattern fallback in jukebox mode),
+    // surface its authentic metadata so the UI shows the real song identity.
+    let activeSongTitle = "";
+    let activeSongArtist = "";
+    const songModelsForMeta = this.manifest?.compressed_song_models || (this.manifest?.stem_cohesion_weights as any)?.compressed_song_models;
+    const activeSongModel = this.activeTrackId ? songModelsForMeta?.[this.activeTrackId] : undefined;
+    const activeCatalogEntry = this.activeTrackId ? this.catalogById.get(this.activeTrackId) : undefined;
+    if (activeSongModel || activeCatalogEntry) {
+      const rawTitle = String(activeCatalogEntry?.title || activeSongModel?.title || "");
+      activeSongArtist = String(activeCatalogEntry?.artist || "");
+      if (!activeSongArtist && rawTitle.includes(" - ")) {
+        const parts = rawTitle.split(" - ");
+        activeSongArtist = parts[0].trim();
+        activeSongTitle = parts.slice(1).join(" - ").trim();
+      } else {
+        activeSongTitle = rawTitle;
+      }
+    }
+    if (!activeSongTitle && this.activePhraseBlock) {
+      activeSongTitle = this.activePhraseBlock.meta.track_title || "";
+    }
+    if (!activeSongTitle && this.activeLoops.drums) {
+      activeSongTitle = this.activeLoops.drums.meta.track_title || "";
+    }
+    if (activeSongTitle && !this.currentVocalMeta.songTitle) {
+      this.currentVocalMeta.songTitle = activeSongArtist ? `${activeSongArtist} - ${activeSongTitle}` : activeSongTitle;
+    }
+
     // Master Scale & Harmonic Information
     const camelotInfo = CAMELOT_KEYS[this.currentCamelotCode] || CAMELOT_KEYS["8B"];
     const isMinor = camelotInfo.isMinor;
@@ -5912,8 +6264,18 @@ export class ClientGrooveboxConductor {
       patternAudioScores,
       vocal_lyric: this.currentVocalMeta.lyric,
       vocalLyric: this.currentVocalMeta.lyric,
-      vocal_song_title: this.currentVocalMeta.songTitle,
-      vocalSongTitle: this.currentVocalMeta.songTitle,
+      vocal_song_title: activeSongTitle && (this.catalogSongActive || activeSongModel)
+        ? (activeSongArtist ? `${activeSongArtist} - ${activeSongTitle}` : activeSongTitle)
+        : this.currentVocalMeta.songTitle,
+      vocalSongTitle: activeSongTitle && (this.catalogSongActive || activeSongModel)
+        ? (activeSongArtist ? `${activeSongArtist} - ${activeSongTitle}` : activeSongTitle)
+        : this.currentVocalMeta.songTitle,
+      active_track_title: activeSongTitle,
+      activeTrackTitle: activeSongTitle,
+      active_track_artist: activeSongArtist,
+      activeTrackArtist: activeSongArtist,
+      active_track_id: this.activeTrackId || "",
+      activeTrackId: this.activeTrackId || "",
       vocal_syllable: this.currentVocalMeta.syllable,
       vocalSyllable: this.currentVocalMeta.syllable,
       vocal_vowel: this.currentVocalMeta.vowel,

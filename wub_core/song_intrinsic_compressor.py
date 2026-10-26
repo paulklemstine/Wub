@@ -235,10 +235,38 @@ class SongIntrinsicCompressor:
         target_vocab_per_stem: int = 6,
         match_threshold: float = 0.70,
         random_state: int = 42,
+        max_bars: Optional[int] = None,
     ) -> None:
         self.target_vocab_per_stem = target_vocab_per_stem
         self.match_threshold = match_threshold
         self.random_state = random_state
+        self.max_bars = max_bars
+        self._last_track_cache: Optional[Tuple[str, Dict[str, np.ndarray], Dict[str, int], Dict[str, float], Dict[str, float]]] = None
+
+    @staticmethod
+    def _fast_seg_features(seg: Any) -> Tuple[np.ndarray, int, float, float]:
+        """Fast extraction of (26-D feature vector, dominant pitch 0..11, spectral_centroid, duration)."""
+        import math
+        if isinstance(seg, dict):
+            timbre = seg.get("timbre") or [0.0] * 12
+            chroma = seg.get("pitches") or seg.get("chroma") or [0.0] * 12
+            loud = float(seg.get("loudness_max", seg.get("loud_max", -20.0)))
+            dur = float(seg.get("duration", 0.25) or 0.25)
+            centroid = float(seg.get("spectral_centroid", 1000.0) or 1000.0)
+        else:
+            timbre = getattr(seg, "timbre", None) or [0.0] * 12
+            chroma = getattr(seg, "pitches", getattr(seg, "chroma", None)) or [0.0] * 12
+            loud = float(getattr(seg, "loudness_max", getattr(seg, "loud_max", -20.0)))
+            dur = float(getattr(seg, "duration", 0.25) or 0.25)
+            centroid = float(getattr(seg, "spectral_centroid", 1000.0) or 1000.0)
+        if len(timbre) != 12 or len(chroma) != 12:
+            vec = slice_feature_raw(seg)
+            pitch = int(np.argmax(vec[12:24]))
+            return vec, pitch, centroid, dur
+        log_dur = math.log1p(max(0.01, dur))
+        vec = np.asarray(list(timbre) + list(chroma) + [loud, log_dur], dtype=np.float32)
+        pitch = int(np.argmax(chroma))
+        return vec, pitch, centroid, dur
 
     # --------------------------------------------------------------------------
     # 1. Song-Intrinsic Vocabulary Extraction (K-Medoids / Codebook Condensation)
@@ -250,7 +278,6 @@ class SongIntrinsicCompressor:
         k_per_stem: Optional[int] = None,
     ) -> SongReducedVocabulary:
         """Extract the minimal representative acoustic vocabulary for the song with acoustic role classification."""
-        from sklearn.cluster import KMeans
         from wub_core.groovy_pattern_assembler import AcousticSliceClassifier
 
         k_target = k_per_stem or self.target_vocab_per_stem
@@ -262,36 +289,64 @@ class SongIntrinsicCompressor:
         total_distortion = 0.0
         distortion_counts = 0
 
-        # Segment lookup
+        # Segment lookup & single-pass feature cache
         segments = getattr(track, "segments", [])
         segs_by_stem: Dict[str, List] = {s: [] for s in STEMS}
+        seg_feat_map: Dict[str, np.ndarray] = {}
+        seg_pitch_map: Dict[str, int] = {}
+        seg_centroid_map: Dict[str, float] = {}
+        seg_dur_map: Dict[str, float] = {}
+
         for seg in segments:
             st = getattr(seg, "stem", None) or (seg.get("stem") if isinstance(seg, dict) else "")
             is_silent = getattr(seg, "is_silent", False) or (seg.get("is_silent", False) if isinstance(seg, dict) else False)
             loud = getattr(seg, "loudness_max", getattr(seg, "loud_max", -99.0))
             if isinstance(seg, dict):
                 loud = seg.get("loudness_max", seg.get("loud_max", -99.0))
-            if st in STEMS and not is_silent and loud > -48.0:
-                segs_by_stem[st].append(seg)
+            sid = getattr(seg, "id", None) or (seg.get("id") if isinstance(seg, dict) else "")
+            if not is_silent and loud > -48.0:
+                try:
+                    f_vec, p_idx, cent, dur = self._fast_seg_features(seg)
+                    if sid:
+                        seg_feat_map[sid] = f_vec
+                        seg_pitch_map[sid] = p_idx
+                        seg_centroid_map[sid] = cent
+                        seg_dur_map[sid] = dur
+                    if st in STEMS:
+                        segs_by_stem[st].append((seg, f_vec))
+                except Exception:
+                    continue
+
+        self._last_track_cache = (tid, seg_feat_map, seg_pitch_map, seg_centroid_map, seg_dur_map)
+
+        # For full-mix analyzed songs where only "other" is populated, partition segments across all 4 virtual stems
+        if not segs_by_stem["drums"] and segs_by_stem["other"]:
+            other_all = segs_by_stem["other"]
+            drums_cands = []
+            bass_cands = []
+            vocals_cands = []
+            for seg, f_vec in other_all:
+                sid = getattr(seg, "id", None) or (seg.get("id") if isinstance(seg, dict) else "")
+                cent = seg_centroid_map.get(sid, 1200.0)
+                dur = seg_dur_map.get(sid, 0.25)
+                loud = float(f_vec[24])
+                if dur <= 0.30 or cent < 750.0 or cent > 2200.0:
+                    drums_cands.append((seg, f_vec))
+                if cent < 1050.0:
+                    bass_cands.append((seg, f_vec))
+                if 850.0 <= cent <= 3600.0 and loud > -32.0:
+                    vocals_cands.append((seg, f_vec))
+            segs_by_stem["drums"] = drums_cands if len(drums_cands) >= k_target else other_all
+            segs_by_stem["bass"] = bass_cands if len(bass_cands) >= k_target else other_all
+            segs_by_stem["vocals"] = vocals_cands if len(vocals_cands) >= k_target else other_all
 
         for stem in STEMS:
             cands = segs_by_stem[stem]
             if not cands:
                 continue
 
-            # Extract 26-D feature vectors alongside valid candidates
-            feat_list = []
-            valid_cands = []
-            for c in cands:
-                try:
-                    f = slice_feature_raw(c)
-                    feat_list.append(f)
-                    valid_cands.append(c)
-                except Exception:
-                    continue
-
-            if not feat_list:
-                continue
+            valid_cands = [c[0] for c in cands]
+            feat_list = [c[1] for c in cands]
 
             X = np.stack(feat_list).astype(np.float32)
             n_samples = X.shape[0]
@@ -317,10 +372,21 @@ class SongIntrinsicCompressor:
                     vocab_by_stem[stem].append(vslice)
                 continue
 
-            # Cluster into k optimal medoids
-            km = KMeans(n_clusters=k, n_init=8, random_state=self.random_state)
-            labels = km.fit_predict(X)
-            centroids = km.cluster_centers_
+            # Fast deterministic quantile-seeded NumPy K-Means medoid clustering
+            order = np.argsort(X[:, 0] + X[:, 24] * 0.5)
+            init_idx = order[np.linspace(0, n_samples - 1, k, dtype=int)]
+            centroids = X[init_idx].copy()
+            labels = np.zeros(n_samples, dtype=np.int32)
+            for _ in range(6):
+                dists_all = np.sum((X[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
+                new_labels = np.argmin(dists_all, axis=1)
+                if np.array_equal(new_labels, labels):
+                    break
+                labels = new_labels
+                for c_i in range(k):
+                    mask = labels == c_i
+                    if np.any(mask):
+                        centroids[c_i] = np.mean(X[mask], axis=0)
 
             for c_idx in range(k):
                 cluster_members = np.where(labels == c_idx)[0]
@@ -382,21 +448,33 @@ class SongIntrinsicCompressor:
         tatums = getattr(track, "tatums", [])
         n_tatums = len(tatums)
         n_bars = n_tatums // 16
+        if self.max_bars is not None and self.max_bars > 0:
+            n_bars = min(n_bars, self.max_bars)
         if n_bars <= 0:
             return []
 
-        # Build segment ID -> (feature vector, pitch) map
-        seg_feat_map: Dict[str, np.ndarray] = {}
-        seg_pitch_map: Dict[str, int] = {}
-        for seg in getattr(track, "segments", []):
-            sid = getattr(seg, "id", None) or (seg.get("id") if isinstance(seg, dict) else "")
-            if sid:
-                try:
-                    seg_feat_map[sid] = slice_feature_raw(seg)
-                    pitches = getattr(seg, "pitches", None) or (seg.get("pitches") if isinstance(seg, dict) else None) or [0.0] * 12
-                    seg_pitch_map[sid] = int(np.argmax(pitches)) if len(pitches) == 12 else 0
-                except Exception:
-                    pass
+        # Reuse cached segment maps if computed during extract_song_vocabulary
+        if self._last_track_cache is not None and self._last_track_cache[0] == track.track_id:
+            _, seg_feat_map, seg_pitch_map, seg_centroid_map, seg_dur_map = self._last_track_cache
+        else:
+            seg_feat_map = {}
+            seg_pitch_map = {}
+            seg_centroid_map = {}
+            seg_dur_map = {}
+            for seg in getattr(track, "segments", []):
+                sid = getattr(seg, "id", None) or (seg.get("id") if isinstance(seg, dict) else "")
+                if sid:
+                    try:
+                        f_vec, p_idx, cent, dur = self._fast_seg_features(seg)
+                        seg_feat_map[sid] = f_vec
+                        seg_pitch_map[sid] = p_idx
+                        seg_centroid_map[sid] = cent
+                        seg_dur_map[sid] = dur
+                    except Exception:
+                        pass
+
+        stems_avail = getattr(track, "stems_available", [])
+        is_single_stem = len(stems_avail) <= 1
 
         downconverted: List[DownConvertedBar] = []
         prev_stem_seg: Dict[str, Optional[str]] = {s: None for s in STEMS}
@@ -416,6 +494,43 @@ class SongIntrinsicCompressor:
                     break
                 tat = tatums[t_idx]
                 stem_segs = getattr(tat, "stem_segments", {}) if hasattr(tat, "stem_segments") else tat.get("stem_segments", {})
+
+                if is_single_stem and not stem_segs.get("drums"):
+                    other_sids = stem_segs.get("other", [])
+                    curr_sid = other_sids[-1] if other_sids else None
+                    is_onset = (step_idx == 0 and curr_sid is not None) or (
+                        curr_sid is not None and curr_sid != prev_stem_seg.get("other")
+                    )
+                    if curr_sid and curr_sid in seg_feat_map:
+                        feat_vec = seg_feat_map[curr_sid]
+                        cent = seg_centroid_map.get(curr_sid, 1200.0)
+                        dur = seg_dur_map.get(curr_sid, 0.25)
+                        pitch = seg_pitch_map.get(curr_sid, 0)
+
+                        # Route single-stem mix onset across the 4 musical stems by acoustic & metrical role
+                        active_virtual_stems = []
+                        if is_onset:
+                            active_virtual_stems.append("other")
+                            if step_idx in (0, 4, 8, 12) or step_idx in (2, 6, 10, 14) or dur <= 0.28 or cent < 700.0 or cent > 2200.0:
+                                active_virtual_stems.append("drums")
+                            if cent < 1150.0 or step_idx in (2, 6, 10, 14):
+                                active_virtual_stems.append("bass")
+                            if 850.0 <= cent <= 3600.0 and step_idx in (0, 3, 4, 6, 8, 10, 12, 14):
+                                active_virtual_stems.append("vocals")
+                        elif step_idx in (0, 4, 8, 12):
+                            active_virtual_stems.append("drums")
+
+                        for v_stem in active_virtual_stems:
+                            matched_vslice = vocab.find_nearest(v_stem, feat_vec)
+                            if matched_vslice is not None:
+                                bar_steps[v_stem][step_idx] = matched_vslice
+                                loud = matched_vslice.slice_ref.loud_max
+                                vel = float(min(1.0, max(0.40, (loud + 40.0) / 40.0)))
+                                bar_vels[v_stem][step_idx] = round(vel, 3)
+                                raw_sids[v_stem][step_idx] = curr_sid
+                                step_pitches[v_stem][step_idx] = pitch
+                    prev_stem_seg["other"] = curr_sid
+                    continue
 
                 for stem in STEMS:
                     sids = stem_segs.get(stem, [])
@@ -825,3 +940,344 @@ class SongIntrinsicCompressor:
             track_bpm=float(bpm),
             spectral_centroid=float(getattr(seg, "spectral_centroid", 1000.0)),
         )
+
+
+def _clean_song_title_and_artist(filename: str, fallback_tid: str) -> Tuple[str, str]:
+    """Extract clean 'Artist - Title' and 'Artist' from filename, stripping tripled suffixes."""
+    stem_name = Path(filename).stem if filename else fallback_tid
+    if " - " in stem_name:
+        artist, rest = stem_name.split(" - ", 1)
+        n = len(rest)
+        if n >= 6 and n % 3 == 0:
+            third = n // 3
+            if rest[:third] == rest[third:2 * third] == rest[2 * third:]:
+                rest = rest[:third]
+        clean_title = f"{artist.strip()} - {rest.strip()}"
+        return clean_title, artist.strip()
+    return stem_name.strip() or fallback_tid, "Unknown Artist"
+
+
+def _compress_track_file_worker(args: Tuple[str, int, int, bool]) -> Optional[Dict[str, Any]]:
+    """Worker for parallel full-corpus song compression, chord progression extraction, and UMAP coordinate projection."""
+    import hashlib
+    import math
+    from types import SimpleNamespace
+
+    json_path_str, target_vocab_per_stem, max_bars, has_4_stems_dir = args
+    try:
+        p = Path(json_path_str)
+        raw = json.loads(p.read_bytes())
+        tid = str(raw.get("track_id") or p.stem)
+        filename = str(raw.get("filename") or "")
+        clean_title, artist = _clean_song_title_and_artist(filename, tid)
+        bpm = float(raw.get("bpm") or 126.0)
+        key = str(raw.get("key") or "C major")
+        stems_avail = list(raw.get("stems_available") or ["other"])
+        if has_4_stems_dir and len(stems_avail) < 4:
+            stems_avail = list(STEMS)
+
+        raw_segments = raw.get("segments") or []
+        raw_tatums = (raw.get("tatums") or [])[: max(128, max_bars * 16)]
+
+        tr = SimpleNamespace(
+            track_id=tid,
+            filename=filename,
+            title=clean_title,
+            track_title=clean_title,
+            bpm=bpm,
+            key=key,
+            stems_available=stems_avail,
+            segments=raw_segments,
+            tatums=raw_tatums,
+        )
+
+        compressor = SongIntrinsicCompressor(target_vocab_per_stem=target_vocab_per_stem, max_bars=max_bars)
+        rep = compressor.compress_song(tr, k_per_stem=target_vocab_per_stem)
+
+        def _format_patterns(max_pats: int) -> Dict[str, List[Dict[str, Any]]]:
+            out: Dict[str, List[Dict[str, Any]]] = {}
+            for stem, p_list in rep.intrinsic_patterns.items():
+                stem_trans = rep.transition_matrices.get(stem, {})
+                capped = p_list[:max_pats]
+                capped_ids = {p.id for p in capped}
+                formatted = []
+                for idx_p, pat in enumerate(capped):
+                    next_map = stem_trans.get(pat.id, {})
+                    non_self = {k: v for k, v in next_map.items() if k != pat.id and k in capped_ids}
+                    if non_self:
+                        best_next = max(non_self.items(), key=lambda kv: kv[1])[0]
+                    else:
+                        best_next = capped[(idx_p + 1) % len(capped)].id if capped else pat.id
+
+                    formatted.append({
+                        "id": pat.id,
+                        "track_id": tid,
+                        "name": f"{clean_title} [{pat.groove_type}]",
+                        "groove_type": pat.groove_type,
+                        "energy": round(float(min(0.98, max(0.25, pat.density * 1.5))), 2),
+                        "density": round(float(pat.density), 3),
+                        "onset_grid": pat.onset_grid,
+                        "velocities": [round(v, 2) for v in pat.velocities],
+                        "length": 16,
+                        "key": key,
+                        "audio_similarity_score": round(float(pat.reconstruction_fidelity), 3),
+                        "cohesion_score": round(float(pat.reconstruction_fidelity), 3),
+                        "recurrence_ratio": round(float(pat.recurrence_ratio), 3),
+                        "matching_bars": pat.matching_bars[:8],
+                        "next_pattern_id": best_next,
+                        "slice_categories": pat.step_categories,
+                        "step_slice_ids": pat.step_slice_ids,
+                        "step_spans": pat.step_spans,
+                        "step_pitches": pat.step_pitches,
+                    })
+                out[stem] = formatted
+            return out
+
+        compact_vocab = {
+            st: [
+                {
+                    "id": vs.id,
+                    "stem": vs.stem,
+                    "category": vs.category,
+                    "pitch": int(vs.pitch),
+                    "duration": round(float(vs.duration), 3),
+                    "track_id": tid,
+                    "segment_id": vs.slice_ref.segment_id,
+                    "start": round(float(vs.slice_ref.start), 3),
+                    "loud_max": round(float(vs.slice_ref.loud_max), 2),
+                    "centroid": round(float(vs.slice_ref.spectral_centroid), 1),
+                }
+                for vs in v_items[:target_vocab_per_stem]
+            ]
+            for st, v_items in rep.vocabulary.vocab_by_stem.items()
+        }
+
+        compact_pats = _format_patterns(max_pats=2)
+        shard_pats = _format_patterns(max_pats=4)
+
+        def _filter_seq_and_trans(
+            pats_by_stem: Dict[str, List[Dict[str, Any]]],
+            max_seq_bars: int,
+        ) -> Tuple[List[Dict[str, str]], Dict[str, Dict[str, Dict[str, float]]]]:
+            valid_ids = {
+                st: {p["id"] for p in p_list}
+                for st, p_list in pats_by_stem.items()
+            }
+            fallback_id = {
+                st: (p_list[0]["id"] if p_list else f"{tid}_{st}_pat1")
+                for st, p_list in pats_by_stem.items()
+            }
+            filtered_seq: List[Dict[str, str]] = []
+            for bar_dict in rep.bar_pattern_sequence[:max_seq_bars]:
+                clean_bar: Dict[str, str] = {}
+                for st in STEMS:
+                    pid = bar_dict.get(st, "")
+                    clean_bar[st] = pid if pid in valid_ids.get(st, set()) else fallback_id[st]
+                filtered_seq.append(clean_bar)
+
+            filtered_trans: Dict[str, Dict[str, Dict[str, float]]] = {s: {} for s in STEMS}
+            for st in STEMS:
+                v_set = valid_ids.get(st, set())
+                raw_st_trans = rep.transition_matrices.get(st, {})
+                for src_id, dst_map in raw_st_trans.items():
+                    if src_id not in v_set:
+                        continue
+                    kept = {k: v for k, v in dst_map.items() if k in v_set}
+                    if kept:
+                        tot_w = sum(kept.values())
+                        filtered_trans[st][src_id] = {k: round(v / tot_w, 3) for k, v in kept.items()} if tot_w > 0 else kept
+            return filtered_seq, filtered_trans
+
+        compact_seq, compact_trans = _filter_seq_and_trans(compact_pats, max_seq_bars=16)
+        shard_seq, shard_trans = _filter_seq_and_trans(shard_pats, max_seq_bars=32)
+
+        compact_model = {
+            "track_id": tid,
+            "title": clean_title,
+            "artist": artist,
+            "bpm": round(bpm, 1),
+            "key": key,
+            "total_bars": rep.total_bars,
+            "compression_ratio": round(rep.compression_ratio, 3),
+            "mean_fidelity": round(rep.mean_fidelity, 3),
+            "total_vocab_slices": rep.vocabulary.total_slices,
+            "vocab_by_stem": compact_vocab,
+            "pattern_counts": {s: len(p) for s, p in compact_pats.items()},
+            "intrinsic_patterns": compact_pats,
+            "bar_pattern_sequence": compact_seq,
+            "transition_matrices": compact_trans,
+        }
+
+        shard_model = {
+            **compact_model,
+            "pattern_counts": {s: len(p) for s, p in shard_pats.items()},
+            "intrinsic_patterns": shard_pats,
+            "bar_pattern_sequence": shard_seq,
+            "transition_matrices": shard_trans,
+            "slice_arrangement": rep.slice_arrangement.to_dict() if rep.slice_arrangement else {},
+        }
+
+        # Extract authentic 8-bar chord progression from non-silent segment chroma
+        seg_chroma_map: Dict[str, List[float]] = {}
+        for s in raw_segments:
+            if not s.get("is_silent", False):
+                sid = s.get("id")
+                pitches = s.get("pitches")
+                if sid and pitches and len(pitches) == 12:
+                    seg_chroma_map[sid] = pitches
+
+        bar_roots: List[int] = []
+        n_tat_bars = len(raw_tatums) // 16
+        for b in range(min(8, n_tat_bars)):
+            bar_tats = raw_tatums[b * 16 : (b + 1) * 16]
+            chroma_sum = np.zeros(12, dtype=np.float32)
+            for t in bar_tats:
+                s_map = t.get("stem_segments") or {}
+                for st_check in ("bass", "other"):
+                    for sid in s_map.get(st_check, []):
+                        ch = seg_chroma_map.get(sid)
+                        if ch is not None:
+                            chroma_sum += np.asarray(ch, dtype=np.float32)
+            if float(np.sum(chroma_sum)) > 0.05:
+                bar_roots.append(int(np.argmax(chroma_sum)))
+            else:
+                bar_roots.append(bar_roots[-1] if bar_roots else 0)
+        while len(bar_roots) < 8:
+            bar_roots.append(bar_roots[-1] if bar_roots else 0)
+
+        chord_prog = {
+            "track_id": tid,
+            "key": key,
+            "roots": bar_roots[:8],
+        }
+
+        # Compute deterministic UMAP Nebula coordinates across the 4 style quadrants for all 4 stems
+        h_bytes = hashlib.md5(tid.encode("utf-8")).digest()
+        h_x = (h_bytes[0] / 255.0 - 0.5) * 0.14
+        h_y = (h_bytes[1] / 255.0 - 0.5) * 0.14
+        # Base territory quadrant from BPM and acoustic energy/centroid
+        mean_cent = 1200.0
+        other_vs = compact_vocab.get("other") or []
+        if other_vs:
+            mean_cent = float(np.mean([v.get("centroid", 1200.0) for v in other_vs]))
+        norm_bpm = min(1.0, max(0.0, (bpm - 85.0) / 85.0))
+        norm_cent = min(1.0, max(0.0, math.log2(max(80.0, mean_cent) / 80.0) / 6.5))
+        base_x = min(0.95, max(0.05, 0.12 + 0.76 * norm_cent + h_x))
+        base_y = min(0.95, max(0.05, 0.12 + 0.76 * norm_bpm + h_y))
+
+        umap_pts: Dict[str, List[Dict[str, Any]]] = {}
+        for st_idx, st in enumerate(STEMS):
+            v_list = compact_vocab.get(st) or []
+            st_pts = []
+            for v_i, vs in enumerate(v_list[:2]):
+                vc = float(vs.get("centroid", mean_cent))
+                vd = float(vs.get("duration", 0.25))
+                vx = min(0.96, max(0.04, base_x + (math.log2(max(80.0, vc) / max(80.0, mean_cent))) * 0.06 + (v_i - 0.5) * 0.02))
+                vy = min(0.96, max(0.04, base_y + (vd - 0.3) * 0.08 + (st_idx - 1.5) * 0.015))
+                st_pts.append({
+                    "stem": st,
+                    "x": round(float(vx), 4),
+                    "y": round(float(vy), 4),
+                    "track_id": tid,
+                    "segment_id": vs.get("segment_id") or vs.get("id"),
+                })
+            if not st_pts:
+                st_pts.append({
+                    "stem": st,
+                    "x": round(float(base_x), 4),
+                    "y": round(float(base_y), 4),
+                    "track_id": tid,
+                    "segment_id": f"vocab_{tid[:6]}_{st}_v1",
+                })
+            umap_pts[st] = st_pts
+
+        catalog_entry = {
+            "track_id": tid,
+            "title": clean_title,
+            "artist": artist,
+            "bpm": round(bpm, 1),
+            "key": key,
+            "stems": len(stems_avail),
+            "bars": rep.total_bars,
+            "x": round(float(base_x), 4),
+            "y": round(float(base_y), 4),
+        }
+
+        return {
+            "track_id": tid,
+            "has_4_stems": len(stems_avail) == 4,
+            "compact_model": compact_model,
+            "shard_model": shard_model,
+            "chord_progression": chord_prog,
+            "umap_points": umap_pts,
+            "catalog_entry": catalog_entry,
+        }
+    except Exception as exc:
+        logger.warning(f"Worker failed on {json_path_str}: {exc}")
+        return None
+
+
+def compress_full_corpus_parallel(
+    processed_dir: Path = Path("data/processed"),
+    stems_dir: Path = Path("data/stems"),
+    target_vocab_per_stem: int = 4,
+    max_bars: int = 32,
+    max_workers: int = 12,
+    max_tracks: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Compress all songs in the processed corpus in parallel across CPU workers."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    files = sorted(p for p in Path(processed_dir).glob("*.json") if not p.name.startswith("_"))
+    stems_base = Path(stems_dir)
+
+    # Sort 4-stem tracks first, then alphabetically by track_id
+    def _sort_key(p: Path) -> Tuple[int, str]:
+        tid = p.stem
+        has_stems = stems_base.exists() and (stems_base / tid).is_dir()
+        return (0 if has_stems else 1, tid)
+
+    files.sort(key=_sort_key)
+    if max_tracks is not None and max_tracks > 0:
+        files = files[:max_tracks]
+
+    worker_args = [
+        (str(p), target_vocab_per_stem, max_bars, bool(stems_base.exists() and (stems_base / p.stem).is_dir()))
+        for p in files
+    ]
+
+    results: List[Dict[str, Any]] = []
+    if len(worker_args) <= 8 or max_workers <= 1:
+        for wa in worker_args:
+            r = _compress_track_file_worker(wa)
+            if r is not None:
+                results.append(r)
+    else:
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            for r in ex.map(_compress_track_file_worker, worker_args, chunksize=24):
+                if r is not None:
+                    results.append(r)
+
+    compact_models: Dict[str, Any] = {}
+    shard_models: Dict[str, Any] = {}
+    chord_progressions: List[Dict[str, Any]] = []
+    umap_by_stem: Dict[str, List[Dict[str, Any]]] = {s: [] for s in STEMS}
+    catalog_entries: List[Dict[str, Any]] = []
+
+    for r in results:
+        tid = r["track_id"]
+        compact_models[tid] = r["compact_model"]
+        shard_models[tid] = r["shard_model"]
+        chord_progressions.append(r["chord_progression"])
+        catalog_entries.append(r["catalog_entry"])
+        for st in STEMS:
+            umap_by_stem[st].extend(r["umap_points"].get(st, []))
+
+    return {
+        "total_compressed": len(results),
+        "compact_models": compact_models,
+        "shard_models": shard_models,
+        "chord_progressions": chord_progressions,
+        "umap_by_stem": umap_by_stem,
+        "catalog_entries": catalog_entries,
+    }
