@@ -19,13 +19,94 @@ export interface TamagotchiStats {
 }
 
 const STAGE_CONFIGS: Record<TamagotchiStage, { name: string; minXp: number }> = {
-  1: { name: "RAVE ORB", minXp: 0 },
-  2: { name: "DISCO ORB", minXp: 250 },
-  3: { name: "CYBER ORB", minXp: 750 },
-  4: { name: "ASTRAL ORB", minXp: 1800 },
+  1: { name: "GUMMI CUB (RAVE ORB)", minXp: 0 },
+  2: { name: "NEON GUMMI (DISCO ORB)", minXp: 250 },
+  3: { name: "CYBER GUMMI (CYBER ORB)", minXp: 750 },
+  4: { name: "COSMIC GUMMI (ASTRAL ORB)", minXp: 1800 },
 };
 
-const MUSIC_NOTES = ["✨", "💖", "🐾", "🌈", "✦", "✧", "💫", "♬", "⭐", "♡"];
+const MUSIC_NOTES = ["✨", "💖", "🐾", "🌈", "✦", "✧", "💫", "♬", "⭐", "♡", "🍬", "🍭"];
+
+export interface GummiLoopVertex {
+  x: number;
+  y: number;
+  nx: number;
+  ny: number;
+  u: number;
+}
+
+/**
+ * Builds the smooth closed Catmull-Rom parametric loop for the Kawaii Gummi Bear body contour.
+ * Outward unit normals are precomputed for seamless audio-reactive wave displacement.
+ */
+function buildGummiBearPoints(): GummiLoopVertex[] {
+  const halfPts: [number, number][] = [
+    [0.0, -48.0],     // 0: top head center dip
+    [14.0, -50.0],    // 1: top head slope
+    [23.0, -53.0],    // 2: inner ear base
+    [30.0, -66.0],    // 3: inner ear curve
+    [40.0, -68.0],    // 4: ear peak
+    [48.0, -59.0],    // 5: ear outer round
+    [44.0, -46.0],    // 6: outer ear base
+    [46.0, -33.0],    // 7: upper cheek
+    [50.0, -16.0],    // 8: chubby cheek max
+    [45.0, -2.0],     // 9: lower cheek curve
+    [35.0, 8.0],      // 10: cute neck pinch
+    [40.0, 14.0],     // 11: shoulder
+    [52.0, 19.0],     // 12: arm top
+    [58.0, 27.0],     // 13: chubby paw tip
+    [52.0, 35.0],     // 14: paw bottom round
+    [42.0, 38.0],     // 15: arm under
+    [36.0, 42.0],     // 16: waist indent
+    [44.0, 52.0],     // 17: chubby tummy upper
+    [48.0, 64.0],     // 18: chubby tummy max
+    [42.0, 76.0],     // 19: hip
+    [34.0, 84.0],     // 20: outer foot
+    [22.0, 88.0],     // 21: foot bottom round
+    [11.0, 84.0],     // 22: inner foot
+    [0.0, 74.0],      // 23: crotch center
+  ];
+
+  const leftPts: [number, number][] = [];
+  for (let i = halfPts.length - 2; i >= 1; i--) {
+    leftPts.push([-halfPts[i][0], halfPts[i][1]]);
+  }
+  const allPts = halfPts.concat(leftPts);
+  const pLen = allPts.length;
+
+  const sampled: { x: number; y: number }[] = [];
+  const stepsPerSeg = 5;
+  for (let i = 0; i < pLen; i++) {
+    const p0 = allPts[(i - 1 + pLen) % pLen];
+    const p1 = allPts[i];
+    const p2 = allPts[(i + 1) % pLen];
+    const p3 = allPts[(i + 2) % pLen];
+    for (let s = 0; s < stepsPerSeg; s++) {
+      const t = s / stepsPerSeg;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const x = 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
+      const y = 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+      sampled.push({ x, y });
+    }
+  }
+
+  const n = sampled.length;
+  const result: GummiLoopVertex[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = sampled[(i - 1 + n) % n];
+    const next = sampled[(i + 1) % n];
+    const tx = next.x - prev.x;
+    const ty = next.y - prev.y;
+    const len = Math.hypot(tx, ty);
+    const nx = len > 1e-6 ? ty / len : 0.0;
+    const ny = len > 1e-6 ? -tx / len : -1.0;
+    result.push({ x: sampled[i].x, y: sampled[i].y, nx, ny, u: i / n });
+  }
+  return result;
+}
+
+const GUMMI_BEAR_LOOP_POINTS: GummiLoopVertex[] = buildGummiBearPoints();
 
 export type VocalTimbre =
   | "SOULFUL"   // Warm rich diva / house / chest singing
@@ -117,7 +198,7 @@ export class TamagotchiAvatar {
     this.affection = Math.min(10, this.affection + 1);
     this.temporaryAction = "PET";
     this.actionTimer = 2.0;
-    this.speechBubble = "💖 NEIGH! LOVE THIS GROOVE ✨";
+    this.speechBubble = "💖 SQUISH! LOVE THIS GROOVE ✨";
     this.speechTimer = 2.5;
     this.saveState();
   }
@@ -127,7 +208,7 @@ export class TamagotchiAvatar {
     this.vibe = Math.min(100, this.vibe + 15);
     this.temporaryAction = "EAT";
     this.actionTimer = 2.2;
-    this.speechBubble = "🦄 NOM NOM! SPARKLE AUDIO SLICE!";
+    this.speechBubble = "🐻 NOM NOM! JUICY GUMMI SLICE! 🍬";
     this.speechTimer = 2.5;
     this.saveState();
   }
@@ -137,7 +218,7 @@ export class TamagotchiAvatar {
     this.vibe = 100;
     this.temporaryAction = "HYPE";
     this.actionTimer = 3.0;
-    this.speechBubble = "⚡ PSYCHEDELIC BASS DROP! 🌈";
+    this.speechBubble = "⚡ PSYCHEDELIC GUMMI BOUNCE! 🌈";
     this.speechTimer = 3.0;
     this.saveState();
   }
@@ -177,7 +258,7 @@ export class TamagotchiAvatar {
       this.vibe = 100;
       this.temporaryAction = "EVOLVE";
       this.actionTimer = 3.5;
-      this.speechBubble = `✨ EVOLVED TO ${STAGE_CONFIGS[this.stage].name}! 🦄🌈`;
+      this.speechBubble = `✨ EVOLVED TO ${STAGE_CONFIGS[this.stage].name}! 🐻🌈`;
       this.speechTimer = 3.5;
       this.saveState();
     }
@@ -501,60 +582,60 @@ export class TamagotchiAvatar {
     const noteChar = this.noteFloating.length > 0 ? this.noteFloating[0].char : "✨";
 
     if (this.stage === 1) {
-      // Stage 1: Rave Orb
+      // Stage 1: Gummi Cub
       faceLines = bob ? [
-        `      <span class="rave-orb">.╭─────────╮.</span>       `,
+        `      <span class="rave-orb">.╭ʕ •ᴥ• ʔ╮.</span>       `,
         `     <span class="rave-orb">(</span>   <span class="rave-eyes">${eyes}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">${noteChar}</span>  `,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~✦</span> `,
         `     <span class="rave-orb">(</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~♡</span> `,
-        `      <span class="rave-orb">·╰─────────╯·</span>       `,
+        `      <span class="rave-orb">·╰─(づ｡◕‿‿◕｡)づ─╯·</span>  `,
       ] : [
-        `      <span class="rave-orb">.╭─────────╮.</span>       `,
+        `      <span class="rave-orb">.╭ʕ •ᴥ• ʔ╮.</span>       `,
         `     <span class="rave-orb">(</span>   <span class="rave-eyes">${eyes}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">${noteChar}</span>  `,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~~*</span> `,
         `     <span class="rave-orb">(</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~~*</span> `,
-        `      <span class="rave-orb">·╰─────────╯·</span>       `,
+        `      <span class="rave-orb">·╰─(づ｡◕‿‿◕｡)づ─╯·</span>  `,
       ];
     } else if (this.stage === 2) {
-      // Stage 2: Disco Orb
+      // Stage 2: Neon Gummi
       faceLines = bob ? [
-        `     <span class="rave-wings">.·´</span><span class="rave-orb">╭─────────╮</span><span class="rave-wings">\`·.</span>     `,
+        `     <span class="rave-wings">.·´</span><span class="rave-orb">╭ʕ •ᴥ• ʔ╮</span><span class="rave-wings">\`·.</span>     `,
         `   <span class="rave-wings">[o(</span>  <span class="rave-eyes">${eyes}</span>  <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~✦</span> `,
         `     <span class="rave-orb">(</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~🌈</span> `,
-        `     <span class="rave-wings">\`·.</span><span class="rave-orb">╰─| WUB |─╯</span><span class="rave-wings">.·´</span>     `,
+        `     <span class="rave-wings">\`·.</span><span class="rave-orb">╰─| GUMMI |─╯</span><span class="rave-wings">.·´</span>   `,
       ] : [
-        `     <span class="rave-wings">.·´</span><span class="rave-orb">╭─────────╮</span><span class="rave-wings">\`·.</span>     `,
+        `     <span class="rave-wings">.·´</span><span class="rave-orb">╭ʕ •ᴥ• ʔ╮</span><span class="rave-wings">\`·.</span>     `,
         `   <span class="rave-wings">[o(</span>  <span class="rave-eyes">${eyes}</span>  <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~~*</span> `,
         `     <span class="rave-orb">(</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~~✨</span> `,
-        `     <span class="rave-wings">\`·.</span><span class="rave-orb">╰─| WUB |─╯</span><span class="rave-wings">.·´</span>     `,
+        `     <span class="rave-wings">\`·.</span><span class="rave-orb">╰─| GUMMI |─╯</span><span class="rave-wings">.·´</span>   `,
       ];
     } else if (this.stage === 3) {
-      // Stage 3: Cyber Orb
+      // Stage 3: Cyber Gummi
       faceLines = bob ? [
-        `     <span class="rave-wings">~/</span><span class="rave-orb">╭──⚡⚡──╮</span><span class="rave-wings">\\~</span>     `,
+        `     <span class="rave-wings">~/</span><span class="rave-orb">╭ʕ ⚡ᴥ⚡ ʔ╮</span><span class="rave-wings">\\~</span>     `,
         `   <span class="rave-wings">~/(\\</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~✦</span> `,
         `    <span class="rave-body">&lt;[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]&gt;</span>    `,
-        `     <span class="rave-orb">·╰─| WUB |─╯·</span>      `,
+        `     <span class="rave-orb">·╰─| GUMMI |─╯·</span>    `,
       ] : [
-        `     <span class="rave-wings">~/</span><span class="rave-orb">╭──⚡⚡──╮</span><span class="rave-wings">\\~</span>     `,
+        `     <span class="rave-wings">~/</span><span class="rave-orb">╭ʕ ⚡ᴥ⚡ ʔ╮</span><span class="rave-wings">\\~</span>     `,
         `   <span class="rave-wings">~/\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~~*</span> `,
         `    <span class="rave-body">\\[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]/</span>    `,
-        `     <span class="rave-orb">·╰─| WUB |─╯·</span>      `,
+        `     <span class="rave-orb">·╰─| GUMMI |─╯·</span>    `,
       ];
     } else {
-      // Stage 4: Astral Orb
+      // Stage 4: Cosmic Gummi
       faceLines = bob ? [
-        `    <span class="rave-spark">✧</span><span class="rave-wings">~/</span><span class="rave-orb">╭──✦✦──╮</span><span class="rave-wings">\\~</span><span class="rave-spark">✧</span>    `,
+        `    <span class="rave-spark">✧</span><span class="rave-wings">~/</span><span class="rave-orb">╭ʕ ✦ᴥ✦ ʔ╮</span><span class="rave-wings">\\~</span><span class="rave-spark">✧</span>    `,
         `  <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~✦</span> `,
         `   <span class="rave-body">&lt;[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]&gt;</span>    `,
         `    <span class="rave-orb">·╰─| 505 |─╯·</span>       `,
       ] : [
-        `    <span class="rave-spark">✧</span><span class="rave-wings">~/</span><span class="rave-orb">╭──✦✦──╮</span><span class="rave-wings">\\~</span><span class="rave-spark">✧</span>    `,
+        `    <span class="rave-spark">✧</span><span class="rave-wings">~/</span><span class="rave-orb">╭ʕ ✦ᴥ✦ ʔ╮</span><span class="rave-wings">\\~</span><span class="rave-spark">✧</span>    `,
         `  <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~~*</span> `,
         `   <span class="rave-body">\\[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]/</span>    `,
@@ -629,8 +710,8 @@ export class TamagotchiAvatar {
 
     // Center coordinates with beat bobbing
     const cx = w * 0.5;
-    const bobOffset = bob ? 4.0 : 0.0;
-    const cy = h * 0.48 + bobOffset;
+    const bobOffset = bob ? 3.0 : 0.0;
+    const cy = h * 0.46 + bobOffset;
 
     // Stage-based color palette
     let mainColor = "#ff77e9";
@@ -656,71 +737,111 @@ export class TamagotchiAvatar {
       this.canvasEl.classList.remove("singing");
     }
 
-    // Circular angular distance with full 2*PI wrap-around
-    const angDist = (a: number, b: number): number => {
-      let diff = Math.abs(a - b) % (Math.PI * 2);
-      if (diff > Math.PI) diff = Math.PI * 2 - diff;
-      return diff;
-    };
+    // -------------------------------------------------------------------------
+    // 1. KAWAII GUMMI BEAR DYNAMICS (SQUISH & STRETCH BOUNCE)
+    // -------------------------------------------------------------------------
+    const squishY = 1.0 - 0.06 * Math.min(1.2, drumLevel * 1.5) + (bob ? -0.02 : 0.015);
+    const squishX = 1.0 + 0.06 * Math.min(1.2, drumLevel * 1.5) - (bob ? -0.02 : 0.015);
+    const baseScale = 0.86 + 0.02 * this.stage;
+    const scaleX = baseScale * squishX;
+    const scaleY = baseScale * squishY;
 
     // -------------------------------------------------------------------------
-    // 1. THE AUDIO REACTIVE SINGLE LINE LOOP (CREATURE ROUND ORB OUTLINE)
+    // 2. THE AUDIO REACTIVE RING LOOP (CREATURE ROUND ORB OUTLINE & WHOLE GUMMI BEAR BODY)
     // -------------------------------------------------------------------------
-    const N = 180;
-    const baseR = 48 + 4 * this.stage;
-    const audioExpansion = 1.0 + 0.18 * Math.min(1.5, rmsLevel);
+    const N = GUMMI_BEAR_LOOP_POINTS.length;
+    const displacedPoints: { x: number; y: number }[] = new Array(N);
 
+    for (let i = 0; i < N; i++) {
+      const pt = GUMMI_BEAR_LOOP_POINTS[i];
+      const waveRipple = (
+        Math.sin(6 * Math.PI * 2 * pt.u - t * 4.2) * 2.8 +
+        Math.cos(9 * Math.PI * 2 * pt.u + t * 6.5) * 1.8 +
+        Math.sin(3 * Math.PI * 2 * pt.u + t * 2.2) * (drumLevel * 4.2) +
+        Math.cos(12 * Math.PI * 2 * pt.u - t * 7.5) * (vocalsLevel * 2.6) +
+        Math.sin(2 * Math.PI * 2 * pt.u + t * 3.0) * (bassLevel * 3.5)
+      ) * Math.min(1.2, rmsLevel * 1.6 + 0.25);
+
+      const px = cx + (pt.x * scaleX) + pt.nx * waveRipple;
+      const py = cy + (pt.y * scaleY) + pt.ny * waveRipple;
+      displacedPoints[i] = { x: px, y: py };
+    }
+
+    // 2A. Juicy Translucent Candy Gelatin Fill
+    ctx.save();
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const p = displacedPoints[i];
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    }
+    ctx.closePath();
+
+    const jellyGrad = ctx.createRadialGradient(
+      cx, cy + 20 * scaleY, 10,
+      cx, cy + 20 * scaleY, 78 * baseScale
+    );
+    if (this.stage === 1) {
+      // Pink Strawberry Gummi
+      jellyGrad.addColorStop(0.0, "rgba(255, 120, 195, 0.42)");
+      jellyGrad.addColorStop(0.55, "rgba(255, 60, 160, 0.28)");
+      jellyGrad.addColorStop(1.0, "rgba(255, 20, 140, 0.12)");
+    } else if (this.stage === 2) {
+      // Neon Wildberry Gummi
+      jellyGrad.addColorStop(0.0, "rgba(235, 70, 255, 0.44)");
+      jellyGrad.addColorStop(0.55, "rgba(180, 40, 255, 0.28)");
+      jellyGrad.addColorStop(1.0, "rgba(100, 20, 230, 0.14)");
+    } else if (this.stage === 3) {
+      // Cyber Mint / Raspberry Gummi
+      jellyGrad.addColorStop(0.0, "rgba(0, 255, 245, 0.45)");
+      jellyGrad.addColorStop(0.55, "rgba(0, 180, 255, 0.30)");
+      jellyGrad.addColorStop(1.0, "rgba(0, 80, 220, 0.14)");
+    } else {
+      // Cosmic Golden Honey Gummi
+      jellyGrad.addColorStop(0.0, "rgba(255, 235, 80, 0.48)");
+      jellyGrad.addColorStop(0.55, "rgba(255, 160, 20, 0.32)");
+      jellyGrad.addColorStop(1.0, "rgba(255, 80, 120, 0.15)");
+    }
+    ctx.fillStyle = jellyGrad;
+    ctx.fill();
+    ctx.restore();
+
+    // 2B. Outer Translucent Celestial Jelly Glow Aura Ring
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-
-    // 1A. Outer Translucent Celestial Glow Ring
     ctx.beginPath();
-    for (let i = 0; i <= N; i++) {
-      const theta = (i / N) * Math.PI * 2;
-      const waveRipple = (
-        Math.sin(5 * theta - t * 3.5) * 2.5 +
-        Math.cos(7 * theta + t * 5.0) * 1.5 +
-        Math.sin(2 * theta + t * 1.5) * (drumLevel * 3.0)
-      ) * Math.min(1.0, rmsLevel * 1.6);
-      const r = (baseR * 1.12 * audioExpansion) + waveRipple;
-      const px = cx + r * Math.cos(theta);
-      const py = cy + r * Math.sin(theta);
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
+    for (let i = 0; i < N; i++) {
+      const pt = GUMMI_BEAR_LOOP_POINTS[i];
+      const p = displacedPoints[i];
+      const auraDist = 3.2;
+      const ax = p.x + pt.nx * auraDist;
+      const ay = p.y + pt.ny * auraDist;
+      if (i === 0) ctx.moveTo(ax, ay);
+      else ctx.lineTo(ax, ay);
     }
     ctx.closePath();
     ctx.strokeStyle = glowColor;
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.8;
     ctx.globalAlpha = 0.35 + 0.35 * Math.min(1.0, rmsLevel);
     ctx.stroke();
 
-    // 1B. Main Radiant Round Orb Perimeter (Neon Bloom Pass)
+    // 2C. Main Radiant Gummi Bear Perimeter (Neon Bloom Pass)
     ctx.beginPath();
-    for (let i = 0; i <= N; i++) {
-      const theta = (i / N) * Math.PI * 2;
-      const waveRipple = (
-        Math.sin(6 * theta - t * 4.2) * 3.0 +
-        Math.cos(9 * theta + t * 6.5) * 2.0 +
-        Math.sin(3 * theta + t * 2.2) * (drumLevel * 4.2) +
-        Math.cos(12 * theta - t * 7.5) * (vocalsLevel * 2.4)
-      ) * Math.min(1.2, rmsLevel * 1.8);
-      const r = (baseR * audioExpansion) + waveRipple;
-      const px = cx + r * Math.cos(theta);
-      const py = cy + r * Math.sin(theta);
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
+    for (let i = 0; i < N; i++) {
+      const p = displacedPoints[i];
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
     }
     ctx.closePath();
-
-    ctx.shadowBlur = 16 + 22 * rmsLevel;
+    ctx.shadowBlur = 18 + 24 * rmsLevel;
     ctx.shadowColor = glowColor;
     ctx.strokeStyle = glowColor;
-    ctx.lineWidth = 4.4;
-    ctx.globalAlpha = 0.45;
+    ctx.lineWidth = 4.6;
+    ctx.globalAlpha = 0.48;
     ctx.stroke();
 
-    // 1C. Inner Crisp Laser Vector Pass (White/Neon core)
+    // 2D. Inner Crisp Laser Vector Pass (White/Neon core)
     ctx.shadowBlur = 8;
     ctx.shadowColor = "#ffffff";
     ctx.strokeStyle = mainColor;
@@ -729,13 +850,150 @@ export class TamagotchiAvatar {
     ctx.stroke();
     ctx.restore();
 
-    // 1D. CELESTIAL EQUATORIAL PLANETARY RING (Inclined Orbiting Ring vibrating to Other/Synth instrument)
+    // -------------------------------------------------------------------------
+    // 3. CUTE INNER EAR CUSHIONS (AUDIO REACTIVE WIGGLE)
+    // -------------------------------------------------------------------------
+    ctx.save();
+    const earPadW = 6.8 * baseScale;
+    const earPadH = 8.0 * baseScale;
+    const earWiggle = Math.sin(t * 14.0) * (vocalsLevel * 2.8);
+
+    // Left Inner Ear Pad
+    ctx.save();
+    ctx.translate(cx - 32 * scaleX, cy - 54 * scaleY + earWiggle);
+    ctx.rotate(-0.25);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, earPadW, earPadH, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 160, 210, 0.55)";
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "#ff77e9";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 230, 245, 0.75)";
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.restore();
+
+    // Right Inner Ear Pad
+    ctx.save();
+    ctx.translate(cx + 32 * scaleX, cy - 54 * scaleY - earWiggle);
+    ctx.rotate(0.25);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, earPadW, earPadH, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 160, 210, 0.55)";
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "#ff77e9";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 230, 245, 0.75)";
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.restore();
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 4. CHUBBY PEAR-SHAPED KAWAII TUMMY (SUB-BASS BOUNCE)
+    // -------------------------------------------------------------------------
+    ctx.save();
+    const bellyY = cy + 48 * scaleY;
+    const bellyPulse = 1.0 + 0.12 * Math.min(1.5, bassLevel * 2.2);
+    const bellyRx = 22 * scaleX * bellyPulse;
+    const bellyRy = 19 * scaleY * bellyPulse;
+    ctx.beginPath();
+    ctx.ellipse(cx, bellyY, bellyRx, bellyRy, 0, 0, Math.PI * 2);
+    const bellyGrad = ctx.createRadialGradient(cx, bellyY, 4, cx, bellyY, bellyRx);
+    bellyGrad.addColorStop(0.0, "rgba(255, 245, 252, 0.35)");
+    bellyGrad.addColorStop(0.7, "rgba(255, 210, 235, 0.22)");
+    bellyGrad.addColorStop(1.0, "rgba(255, 180, 220, 0.05)");
+    ctx.fillStyle = bellyGrad;
+    ctx.shadowBlur = 10 + 12 * bassLevel;
+    ctx.shadowColor = mainColor;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 235, 250, 0.50)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 5. KAWAII PAW BEANS (PINK JELLY PADS ON HANDS & FEET)
+    // -------------------------------------------------------------------------
+    ctx.save();
+    const drawPaw = (pawX: number, pawY: number, angle: number, isHand: boolean) => {
+      ctx.save();
+      ctx.translate(pawX, pawY);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(255, 150, 210, 0.65)";
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = "#ff77e9";
+
+      // Main palm/foot pad
+      const padR = (isHand ? 3.5 : 4.2) * baseScale;
+      ctx.beginPath();
+      ctx.arc(0, 0, padR, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 3 Cute tiny toe beans
+      const beanR = (isHand ? 1.6 : 2.0) * baseScale;
+      const beanDist = padR + beanR + 1.2;
+      for (let b = -1; b <= 1; b++) {
+        const bAng = b * 0.45 - Math.PI / 2;
+        const bx = beanDist * Math.cos(bAng);
+        const by = beanDist * Math.sin(bAng);
+        ctx.beginPath();
+        ctx.arc(bx, by, beanR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    };
+
+    // Left & Right Hand Paws
+    drawPaw(cx - 48 * scaleX, cy + 24 * scaleY, -0.65, true);
+    drawPaw(cx + 48 * scaleX, cy + 24 * scaleY, 0.65, true);
+
+    // Left & Right Foot Paws
+    drawPaw(cx - 18 * scaleX, cy + 70 * scaleY, 0.15, false);
+    drawPaw(cx + 18 * scaleX, cy + 70 * scaleY, -0.15, false);
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 6. DELICIOUS 3D GUMMI CANDY SPECULAR HIGHLIGHTS
+    // -------------------------------------------------------------------------
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.65)";
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = "round";
+
+    // Forehead shine arc
+    ctx.beginPath();
+    ctx.arc(cx - 12 * scaleX, cy - 35 * scaleY, 14 * scaleX, 1.15 * Math.PI, 1.65 * Math.PI);
+    ctx.stroke();
+
+    // Ear gloss dots
+    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.beginPath();
+    ctx.arc(cx - 36 * scaleX, cy - 60 * scaleY, 2.2, 0, Math.PI * 2);
+    ctx.arc(cx + 36 * scaleX, cy - 60 * scaleY, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Chubby cheek gloss pills
+    ctx.beginPath();
+    ctx.arc(cx - 34 * scaleX, cy - 14 * scaleY, 2.0, 0, Math.PI * 2);
+    ctx.arc(cx + 34 * scaleX, cy - 14 * scaleY, 2.0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Belly shine crescent
+    ctx.beginPath();
+    ctx.arc(cx - 10 * scaleX, cy + 40 * scaleY, 11 * scaleX, 1.25 * Math.PI, 1.70 * Math.PI);
+    ctx.stroke();
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 7. CELESTIAL EQUATORIAL PLANETARY RING (Inclined Orbiting Synth Ring)
+    // -------------------------------------------------------------------------
     if (otherLevel > 0.015 || (otherWaveform && otherWaveform.length > 0) || this.stage >= 2) {
       ctx.save();
-      const ringRx = baseR * 1.38 * audioExpansion;
-      const ringRy = baseR * 0.42 * audioExpansion;
-      const ringTilt = -0.22; // ~ -12 degrees tilt for celestial depth
-      ctx.translate(cx, cy);
+      const ringRx = 56 * baseScale * (1.0 + 0.15 * Math.min(1.5, rmsLevel));
+      const ringRy = 18 * baseScale * (1.0 + 0.15 * Math.min(1.5, rmsLevel));
+      const ringTilt = -0.18;
+      ctx.translate(cx, cy + 28 * scaleY);
       ctx.rotate(ringTilt);
 
       ctx.beginPath();
@@ -769,71 +1027,49 @@ export class TamagotchiAvatar {
     }
 
     // -------------------------------------------------------------------------
-    // 2. EXPRESSIVE FACIAL FEATURES
+    // 8. ROSY CHEEKS & KAWAII BLUSH SLASHES (///)
     // -------------------------------------------------------------------------
-    const eyeSpacing = 24 + 2 * this.stage;
-    const eyeY = cy - 7;
+    const cheekSpacing = 28 * scaleX;
+    const cheekY = cy - 6 * scaleY;
+    const lCheekX = cx - cheekSpacing;
+    const rCheekX = cx + cheekSpacing;
+
+    ctx.save();
+    ctx.fillStyle = `rgba(255, 90, 180, ${0.40 + 0.30 * Math.min(1.0, rmsLevel)})`;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = "#ff0077";
+    ctx.beginPath();
+    ctx.ellipse(lCheekX, cheekY, 8.5 * baseScale, 5.5 * baseScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(rCheekX, cheekY, 8.5 * baseScale, 5.5 * baseScale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Kawaii blush slash marks (///)
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.75)";
+    ctx.lineWidth = 1.4;
+    ctx.lineCap = "round";
+    for (let b = -1; b <= 1; b++) {
+      // Left cheek slashes
+      ctx.beginPath();
+      ctx.moveTo(lCheekX + b * 3.5 - 1.5, cheekY + 2.5);
+      ctx.lineTo(lCheekX + b * 3.5 + 1.5, cheekY - 2.5);
+      ctx.stroke();
+
+      // Right cheek slashes
+      ctx.beginPath();
+      ctx.moveTo(rCheekX + b * 3.5 - 1.5, cheekY + 2.5);
+      ctx.lineTo(rCheekX + b * 3.5 + 1.5, cheekY - 2.5);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 9. BIG EXPRESSIVE ANIME WAVEFORM EYES
+    // -------------------------------------------------------------------------
+    const eyeSpacing = 18 * scaleX;
+    const eyeY = cy - 18 * scaleY;
     const leftEyeX = cx - eyeSpacing;
     const rightEyeX = cx + eyeSpacing;
 
-    // Cheeks subtle neon blush
-    ctx.save();
-    ctx.fillStyle = "rgba(255, 105, 180, 0.32)";
-    ctx.beginPath();
-    ctx.arc(leftEyeX - 12, eyeY + 16, 7.5, 0, Math.PI * 2);
-    ctx.arc(rightEyeX + 12, eyeY + 16, 7.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    // Glowing Cyber Whiskers (Audio Reactive Twitching Whisker Vectors)
-    ctx.save();
-    ctx.strokeStyle = accentColor;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = accentColor;
-    ctx.lineWidth = 1.4;
-    ctx.globalAlpha = 0.65 + 0.35 * Math.min(1.0, rmsLevel);
-
-    const whiskerTwitch = Math.sin(t * 8.0) * (1.0 + drumLevel * 2.5);
-    const wSpan = 18 + 4 * this.stage;
-
-    // Left Whiskers (fanning outward left)
-    const lCheekX = leftEyeX - 16;
-    const lCheekY = eyeY + 16;
-    ctx.beginPath();
-    ctx.moveTo(lCheekX, lCheekY - 3);
-    ctx.lineTo(lCheekX - wSpan, lCheekY - 7 + whiskerTwitch);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(lCheekX - 2, lCheekY + 1);
-    ctx.lineTo(lCheekX - wSpan - 3, lCheekY + 1 + whiskerTwitch * 0.5);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(lCheekX, lCheekY + 5);
-    ctx.lineTo(lCheekX - wSpan, lCheekY + 8 - whiskerTwitch * 0.6);
-    ctx.stroke();
-
-    // Right Whiskers (fanning outward right, mirrored)
-    const rCheekX = rightEyeX + 16;
-    const rCheekY = eyeY + 16;
-    ctx.beginPath();
-    ctx.moveTo(rCheekX, rCheekY - 3);
-    ctx.lineTo(rCheekX + wSpan, rCheekY - 7 + whiskerTwitch);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(rCheekX + 2, rCheekY + 1);
-    ctx.lineTo(rCheekX + wSpan + 3, rCheekY + 1 + whiskerTwitch * 0.5);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(rCheekX, rCheekY + 5);
-    ctx.lineTo(rCheekX + wSpan, rCheekY + 8 - whiskerTwitch * 0.6);
-    ctx.stroke();
-    ctx.restore();
-
-    // Big Anime Eyes rendering
     ctx.save();
     ctx.shadowBlur = 10;
     ctx.shadowColor = accentColor;
@@ -851,24 +1087,37 @@ export class TamagotchiAvatar {
       this.drawHeart(ctx, leftEyeX, eyeY, 11);
       this.drawHeart(ctx, rightEyeX, eyeY, 11);
     } else {
-      // Big Anime-Like Audio Reactive Concentric Waveform Eyes:
-      // Large vertical anime iris, glowing gradient, bass ripples, drum pupil, upper lash wing & catchlights
       this.drawWaveformEye(ctx, leftEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap, accentColor, cx);
       this.drawWaveformEye(ctx, rightEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap, accentColor, cx);
     }
     ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 2.5. AUDIO REACTIVE DYNAMIC "X" SHAPED NOSE IN THE MIDDLE OF THE FACE
+    // 10. CUTE BEAR SNOUT / MUZZLE
     // -------------------------------------------------------------------------
-    const noseX = cx;
-    const noseY = cy + 13;
-    this.drawDynamicNose(ctx, noseX, noseY, drumLevel, bassLevel, vocalsLevel, rmsLevel, isSinging, waveform, accentColor);
+    const muzzleY = cy - 4 * scaleY;
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, muzzleY, 13 * scaleX, 10 * scaleY, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 248, 252, 0.36)";
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "#ffffff";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 220, 245, 0.65)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 3. THE LIVE VOCAL WAVEFORM AUDIO REACTIVE MOUTH (MOVED DOWN)
+    // 11. KAWAII BEAR BUTTON NOSE
     // -------------------------------------------------------------------------
-    const mouthY = cy + 34;
+    const noseY = cy - 7 * scaleY;
+    this.drawKawaiiBearNose(ctx, cx, noseY, drumLevel, bassLevel, vocalsLevel, rmsLevel, isSinging, waveform, accentColor, baseScale);
+
+    // -------------------------------------------------------------------------
+    // 12. THE LIVE VOCAL WAVEFORM AUDIO REACTIVE MOUTH
+    // -------------------------------------------------------------------------
+    const mouthY = cy + 1 * scaleY;
     const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
 
     ctx.save();
@@ -876,37 +1125,37 @@ export class TamagotchiAvatar {
     ctx.lineJoin = "round";
 
     const mouthSteps = 64;
-    const mouthColor = isSinging ? "#ffff00" : "#00ff88";
-    const mouthGlow = isSinging ? "#ffea00" : "#00ffcc";
+    const mouthColor = isSinging ? "#ffff00" : "#ff0077";
+    const mouthGlow = isSinging ? "#ffea00" : "#ff77e9";
 
     ctx.shadowBlur = isSinging ? (14 + 18 * mouthAperture) : 8;
     ctx.shadowColor = mouthGlow;
     ctx.strokeStyle = mouthColor;
-    ctx.fillStyle = isSinging ? "rgba(255, 234, 0, 0.15)" : "transparent";
+    ctx.fillStyle = isSinging ? "rgba(255, 234, 0, 0.22)" : "rgba(255, 105, 180, 0.15)";
     ctx.lineWidth = 2.4;
 
     ctx.beginPath();
     if (!isSinging && vocalsLevel < 0.006) {
-      // Resting / Breathing cute smiling mini loop
-      const breathe = Math.sin(t * 2.5) * 1.2;
-      const rx = 10 + breathe;
-      const ry = 4 + breathe * 0.5;
+      // Resting cute kawaii bear smile ( ᵕ ‿ ᵕ ) / w-shape
+      const breathe = Math.sin(t * 2.5) * 1.0;
+      const rx = 6.5 + breathe;
+      const ry = 3.2 + breathe * 0.4;
       for (let j = 0; j <= mouthSteps; j++) {
         const phi = (j / mouthSteps) * Math.PI * 2;
         const mx = cx + rx * Math.cos(phi);
-        const my = mouthY + ry * Math.sin(phi) + 1.8 * Math.pow(Math.cos(phi), 2);
+        const my = mouthY + ry * Math.sin(phi) + 1.2 * Math.pow(Math.cos(phi), 2);
         if (j === 0) ctx.moveTo(mx, my);
         else ctx.lineTo(mx, my);
       }
     } else {
       // Live Audio Waveform Voice Instrument Singing Mini Loop!
-      let baseW = 14;
-      let baseH = 12;
+      let baseW = 12;
+      let baseH = 10;
       const upVowel = (vowel || "AH").toUpperCase();
-      if (upVowel === "EE") { baseW = 18; baseH = 6; }
-      else if (upVowel === "OH") { baseW = 11; baseH = 16; }
-      else if (upVowel === "OO") { baseW = 8; baseH = 8; }
-      else if (upVowel === "AY") { baseW = 16; baseH = 10; }
+      if (upVowel === "EE") { baseW = 15; baseH = 5; }
+      else if (upVowel === "OH") { baseW = 9; baseH = 14; }
+      else if (upVowel === "OO") { baseW = 7; baseH = 7; }
+      else if (upVowel === "AY") { baseW = 14; baseH = 9; }
 
       const curW = baseW * (0.6 + 0.9 * mouthAperture);
       const curH = baseH * (0.6 + 1.1 * mouthAperture);
@@ -923,7 +1172,7 @@ export class TamagotchiAvatar {
         }
 
         const rad = Math.sqrt(Math.pow(curW * Math.cos(phi), 2) + Math.pow(curH * Math.sin(phi), 2));
-        const waveDisp = sampleNorm * (6.0 * mouthAperture + 1.5);
+        const waveDisp = sampleNorm * (5.5 * mouthAperture + 1.2);
         const mx = cx + (rad + waveDisp * 0.7) * Math.cos(phi);
         const my = mouthY + (rad + waveDisp) * Math.sin(phi);
 
@@ -1188,6 +1437,54 @@ export class TamagotchiAvatar {
     ctx.restore();
   }
 
+  private drawKawaiiBearNose(
+    ctx: CanvasRenderingContext2D,
+    noseX: number,
+    noseY: number,
+    drumLevel: number = 0,
+    bassLevel: number = 0,
+    vocalsLevel: number = 0,
+    rmsLevel: number = 0,
+    isSinging: boolean = false,
+    waveform?: Uint8Array | null,
+    accentColor: string = "#00ffff",
+    baseScale: number = 0.88
+  ): void {
+    ctx.save();
+    const t = performance.now() / 1000;
+    const audioEnergy = Math.min(1.5, drumLevel * 1.8 + rmsLevel * 1.2 + (isSinging ? 0.4 : 0.0));
+    const pulse = 1.0 + 0.22 * audioEnergy;
+    const r = 3.6 * baseScale * pulse;
+
+    ctx.translate(noseX, noseY);
+
+    // Cute rounded kawaii heart / bear button nose
+    ctx.beginPath();
+    ctx.moveTo(0, r * 0.45);
+    ctx.bezierCurveTo(-r * 1.3, -r * 0.75, -r * 1.3, -r * 1.25, 0, -r * 0.55);
+    ctx.bezierCurveTo(r * 1.3, -r * 1.25, r * 1.3, -r * 0.75, 0, r * 0.45);
+    ctx.closePath();
+
+    const noseColor = isSinging ? "#ffff00" : (drumLevel > 0.45 ? "#ff0077" : "#ff3399");
+    const noseGlow = isSinging ? "#ffea00" : "#ff00a0";
+
+    ctx.shadowBlur = 8 + 12 * audioEnergy;
+    ctx.shadowColor = noseGlow;
+    ctx.fillStyle = noseColor;
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // Sparkling specular catchlight on nose
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(-r * 0.35, -r * 0.65, 1.1 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
   private drawDynamicNose(
     ctx: CanvasRenderingContext2D,
     noseX: number,
@@ -1200,72 +1497,7 @@ export class TamagotchiAvatar {
     waveform?: Uint8Array | null,
     accentColor: string = "#00ffff"
   ): void {
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
-    const t = performance.now() / 1000;
-
-    // Dynamic audio reactivity: scales dynamically with drum hits & RMS level
-    const audioEnergy = Math.min(1.5, drumLevel * 1.8 + rmsLevel * 1.2 + (isSinging ? 0.4 : 0.0));
-    const pulse = 1.0 + 1.6 * audioEnergy;
-    const baseArm = 4.2 + 0.5 * this.stage;
-    const armLen = baseArm * pulse;
-
-    // Subtle rhythmic rotation & breathing
-    const rot = Math.sin(t * 7.0) * (0.04 + 0.12 * drumLevel);
-
-    // Waveform sample displacement for organic audio reaction
-    let waveDev = 0;
-    if (waveform && waveform.length > 0) {
-      const midIdx = Math.floor(waveform.length * 0.5);
-      waveDev = ((waveform[midIdx] - 128) / 128.0) * (2.8 * pulse);
-    } else {
-      waveDev = Math.sin(t * 14.0) * (1.0 * pulse);
-    }
-
-    const noseColor = isSinging ? "#ffff00" : (drumLevel > 0.45 ? "#ff00a0" : accentColor);
-    const noseGlow = isSinging ? "#ffea00" : (drumLevel > 0.45 ? "#ff0077" : "#00ffff");
-
-    ctx.shadowBlur = 10 + 18 * audioEnergy;
-    ctx.shadowColor = noseGlow;
-    ctx.strokeStyle = noseColor;
-    ctx.lineWidth = 2.4 + 1.8 * Math.min(1.2, drumLevel * 1.5);
-
-    ctx.translate(noseX, noseY);
-    ctx.rotate(rot);
-
-    // Dynamic "X" cross arms with audio-reactive center displacement
-    const armX = armLen;
-    const armY = armLen * 0.85;
-
-    // First diagonal arm (\)
-    ctx.beginPath();
-    ctx.moveTo(-armX, -armY);
-    ctx.quadraticCurveTo(waveDev * 0.6, -waveDev * 0.4, armX, armY);
-    ctx.stroke();
-
-    // Second diagonal arm (/)
-    ctx.beginPath();
-    ctx.moveTo(armX, -armY);
-    ctx.quadraticCurveTo(-waveDev * 0.6, waveDev * 0.4, -armX, armY);
-    ctx.stroke();
-
-    // Central Audio Reactive Nose Core (Pulsing glowing diamond/jewel)
-    const coreR = Math.max(1.2, (isSinging ? 3.0 : 1.8) * Math.min(2.0, pulse));
-    ctx.fillStyle = isSinging ? "#ffffff" : noseColor;
-    ctx.shadowBlur = 12 + 14 * audioEnergy;
-    ctx.shadowColor = "#ffffff";
-    ctx.beginPath();
-    // Glowing diamond core at intersection of X
-    ctx.moveTo(0, -coreR);
-    ctx.lineTo(coreR, 0);
-    ctx.lineTo(0, coreR);
-    ctx.lineTo(-coreR, 0);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.restore();
+    this.drawKawaiiBearNose(ctx, noseX, noseY, drumLevel, bassLevel, vocalsLevel, rmsLevel, isSinging, waveform, accentColor);
   }
 
   public render(): void {
