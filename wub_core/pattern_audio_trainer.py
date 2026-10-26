@@ -1542,6 +1542,28 @@ class PatternAudioFeedbackEngine:
             tid = tr.track_id
             try:
                 rep = compressor.compress_song(tr, k_per_stem=target_vocab_per_stem)
+                # Format intrinsic patterns for the client sequencer
+                client_intrinsic_patterns = {}
+                for stem, p_list in rep.intrinsic_patterns.items():
+                    client_intrinsic_patterns[stem] = [
+                        {
+                            "id": p.id,
+                            "name": f"{rep.track_title} [{p.groove_type}]",
+                            "groove_type": p.groove_type,
+                            "energy": float(np.clip(p.density * 1.5, 0.25, 0.98)),
+                            "density": round(float(p.density), 3),
+                            "onset_grid": p.onset_grid,
+                            "velocities": p.velocities,
+                            "length": 16,
+                            "key": rep.key,
+                            "audio_similarity_score": round(float(p.reconstruction_fidelity), 4),
+                            "cohesion_score": round(float(p.reconstruction_fidelity), 4),
+                            "recurrence_ratio": round(float(p.recurrence_ratio), 4),
+                            "slice_categories": [s.category if s is not None else None for s in p.steps],
+                        }
+                        for p in p_list
+                    ]
+
                 compressed_models[tid] = {
                     "track_id": rep.track_id,
                     "title": rep.track_title,
@@ -1552,6 +1574,7 @@ class PatternAudioFeedbackEngine:
                     "mean_fidelity": rep.mean_fidelity,
                     "total_vocab_slices": rep.vocabulary.total_slices,
                     "pattern_counts": {s: len(p) for s, p in rep.intrinsic_patterns.items()},
+                    "intrinsic_patterns": client_intrinsic_patterns,
                     "transition_matrices": rep.transition_matrices,
                 }
                 total_compression += rep.compression_ratio

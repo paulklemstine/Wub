@@ -4346,30 +4346,44 @@ export class ClientGrooveboxConductor {
       const isSparseBass = (bSteer.y < 0.35 && bTerr !== "cyber");
       const isDenseBass = (bSteer.y > 0.70 || bTerr === "cyber");
 
+      // Respect authentic onset grid from compressed pattern library; support turnaround voice leading on step 14
+      const isPatternOnset = bPat.onset_grid ? bPat.onset_grid.includes(step % 16) : false;
+      const isTurnaroundPickup = (step % 16 === 14) && (phraseBar % 2 === 1 || phraseBar === 7);
       const shouldPlayBass = isSparseBass
         ? (step % 16 === 0 || step % 16 === 8)
-        : (isDenseBass
-          ? ([0, 2, 3, 5, 6, 8, 10, 11, 13, 14].includes(step % 16) || bPat.onset_grid.includes(step))
-          : ([2, 6, 10, 14].includes(step % 16) || bPat.onset_grid.includes(step)));
+        : (isPatternOnset || (isTurnaroundPickup && isDenseBass));
 
       if (shouldPlayBass) {
-        let vel = bPat.velocities ? (bPat.velocities[step] || 0.90) : 0.90;
+        let vel = bPat.velocities ? (bPat.velocities[step % 16] || 0.90) : 0.90;
         let dur = (bassCat === "bass:rolling") ? 0.35 : (bassCat === "bass:sub" ? 0.85 : 0.45);
         if (bTerr === "wave") dur = 1.20; // Spacious 808 sub
         else if (bTerr === "cyber") dur = 0.25; // Snappy acid/reese rolling
 
+        // Musical voice leading for pattern boundaries:
+        let targetPitch = chord.rootPitch;
+        if (isTurnaroundPickup) {
+          const nextChordIdx = (chordIndex + (phraseBar % 2 === 1 ? 1 : 0)) % this.activeProgression.length;
+          const nextRoot = this.activeProgression[nextChordIdx].rootPitch;
+          targetPitch = (nextRoot + 10) % 12; // Whole-step below or 7th leading tone
+          dur = (60 / this.currentBpm / 4) * 1.6;
+          vel *= 0.85;
+        } else if (bassCat === "bass:rolling" && [2, 10].includes(step % 16)) {
+          targetPitch = (chord.rootPitch + 7) % 12; // 5th for dance pocket bounce
+        }
+
         const subSlice = (bassCat === "bass:rolling")
-          ? (this.getPitchedSliceFromAsset(this.activeSongKit?.bassRollingAsset, chord.rootPitch, 3) || this.getBestSlice(bassCat, chord.rootPitch, 0, bTerr))
-          : (this.getPitchedSliceFromAsset(this.activeSongKit?.bassSubAsset, chord.rootPitch, 3) || this.getBestSlice(bassCat, chord.rootPitch, 0, bTerr));
+          ? (this.getPitchedSliceFromAsset(this.activeSongKit?.bassRollingAsset, targetPitch, 3) || this.getBestSlice(bassCat, targetPitch, 0, bTerr))
+          : (this.getPitchedSliceFromAsset(this.activeSongKit?.bassSubAsset, targetPitch, 3) || this.getBestSlice(bassCat, targetPitch, 0, bTerr));
         if (subSlice) {
           this.engine.scheduleSlice("bass", subSlice.buffer, when, {
             rate: subSlice.rate,
-            fadeMs: 6,
+            fadeMs: 20,
             gain: vel,
             voiceKey: "bass",
           });
         } else {
-          this.synth.playSub(when, vel, chord.bassHz, dur, bDest, bTerr);
+          const noteHz = 440 * Math.pow(2, (targetPitch - 9 - 24) / 12);
+          this.synth.playSub(when, vel, noteHz, dur, bDest, bTerr);
         }
       }
     }
@@ -4385,19 +4399,20 @@ export class ClientGrooveboxConductor {
       const isArpMode = (otherCat === "other:arp" || sec === "DROP" || oSteer.y > 0.72 || oTerr === "cyber");
       const isSparsePad = ((otherCat === "other:pad" || oSteer.y < 0.35) && oTerr !== "cyber" && oTerr !== "breaks");
 
+      const isPatternOnset = oPat.onset_grid ? oPat.onset_grid.includes(step % 16) : false;
       const shouldPlayOther = isSparsePad
         ? (step % 16 === 0 || step % 16 === 8)
-        : (isArpMode ? (step % 2 === 0 || oPat.onset_grid.includes(step)) : ([2, 6, 10, 14].includes(step % 16) || oPat.onset_grid.includes(step)));
+        : (isArpMode ? (step % 2 === 0 || isPatternOnset) : isPatternOnset);
 
       if (shouldPlayOther) {
-        const vel = oPat.velocities ? (oPat.velocities[step] || 0.85) : 0.85;
+        const vel = oPat.velocities ? (oPat.velocities[step % 16] || 0.85) : 0.85;
 
         if (isArpMode) {
           const arpSlice = this.getPitchedSliceFromAsset(this.activeSongKit?.arpAsset, chord.rootPitch, 3) || this.getBestSlice("other:arp", chord.rootPitch, 0, oTerr);
           if (arpSlice) {
             this.engine.scheduleSlice("other", arpSlice.buffer, when, {
               rate: arpSlice.rate,
-              fadeMs: 4,
+              fadeMs: 16,
               gain: vel,
               voiceKey: "other:arp",
             });
@@ -4431,7 +4446,7 @@ export class ClientGrooveboxConductor {
           if (chordSlice) {
             this.engine.scheduleSlice("other", chordSlice.buffer, when, {
               rate: chordSlice.rate,
-              fadeMs: 6,
+              fadeMs: 25,
               gain: vel,
               voiceKey: isSparsePad ? "other:pad" : "other:chord",
             });
@@ -4669,23 +4684,49 @@ export class ClientGrooveboxConductor {
       }
 
       this.activeLoops[stem] = undefined;
-      const currG = this.activePatterns[stem]?.groove_type || "four_on_floor_hats";
+      const currPat = this.activePatterns[stem];
+      const currG = currPat?.groove_type || "four_on_floor_hats";
       let nextG = isTurnaround && stem === "drums"
         ? "turnaround_fill"
         : this.phraseModel.sampleNextGroove(phraseBar, stem, currG);
 
-      // Intrinsic Pattern Compression: If active song has compressed intrinsic transitions, sample from them!
-      const songModel = this.activeTrackId ? (this.manifest?.compressed_song_models?.[this.activeTrackId] || (this.manifest?.stem_cohesion_weights as any)?.compressed_song_models?.[this.activeTrackId]) : undefined;
+      // Intrinsic Pattern Compression & Authentic Song Arrangement Flow:
+      // Sample transition from active compressed song model if available
+      const songModels = this.manifest?.compressed_song_models || (this.manifest?.stem_cohesion_weights as any)?.compressed_song_models;
+      const songModel = this.activeTrackId ? songModels?.[this.activeTrackId] : undefined;
       const songTransitions = songModel?.transition_matrices?.[stem];
-      if (songTransitions && songTransitions[currG]) {
-        const transMap = songTransitions[currG];
-        const r = Math.random();
-        let cum = 0;
-        for (const [targetG, prob] of Object.entries(transMap)) {
-          cum += (prob as number);
-          if (r <= cum) {
-            nextG = targetG;
-            break;
+      let matchedIntrinsicPat: SerializedPattern | null = null;
+
+      if (songTransitions) {
+        const transMap = (currPat?.id && songTransitions[currPat.id])
+          ? songTransitions[currPat.id]
+          : (songTransitions[currG] || null);
+
+        if (transMap && Object.keys(transMap).length > 0) {
+          const r = Math.random();
+          let cum = 0;
+          for (const [targetKey, prob] of Object.entries(transMap)) {
+            cum += (prob as number);
+            if (r <= cum) {
+              if (songModel.intrinsic_patterns?.[stem]) {
+                const found = (songModel.intrinsic_patterns[stem] as SerializedPattern[]).find((p) => p.id === targetKey);
+                if (found) {
+                  matchedIntrinsicPat = { ...found };
+                  nextG = found.groove_type;
+                  break;
+                }
+              }
+              if (this.manifest?.patterns?.[stem]) {
+                const found = this.manifest.patterns[stem].find((p) => p.id === targetKey);
+                if (found) {
+                  matchedIntrinsicPat = { ...found };
+                  nextG = found.groove_type;
+                  break;
+                }
+              }
+              nextG = targetKey;
+              break;
+            }
           }
         }
       }
@@ -4753,7 +4794,7 @@ export class ClientGrooveboxConductor {
       }
 
       const stemTerr = this.getStemTerritory(stem);
-      let cand = this.synthesizePattern(stem, nextG, stemTerr);
+      let cand = matchedIntrinsicPat || this.synthesizePattern(stem, nextG, stemTerr, currPat || undefined);
       let goodness = this.rejectionClassifier.evaluatePattern(stem, cand, chord, stemTerr, this.computeInterStemAffinity(stem, nextG));
 
       // Adversarial rejection sampling: mutate/regularize until accepted (up to 3 attempts)
@@ -4891,7 +4932,7 @@ export class ClientGrooveboxConductor {
     return Math.max(0.2, Math.min(1.0, score));
   }
 
-  private synthesizePattern(stem: StemName, grooveType: string, territory?: StyleTerritory): SerializedPattern {
+  private synthesizePattern(stem: StemName, grooveType: string, territory?: StyleTerritory, previousPattern?: SerializedPattern): SerializedPattern {
     const terr = territory ?? this.getStemTerritory(stem);
 
     // 1. Try to find matching authentic patterns in standalone manifest
@@ -4920,17 +4961,23 @@ export class ClientGrooveboxConductor {
       });
 
       if (matches.length > 0) {
-        // ML Features Feedback Loop:
+        // ML Features Feedback Loop with Transition Continuity:
         // Rank and probabilistically select patterns based on:
         // 1. audio_similarity_score (from original song training data)
         // 2. cohesion_score (multi-stem mix synergy)
         // 3. inter-stem affinity (compatibility with currently active partner stems)
+        // 4. transition continuity (smooth density and groove flow from previous pattern)
         const steerY = this.steering[stem]?.y ?? 0.5;
         const scores = matches.map((pat) => {
           const sim = pat.audio_similarity_score ?? 0.85;
           const coh = pat.cohesion_score ?? sim;
           const aff = this.computeInterStemAffinity(stem, pat.groove_type);
-          return (0.45 * sim) + (0.35 * coh) + (0.20 * aff);
+          let cont = 1.0;
+          if (previousPattern) {
+            const diff = Math.abs(pat.density - previousPattern.density);
+            cont = Math.max(0.4, 1.0 - diff * 0.8);
+          }
+          return (0.40 * sim) + (0.30 * coh) + (0.15 * aff) + (0.15 * cont);
         });
 
         const temp = 0.12 + Math.abs(steerY - 0.5) * 0.20;

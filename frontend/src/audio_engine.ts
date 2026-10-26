@@ -17,7 +17,7 @@ export const STEMS: readonly StemName[] = ["drums", "bass", "vocals", "other"];
 export const ENGINE_SAMPLE_RATE = 44100;
 export const SCHEDULER_INTERVAL_MS = 25;
 export const SCHEDULE_AHEAD_TIME_S = 0.15;
-export const DEFAULT_FADE_MS = 3;
+export const DEFAULT_FADE_MS = 6;
 export const MAX_VOLUME = 1.5;
 
 export interface SliceScheduleOptions {
@@ -354,7 +354,13 @@ export class AudioEngine {
     // Choke voice tracking: allows independent drum tracks (kick, snare, hat) while choking open hats or previous bass
     const vKey = opts.voiceKey || stem;
     const chokes = [vKey, ...(opts.chokeKeys || [])];
-    const crossfadeSec = Math.min(requestedFadeMs / 1000, 0.008);
+
+    // Dynamic, click-free crossfade release duration:
+    // Drums choke quickly (12-16ms) to keep transients tight.
+    // Tonal stems (bass, other, vocals) crossfade gracefully (25-45ms) to prevent sub-bass phase tears and pops.
+    const crossfadeSec = stem === "drums"
+      ? Math.max(0.010, Math.min(requestedFadeMs / 1000, 0.018))
+      : Math.max(0.025, Math.min(requestedFadeMs / 1000, 0.048));
 
     for (const cKey of chokes) {
       const prev = this.activeVoices_[cKey];
@@ -362,9 +368,12 @@ export class AudioEngine {
         const stopAt = startAt + crossfadeSec;
         try {
           prev.gain.gain.cancelScheduledValues(startAt);
+          if (typeof (prev.gain.gain as any).cancelAndHoldAtTime === "function") {
+            (prev.gain.gain as any).cancelAndHoldAtTime(startAt);
+          }
           prev.gain.gain.setValueAtTime(prev.gain.gain.value, startAt);
-          prev.gain.gain.linearRampToValueAtTime(0, stopAt);
-          prev.source.stop(stopAt + 0.01);
+          prev.gain.gain.linearRampToValueAtTime(0.0001, stopAt);
+          prev.source.stop(stopAt + 0.02);
         } catch {
           // Safe if already stopped
         }
@@ -378,34 +387,28 @@ export class AudioEngine {
 
     const vGain = typeof opts.gain === "number" && Number.isFinite(opts.gain) ? Math.max(0, Math.min(1.5, opts.gain)) : 1.0;
     const sliceGain = ctx.createGain();
+    sliceGain.gain.value = 0.0;
     source.connect(sliceGain);
     sliceGain.connect(buses[stem].input);
 
-    if (requestedFadeMs > 0 && durSec > 0) {
-      const fadeSec = Math.min(requestedFadeMs / 1000, durSec / 2);
-      if (fadeSec > 0) {
-        const n = Math.max(2, Math.round(fadeSec * ctx.sampleRate));
-        const fadeIn = new Float32Array(n);
-        const fadeOut = new Float32Array(n);
-        for (let i = 0; i < n; i++) {
-          const t = i / (n - 1);
-          // Equal-power (cosine) curves scaled by velocity/gain
-          fadeIn[i] = Math.sin(0.5 * Math.PI * t) * vGain;
-          fadeOut[i] = Math.cos(0.5 * Math.PI * t) * vGain;
-        }
-        const endAt = startAt + durSec;
-        sliceGain.gain.setValueAtTime(0, startAt);
-        sliceGain.gain.setValueCurveAtTime(fadeIn, startAt, fadeSec);
-        sliceGain.gain.setValueAtTime(vGain, startAt + fadeSec);
-        sliceGain.gain.setValueCurveAtTime(fadeOut, endAt - fadeSec, fadeSec);
-      } else {
-        sliceGain.gain.value = vGain;
-      }
-    } else {
-      sliceGain.gain.value = vGain;
-    }
-
     const endAt = startAt + durSec;
+    if (requestedFadeMs > 0 && durSec > 0.01) {
+      // De-clicking micro fade-in prevents DC offset pop on slice attack
+      const fadeInSec = Math.max(0.002, Math.min(requestedFadeMs / 1000, durSec / 4));
+      // Musical fade-out guarantees click-free release decay
+      const fadeOutSec = stem === "drums"
+        ? Math.max(0.005, Math.min(0.020, durSec / 3))
+        : Math.max(0.015, Math.min(0.045, durSec / 3));
+
+      sliceGain.gain.setValueAtTime(0.0001, startAt);
+      sliceGain.gain.linearRampToValueAtTime(vGain, startAt + fadeInSec);
+      if (endAt - fadeOutSec > startAt + fadeInSec) {
+        sliceGain.gain.setValueAtTime(vGain, endAt - fadeOutSec);
+      }
+      sliceGain.gain.linearRampToValueAtTime(0.0001, endAt);
+    } else {
+      sliceGain.gain.setValueAtTime(vGain, startAt);
+    }
     this.activeVoices_[vKey] = { source, gain: sliceGain, endAt };
     source.onended = () => {
       this.liveSources_.delete(source);

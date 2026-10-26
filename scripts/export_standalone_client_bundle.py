@@ -575,6 +575,18 @@ def export_bundle() -> None:
         elif key in stem_cohesion_weights:
             standalone_manifest[key] = stem_cohesion_weights[key]
 
+    # Merge intrinsic patterns mined from authentic songs into the global patterns bank
+    csm = standalone_manifest.get("compressed_song_models", {})
+    for tid, model in csm.items():
+        ipat = model.get("intrinsic_patterns", {})
+        for stem, p_list in ipat.items():
+            if stem in standalone_manifest["patterns"]:
+                existing_ids = {p.get("id") for p in standalone_manifest["patterns"][stem]}
+                for p in p_list:
+                    if p.get("id") not in existing_ids:
+                        standalone_manifest["patterns"][stem].append(p)
+                        existing_ids.add(p.get("id"))
+
     vocal_json = public_dir / "vocal_patterns.json"
     if "vocal_patterns" not in standalone_manifest and vocal_json.exists():
         try:

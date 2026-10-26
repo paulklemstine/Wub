@@ -213,3 +213,40 @@ def test_compress_song_full_pipeline():
     assert "intrinsic_patterns" in d
     assert "bar_pattern_sequence" in d
     assert "transition_matrices" in d
+
+
+def test_train_song_intrinsic_compression_includes_client_intrinsic_patterns(tmp_path):
+    """Verify that PatternAudioFeedbackEngine.train_song_intrinsic_compression formats intrinsic patterns for client."""
+    from wub_core.pattern_audio_trainer import PatternAudioFeedbackEngine
+
+    song = _make_mock_song(n_bars=16)
+
+    class MockCorpusStore:
+        def __init__(self, song_list):
+            self.tracks = song_list
+
+    mock_store = MockCorpusStore([song])
+    feedback_file = tmp_path / "test_feedback.json"
+    engine = PatternAudioFeedbackEngine(feedback_path=feedback_file)
+
+    res = engine.train_song_intrinsic_compression(mock_store, max_tracks=1, target_vocab_per_stem=4)
+    assert res["status"] == "ok"
+    assert res["compressed_songs"] == 1
+
+    csm = engine.feedback_data.get("compressed_song_models", {})
+    assert song.track_id in csm
+    model = csm[song.track_id]
+    assert "intrinsic_patterns" in model
+    assert all(s in model["intrinsic_patterns"] for s in STEMS)
+
+    # Check that drum patterns have client-required fields
+    drum_pats = model["intrinsic_patterns"]["drums"]
+    assert len(drum_pats) > 0
+    p0 = drum_pats[0]
+    assert "id" in p0
+    assert "onset_grid" in p0
+    assert "velocities" in p0
+    assert "length" in p0
+    assert p0["length"] == 16
+    assert "energy" in p0
+

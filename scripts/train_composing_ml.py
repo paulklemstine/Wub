@@ -58,10 +58,19 @@ def main() -> None:
         flush=True,
     )
 
-    # 2. Run real-audio waveform assembly & acoustic similarity scoring
+    # 2. Train Song-Intrinsic Compression & Pattern Mining on Authentic Songs
+    print("Training Song-Intrinsic Vocabulary & Pattern Compression...", flush=True)
+    fb_engine = PatternAudioFeedbackEngine()
+    comp_res = fb_engine.train_song_intrinsic_compression(store, max_tracks=min(25, len(tracks)), target_vocab_per_stem=6)
+    print(
+        f"Compressed {comp_res.get('compressed_songs')} authentic songs | "
+        f"Mean compression ratio: {comp_res.get('mean_compression_ratio')}",
+        flush=True,
+    )
+
+    # 3. Optional real-audio waveform assembly & acoustic similarity scoring
     if args.audio_eval > 0:
         print("Assembling pattern audio waveforms & scoring similarity against real training songs...", flush=True)
-        fb_engine = PatternAudioFeedbackEngine()
         fb_res = fb_engine.run_training_step(bank=bank, corpus_store=store, n_optimize=args.audio_eval)
         print(
             f"Acoustic feedback loop evaluated {fb_res.get('evaluated')} patterns | "
@@ -70,13 +79,13 @@ def main() -> None:
             flush=True,
         )
 
-    # 3. Train Tier 2 Phrase Composer Model (weighted by audio similarity)
+    # 4. Train Tier 2 Phrase Composer Model (weighted by audio similarity)
     print("Training Tier 2 Phrase Composer Markov Model across all 4 stems...", flush=True)
     phrase_model = PhraseComposerModel(weights_path=out_file)
     n_phrase_trans = phrase_model.train_on_tracks(tracks, bank)
     print(f"Learned {n_phrase_trans} bar-to-bar groove transitions across phrase bars.", flush=True)
 
-    # 4. Train Tier 3 Song Arranger (macro-sections & harmonic phrase mixing)
+    # 5. Train Tier 3 Song Arranger (macro-sections & harmonic phrase mixing)
     print("Training Tier 3 Song Arranger on macro song structures & energy curves...", flush=True)
     arranger = SongArranger(bank, weights_path=out_file)
     n_sec_trans = arranger.train_on_corpus(tracks)
