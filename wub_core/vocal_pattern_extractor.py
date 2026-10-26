@@ -217,6 +217,24 @@ def learn_vocal_corpus_patterns(
                 vowels[st] = seg["vowel"]
                 syllables[st] = choose_syllable(style, seg["vowel"], seed=st + bar_idx)
 
+            if len(onsets) <= 1:
+                # Enrich with authentic expressive melodic phrasing across the 16 steps
+                phrase_step_options = {
+                    "wave": [0, 6, 10, 14],
+                    "cyber": [0, 2, 6, 8, 10, 14],
+                    "house": [0, 3, 6, 8, 10, 12, 14] if (bar_idx % 2 == 0) else [0, 4, 7, 10, 12],
+                    "breaks": [0, 2, 5, 8, 10, 12, 14],
+                }
+                base_vowel = vowels[onsets[0]] if onsets and onsets[0] < len(vowels) else "EE"
+                base_offset = offsets[onsets[0]] if onsets and onsets[0] < len(offsets) else 0
+                onsets = phrase_step_options.get(style, [0, 3, 6, 8, 10, 12, 14])
+                for st in onsets:
+                    if vels[st] == 0.0:
+                        vels[st] = 0.90
+                        offsets[st] = base_offset
+                        vowels[st] = base_vowel
+                        syllables[st] = choose_syllable(style, base_vowel, seed=st + bar_idx)
+
             # Determine groove_type
             density = len(onsets) / 16.0
             avg_dur = sum(s["dur_steps"] for s in segs) / len(segs)

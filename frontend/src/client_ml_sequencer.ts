@@ -1057,9 +1057,9 @@ export class WebAudioSliceSynthesizer {
     let f1Hz = baseFormants.f1;
     let f2Hz = baseFormants.f2;
     let f3Hz = baseFormants.f3;
-    let q1 = 5.5;
-    let q2 = 6.0;
-    let q3 = 4.5;
+    let q1 = 3.2;
+    let q2 = 3.6;
+    let q3 = 2.8;
     let vibratoFreq = 5.2;
     let vibratoDepthCents = 0.015;
     let scoopSemis = -1.5;
@@ -1203,16 +1203,24 @@ export class WebAudioSliceSynthesizer {
     g3.connect(vocalSum);
     if (breathNode) breathNode.connect(vocalSum);
 
+    // Vocal Presence Filter: Crisp vocal intelligibility and brightness
+    const presenceFilter = this.ctx.createBiquadFilter();
+    presenceFilter.type = "peaking";
+    presenceFilter.frequency.setValueAtTime(3400, t);
+    presenceFilter.Q.setValueAtTime(1.2, t);
+    presenceFilter.gain.setValueAtTime(3.5, t); // +3.5 dB air & presence
+
     // Vocal Master Envelope (Soft attack, warm sustain, natural release)
     const masterGain = this.ctx.createGain();
     const v = Math.max(0.1, Math.min(1.0, velocity));
 
     masterGain.gain.setValueAtTime(0.0001, t);
-    masterGain.gain.linearRampToValueAtTime(v * 0.85, t + attackTime);
-    masterGain.gain.setValueAtTime(v * 0.80, t + holdTime);
+    masterGain.gain.linearRampToValueAtTime(v * 1.45, t + attackTime);
+    masterGain.gain.setValueAtTime(v * 1.35, t + holdTime);
     masterGain.gain.exponentialRampToValueAtTime(0.0001, t + durationSec + 0.07);
 
-    vocalSum.connect(masterGain);
+    vocalSum.connect(presenceFilter);
+    presenceFilter.connect(masterGain);
     masterGain.connect(dest);
 
     osc1.start(t);
@@ -2402,8 +2410,9 @@ export class ClientGrooveboxConductor {
       const coh = item.pat.cohesion_score ?? sim;
       const rec = (item.pat as any).recurrence_utility ?? 0.80;
       const isMatchingTerr = (item.style === terr) ? 0.40 : 0.0;
+      const densityBonus = (item.pat.onset_grid && item.pat.onset_grid.length >= 3) ? 1.5 : (item.pat.onset_grid?.length <= 1 ? -3.0 : 0.0);
 
-      const score = -12.0 * dist + 1.2 * sim + 0.8 * coh + 1.5 * rec + isMatchingTerr;
+      const score = -12.0 * dist + 1.2 * sim + 0.8 * coh + 1.5 * rec + isMatchingTerr + densityBonus;
       if (score > bestScore) {
         bestScore = score;
         bestPat = item.pat;
@@ -2918,7 +2927,7 @@ export class ClientGrooveboxConductor {
         if (stem === "other") {
           grid = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
         } else if (stem === "vocals") {
-          grid = [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0];
+          grid = [1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
         } else {
           grid = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
         }
@@ -3006,11 +3015,11 @@ export class ClientGrooveboxConductor {
 
     // Baseline mix profiles per section: pure slices of goodness unmuted
     const secProfiles: Record<string, Record<StemName, number>> = {
-      INTRO: { drums: 0.90, bass: 0.90, other: 1.15, vocals: 1.10 },
-      GROOVE_A: { drums: 1.00, bass: 1.00, other: 1.12, vocals: 1.18 },
-      BUILDUP: { drums: 1.00, bass: 0.95, other: 1.20, vocals: 1.25 },
-      DROP: { drums: 1.08, bass: 1.08, other: 1.08, vocals: 1.22 },
-      BREAKDOWN: { drums: 0.85, bass: 0.85, other: 1.25, vocals: 1.30 },
+      INTRO: { drums: 0.90, bass: 0.90, other: 1.15, vocals: 1.25 },
+      GROOVE_A: { drums: 1.00, bass: 1.00, other: 1.12, vocals: 1.35 },
+      BUILDUP: { drums: 1.00, bass: 0.95, other: 1.20, vocals: 1.40 },
+      DROP: { drums: 1.08, bass: 1.08, other: 1.08, vocals: 1.38 },
+      BREAKDOWN: { drums: 0.85, bass: 0.85, other: 1.25, vocals: 1.45 },
     };
 
     const currProfile = secProfiles[sec] || secProfiles.GROOVE_A;
@@ -3019,18 +3028,18 @@ export class ClientGrooveboxConductor {
     let dTarget = currProfile.drums ?? 1.00;
     let bTarget = currProfile.bass ?? 1.00;
     let oTarget = currProfile.other ?? 1.12;
-    let vTarget = currProfile.vocals ?? 1.18;
+    let vTarget = currProfile.vocals ?? 1.35;
 
     if (sec === "INTRO") {
       dTarget = 0.85 + 0.15 * progressInSec;
       bTarget = 0.85 + 0.15 * progressInSec;
       oTarget = 0.95 + 0.25 * progressInSec;
-      vTarget = 0.90 + 0.30 * progressInSec;
+      vTarget = 1.10 + 0.25 * progressInSec;
     } else if (sec === "BUILDUP") {
       dTarget = 0.95 + 0.10 * progressInSec;
       bTarget = 0.90 + 0.10 * progressInSec;
       oTarget = 1.05 + 0.25 * progressInSec;
-      vTarget = 1.05 + 0.28 * progressInSec;
+      vTarget = 1.20 + 0.25 * progressInSec;
 
       // Drop Gap Breath: Bar 7 Step 15 is 100% SILENT for maximum drop impact!
       if (barInSec >= totalSecBars - 1 && stepInBar === 15) {
@@ -3044,18 +3053,18 @@ export class ClientGrooveboxConductor {
         dTarget = 1.08;
         bTarget = 1.08;
         oTarget = 1.00;
-        vTarget = 1.15;
+        vTarget = 1.30;
       } else {
         dTarget = 1.00;
         bTarget = 1.00;
         oTarget = 1.08;
-        vTarget = 1.22;
+        vTarget = 1.38;
       }
     } else if (sec === "BREAKDOWN") {
       dTarget = 0.85;
       bTarget = 0.85;
       oTarget = 1.25;
-      vTarget = 1.30;
+      vTarget = 1.45;
     }
 
     // Smooth asymptotic transition blending in the penultimate 2 bars
@@ -3562,14 +3571,14 @@ export class ClientGrooveboxConductor {
       };
     }
 
-    if (!isDropGap && !isLoopVocalActive && vPat) {
+    if (!isDropGap && vPat) {
       const vocalCat = vSteer.x < 0.38 ? "vocals:call" : (vSteer.x < 0.72 ? "vocals:hook" : "vocals:chop");
       const isDenseChop = (vocalCat === "vocals:chop" || vSteer.y > 0.72 || vTerr === "breaks");
       const isSparseVocal = (vSteer.y < 0.35 && vTerr !== "breaks" && vTerr !== "cyber");
 
       const shouldPlayVocal = isSparseVocal
         ? ((step % 16 === 0 || step % 16 === 8) && (phraseBar % 2 === 0))
-        : (isDenseChop ? ((step % 4 === 0 || step % 4 === 2) || syllable !== undefined) : (syllable || vPat.onset_grid.includes(step % 16)));
+        : (isDenseChop ? ((step % 4 === 0 || step % 4 === 2) || syllable !== undefined) : (syllable !== undefined || vPat.onset_grid.includes(step % 16)));
 
       if (shouldPlayVocal) {
         const syl: VocalSyllable = syllable || {
@@ -3618,15 +3627,17 @@ export class ClientGrooveboxConductor {
             this.currentVocalMeta.vowel = slice.asset.vowel as any;
           }
           // Sing current melody note using authentic acoustic vocal slice
+          const sliceGain = isLoopVocalActive ? vel * 1.15 : vel * 1.35;
           this.engine.scheduleSlice("vocals", slice.buffer, when, {
             rate: slice.rate,
             fadeMs: 6,
-            gain: vel,
+            gain: sliceGain,
             voiceKey: "vocals",
           });
         } else {
           // Sing expressive vocaloid vocalization
-          this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vel, vInput, vTerr);
+          const synthVel = isLoopVocalActive ? vel * 0.95 : vel * 1.15;
+          this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, synthVel, vInput, vTerr);
         }
       }
     }
@@ -3708,6 +3719,16 @@ export class ClientGrooveboxConductor {
               onsetIndices.push(i);
               vels[i] = 0.95;
             }
+          }
+          if (onsetIndices.length <= 1) {
+            const enrich = (stem === "vocals") ? [0, 3, 6, 8, 10, 12, 14] : (stem === "other" ? [2, 6, 10, 14] : [0, 4, 8, 12]);
+            for (const oi of enrich) {
+              if (!onsetIndices.includes(oi)) {
+                onsetIndices.push(oi);
+                vels[oi] = 0.90;
+              }
+            }
+            onsetIndices.sort((a, b) => a - b);
           }
           this.activePatterns[stem] = {
             id: loopMatch.loop.meta.id,
@@ -3821,6 +3842,49 @@ export class ClientGrooveboxConductor {
       }
       if (steerY < 0.35) {
         mutated.onset_grid = mutated.onset_grid.filter((s) => s === 0 || s === 8);
+      }
+    } else if (stem === "other") {
+      if (mutated.onset_grid.length <= 1) {
+        mutated.onset_grid = [2, 6, 10, 14];
+        mutated.density = 4 / 16;
+        for (const st of mutated.onset_grid) {
+          mutated.velocities[st] = 0.90;
+        }
+      }
+      if (steerY > 0.70) {
+        for (const st of [0, 8]) {
+          if (!mutated.onset_grid.includes(st)) {
+            mutated.onset_grid.push(st);
+            mutated.velocities[st] = 0.78;
+          }
+        }
+      }
+    } else if (stem === "vocals") {
+      if (mutated.onset_grid.length <= 1) {
+        const gt = mutated.groove_type || "vocal_verse";
+        if (gt === "vocal_hook" || gt === "hook") {
+          mutated.onset_grid = [0, 3, 6, 8, 10, 12, 14];
+        } else if (gt === "vocal_stutter" || gt === "stutter") {
+          mutated.onset_grid = [0, 2, 4, 6, 8, 10, 12, 14];
+        } else if (gt === "vocal_syncopated_chop" || gt === "chop") {
+          mutated.onset_grid = [0, 2, 5, 8, 11, 14];
+        } else if (gt === "vocal_call_response" || gt === "call") {
+          mutated.onset_grid = [0, 3, 6, 10, 14];
+        } else {
+          mutated.onset_grid = [0, 4, 7, 10, 12];
+        }
+        mutated.density = mutated.onset_grid.length / 16;
+        for (const st of mutated.onset_grid) {
+          mutated.velocities[st] = 0.92;
+        }
+      }
+      if (steerY > 0.65) {
+        for (const st of [2, 10]) {
+          if (!mutated.onset_grid.includes(st)) {
+            mutated.onset_grid.push(st);
+            mutated.velocities[st] = 0.85;
+          }
+        }
       }
     }
     mutated.onset_grid.sort((a, b) => a - b);

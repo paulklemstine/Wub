@@ -321,13 +321,29 @@ class PatternBank:
                             bar_stems["other"][ob] = o_ref
                         bar_onsets["other"] = [2, 10]
 
+                # Feedback check 4: Vocal melody & chop singing integrity
+                # Authentic dance music vocals feature continuous lyrical lines, hook motifs, and syncopated chops
+                if len(bar_onsets["vocals"]) <= 1:
+                    track_vocals = [s for pool in self.slice_palette["vocals"].values() for s in pool if s.track_id == tr.track_id]
+                    if not track_vocals:
+                        track_vocals = [s for pool in self.slice_palette["vocals"].values() for s in pool]
+                    if track_vocals:
+                        v_ref = track_vocals[0]
+                        if phrase_bar in (0, 2, 4, 6):
+                            v_onsets = [0, 3, 6, 8, 10, 12, 14] if (bar_num % 2 == 0) else [0, 4, 7, 10, 12]
+                        elif phrase_bar == 7:
+                            v_onsets = [0, 2, 4, 6, 8, 10, 12, 14]
+                        else:
+                            v_onsets = [0, 2, 5, 8, 11, 14]
+
+                        for s_step in v_onsets:
+                            bar_stems["vocals"][s_step] = v_ref
+                        bar_onsets["vocals"] = v_onsets
+
                 # Classify groove types for each stem after reinforcement
                 bar_grooves["drums"] = classify_drum_groove(bar_onsets["drums"], 16)
                 bar_grooves["bass"] = classify_bass_groove(bar_onsets["bass"], 16)
                 d_density = len(bar_onsets["other"]) / 16.0
-                bar_grooves["other"] = classify_synth_groove(bar_onsets["other"], d_density)
-                v_density = len(bar_onsets["vocals"]) / 16.0
-                bar_grooves["vocals"] = classify_vocal_groove(bar_onsets["vocals"], v_density)
                 bar_grooves["other"] = classify_synth_groove(bar_onsets["other"], d_density)
                 v_density = len(bar_onsets["vocals"]) / 16.0
                 bar_grooves["vocals"] = classify_vocal_groove(bar_onsets["vocals"], v_density)
