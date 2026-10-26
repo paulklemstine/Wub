@@ -189,7 +189,7 @@ class StemVQ:
 def build_dataset(analyses, vqs: Dict[str, StemVQ], stride: int = 1) -> List[Dict[str, int]]:
     """One token row per tatum: {r, drums, bass, other, vocals}.
 
-    r = (bar_position % 4) * 4 + beat_position (0..15). Per stem, the first
+    r = beat_position * 4 + tatum_position (0..15). Per stem, the first
     segment id in tatum.stem_segments[stem] is VQ-encoded; missing segment
     ids, silent segments, or stems absent from the track yield silence.
     stride>1 keeps every Nth tatum (full-corpus training on small boxes).
@@ -199,7 +199,9 @@ def build_dataset(analyses, vqs: Dict[str, StemVQ], stride: int = 1) -> List[Dic
         seg_by_id = {s.id: s for s in tr.segments}
         available = set(tr.stems_available or [])
         for tat in tr.tatums[:: max(1, int(stride))]:
-            r = ((tat.bar_position % 4) * 4 + tat.beat_position) % _R_VOCAB
+            beat_pos = getattr(tat, "beat_position", tat.get("beat_position", 0) if isinstance(tat, dict) else 0)
+            tatum_pos = getattr(tat, "tatum_position", tat.get("tatum_position", 0) if isinstance(tat, dict) else 0)
+            r = (int(beat_pos) * 4 + int(tatum_pos)) % _R_VOCAB
             row: Dict[str, int] = {"r": int(r)}
             segmap = tat.stem_segments or {}
             for stem in STEM_ORDER:

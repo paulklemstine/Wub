@@ -154,3 +154,59 @@ def test_wubgpt_end_to_end():
         loaded_model, loaded_vqs, cfg = load_checkpoint(ckpt_file)
         assert len(loaded_vqs) == 4
         assert loaded_model.d_model == model.d_model
+
+
+def test_rhythmic_step_position_encoding():
+    """Verify that build_dataset maps each 16th note tatum position cleanly to 0..15."""
+    segs = [
+        Segment(
+            id="seg_drums_0",
+            track_id="t1",
+            stem="drums",
+            start=0.0,
+            duration=0.125,
+            loudness_start=-10.0,
+            loudness_max=-6.0,
+            loudness_max_time=0.01,
+            pitches=[1.0] * 12,
+            timbre=[0.5] * 12,
+            spectral_centroid=1000.0,
+            zero_crossing_start_offset=0.0,
+        )
+    ]
+    tatums = []
+    # 1 bar of 16 tatums (4 beats x 4 tatums)
+    for b in range(4):
+        for tp in range(4):
+            idx = b * 4 + tp
+            tatums.append(
+                Tatum(
+                    id=f"tat_{idx}",
+                    index=idx,
+                    bar_position=0,
+                    beat_position=b,
+                    tatum_position=tp,
+                    start=idx * 0.125,
+                    duration=0.125,
+                    confidence=1.0,
+                    stem_segments={"drums": ["seg_drums_0"]},
+                )
+            )
+    tr = TrackAnalysis(
+        track_id="t1",
+        filename="t1.mp3",
+        duration=2.0,
+        sample_rate=44100,
+        bpm=120.0,
+        key="C major",
+        tatums=tatums,
+        segments=segs,
+        stems_available=["drums"],
+    )
+    vqs = {"drums": StemVQ(stem="drums", k=2).fit(segs)}
+    dataset = build_dataset([tr], vqs)
+    assert len(dataset) == 16
+    r_values = [row["r"] for row in dataset]
+    # Each step from 0 to 15 must be distinctly encoded
+    assert r_values == list(range(16))
+

@@ -165,24 +165,79 @@ def nearest_zero_crossing_offset(y: np.ndarray, idx: int, sr: int, window_ms: fl
     return float(abs((lo + int(best)) - idx)) / float(sr)
 
 
-def detect_onsets(y: np.ndarray, sr: int, backtrack: bool = True) -> np.ndarray:
+def detect_onsets(y: np.ndarray, sr: int, stem: str = "other", backtrack: bool = True) -> np.ndarray:
     import librosa
 
-    # stem-adaptive params: percussive stems want tighter pre/post
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=256)
-    onsets = librosa.onset.onset_detect(
-        onset_envelope=onset_env,
-        sr=sr,
-        hop_length=256,
-        backtrack=backtrack,
-        pre_max=5,
-        post_max=5,
-        pre_avg=10,
-        post_avg=10,
-        delta=0.25,
-        wait=3,
-        units="time",
-    )
+    # Stem-adaptive onset envelope and peak-picking
+    if stem == "drums":
+        # Full-bandwidth with tight windowing for crisp transient detection (kicks, snares, 16th hats)
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=256)
+        onsets = librosa.onset.onset_detect(
+            onset_envelope=onset_env,
+            sr=sr,
+            hop_length=256,
+            backtrack=backtrack,
+            pre_max=3,
+            post_max=3,
+            pre_avg=8,
+            post_avg=8,
+            delta=0.20,
+            wait=2,
+            units="time",
+        )
+    elif stem == "bass":
+        # Low-frequency band focus (30-500 Hz, n_mels=32) for sub bass and bassline note onsets
+        onset_env = librosa.onset.onset_strength(
+            y=y, sr=sr, hop_length=256, fmin=30, fmax=500, n_mels=32
+        )
+        onsets = librosa.onset.onset_detect(
+            onset_envelope=onset_env,
+            sr=sr,
+            hop_length=256,
+            backtrack=backtrack,
+            pre_max=4,
+            post_max=4,
+            pre_avg=8,
+            post_avg=8,
+            delta=0.18,
+            wait=3,
+            units="time",
+        )
+    elif stem == "vocals":
+        # Formant/vowel frequency focus (250-5000 Hz, n_mels=64) with sensitive thresholding for vocal attacks
+        onset_env = librosa.onset.onset_strength(
+            y=y, sr=sr, hop_length=256, fmin=250, fmax=5000, n_mels=64
+        )
+        onsets = librosa.onset.onset_detect(
+            onset_envelope=onset_env,
+            sr=sr,
+            hop_length=256,
+            backtrack=backtrack,
+            pre_max=4,
+            post_max=4,
+            pre_avg=8,
+            post_avg=8,
+            delta=0.16,
+            wait=3,
+            units="time",
+        )
+    else:  # "other" / synth / master mix
+        onset_env = librosa.onset.onset_strength(
+            y=y, sr=sr, hop_length=256, fmin=100
+        )
+        onsets = librosa.onset.onset_detect(
+            onset_envelope=onset_env,
+            sr=sr,
+            hop_length=256,
+            backtrack=backtrack,
+            pre_max=5,
+            post_max=5,
+            pre_avg=10,
+            post_avg=10,
+            delta=0.20,
+            wait=3,
+            units="time",
+        )
     return np.asarray(onsets, dtype=float)
 
 
@@ -247,7 +302,7 @@ def slice_stem(
     track_id: str,
     duration: float,
 ) -> List[Segment]:
-    onsets = detect_onsets(y_stem, sr, backtrack=True)
+    onsets = detect_onsets(y_stem, sr, stem=stem, backtrack=True)
     bounds = [0.0] + [float(t) for t in onsets if 0.0 < float(t) < duration] + [duration]
     # dedupe + enforce min segment length; merge tiny slivers forward
     bounds = sorted(set(bounds))

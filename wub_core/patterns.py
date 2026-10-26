@@ -53,6 +53,7 @@ class MultiStemPattern:
     stems: Dict[str, List[Optional[SliceRef]]] = field(default_factory=dict)
     onset_grids: Dict[str, List[int]] = field(default_factory=dict)
     groove_types: Dict[str, str] = field(default_factory=dict)
+    velocities: Dict[str, List[float]] = field(default_factory=dict)
     audio_similarity_score: float = 0.5  # Acoustic similarity to real song audio (0.0..1.0)
     cohesion_score: float = 0.5  # Multi-stem acoustic synergy score (0.0..1.0)
 
@@ -238,6 +239,7 @@ class PatternBank:
 
                 bar_stems: Dict[str, List[Optional[SliceRef]]] = {s: [None] * 16 for s in STEMS}
                 bar_onsets: Dict[str, List[int]] = {s: [] for s in STEMS}
+                bar_vels: Dict[str, List[float]] = {s: [0.0] * 16 for s in STEMS}
                 bar_grooves: Dict[str, str] = {s: "none" for s in STEMS}
                 bar_loudness: List[float] = []
 
@@ -258,6 +260,9 @@ class PatternBank:
                             if sref is not None and sref.loud_max > -48.0:
                                 bar_stems[stem][step_idx] = sref
                                 bar_onsets[stem].append(step_idx)
+                                # Empirical velocity extracted directly from slice loudness (-48..0 dB)
+                                vel = float(min(1.0, max(0.40, (sref.loud_max + 40.0) / 40.0)))
+                                bar_vels[stem][step_idx] = round(vel, 3)
                                 bar_loudness.append(max(0.0, sref.loud_max + 60.0) / 60.0)
                         prev_stem_seg[stem] = curr_seg
 
@@ -282,20 +287,25 @@ class PatternBank:
                     # Anchor downbeats 0 and 8
                     if bar_stems["drums"][0] is None:
                         bar_stems["drums"][0] = k_ref
+                        bar_vels["drums"][0] = 1.00
                     if bar_stems["drums"][8] is None:
                         bar_stems["drums"][8] = k_ref
+                        bar_vels["drums"][8] = 0.95
                     # Anchor backbeats 4 and 12
                     for s_step in (4, 12):
                         if bar_stems["drums"][s_step] is None:
                             bar_stems["drums"][s_step] = s_ref or k_ref
+                            bar_vels["drums"][s_step] = 0.92
                     # Anchor offbeat driving hi-hats 2, 6, 10, 14
                     for ob in (2, 6, 10, 14):
                         if bar_stems["drums"][ob] is None:
                             bar_stems["drums"][ob] = h_ref or s_ref
+                            bar_vels["drums"][ob] = 0.82
                     # Anchor driving closed 16th hats
                     for cb in (1, 3, 5, 7, 9, 11, 13, 15):
                         if bar_stems["drums"][cb] is None:
                             bar_stems["drums"][cb] = h_ref or s_ref
+                            bar_vels["drums"][cb] = 0.65
 
                     bar_onsets["drums"] = [i for i, s in enumerate(bar_stems["drums"]) if s is not None]
 
@@ -308,6 +318,7 @@ class PatternBank:
                         b_ref = track_bass[0]
                         for ob in (2, 6, 10, 14):
                             bar_stems["bass"][ob] = b_ref
+                            bar_vels["bass"][ob] = 0.88
                         bar_onsets["bass"] = [2, 6, 10, 14]
 
                 # Feedback check 3: Synths/Other melodic groove integrity
@@ -319,6 +330,7 @@ class PatternBank:
                         o_ref = track_other[0]
                         for ob in (2, 10):
                             bar_stems["other"][ob] = o_ref
+                            bar_vels["other"][ob] = 0.85
                         bar_onsets["other"] = [2, 10]
 
                 # Feedback check 4: Vocal melody & chop singing integrity
@@ -338,6 +350,7 @@ class PatternBank:
 
                         for s_step in v_onsets:
                             bar_stems["vocals"][s_step] = v_ref
+                            bar_vels["vocals"][s_step] = 0.90
                         bar_onsets["vocals"] = v_onsets
 
                 # Classify groove types for each stem after reinforcement
@@ -367,6 +380,7 @@ class PatternBank:
                     stems=bar_stems,
                     onset_grids=bar_onsets,
                     groove_types=bar_grooves,
+                    velocities={s: list(bar_vels[s]) for s in STEMS},
                 )
                 self.multistem_patterns.append(msp)
                 self.multistem_by_track_bar[(tr.track_id, bar_num)] = msp
@@ -431,6 +445,7 @@ class PatternBank:
                         bar_num=bar_num,
                         bpm=tr.bpm,
                         key=tr.key,
+                        velocities=list(bar_vels[stem]),
                     )
 
                     self.patterns_by_stem[stem].append(pat)

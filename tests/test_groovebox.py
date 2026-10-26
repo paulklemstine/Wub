@@ -306,3 +306,75 @@ def test_dense_pattern_infill_and_nonstop_beats():
 
     # Every step of the bar has a driving drum slice!
     assert drum_slices_fired == 16
+
+
+def test_empirical_pattern_velocities_and_dynamics():
+    """Verify that PatternBank loads patterns with empirical velocity curves from real song loudness."""
+    tr = _make_dance_track("test_tr_vels", bpm=126.0, n_bars=4)
+    bank = PatternBank()
+    n_pats = bank.load_from_tracks([tr])
+    assert n_pats > 0
+
+    # 1. MultiStemPattern has per-stem velocity lists
+    msp = bank.multistem_patterns[0]
+    assert hasattr(msp, "velocities")
+    assert "drums" in msp.velocities
+    assert len(msp.velocities["drums"]) == 16
+    assert all(0.0 <= v <= 1.0 for v in msp.velocities["drums"])
+
+    # 2. SequencerPattern has velocities curve
+    for stem in ["drums", "bass", "other", "vocals"]:
+        pats = bank.patterns_by_stem.get(stem, [])
+        assert len(pats) > 0
+        p = pats[0]
+        assert p.velocities is not None
+        assert len(p.velocities) == 16
+        # Active steps have non-zero velocity
+        for step in p.onset_grid:
+            assert p.velocities[step] > 0.0
+
+
+def test_statistical_groove_miner_and_mining_from_tracks():
+    """Verify statistical groove fitting, empirical velocity/microtiming learning, and pattern mining."""
+    from wub_core.groove_miner import StatisticalGrooveModel, mine_patterns_from_tracks
+
+    tr1 = _make_dance_track("tr_mine_1", bpm=128.0, n_bars=8)
+    tr2 = _make_dance_track("tr_mine_2", bpm=128.0, n_bars=8)
+
+    model = StatisticalGrooveModel()
+    n_bars = model.fit_from_tracks([tr1, tr2])
+    assert n_bars > 0
+
+    # Empirical velocities and microtimings are populated
+    assert "drums" in model.empirical_velocities
+    assert len(model.empirical_velocities["drums"]) > 0
+    assert "drums" in model.empirical_microtiming
+
+    # Mine top patterns from tracks
+    mined = mine_patterns_from_tracks([tr1, tr2], min_recurrence=1, top_k=4)
+    assert "drums" in mined
+    assert len(mined["drums"]) > 0
+    assert mined["drums"][0].velocities is not None
+
+
+def test_stem_adaptive_onset_detection():
+    """Verify stem-adaptive onset detection handles drums, bass, vocals, and other distinctly."""
+    from wub_core.analyzer import detect_onsets
+
+    sr = 22050
+    # 1-second synthetic impulse signals
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    # Bass impulse (low sine chirp)
+    y_bass = np.sin(2 * np.pi * 60 * t) * np.exp(-10 * (t % 0.25))
+    # Drums click impulse
+    y_drums = np.zeros(sr)
+    for hit in [0, int(0.25 * sr), int(0.5 * sr), int(0.75 * sr)]:
+        y_drums[hit : hit + 200] = 1.0
+
+    onsets_drums = detect_onsets(y_drums, sr, stem="drums")
+    onsets_bass = detect_onsets(y_bass, sr, stem="bass")
+    assert isinstance(onsets_drums, np.ndarray)
+    assert isinstance(onsets_bass, np.ndarray)
+    assert len(onsets_drums) > 0
+    assert len(onsets_bass) > 0
+

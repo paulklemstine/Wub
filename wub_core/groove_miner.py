@@ -16,6 +16,7 @@ import numpy as np
 
 from wub_core.model_markov import SliceRef
 from wub_core.patterns import (
+    PatternBank,
     SequencerPattern,
     classify_drum_groove,
     classify_bass_groove,
@@ -127,6 +128,8 @@ class StatisticalGrooveModel:
 
     def __init__(self) -> None:
         self.empirical_distributions: Dict[str, Dict[str, np.ndarray]] = {}
+        self.empirical_velocities: Dict[str, Dict[str, np.ndarray]] = {}
+        self.empirical_microtiming: Dict[str, Dict[str, np.ndarray]] = {}
         # Initialize with curated empirical priors
         for stem, grooves in DEFAULT_ONSET_PRIORS.items():
             self.empirical_distributions[stem] = {
@@ -135,9 +138,13 @@ class StatisticalGrooveModel:
         self.trained_bars: int = 0
 
     def fit_from_tracks(self, tracks: List[TrackAnalysis]) -> int:
-        """Learn statistical onset probabilities from analyzed track bars."""
+        """Learn statistical onset probabilities, empirical velocities, and microtiming from analyzed track bars."""
         accum: Dict[str, Dict[str, np.ndarray]] = defaultdict(lambda: defaultdict(lambda: np.zeros(16, dtype=float)))
         counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        accum_vel: Dict[str, Dict[str, np.ndarray]] = defaultdict(lambda: defaultdict(lambda: np.zeros(16, dtype=float)))
+        counts_vel: Dict[str, Dict[str, np.ndarray]] = defaultdict(lambda: defaultdict(lambda: np.zeros(16, dtype=int)))
+        accum_micro: Dict[str, Dict[str, np.ndarray]] = defaultdict(lambda: defaultdict(lambda: np.zeros(16, dtype=float)))
+        counts_micro: Dict[str, Dict[str, np.ndarray]] = defaultdict(lambda: defaultdict(lambda: np.zeros(16, dtype=int)))
 
         total = 0
         for tr in tracks:
@@ -146,17 +153,20 @@ class StatisticalGrooveModel:
             if n_bars < 2:
                 continue
 
+            seg_lookup = {s.id: s for s in getattr(tr, "segments", [])}
             prev_segs: Dict[str, Optional[str]] = {s: None for s in tr.stems_available}
             for b in range(n_bars):
                 start = b * 16
                 for stem in tr.stems_available:
                     onsets: List[int] = []
+                    step_seg_ids: Dict[int, str] = {}
                     for step in range(16):
                         tat = tatums[start + step]
                         sids = tat.stem_segments.get(stem, [])
                         curr = sids[-1] if sids else None
                         if curr is not None and curr != prev_segs.get(stem):
                             onsets.append(step)
+                            step_seg_ids[step] = curr
                         prev_segs[stem] = curr
 
                     if stem == "drums":
@@ -170,10 +180,26 @@ class StatisticalGrooveModel:
 
                     for step in onsets:
                         accum[stem][gt][step] += 1.0
+                        sid = step_seg_ids.get(step)
+                        sg = seg_lookup.get(sid) if sid else None
+                        if sg is not None:
+                            loud = float(getattr(sg, "loudness_max", getattr(sg, "loud_max", -20.0)))
+                            vel = float(min(1.0, max(0.40, (loud + 40.0) / 40.0)))
+                            accum_vel[stem][gt][step] += vel
+                            counts_vel[stem][gt][step] += 1
+
+                            tat = tatums[start + step]
+                            tat_start = float(getattr(tat, "start", 0.0))
+                            tat_dur = max(0.01, float(getattr(tat, "duration", 0.125)))
+                            sg_start = float(getattr(sg, "start", 0.0))
+                            dev = max(-0.35, min(0.35, (sg_start - tat_start) / tat_dur))
+                            accum_micro[stem][gt][step] += dev
+                            counts_micro[stem][gt][step] += 1
+
                     counts[stem][gt] += 1
                     total += 1
 
-        # Smooth and normalize
+        # Smooth and normalize onset distributions
         for stem in accum:
             if stem not in self.empirical_distributions:
                 self.empirical_distributions[stem] = {}
@@ -184,6 +210,21 @@ class StatisticalGrooveModel:
                     prior = self.empirical_distributions.get(stem, {}).get(gt, np.full(16, 0.25))
                     smoothed = (accum[stem][gt] + 2.0 * prior) / (c + 2.0)
                     self.empirical_distributions[stem][gt] = np.clip(smoothed, 0.01, 0.99)
+
+        # Normalize empirical velocities and microtiming
+        for stem in accum_vel:
+            self.empirical_velocities.setdefault(stem, {})
+            self.empirical_microtiming.setdefault(stem, {})
+            for gt in accum_vel[stem]:
+                vel_arr = np.zeros(16, dtype=float)
+                micro_arr = np.zeros(16, dtype=float)
+                for s in range(16):
+                    nv = counts_vel[stem][gt][s]
+                    vel_arr[s] = accum_vel[stem][gt][s] / nv if nv > 0 else 0.85
+                    nm = counts_micro[stem][gt][s]
+                    micro_arr[s] = accum_micro[stem][gt][s] / nm if nm > 0 else 0.0
+                self.empirical_velocities[stem][gt] = vel_arr
+                self.empirical_microtiming[stem][gt] = micro_arr
 
         self.trained_bars += total
         return total
@@ -289,6 +330,11 @@ class StatisticalGrooveModel:
         if not onset_grid:
             return None
 
+        vel_dist = self.empirical_velocities.get(stem, {}).get(template_name)
+        velocities = [0.0] * 16
+        for s in onset_grid:
+            velocities[s] = float(vel_dist[s]) if vel_dist is not None else 0.85
+
         density = len(onset_grid) / 16.0
         pat_id = f"stat_{stem}_{template_name}_{int(rng.integers(1000, 9999))}"
         return SequencerPattern(
@@ -305,4 +351,35 @@ class StatisticalGrooveModel:
             bar_num=0,
             bpm=126.0,
             key="C major",
+            velocities=velocities,
         )
+
+
+def mine_patterns_from_tracks(
+    tracks: List[TrackAnalysis],
+    min_recurrence: int = 2,
+    top_k: int = 16,
+) -> Dict[str, List[SequencerPattern]]:
+    """Mine and rank the most consistent, high-recurrence rhythmic patterns from tracks."""
+    bank = PatternBank()
+    bank.load_from_tracks(tracks)
+    mined: Dict[str, List[SequencerPattern]] = {s: [] for s in STEMS}
+    for stem in STEMS:
+        pats = bank.patterns_by_stem.get(stem, [])
+        grid_groups: Dict[Tuple[int, ...], List[SequencerPattern]] = defaultdict(list)
+        for p in pats:
+            grid_groups[tuple(p.onset_grid)].append(p)
+
+        # Sort by recurrence count (frequency of appearance) and acoustic energy
+        sorted_groups = sorted(
+            grid_groups.items(),
+            key=lambda item: (len(item[1]), float(np.mean([p.energy for p in item[1]]))),
+            reverse=True,
+        )
+        for grid, pat_list in sorted_groups[:top_k]:
+            if len(pat_list) >= min_recurrence:
+                best_pat = max(pat_list, key=lambda p: float(p.energy))
+                mined[stem].append(best_pat)
+            elif not mined[stem] and pat_list:
+                mined[stem].append(pat_list[0])
+    return mined
