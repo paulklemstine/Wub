@@ -185,7 +185,7 @@ class PatternBank:
             "drums": {"kick": [], "snare": [], "hat": [], "fill": []},
             "bass": {"sub": [], "stab": [], "rolling": []},
             "other": {"chord": [], "stab": [], "arp": [], "pad": []},
-            "vocals": {"chop": [], "phrase": []},
+            "vocals": {"chop": [], "call": [], "hook": [], "phrase": []},
         }
 
     def load_from_tracks(self, tracks: List[TrackAnalysis], min_bpm: float = 90.0, max_bpm: float = 160.0) -> int:
@@ -334,24 +334,37 @@ class PatternBank:
                         bar_onsets["other"] = [2, 10]
 
                 # Feedback check 4: Vocal melody & chop singing integrity
-                # Authentic dance music vocals feature continuous lyrical lines, hook motifs, and syncopated chops
-                if len(bar_onsets["vocals"]) <= 1:
+                # Authentic dance music vocals feature continuous lyrical lines, hook motifs, and syncopated chops.
+                # Long vocal phrases (sref.duration >= 0.6) must NOT be chopped up into stutter repeats!
+                has_long_vocal_phrase = any(
+                    (bar_stems["vocals"][s] is not None and bar_stems["vocals"][s].duration >= 0.6)
+                    for s in bar_onsets["vocals"]
+                )
+                if len(bar_onsets["vocals"]) == 0 or (len(bar_onsets["vocals"]) == 1 and not has_long_vocal_phrase):
                     track_vocals = [s for pool in self.slice_palette["vocals"].values() for s in pool if s.track_id == tr.track_id]
                     if not track_vocals:
                         track_vocals = [s for pool in self.slice_palette["vocals"].values() for s in pool]
                     if track_vocals:
-                        v_ref = track_vocals[0]
-                        if phrase_bar in (0, 2, 4, 6):
-                            v_onsets = [0, 3, 6, 8, 10, 12, 14] if (bar_num % 2 == 0) else [0, 4, 7, 10, 12]
-                        elif phrase_bar == 7:
-                            v_onsets = [0, 2, 4, 6, 8, 10, 12, 14]
+                        # If the available slice is a long phrase (>= 0.6s), anchor on step 0 and let it sing its whole phrase!
+                        if track_vocals[0].duration >= 0.6:
+                            bar_stems["vocals"][0] = track_vocals[0]
+                            bar_vels["vocals"][0] = 0.95
+                            bar_onsets["vocals"] = [0]
                         else:
-                            v_onsets = [0, 2, 5, 8, 11, 14]
+                            if phrase_bar in (0, 2, 4, 6):
+                                v_onsets = [0, 3, 6, 8, 10, 12, 14] if (bar_num % 2 == 0) else [0, 4, 7, 10, 12]
+                            elif phrase_bar == 7:
+                                v_onsets = [0, 2, 4, 6, 8, 10, 12, 14]
+                            else:
+                                v_onsets = [0, 2, 5, 8, 11, 14]
 
-                        for s_step in v_onsets:
-                            bar_stems["vocals"][s_step] = v_ref
-                            bar_vels["vocals"][s_step] = 0.90
-                        bar_onsets["vocals"] = v_onsets
+                            # Sequence consecutive slices across the onsets so words sound natural and sequential
+                            v_pool = [s for s in track_vocals if s.duration < 0.6] or track_vocals
+                            for idx, s_step in enumerate(v_onsets):
+                                slice_pick = v_pool[idx % len(v_pool)]
+                                bar_stems["vocals"][s_step] = slice_pick
+                                bar_vels["vocals"][s_step] = 0.90
+                            bar_onsets["vocals"] = v_onsets
 
                 # Classify groove types for each stem after reinforcement
                 bar_grooves["drums"] = classify_drum_groove(bar_onsets["drums"], 16)
@@ -424,10 +437,14 @@ class PatternBank:
                             else:
                                 self.slice_palette["other"]["arp"].append(sref)
                         elif stem == "vocals":
-                            if sref.duration < 0.3:
-                                self.slice_palette["vocals"]["chop"].append(sref)
-                            else:
+                            if sref.duration >= 2.0:
                                 self.slice_palette["vocals"]["phrase"].append(sref)
+                            elif sref.duration >= 1.0:
+                                self.slice_palette["vocals"]["hook"].append(sref)
+                            elif sref.duration >= 0.35:
+                                self.slice_palette["vocals"]["call"].append(sref)
+                            else:
+                                self.slice_palette["vocals"]["chop"].append(sref)
 
                     pattern_id = f"pat_{stem}_{tr.track_id[:6]}_{bar_num:03d}"
                     clean_name = tr.filename.replace(".mp3", "")

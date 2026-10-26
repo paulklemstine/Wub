@@ -11,6 +11,7 @@ Guarantees:
 from __future__ import annotations
 
 import base64
+from collections import defaultdict
 import hashlib
 import json
 from pathlib import Path
@@ -58,7 +59,7 @@ def harvest_pure_slices(
         "drums": {"kick": [], "snare": [], "hat_closed": [], "hat_open": [], "percussion": [], "fill": []},
         "bass": {"sub": [], "rolling": [], "stab": []},
         "other": {"chord": [], "arp": [], "pad": []},
-        "vocals": {"chop": [], "hook": [], "call": []},
+        "vocals": {"phrase": [], "hook": [], "call": [], "chop": []},
     }
 
     seen_hashes: Set[str] = set()
@@ -310,12 +311,13 @@ def harvest_pure_slices(
         print(f"✓ Harvested {len(manifest['other'][cat])} chromatic other:{cat} slices across pitches 0..11", flush=True)
 
     # --------------------------------------------------------------------------
-    # 4. VOCALS
+    # 4. VOCALS (Long Phrases, Chorus Hooks, Melodic Calls, and Consecutive Slices)
     # --------------------------------------------------------------------------
     vocal_targets = {
-        "chop": {"dur_min": 0.10, "dur_max": 0.35, "loud_min": -22.0, "shape_dur": 0.28, "fade_out": 25.0, "peak": 0.90, "count": 48},
-        "hook": {"dur_min": 1.0, "dur_max": 3.5, "loud_min": -20.0, "shape_dur": 2.2, "fade_out": 50.0, "peak": 0.92, "count": 36},
-        "call": {"dur_min": 0.38, "dur_max": 0.95, "loud_min": -22.0, "shape_dur": 0.75, "fade_out": 35.0, "peak": 0.90, "count": 36},
+        "phrase": {"dur_min": 1.8, "dur_max": 8.0, "loud_min": -24.0, "shape_dur": None, "fade_out": 80.0, "peak": 0.94, "count": 36},
+        "hook": {"dur_min": 1.0, "dur_max": 4.5, "loud_min": -22.0, "shape_dur": None, "fade_out": 60.0, "peak": 0.92, "count": 36},
+        "call": {"dur_min": 0.38, "dur_max": 1.8, "loud_min": -22.0, "shape_dur": None, "fade_out": 40.0, "peak": 0.90, "count": 36},
+        "chop": {"dur_min": 0.12, "dur_max": 0.45, "loud_min": -22.0, "shape_dur": 0.35, "fade_out": 25.0, "peak": 0.90, "count": 48},
     }
 
     for cat, cfg in vocal_targets.items():
@@ -335,14 +337,16 @@ def harvest_pure_slices(
 
                     candidates.append((loud, tid, s))
 
+        # Sort primarily by loudness/quality, keeping chronological order secondary
         candidates.sort(key=lambda x: x[0], reverse=True)
         taken = 0
-        seen_tids = set()
+        tid_counts: Dict[str, int] = defaultdict(int)
 
         for loud, tid, s in candidates:
             if taken >= cfg["count"]:
                 break
-            if tid in seen_tids:
+            # Allow up to 3 consecutive slices per track so lyrical phrases can be sequenced in order
+            if tid_counts[tid] >= 3:
                 continue
 
             stem_path = stems_dir / tid / "vocals.wav"
@@ -392,13 +396,16 @@ def harvest_pure_slices(
                     "track_title": meta.get("filename", "").replace(".mp3", ""),
                     "track_id": tid,
                     "segment_id": s.get("id", ""),
+                    "start": round(float(s.get("start", 0.0)), 3),
                 })
-                seen_tids.add(tid)
+                tid_counts[tid] += 1
                 taken += 1
             except Exception:
                 continue
 
-        print(f"✓ Harvested {taken} distinct vocals:{cat} slices", flush=True)
+        # Sort slices within the category by track_id and start time so consecutive slices are grouped
+        manifest["vocals"][cat].sort(key=lambda item: (item.get("track_id", ""), item.get("start", 0.0)))
+        print(f"✓ Harvested {taken} distinct vocals:{cat} slices (long phrases & consecutive lines)", flush=True)
 
     total_slices = sum(len(items) for cats in manifest.values() for items in cats.values())
     print(f"\n🎉 Successfully harvested {total_slices} pure, unique, distinct audio slices to {out_dir}!", flush=True)

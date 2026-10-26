@@ -306,9 +306,11 @@ def slice_stem(
     bounds = [0.0] + [float(t) for t in onsets if 0.0 < float(t) < duration] + [duration]
     # dedupe + enforce min segment length; merge tiny slivers forward
     bounds = sorted(set(bounds))
+    min_seg = 0.180 if stem == "vocals" else MIN_SEGMENT_SEC
+    max_seg = 8.0 if stem == "vocals" else MAX_SEGMENT_SEC
     merged: List[float] = [bounds[0]]
     for b in bounds[1:]:
-        if b - merged[-1] < MIN_SEGMENT_SEC:
+        if b - merged[-1] < min_seg:
             continue
         merged.append(b)
     if merged[-1] < duration - 1e-6:
@@ -316,8 +318,8 @@ def slice_stem(
     # cap pathological lengths (sparse stems with no onsets for minutes)
     capped: List[float] = [merged[0]]
     for b in merged[1:]:
-        while b - capped[-1] > MAX_SEGMENT_SEC:
-            capped.append(capped[-1] + MAX_SEGMENT_SEC)
+        while b - capped[-1] > max_seg:
+            capped.append(capped[-1] + max_seg)
         capped.append(b)
     merged = capped
     segments: List[Segment] = []

@@ -1653,6 +1653,9 @@ export class ClientGrooveboxConductor {
   private kitKeyRoot: number = -1;
   private kitTerritory: StyleTerritory | null = null;
   private recentPhraseBlocks: string[] = [];
+  private vocalPhraseEndAudioSec: number = 0;
+  private activeVocalTrackId?: string;
+  private activeVocalChainIndex: number = 0;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -2129,7 +2132,8 @@ export class ClientGrooveboxConductor {
     targetPitch?: number,
     variationFraction?: number,
     territory?: StyleTerritory,
-    targetVowel?: string
+    targetVowel?: string,
+    preferredTrackId?: string
   ): { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null {
     // 1. Look for style-specific slices first (e.g. drums:kick:wave / drums:kick_wave)
     let list: SliceAsset[] | undefined;
@@ -2145,7 +2149,7 @@ export class ClientGrooveboxConductor {
       // Intelligent fallback within same stem
       const [stem, cat] = stemCategory.split(":");
       if (stem === "vocals") {
-        for (const alt of ["hook", "call", "chop"]) {
+        for (const alt of ["phrase", "hook", "call", "chop"]) {
           if (alt !== cat) {
             const altList = (territory ? (this.sliceRegistry.get(`vocals:${alt}:${territory}`) || this.sliceRegistry.get(`vocals:${alt}_${territory}`)) : undefined) ||
               this.sliceRegistry.get(`vocals:${alt}`);
@@ -2184,6 +2188,14 @@ export class ClientGrooveboxConductor {
       const fallbackBuf = (territory ? this.synth.getSliceBuffer(`${stemCategory}:${territory}`) : undefined) ||
         this.synth.getSliceBuffer(stemCategory);
       return fallbackBuf ? { buffer: fallbackBuf, rate: 1.0 } : null;
+    }
+
+    // Lyrical phrase continuity: prioritize slices from the same authentic track
+    if (preferredTrackId && list.some((item) => item.trackId === preferredTrackId)) {
+      const sameTrackSlices = list.filter((item) => item.trackId === preferredTrackId);
+      if (sameTrackSlices.length > 0) {
+        list = sameTrackSlices;
+      }
     }
 
     if (targetPitch === undefined) {
@@ -2804,6 +2816,9 @@ export class ClientGrooveboxConductor {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.vocalPhraseEndAudioSec = 0;
+    this.activeVocalTrackId = undefined;
+    this.activeVocalChainIndex = 0;
   }
 
   private clockTick(): void {
@@ -3578,9 +3593,10 @@ export class ClientGrooveboxConductor {
     }
 
     if (!isDropGap && vPat) {
-      const vocalCat = vSteer.x < 0.38 ? "vocals:call" : (vSteer.x < 0.72 ? "vocals:hook" : "vocals:chop");
+      const vocalCat = vSteer.x < 0.28 ? "vocals:phrase" : (vSteer.x < 0.58 ? "vocals:hook" : (vSteer.x < 0.80 ? "vocals:call" : "vocals:chop"));
       const isDenseChop = (vocalCat === "vocals:chop" || vSteer.y > 0.72 || vTerr === "breaks");
       const isSparseVocal = (vSteer.y < 0.35 && vTerr !== "breaks" && vTerr !== "cyber");
+      const isPhraseSinging = (when < this.vocalPhraseEndAudioSec - 0.04);
 
       const shouldPlayVocal = isSparseVocal
         ? ((step % 16 === 0 || step % 16 === 8) && (phraseBar % 2 === 0))
@@ -3611,45 +3627,64 @@ export class ClientGrooveboxConductor {
           syllable: syl.text,
           vowel: syl.vowel,
           note: noteName,
-          songTitle: activeTitle,
+          songTitle: this.currentVocalMeta.songTitle || activeTitle,
           sectionName: sec,
         };
 
-        // Sings melody using authentic acoustic vocal slices whenever available
-        const lockedVocalAsset = (vocalCat === "vocals:chop")
-          ? (this.activeSongKit?.vocalChopAsset || this.activeSongKit?.vocalHookAsset)
-          : (this.activeSongKit?.vocalHookAsset || this.activeSongKit?.vocalCallAsset);
-        const slice = this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
-          this.getBestSlice(vocalCat, melodyPitch, 0, vTerr, syl.vowel) ||
-          this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr, syl.vowel) ||
-          this.getBestSlice("vocals:call", melodyPitch, 0, vTerr, syl.vowel) ||
-          this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr, syl.vowel);
-
-        if (slice) {
-          if (slice.asset?.trackTitle) {
-            this.currentVocalMeta.songTitle = slice.asset.trackTitle;
-          }
-          if (slice.asset?.vowel) {
-            this.currentVocalMeta.vowel = slice.asset.vowel as any;
-          }
-          // 1. Primary Lead Vocal: Authentic Acoustic Vocal Slice
-          const sliceGain = isLoopVocalActive ? vel * 1.20 : vel * 1.40;
-          this.engine.scheduleSlice("vocals", slice.buffer, when, {
-            rate: slice.rate,
-            fadeMs: 6,
-            gain: sliceGain,
-            voiceKey: "vocals",
-          });
-
-          // 2. Harmonic Vocaloid Layer: Mixed in alongside the acoustic vocal slice!
-          // Blends resonant formant body, glottal tone, and sustained warmth under the authentic slice
-          const vocaloidBlend = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.65 : (sec === "DROP" ? 0.45 : 0.52);
-          const vocaloidGain = vel * vocaloidBlend;
-          this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vocaloidGain, vInput, vTerr);
+        // If an authentic long vocal phrase is currently singing, DO NOT interrupt or choke it!
+        // The vocal track is heard in its entire phrase without disjointed chopped noise.
+        if (isPhraseSinging) {
+          const vocaloidBlend = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.40 : 0.28;
+          this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vel * vocaloidBlend, vInput, vTerr);
         } else {
-          // If no acoustic slice is found, vocaloid carries full lead singing
-          const synthVel = isLoopVocalActive ? vel * 1.05 : vel * 1.30;
-          this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, synthVel, vInput, vTerr);
+          // Ready for a new vocal phrase or consecutive slice from the active song!
+          const lockedVocalAsset = (vocalCat === "vocals:chop")
+            ? (this.activeSongKit?.vocalChopAsset || this.activeSongKit?.vocalHookAsset)
+            : (this.activeSongKit?.vocalHookAsset || this.activeSongKit?.vocalCallAsset);
+          const slice = this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
+            this.getBestSlice(vocalCat, melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals:phrase", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals:call", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId);
+
+          if (slice) {
+            if (slice.asset?.trackId) {
+              this.activeVocalTrackId = slice.asset.trackId;
+            }
+            if (slice.asset?.trackTitle) {
+              this.currentVocalMeta.songTitle = slice.asset.trackTitle;
+            }
+            if (slice.asset?.vowel) {
+              this.currentVocalMeta.vowel = slice.asset.vowel as any;
+            }
+
+            const naturalDur = slice.buffer.duration / (slice.rate || 1.0);
+            // Long phrases & hooks (>= 0.5s) get sustained phrase duration so words are never choked mid-sentence!
+            if (naturalDur >= 0.50) {
+              this.vocalPhraseEndAudioSec = when + naturalDur;
+            } else {
+              this.vocalPhraseEndAudioSec = when + durSec;
+            }
+
+            // 1. Primary Lead Vocal: Authentic Acoustic Vocal Slice (heard in its entire phrase)
+            const sliceGain = isLoopVocalActive ? vel * 1.20 : vel * 1.45;
+            this.engine.scheduleSlice("vocals", slice.buffer, when, {
+              rate: slice.rate,
+              fadeMs: naturalDur >= 0.50 ? 12 : 6,
+              gain: sliceGain,
+              voiceKey: "vocals:phrase",
+            });
+
+            // 2. Harmonic Vocaloid Layer: Formant vocoder harmony underlay
+            const vocaloidBlend = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.65 : (sec === "DROP" ? 0.45 : 0.52);
+            const vocaloidGain = vel * vocaloidBlend;
+            this.synth.playSingingVoice(when, noteHz, syl.vowel, Math.min(durSec, naturalDur), vocaloidGain, vInput, vTerr);
+          } else {
+            // Fallback: vocaloid carries full lead singing
+            const synthVel = isLoopVocalActive ? vel * 1.05 : vel * 1.30;
+            this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, synthVel, vInput, vTerr);
+          }
         }
       }
     }
@@ -3874,23 +3909,26 @@ export class ClientGrooveboxConductor {
     } else if (stem === "vocals") {
       if (mutated.onset_grid.length <= 1) {
         const gt = mutated.groove_type || "vocal_verse";
-        if (gt === "vocal_hook" || gt === "hook") {
-          mutated.onset_grid = [0, 3, 6, 8, 10, 12, 14];
+        if (gt === "vocal_phrase" || gt === "phrase" || gt === "vocal_sustained") {
+          // Whole long vocal phrase: start on step 0 and sing uninterrupted through the bar
+          mutated.onset_grid = [0];
+        } else if (gt === "vocal_hook" || gt === "hook") {
+          mutated.onset_grid = [0, 4, 8, 12];
         } else if (gt === "vocal_stutter" || gt === "stutter") {
           mutated.onset_grid = [0, 2, 4, 6, 8, 10, 12, 14];
         } else if (gt === "vocal_syncopated_chop" || gt === "chop") {
           mutated.onset_grid = [0, 2, 5, 8, 11, 14];
         } else if (gt === "vocal_call_response" || gt === "call") {
-          mutated.onset_grid = [0, 3, 6, 10, 14];
+          mutated.onset_grid = [0, 4, 8, 12];
         } else {
-          mutated.onset_grid = [0, 4, 7, 10, 12];
+          mutated.onset_grid = [0];
         }
         mutated.density = mutated.onset_grid.length / 16;
         for (const st of mutated.onset_grid) {
-          mutated.velocities[st] = 0.92;
+          mutated.velocities[st] = 0.95;
         }
       }
-      if (steerY > 0.65) {
+      if (steerY > 0.70 && mutated.groove_type !== "vocal_phrase" && mutated.groove_type !== "phrase" && mutated.groove_type !== "vocal_sustained") {
         for (const st of [2, 10]) {
           if (!mutated.onset_grid.includes(st)) {
             mutated.onset_grid.push(st);

@@ -170,3 +170,72 @@ def test_vocal_pattern_extractor_dsp():
 
     syl = choose_syllable("wave", "EE", seed=0)
     assert isinstance(syl, str) and len(syl) > 0
+
+
+def test_long_vocal_slices_and_phrase_extraction():
+    """Verify long vocal phrases and consecutive slices are preserved without over-chopping."""
+    from wub_core.analyzer import slice_stem
+    from wub_core.patterns import PatternBank, SequencerPattern
+    from wub_core.schema import Segment, Tatum, TrackAnalysis
+
+    # 1. Test analyzer slice_stem preserves long vocal phrase segments
+    sr = 22050
+    # 4-second vocal note
+    t = np.linspace(0, 4.0, int(4.0 * sr), endpoint=False)
+    y_vocal = np.sin(2 * np.pi * 330.0 * t) * 0.8
+    segs = slice_stem(y_vocal, sr, stem="vocals", track_id="vocal_trk", duration=4.0)
+    # Vocal segments should not be micro-chopped into dozens of tiny fragments
+    assert len(segs) <= 3
+    # At least one segment should be a full long phrase (> 1.5 seconds)
+    assert any(s.duration >= 1.5 for s in segs)
+
+    # 2. Test PatternBank preserves long vocal phrase without destroying it with stutter repeats
+    v_seg = Segment(
+        id="seg_vocals_long",
+        track_id="tr_voc_phrase",
+        stem="vocals",
+        start=0.0,
+        duration=3.2,  # 3.2-second sustained lyrical phrase
+        loudness_start=-12.0,
+        loudness_max=-6.0,
+        loudness_max_time=0.1,
+        pitches=[1.0] * 12,
+        timbre=[0.5] * 12,
+        spectral_centroid=2200.0,
+        zero_crossing_start_offset=0.0,
+    )
+    tatums = []
+    for idx in range(16):
+        tatums.append(
+            Tatum(
+                id=f"tat_{idx}",
+                index=idx,
+                bar_position=0,
+                beat_position=idx // 4,
+                tatum_position=idx % 4,
+                start=idx * 0.125,
+                duration=0.125,
+                confidence=1.0,
+                stem_segments={"vocals": ["seg_vocals_long"]},
+            )
+        )
+    tr = TrackAnalysis(
+        track_id="tr_voc_phrase",
+        filename="vocal_phrase_test.mp3",
+        duration=2.0,
+        sample_rate=44100,
+        bpm=120.0,
+        key="C major",
+        tatums=tatums,
+        segments=[v_seg],
+        stems_available=["vocals"],
+    )
+    bank = PatternBank()
+    bank.load_from_tracks([tr])
+    assert len(bank.patterns_by_stem["vocals"]) > 0
+    voc_pat = bank.patterns_by_stem["vocals"][0]
+    # Long vocal phrase starting at step 0 must NOT be chopped into 7 stutter onsets!
+    assert voc_pat.onset_grid == [0]
+    assert voc_pat.steps[0] is not None
+    assert voc_pat.steps[0].duration >= 3.0
+
