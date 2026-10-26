@@ -42,10 +42,10 @@ __all__ = [
 
 TIMBRE_DIM = 12
 CHROMA_DIM = 12
-FEAT_DIM = 25  # [timbre12 || chroma12 || loud_max1]
-# Dims standardized with a per-stem StandardScaler (timbre + loudness only;
+FEAT_DIM = 26  # [timbre12 || chroma12 || loud_max1 || log_dur1]
+# Dims standardized with a per-stem StandardScaler (timbre + loudness + log_dur;
 # chroma passes through, matching the indexer convention).
-_STD_IDX = list(range(12)) + [24]
+_STD_IDX = list(range(12)) + [24, 25]
 _R_VOCAB = 16
 
 STREAM_ORDER = ["r", "drums", "bass", "other", "vocals"]
@@ -53,20 +53,23 @@ STEM_ORDER = ["drums", "bass", "other", "vocals"]
 
 
 def slice_feature_raw(obj) -> np.ndarray:
-    """25-D raw feature vector for a SliceRef / Segment / equivalent dict."""
+    """26-D raw feature vector for a SliceRef / Segment / equivalent dict."""
     if isinstance(obj, dict):
         timbre = np.asarray(obj.get("timbre"), dtype=np.float32)
         chroma = np.asarray(obj.get("chroma", obj.get("pitches")), dtype=np.float32)
-        loud = obj.get("loud_max", obj.get("loudness_max"))
+        loud = obj.get("loud_max", obj.get("loudness_max", -20.0))
+        dur = obj.get("duration", 0.25)
     else:
         timbre = np.asarray(obj.timbre, dtype=np.float32)
         chroma = np.asarray(
             getattr(obj, "chroma", getattr(obj, "pitches", None)), dtype=np.float32
         )
-        loud = getattr(obj, "loud_max", getattr(obj, "loudness_max", None))
+        loud = getattr(obj, "loud_max", getattr(obj, "loudness_max", -20.0))
+        dur = getattr(obj, "duration", 0.25)
     if timbre.shape != (12,) or chroma.shape != (12,):
-        raise ValueError("slice features must be timbre(12) + chroma(12) + loud(1)")
-    return np.concatenate([timbre, chroma, [float(loud)]]).astype(np.float32)
+        raise ValueError("slice features must be timbre(12) + chroma(12) + loud(1) + dur(1)")
+    log_dur = float(np.log1p(max(0.01, float(dur) if dur is not None else 0.25)))
+    return np.concatenate([timbre, chroma, [float(loud), log_dur]]).astype(np.float32)
 
 
 class StemVQ:

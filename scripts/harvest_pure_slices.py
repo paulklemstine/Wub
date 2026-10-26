@@ -57,7 +57,7 @@ def harvest_pure_slices(
 
     manifest: Dict[str, Dict[str, List[dict]]] = {
         "drums": {"kick": [], "snare": [], "hat_closed": [], "hat_open": [], "percussion": [], "fill": []},
-        "bass": {"sub": [], "rolling": [], "stab": []},
+        "bass": {"sub": [], "rolling": [], "stab": [], "sustained": []},
         "other": {"chord": [], "arp": [], "pad": []},
         "vocals": {"phrase": [], "hook": [], "call": [], "chop": []},
     }
@@ -76,15 +76,15 @@ def harvest_pure_slices(
                 pass
 
     # --------------------------------------------------------------------------
-    # 1. DRUMS
+    # 1. DRUMS (Longer acoustic decay, sustained room reverb & multi-beat fills)
     # --------------------------------------------------------------------------
     drum_targets = {
-        "kick": {"c_max": 750.0, "dur_min": 0.18, "dur_max": 0.38, "loud_min": -14.0, "shape_dur": 0.30, "fade_out": 20.0, "peak": 0.95, "count": 16},
-        "snare": {"c_min": 1300.0, "c_max": 2900.0, "dur_min": 0.14, "dur_max": 0.40, "loud_min": -14.0, "shape_dur": 0.28, "fade_out": 25.0, "peak": 0.92, "count": 16},
-        "hat_closed": {"c_min": 5500.0, "dur_max": 0.09, "loud_min": -22.0, "shape_dur": 0.05, "fade_out": 12.0, "peak": 0.72, "count": 16},
-        "hat_open": {"c_min": 4800.0, "dur_min": 0.18, "dur_max": 0.35, "loud_min": -18.0, "shape_dur": 0.22, "fade_out": 30.0, "peak": 0.82, "count": 16},
-        "percussion": {"c_min": 900.0, "c_max": 3800.0, "dur_min": 0.06, "dur_max": 0.18, "loud_min": -18.0, "shape_dur": 0.16, "fade_out": 20.0, "peak": 0.85, "count": 16},
-        "fill": {"c_min": 1100.0, "c_max": 3200.0, "dur_min": 0.25, "loud_min": -16.0, "shape_dur": 0.42, "fade_out": 35.0, "peak": 0.92, "count": 16},
+        "kick": {"c_max": 800.0, "dur_min": 0.20, "dur_max": 0.90, "loud_min": -15.0, "shape_dur": 0.50, "fade_out": 30.0, "peak": 0.95, "count": 16},
+        "snare": {"c_min": 1200.0, "c_max": 3200.0, "dur_min": 0.20, "dur_max": 1.50, "loud_min": -15.0, "shape_dur": 0.65, "fade_out": 40.0, "peak": 0.92, "count": 16},
+        "hat_closed": {"c_min": 5000.0, "dur_max": 0.16, "loud_min": -24.0, "shape_dur": 0.08, "fade_out": 15.0, "peak": 0.75, "count": 16},
+        "hat_open": {"c_min": 4500.0, "dur_min": 0.25, "dur_max": 1.80, "loud_min": -20.0, "shape_dur": 0.75, "fade_out": 50.0, "peak": 0.82, "count": 16},
+        "percussion": {"c_min": 800.0, "c_max": 4200.0, "dur_min": 0.08, "dur_max": 0.45, "loud_min": -20.0, "shape_dur": 0.25, "fade_out": 25.0, "peak": 0.85, "count": 16},
+        "fill": {"c_min": 900.0, "c_max": 3500.0, "dur_min": 0.60, "dur_max": 4.50, "loud_min": -18.0, "shape_dur": 2.20, "fade_out": 50.0, "peak": 0.92, "count": 16},
     }
 
     for cat, cfg in drum_targets.items():
@@ -160,12 +160,13 @@ def harvest_pure_slices(
         print(f"✓ Harvested {taken} distinct drums:{cat} slices", flush=True)
 
     # --------------------------------------------------------------------------
-    # 2. BASS (Chromatic 0..11)
+    # 2. BASS (Chromatic 0..11 - Long Sustained Sub, 808 Decay & Multi-Beat Grooves)
     # --------------------------------------------------------------------------
     bass_targets = {
-        "sub": {"c_max": 450.0, "dur_min": 0.20, "loud_min": -20.0, "shape_dur": 0.32, "fade_out": 25.0, "peak": 0.92},
-        "rolling": {"c_max": 650.0, "dur_min": 0.12, "dur_max": 0.24, "loud_min": -20.0, "shape_dur": 0.18, "fade_out": 15.0, "peak": 0.90},
-        "stab": {"c_min": 300.0, "c_max": 900.0, "dur_max": 0.16, "loud_min": -20.0, "shape_dur": 0.14, "fade_out": 12.0, "peak": 0.90},
+        "sub": {"c_max": 500.0, "dur_min": 0.40, "dur_max": 3.50, "loud_min": -22.0, "shape_dur": 1.80, "fade_out": 60.0, "peak": 0.92},
+        "rolling": {"c_max": 750.0, "dur_min": 0.25, "dur_max": 2.00, "loud_min": -22.0, "shape_dur": 0.85, "fade_out": 40.0, "peak": 0.90},
+        "stab": {"c_min": 250.0, "c_max": 1100.0, "dur_min": 0.15, "dur_max": 0.80, "loud_min": -22.0, "shape_dur": 0.45, "fade_out": 25.0, "peak": 0.90},
+        "sustained": {"c_max": 550.0, "dur_min": 1.20, "dur_max": 5.00, "loud_min": -22.0, "shape_dur": 3.00, "fade_out": 80.0, "peak": 0.92},
     }
 
     for cat, cfg in bass_targets.items():
@@ -238,12 +239,12 @@ def harvest_pure_slices(
         print(f"✓ Harvested {len(manifest['bass'][cat])} chromatic bass:{cat} slices across pitches 0..11", flush=True)
 
     # --------------------------------------------------------------------------
-    # 3. OTHER (Chromatic 0..11)
+    # 3. OTHER (Chromatic 0..11 - Multi-Bar Pads, Sustained Chords & Arpeggio Runs)
     # --------------------------------------------------------------------------
     other_targets = {
-        "chord": {"dur_min": 0.22, "loud_min": -22.0, "shape_dur": 0.35, "fade_out": 30.0, "peak": 0.88},
-        "arp": {"dur_min": 0.12, "dur_max": 0.28, "loud_min": -22.0, "shape_dur": 0.20, "fade_out": 20.0, "peak": 0.88},
-        "pad": {"dur_min": 0.38, "loud_min": -24.0, "shape_dur": 0.65, "fade_out": 60.0, "peak": 0.85},
+        "chord": {"dur_min": 0.50, "dur_max": 4.00, "loud_min": -24.0, "shape_dur": 2.00, "fade_out": 80.0, "peak": 0.88},
+        "arp": {"dur_min": 0.30, "dur_max": 2.50, "loud_min": -24.0, "shape_dur": 1.20, "fade_out": 50.0, "peak": 0.88},
+        "pad": {"dur_min": 1.20, "dur_max": 8.00, "loud_min": -26.0, "shape_dur": 4.00, "fade_out": 120.0, "peak": 0.85},
     }
 
     for cat, cfg in other_targets.items():

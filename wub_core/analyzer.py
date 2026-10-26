@@ -26,6 +26,19 @@ MAX_SEGMENT_SEC = 4.0  # force-split longer stretches: a minutes-long "slice"
 # (silent verse, missing stem) is useless for concatenative lookup and blows
 # up render memory (hours of audio per sequence).
 
+STEM_MIN_SEGMENT: Dict[str, float] = {
+    "drums": 0.060,
+    "bass": 0.120,
+    "other": 0.150,
+    "vocals": 0.180,
+}
+STEM_MAX_SEGMENT: Dict[str, float] = {
+    "drums": 4.0,
+    "bass": 6.0,
+    "other": 8.0,
+    "vocals": 8.0,
+}
+
 
 def _to_mono(y: np.ndarray) -> np.ndarray:
     if y.ndim == 2:
@@ -306,8 +319,8 @@ def slice_stem(
     bounds = [0.0] + [float(t) for t in onsets if 0.0 < float(t) < duration] + [duration]
     # dedupe + enforce min segment length; merge tiny slivers forward
     bounds = sorted(set(bounds))
-    min_seg = 0.180 if stem == "vocals" else MIN_SEGMENT_SEC
-    max_seg = 8.0 if stem == "vocals" else MAX_SEGMENT_SEC
+    min_seg = STEM_MIN_SEGMENT.get(stem, MIN_SEGMENT_SEC)
+    max_seg = STEM_MAX_SEGMENT.get(stem, MAX_SEGMENT_SEC)
     merged: List[float] = [bounds[0]]
     for b in bounds[1:]:
         if b - merged[-1] < min_seg:

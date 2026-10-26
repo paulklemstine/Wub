@@ -3481,9 +3481,9 @@ export class ClientGrooveboxConductor {
 
       if (shouldPlayBass) {
         let vel = bPat.velocities ? (bPat.velocities[step] || 0.90) : 0.90;
-        let dur = (bassCat === "bass:rolling") ? 0.14 : (bassCat === "bass:sub" ? 0.28 : 0.20);
-        if (bTerr === "wave") dur = 0.38; // Spacious 808 sub
-        else if (bTerr === "cyber") dur = 0.12; // Snappy acid/reese rolling
+        let dur = (bassCat === "bass:rolling") ? 0.35 : (bassCat === "bass:sub" ? 0.85 : 0.45);
+        if (bTerr === "wave") dur = 1.20; // Spacious 808 sub
+        else if (bTerr === "cyber") dur = 0.25; // Snappy acid/reese rolling
 
         const subSlice = (bassCat === "bass:rolling")
           ? (this.getPitchedSliceFromAsset(this.activeSongKit?.bassRollingAsset, chord.rootPitch, 3) || this.getBestSlice(bassCat, chord.rootPitch, 0, bTerr))
@@ -3491,7 +3491,7 @@ export class ClientGrooveboxConductor {
         if (subSlice) {
           this.engine.scheduleSlice("bass", subSlice.buffer, when, {
             rate: subSlice.rate,
-            fadeMs: 4,
+            fadeMs: 6,
             gain: vel,
             voiceKey: "bass",
           });
@@ -3547,7 +3547,7 @@ export class ClientGrooveboxConductor {
             this.synth.playArp(when, vel, arpFreq, oDest, oTerr);
           }
         } else {
-          const dur = (sec === "BREAKDOWN" || sec === "INTRO" || isSparsePad || oTerr === "wave") ? 0.45 : 0.28;
+          const dur = (sec === "BREAKDOWN" || sec === "INTRO" || isSparsePad || oTerr === "wave") ? 1.60 : 0.65;
           const targetSliceCat = isSparsePad ? "other:pad" : "other:chord";
           const chordSlice = isSparsePad
             ? (this.getPitchedSliceFromAsset(this.activeSongKit?.padAsset, chord.rootPitch, 3) ||
@@ -3558,9 +3558,9 @@ export class ClientGrooveboxConductor {
           if (chordSlice) {
             this.engine.scheduleSlice("other", chordSlice.buffer, when, {
               rate: chordSlice.rate,
-              fadeMs: 4,
+              fadeMs: 6,
               gain: vel,
-              voiceKey: "other:chord",
+              voiceKey: isSparsePad ? "other:pad" : "other:chord",
             });
           } else {
             this.synth.playChord(when, vel, chord.chordHz, chord.isMinor, dur, oDest, oTerr);

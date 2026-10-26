@@ -106,8 +106,16 @@ class AcousticVocabularyOptimizer:
         # Dynamic punch: difference between onset and body
         punch = np.clip((loud_max - loud_start) / 30.0, 0.0, 1.0)
 
-        # Duration sweet spot: 0.08s to 1.5s
-        dur_score = 1.0 - np.clip(abs(dur - 0.35) / 1.5, 0.0, 0.8)
+        # Duration sweet spot tuned by stem (supports longer sustained slices for bass, chords, pads, vocals)
+        stem = str(seg.get("stem", ""))
+        if stem in ("other", "vocals"):
+            dur_score = 1.0 - np.clip(abs(dur - 2.0) / 4.0, 0.0, 0.7)
+        elif stem == "bass":
+            dur_score = 1.0 - np.clip(abs(dur - 1.2) / 3.0, 0.0, 0.7)
+        elif stem == "drums":
+            dur_score = 1.0 - np.clip(abs(dur - 0.45) / 2.0, 0.0, 0.7)
+        else:
+            dur_score = 1.0 - np.clip(abs(dur - 0.35) / 1.5, 0.0, 0.8)
 
         # Headroom: penalize extreme clipping above -0.1 dB or extremely quiet slices
         loud_score = np.clip((loud_max + 30.0) / 30.0, 0.0, 1.0)
