@@ -129,3 +129,26 @@ def test_harmonic_scale_pitch_math():
     for tone in cmaj7_tones:
         assert tone in c_major_pitches, f"Chord tone {tone} must be in C major scale"
 
+
+def test_client_ml_sequencer_song_and_slice_continuity():
+    """Verify that ClientGrooveboxConductor maintains song, slice, and pattern continuity."""
+    seq_path = Path("frontend/src/client_ml_sequencer.ts")
+    assert seq_path.exists(), "frontend/src/client_ml_sequencer.ts must exist"
+    content = seq_path.read_text(encoding="utf-8")
+
+    # Timbral slice locking across chord changes
+    assert "lockedCategorySlices" in content
+    assert "kitTrackId" in content
+
+    # Pattern continuity scoring and smooth motif blending
+    assert "computePatternContinuity" in content
+    assert "blendPatternContinuity" in content
+    assert "shouldEvolvePattern" in content
+
+    # Multi-bar phrase block crossfade envelope in AudioEngine
+    ae_path = Path("frontend/src/audio_engine.ts")
+    assert ae_path.exists(), "frontend/src/audio_engine.ts must exist"
+    ae_content = ae_path.read_text(encoding="utf-8")
+    assert "isLongLoop" in ae_content
+
+

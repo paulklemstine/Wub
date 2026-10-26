@@ -2456,6 +2456,8 @@ export class ClientGrooveboxConductor {
   private activeSongKit: CuratedSongKit | null = null;
   private kitKeyRoot: number = -1;
   private kitTerritory: StyleTerritory | null = null;
+  private kitTrackId?: string;
+  private lockedCategorySlices: Map<string, SliceAsset> = new Map();
   private recentPhraseBlocks: string[] = [];
   private trackBarsPlayed: number = 0;
   private recentTracksPlayed: string[] = [];
@@ -2852,51 +2854,86 @@ export class ClientGrooveboxConductor {
     }
     if (!list || list.length === 0) return null;
 
-    // 1. Same-Track Cohesive Progression: Only if continuing current track and played < 16 bars
+    // 1. Same-Track Cohesive Song Continuity:
+    // Keep playing the active track across its full 16-24 bar song arc!
+    // Never abandon the active track after 4 bars just because its block ID is in recentPhraseBlocks.
     const targetTrack = !forceNewTrack ? (preferredTrackId || this.activeTrackId) : undefined;
-    if (targetTrack && this.trackBarsPlayed < 16) {
-      const trackMatches = list.filter((p) => p.meta.track_id === targetTrack && !this.recentPhraseBlocks.includes(p.meta.id));
-      if (trackMatches.length > 0) {
-        const pick = trackMatches[Math.floor(Math.random() * trackMatches.length)];
+    if (targetTrack && this.trackBarsPlayed < 24) {
+      // First, look for blocks of targetTrack in the current section
+      const sameSecMatches = list.filter((p) => p.meta.track_id === targetTrack);
+      if (sameSecMatches.length > 0) {
+        const unplayedInSec = sameSecMatches.filter((p) => p.meta.id !== this.activePhraseBlock?.meta.id);
+        const pick = (unplayedInSec.length > 0 ? unplayedInSec : sameSecMatches)[0];
         this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-10);
         return pick;
       }
-    }
 
-    // 2. Harmonic Affinity: Prefer phrase blocks in the active Camelot key
-    const activeKey = CAMELOT_KEYS[this.currentCamelotCode]?.name?.toLowerCase();
-    let candidates = list;
-    if (activeKey) {
-      const harmonicMatches = list.filter((p) => p.meta.key.toLowerCase().includes(activeKey));
-      if (harmonicMatches.length > 0) {
-        candidates = harmonicMatches;
+      // Second, if targetTrack has blocks in adjacent sections, stay on targetTrack for song continuity!
+      for (const altSec of ["GROOVE_A", "DROP", "BUILDUP", "BREAKDOWN", "INTRO"]) {
+        const altList = this.phraseBlockRegistry.get(altSec) || [];
+        const altMatches = altList.filter((p) => p.meta.track_id === targetTrack);
+        if (altMatches.length > 0) {
+          const unplayedAlt = altMatches.filter((p) => p.meta.id !== this.activePhraseBlock?.meta.id);
+          const pick = (unplayedAlt.length > 0 ? unplayedAlt : altMatches)[0];
+          this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-10);
+          return pick;
+        }
       }
     }
 
-    // 3. Tempo Affinity: Prefer phrase blocks within +/- 10% of current BPM
-    const tempoMatches = candidates.filter(
-      (p) => Math.abs(p.meta.source_bpm - this.currentBpm) / this.currentBpm <= 0.10
-    );
-    if (tempoMatches.length > 0) {
-      candidates = tempoMatches;
-    }
+    // 2. Smooth DJ Transition to Next Song:
+    // Score candidate blocks by harmonic compatibility, BPM proximity, energy match, and track freshness
+    const activeKey = CAMELOT_KEYS[this.currentCamelotCode]?.name?.toLowerCase() || "";
+    const prevEnergy = this.activePhraseBlock?.meta.energy ?? (section === "DROP" ? 0.90 : 0.75);
 
-    // 4. Maximum Song Variety: Strictly prioritize authentic tracks NOT played recently!
-    const freshTrackCandidates = candidates.filter(
-      (p) => !this.recentTracksPlayed.includes(p.meta.track_id) && !this.recentPhraseBlocks.includes(p.meta.id)
-    );
-    const pool = freshTrackCandidates.length > 0
-      ? freshTrackCandidates
-      : candidates.filter((p) => !this.recentPhraseBlocks.slice(-4).includes(p.meta.id));
+    const scoredCandidates = list.map((p) => {
+      let score = 0.0;
+      // Track freshness bonus (avoid repeating recent songs)
+      if (!this.recentTracksPlayed.includes(p.meta.track_id)) score += 6.0;
+      if (!this.recentPhraseBlocks.includes(p.meta.id)) score += 3.0;
 
-    const pick = (pool.length > 0 ? pool : candidates)[
-      Math.floor(Math.random() * (pool.length > 0 ? pool.length : candidates.length))
-    ];
+      // Tempo proximity (crucial for seamless beat-matched transitions)
+      const bpmDiffRatio = Math.abs(p.meta.source_bpm - this.currentBpm) / Math.max(60, this.currentBpm);
+      score -= bpmDiffRatio * 20.0;
+      if (bpmDiffRatio <= 0.06) score += 4.0;
 
+      // Harmonic key affinity
+      if (activeKey && p.meta.key.toLowerCase().includes(activeKey)) {
+        score += 4.5;
+      }
+
+      // Energy flow continuity
+      const energyDiff = Math.abs((p.meta.energy ?? 0.75) - prevEnergy);
+      score -= energyDiff * 3.0;
+
+      return { block: p, score };
+    });
+
+    scoredCandidates.sort((a, b) => b.score - a.score);
+    const topK = scoredCandidates.slice(0, Math.min(3, scoredCandidates.length));
+    const pick = topK[Math.floor(Math.random() * topK.length)].block;
+
+    const isTrackChange = this.activeTrackId !== pick.meta.track_id;
     this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-10);
     this.recentTracksPlayed = [...this.recentTracksPlayed, pick.meta.track_id].slice(-15);
     this.activeTrackId = pick.meta.track_id;
-    this.trackBarsPlayed = 0;
+
+    if (isTrackChange) {
+      this.trackBarsPlayed = 0;
+      this.lockedCategorySlices.clear();
+      // Gently glide tempo toward new track's natural groove (max +/- 3 BPM step so rhythm never jerks)
+      if (pick.meta.source_bpm >= 85 && pick.meta.source_bpm <= 170) {
+        const bpmDelta = Math.max(-3, Math.min(3, Math.round(pick.meta.source_bpm - this.currentBpm)));
+        this.currentBpm = Math.max(85, Math.min(170, this.currentBpm + bpmDelta));
+      }
+      // Re-lock song kit and vocal track to the new song's cohesive palette
+      const dTerr = getStyleTerritory(this.steering.drums.x, this.steering.drums.y);
+      const chordRoot = this.activeProgression[0]?.rootPitch ?? 0;
+      this.initSongKit(dTerr, chordRoot);
+      this.activeVocalTrackId = pick.meta.track_id;
+      this.activeVocalChainIndex = 0;
+    }
+
     return pick;
   }
 
@@ -2909,8 +2946,30 @@ export class ClientGrooveboxConductor {
     const list = this.loopRegistry.get(stem);
     if (!list || list.length === 0) return null;
 
-    let candidates = list;
+    const activeTrack = this.activeTrackId || this.activeLoops.drums?.meta.track_id;
 
+    // 1. Keep currently playing loop locked if it belongs to the active song and section hasn't changed!
+    const currentLoop = this.activeLoops[stem];
+    if (currentLoop && (!activeTrack || currentLoop.meta.track_id === activeTrack)) {
+      if (phraseBar !== 0) {
+        const rate = this.currentBpm / currentLoop.meta.source_bpm;
+        return { loop: currentLoop, rate };
+      }
+    }
+
+    // 2. Strictly prioritize loops from the active track across all stems first (Studio Session Glue)
+    if (activeTrack) {
+      const allSameTrack = list.filter((l) => l.meta.track_id === activeTrack);
+      if (allSameTrack.length > 0) {
+        const secMatches = allSameTrack.filter((l) => l.meta.suggested_sections?.includes(section));
+        const pick = (secMatches.length > 0 ? secMatches : allSameTrack)[0];
+        const rate = this.currentBpm / pick.meta.source_bpm;
+        return { loop: pick, rate };
+      }
+    }
+
+    // 3. Filter by section feel when no exact track match exists
+    let candidates = list;
     if (section === "DROP") {
       const dropCandidates = list.filter((l) =>
         l.meta.suggested_sections?.includes("DROP") ||
@@ -2931,7 +2990,6 @@ export class ClientGrooveboxConductor {
       );
       if (calmCandidates.length > 0) candidates = calmCandidates;
     } else {
-      // GROOVE_A
       const grooveCandidates = list.filter((l) =>
         l.meta.suggested_sections?.includes("GROOVE_A") ||
         ["groove_a", "sub_pump", "chords", "verse"].includes(l.meta.category)
@@ -2939,29 +2997,20 @@ export class ClientGrooveboxConductor {
       if (grooveCandidates.length > 0) candidates = grooveCandidates;
     }
 
-    // Same-Track Co-Stem Affinity Prior (Authentic Studio Session Glue)
-    // Strictly prioritize loops from the SAME track across all stems
-    const activeTrack = this.activeTrackId || this.activeLoops.drums?.meta.track_id;
-    if (activeTrack) {
-      const sameTrackMatches = candidates.filter((l) => l.meta.track_id === activeTrack);
-      if (sameTrackMatches.length > 0) {
-        candidates = sameTrackMatches;
-      } else {
-        const drumKey = this.activeLoops.drums?.meta.key || CAMELOT_KEYS[this.currentCamelotCode]?.name?.toLowerCase();
-        if (drumKey) {
-          const sameKeyMatches = candidates.filter((l) => l.meta.key.toLowerCase().includes(drumKey));
-          if (sameKeyMatches.length > 0) {
-            candidates = sameKeyMatches;
-          }
-        }
-      }
-    }
+    // 4. Score candidates by BPM proximity and harmonic key match for smooth continuity
+    const drumKey = this.activeLoops.drums?.meta.key || CAMELOT_KEYS[this.currentCamelotCode]?.name?.toLowerCase() || "";
+    const scored = candidates.map((l) => {
+      let s = 0;
+      const bpmDiff = Math.abs(l.meta.source_bpm - this.currentBpm) / Math.max(60, this.currentBpm);
+      s -= bpmDiff * 15.0;
+      if (drumKey && l.meta.key.toLowerCase().includes(drumKey)) s += 5.0;
+      if (currentLoop && l.meta.track_id === currentLoop.meta.track_id) s += 6.0;
+      return { loop: l, score: s };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    const pick = scored[0].loop;
 
     const recents = this.recentLoops[stem] || [];
-    const freshPool = candidates.filter((l) => !recents.slice(-4).includes(l.meta.id));
-    const pool = freshPool.length > 0 ? freshPool : candidates;
-    const pick = pool[Math.floor(Math.random() * pool.length)];
-
     this.recentLoops[stem] = [...recents, pick.meta.id].slice(-6);
     if (!this.activeTrackId && stem === "drums") {
       this.activeTrackId = pick.meta.track_id;
@@ -2979,6 +3028,24 @@ export class ClientGrooveboxConductor {
     targetVowel?: string,
     preferredTrackId?: string
   ): { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null {
+    const effectiveTrackId = preferredTrackId || this.activeTrackId;
+    const cacheKey = `${stemCategory}:${territory || "any"}:${effectiveTrackId || "any"}`;
+
+    // 0. Timbral Continuity Lock:
+    // Reuse the locked slice asset for this instrument category within the active song
+    // so drum kits, bass synths, and chords never jump between unrelated samples mid-phrase!
+    const lockedAsset = this.lockedCategorySlices.get(cacheKey);
+    if (lockedAsset && lockedAsset.buffer && !stemCategory.startsWith("vocals")) {
+      if (targetPitch === undefined) {
+        return { buffer: lockedAsset.buffer, rate: 1.0, asset: lockedAsset };
+      }
+      let diff = (targetPitch - lockedAsset.pitch) % 12;
+      if (diff > 6) diff -= 12;
+      if (diff < -6) diff += 12;
+      const rate = Math.pow(2, diff / 12);
+      return { buffer: lockedAsset.buffer, rate, asset: lockedAsset };
+    }
+
     // 1. Look for style-specific slices first (e.g. drums:kick:wave / drums:kick_wave)
     let list: SliceAsset[] | undefined;
     if (territory) {
@@ -3034,76 +3101,56 @@ export class ClientGrooveboxConductor {
       return fallbackBuf ? { buffer: fallbackBuf, rate: 1.0 } : null;
     }
 
-    // Lyrical phrase continuity: prioritize slices from the same authentic track
-    if (preferredTrackId && list.some((item) => item.trackId === preferredTrackId)) {
-      const sameTrackSlices = list.filter((item) => item.trackId === preferredTrackId);
+    // 2. Song & Track Continuity: prioritize slices from the same authentic track
+    if (effectiveTrackId && list.some((item) => item.trackId === effectiveTrackId)) {
+      const sameTrackSlices = list.filter((item) => item.trackId === effectiveTrackId);
       if (sameTrackSlices.length > 0) {
         list = sameTrackSlices;
       }
     }
 
+    const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
+
     if (targetPitch === undefined) {
       // Prioritize slices with high acoustic scores from the trained feedback loop
-      const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
-      let effectiveList = list;
-      if (trainedScores && list.length > 2) {
-        effectiveList = [...list].sort((a, b) => {
+      let effectiveList = [...list];
+      if (trainedScores && effectiveList.length > 1) {
+        effectiveList.sort((a, b) => {
           const sA = trainedScores[a.name] ?? 0.8;
           const sB = trainedScores[b.name] ?? 0.8;
           return sB - sA;
         });
       }
-      const v = variationFraction !== undefined ? Math.max(0, Math.min(0.999, variationFraction)) : Math.random();
-      const idx = Math.floor(v * effectiveList.length) % effectiveList.length;
-      return { buffer: effectiveList[idx].buffer, rate: 1.0, asset: effectiveList[idx] };
+      const chosen = effectiveList[0];
+      if (!stemCategory.startsWith("vocals")) {
+        this.lockedCategorySlices.set(cacheKey, chosen);
+      }
+      return { buffer: chosen.buffer, rate: 1.0, asset: chosen };
     }
 
-    // For pitched stems (bass, other, vocals): find slice closest to target pitch
-    let best = list[0];
-    let bestDiff = 999;
-    let bestShift = 0;
-    const candidates: Array<{ item: SliceAsset; shift: number }> = [];
-
-    for (const item of list) {
+    // For pitched stems (bass, other, vocals): score by trained quality + harmonic pitch proximity
+    const scoredCandidates = list.map((item) => {
       let diff = (targetPitch - item.pitch) % 12;
       if (diff > 6) diff -= 12;
       if (diff < -6) diff += 12;
       const absDiff = Math.abs(diff);
-      if (absDiff < bestDiff) {
-        bestDiff = absDiff;
-        bestShift = diff;
-        best = item;
-      }
-      if (absDiff <= 1) {
-        candidates.push({ item, shift: diff });
-      }
+      const baseQuality = (trainedScores && trainedScores[item.name]) ? trainedScores[item.name] : 0.85;
+      const vowelBonus = (targetVowel && item.vowel === targetVowel) ? 0.50 : 0.0;
+      const trackBonus = (effectiveTrackId && item.trackId === effectiveTrackId) ? 2.5 : 0.0;
+      const score = baseQuality * 2.0 + trackBonus + vowelBonus - absDiff * 0.25;
+      return { item, shift: diff, score };
+    });
+
+    scoredCandidates.sort((a, b) => b.score - a.score);
+    const best = scoredCandidates[0].item;
+    const bestShift = scoredCandidates[0].shift;
+
+    if (!stemCategory.startsWith("vocals")) {
+      this.lockedCategorySlices.set(cacheKey, best);
     }
 
-    // High-variety slice selection across qualified candidates
-    if (candidates.length > 0) {
-      let pool = candidates;
-      if (targetVowel) {
-        const vowelMatches = candidates.filter((c) => c.item.vowel === targetVowel);
-        if (vowelMatches.length > 0) pool = vowelMatches;
-      }
-      const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
-      if (trainedScores) {
-        pool.sort((a, b) => {
-          const sA = trainedScores[a.item.name] ?? 0.8;
-          const sB = trainedScores[b.item.name] ?? 0.8;
-          return sB - sA;
-        });
-      }
-      const v = variationFraction !== undefined ? Math.max(0, Math.min(0.999, variationFraction)) : Math.random();
-      const cIdx = Math.floor(v * pool.length) % pool.length;
-      best = pool[cIdx].item;
-      bestShift = pool[cIdx].shift;
-    }
-
-    // If exact chromatic pitch exists (bestDiff == 0), rate is 1.0 (zero drift!).
-    // For vocals and melodic stems, allow up to +/- 6 semitones (Rule 6: Harmonic pitch shift)
-    // to sing exact target melody notes while preserving timbre.
-    const maxShift = stemCategory.startsWith("vocals") ? 6 : 3;
+    // Rule 6: Harmonic pitch shift within +/- 6 semitones
+    const maxShift = 6;
     const clampedShift = Math.max(-maxShift, Math.min(maxShift, bestShift));
     const rate = Math.pow(2, clampedShift / 12);
     return { buffer: best.buffer, rate, asset: best };
@@ -3131,8 +3178,16 @@ export class ClientGrooveboxConductor {
       return this.getBestSlice(vocalCat, melodyPitch, 0, territory, targetVowel, this.activeVocalTrackId);
     }
 
-    // 2. Filter to slices matching active track or style territory
+    // 2. Align vocal track with active instrumental song if available, and keep locked for full song narrative
     let filtered: SliceAsset[] = [];
+    if (!this.activeVocalTrackId && this.activeTrackId) {
+      const songVocalMatches = pool.filter((a) => a.trackId === this.activeTrackId);
+      if (songVocalMatches.length > 0) {
+        this.activeVocalTrackId = this.activeTrackId;
+        this.activeVocalChainIndex = 0;
+      }
+    }
+
     if (this.activeVocalTrackId) {
       const trackSlices = pool.filter((a) => a.trackId === this.activeVocalTrackId);
       if (trackSlices.length > 0 && this.activeVocalChainIndex < trackSlices.length) {
@@ -3187,11 +3242,12 @@ export class ClientGrooveboxConductor {
       this.activeVocalTrackId = chosen.trackId;
     }
 
-    // 4. Rule 6: Harmonic pitch shift within +/- 6 semitones
+    // 4. Rule 6: Harmonic pitch shift within +/- 6 semitones (clamped to +/- 2 semitones for natural vocal formants)
     let diff = (melodyPitch - chosen.pitch) % 12;
     if (diff > 6) diff -= 12;
     if (diff < -6) diff += 12;
-    const rate = Math.pow(2, diff / 12);
+    const gentleDiff = Math.max(-2, Math.min(2, diff));
+    const rate = Math.pow(2, gentleDiff / 12);
 
     return { buffer: chosen.buffer, rate, asset: chosen };
   }
@@ -3265,6 +3321,12 @@ export class ClientGrooveboxConductor {
 
     for (const item of list) {
       let score = (trainedScores && trainedScores[item.name]) ? (trainedScores[item.name] * 2.0) : 1.6;
+      // Track & Kit Continuity Bonus: keep all instruments locked to the active song's acoustic palette
+      if (this.activeTrackId && item.trackId && item.trackId === this.activeTrackId) {
+        score += 15.0;
+      } else if (this.activeSongKit?.kick?.asset?.trackId && item.trackId === this.activeSongKit.kick.asset.trackId) {
+        score += 8.0;
+      }
       // Reticule Distance Steering: heavily favor slices physically closest to the reticule on the map
       if (targetCoord && typeof item.x === "number" && typeof item.y === "number") {
         const dx = item.x - targetCoord.x;
@@ -3452,6 +3514,8 @@ export class ClientGrooveboxConductor {
     };
     this.kitKeyRoot = keyRoot;
     this.kitTerritory = territory;
+    this.kitTrackId = this.activeTrackId;
+    this.lockedCategorySlices.clear();
     console.info(`[Client ML] Curated unified song kit locked in for territory: ${territory.toUpperCase()}, key root: ${ROOT_NAMES[keyRoot % 12]}`);
   }
 
@@ -3719,6 +3783,7 @@ export class ClientGrooveboxConductor {
     this.activeLoops = {};
     this.activeVocalTrackId = undefined;
     this.activeVocalChainIndex = 0;
+    this.lockedCategorySlices.clear();
 
     // Pick a fresh starting track from the 33+ authentic phrase blocks
     const allPhraseBlocks = Array.from(this.phraseBlockRegistry.values()).flat();
@@ -3729,6 +3794,7 @@ export class ClientGrooveboxConductor {
       ];
       this.activeTrackId = startingBlock.meta.track_id;
       this.activePhraseBlock = startingBlock;
+      this.activeVocalTrackId = startingBlock.meta.track_id;
       this.recentTracksPlayed = [...this.recentTracksPlayed, startingBlock.meta.track_id].slice(-15);
       this.recentPhraseBlocks = [startingBlock.meta.id];
       if (startingBlock.meta.source_bpm && startingBlock.meta.source_bpm >= 80 && startingBlock.meta.source_bpm <= 175) {
@@ -3779,6 +3845,7 @@ export class ClientGrooveboxConductor {
     this.activeTrackId = undefined;
     this.activePhraseBlock = null;
     this.activeLoops = {};
+    this.lockedCategorySlices.clear();
     this.trackBarsPlayed = 0;
   }
 
@@ -3899,7 +3966,7 @@ export class ClientGrooveboxConductor {
       this.engine.scheduleSlice(stem, buffer, when, {
         rate,
         duration: dropGapBreathSec,
-        fadeMs: 24,
+        fadeMs: stem === "drums" ? 35 : 65,
         gain: stemGain,
         voiceKey: `phrase_${stem}`,
       });
@@ -4095,11 +4162,11 @@ export class ClientGrooveboxConductor {
     // 0. Downbeat handling: phrase blocks mode vs jukebox studio loops mode vs live slice mode
     if (this.playbackMode === "phrase_blocks" || this.playbackMode === "jukebox") {
       if (step % 16 === 0) {
-        // Cohesive 4-bar phrase blocks advance continuously across sections with high song variety
+        // Cohesive 4-bar phrase blocks advance continuously across sections with strong song continuity
         if (barInSec % 4 === 0) {
           this.trackBarsPlayed += 4;
-          // After 8-16 bars on one song, or if reticule steered, DJ crossfade to a new authentic song!
-          const shouldCrossfade = this.trackBarsPlayed >= 12 || Boolean(this.pendingTrackId);
+          // Keep the same song playing through a full 24-bar multi-section arc; only DJ crossfade at section boundary or reticule steer!
+          const shouldCrossfade = (this.trackBarsPlayed >= 24 && barInSec === 0) || this.trackBarsPlayed >= 32 || Boolean(this.pendingTrackId);
           const targetTrack = this.pendingTrackId || (shouldCrossfade ? undefined : this.activeTrackId);
           this.pendingTrackId = undefined;
 
@@ -4156,8 +4223,8 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     // 1. DRUMS (Section-Aware Arrangement with Real Acoustic Slices & Reticule Steering)
     // -------------------------------------------------------------------------
-    // Ensure unified CuratedSongKit is locked in for active territory & chord progression
-    if (!this.activeSongKit || this.kitTerritory !== dTerr || ((phraseBar === 0 && (step % 16 === 0)) && this.kitKeyRoot !== chord.rootPitch && this.totalBarsPlayed % 16 === 0)) {
+    // Ensure unified CuratedSongKit is locked in for active territory & track (do not swap kit on chord changes!)
+    if (!this.activeSongKit || this.kitTerritory !== dTerr || (this.activeTrackId && this.kitTrackId !== this.activeTrackId)) {
       this.initSongKit(dTerr, chord.rootPitch);
     }
 
@@ -4175,7 +4242,7 @@ export class ClientGrooveboxConductor {
       }
       // Groovy Slicer Turnaround on Bar 7 Step 14 or pre-transition turnaround
       if ((phraseBar === 7 || (movement === "PRE_TRANSITION" && isTransitionBar)) && (step % 16) === 14) {
-        const fillSlice = this.getBestSlice("drums:fill", undefined, dSteer.y, dTerr);
+        const fillSlice = this.activeSongKit?.fill || this.getBestSlice("drums:fill", undefined, dSteer.y, dTerr);
         if (fillSlice) {
           this.engine.scheduleSlice("drums", fillSlice.buffer, when, {
             rate: 1.0,
@@ -4187,7 +4254,7 @@ export class ClientGrooveboxConductor {
       }
       // Groovy Ghost Perc on Step 10 during DEVELOPMENT or CLIMAX
       if ((movement === "DEVELOPMENT" || movement === "CLIMAX" || dSteer.y > 0.70) && (step % 16) === 10) {
-        const percSlice = this.getBestSlice("drums:percussion", undefined, dSteer.y, dTerr);
+        const percSlice = this.activeSongKit?.percussion || this.getBestSlice("drums:percussion", undefined, dSteer.y, dTerr);
         if (percSlice) {
           this.engine.scheduleSlice("drums", percSlice.buffer, when, {
             rate: 1.0,
@@ -4199,7 +4266,7 @@ export class ClientGrooveboxConductor {
       }
       // Crisp Open Hi-Hat on offbeats during CLIMAX (step 2 & 10)
       if (movement === "CLIMAX" && (step % 16 === 2 || step % 16 === 10)) {
-        const hatSlice = this.getBestSlice("drums:hat_open", undefined, dSteer.y, dTerr);
+        const hatSlice = this.activeSongKit?.hatOpen || this.getBestSlice("drums:hat_open", undefined, dSteer.y, dTerr);
         if (hatSlice) {
           this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
             rate: 1.0,
@@ -4455,8 +4522,8 @@ export class ClientGrooveboxConductor {
         }
 
         const subSlice = (bassCat === "bass:rolling")
-          ? (this.getPitchedSliceFromAsset(this.activeSongKit?.bassRollingAsset, targetPitch, 3) || this.getBestSlice(bassCat, targetPitch, 0, bTerr))
-          : (this.getPitchedSliceFromAsset(this.activeSongKit?.bassSubAsset, targetPitch, 3) || this.getBestSlice(bassCat, targetPitch, 0, bTerr));
+          ? (this.getPitchedSliceFromAsset(this.activeSongKit?.bassRollingAsset, targetPitch, 6) || this.getBestSlice(bassCat, targetPitch, 0, bTerr))
+          : (this.getPitchedSliceFromAsset(this.activeSongKit?.bassSubAsset, targetPitch, 6) || this.getBestSlice(bassCat, targetPitch, 0, bTerr));
         if (subSlice) {
           this.engine.scheduleSlice("bass", subSlice.buffer, when, {
             rate: subSlice.rate,
@@ -4491,7 +4558,7 @@ export class ClientGrooveboxConductor {
         const vel = oPat.velocities ? (oPat.velocities[step % 16] || 0.85) : 0.85;
 
         if (isArpMode) {
-          const arpSlice = this.getPitchedSliceFromAsset(this.activeSongKit?.arpAsset, chord.rootPitch, 3) || this.getBestSlice("other:arp", chord.rootPitch, 0, oTerr);
+          const arpSlice = this.getPitchedSliceFromAsset(this.activeSongKit?.arpAsset, chord.rootPitch, 6) || this.getBestSlice("other:arp", chord.rootPitch, 0, oTerr);
           if (arpSlice) {
             this.engine.scheduleSlice("other", arpSlice.buffer, when, {
               rate: arpSlice.rate,
@@ -4521,10 +4588,10 @@ export class ClientGrooveboxConductor {
           const dur = (sec === "BREAKDOWN" || sec === "INTRO" || isSparsePad || oTerr === "wave") ? 1.60 : 0.65;
           const targetSliceCat = isSparsePad ? "other:pad" : "other:chord";
           const chordSlice = isSparsePad
-            ? (this.getPitchedSliceFromAsset(this.activeSongKit?.padAsset, chord.rootPitch, 3) ||
-               this.getPitchedSliceFromAsset(this.activeSongKit?.chordAsset, chord.rootPitch, 3) ||
+            ? (this.getPitchedSliceFromAsset(this.activeSongKit?.padAsset, chord.rootPitch, 6) ||
+               this.getPitchedSliceFromAsset(this.activeSongKit?.chordAsset, chord.rootPitch, 6) ||
                this.getBestSlice(targetSliceCat, chord.rootPitch, 0, oTerr))
-            : (this.getPitchedSliceFromAsset(this.activeSongKit?.chordAsset, chord.rootPitch, 3) ||
+            : (this.getPitchedSliceFromAsset(this.activeSongKit?.chordAsset, chord.rootPitch, 6) ||
                this.getBestSlice("other:chord", chord.rootPitch, 0, oTerr));
           if (chordSlice) {
             this.engine.scheduleSlice("other", chordSlice.buffer, when, {
@@ -4617,22 +4684,21 @@ export class ClientGrooveboxConductor {
         } else {
           // Ready for a new vocal phrase or consecutive slice from the active song!
           // Words always move into the future: advance to the next chronological vocal slice
-          // every 2 bars or at the beginning of a new vocal phrase block!
-          const isNewVocalPhraseBlock = (step % 16 === 0 && phraseBar % 2 === 0);
-          const shouldAdvance = isNewVocalPhraseBlock || (step % 16 === 0);
-          const chronologicalSlice = this.getChronologicalVocalSlice(vTerr, melodyPitch, vocalCat, syl.vowel, shouldAdvance);
+          // whenever a vocal phrase finishes so the song's narrative progresses smoothly!
+          const shouldAdvance = true;
+          const chronologicalSlice = this.getChronologicalVocalSlice(vTerr, chord.rootPitch, vocalCat, syl.vowel, shouldAdvance);
 
           const lockedVocalAsset = (vocalCat === "vocals:chop")
             ? (this.activeSongKit?.vocalChopAsset || this.activeSongKit?.vocalHookAsset)
             : (this.activeSongKit?.vocalHookAsset || this.activeSongKit?.vocalCallAsset);
           const slice = chronologicalSlice ||
-            this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
-            this.getBestSlice(vocalCat, melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
-            this.getBestSlice("vocals:phrase", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
-            this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
-            this.getBestSlice("vocals:call", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
-            this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
-            this.getBestSlice("vocals", melodyPitch, 0, vTerr);
+            this.getPitchedSliceFromAsset(lockedVocalAsset, chord.rootPitch, 2) ||
+            this.getBestSlice(vocalCat, chord.rootPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals:phrase", chord.rootPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals:hook", chord.rootPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals:call", chord.rootPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals:chop", chord.rootPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals", chord.rootPitch, 0, vTerr);
 
           if (slice) {
             if (slice.asset?.trackId) {
@@ -4707,6 +4773,87 @@ export class ClientGrooveboxConductor {
     }
   }
 
+  /**
+   * Computes rhythmic and dynamic continuity (0.0 to 1.0) between two patterns
+   * using Jaccard onset overlap, downbeat preservation, and density proximity.
+   */
+  public computePatternContinuity(prev: SerializedPattern | null | undefined, cand: SerializedPattern): number {
+    if (!prev || !prev.onset_grid || !cand.onset_grid) return 1.0;
+    const prevSet = new Set(prev.onset_grid);
+    const candSet = new Set(cand.onset_grid);
+    let intersection = 0;
+    for (const s of candSet) {
+      if (prevSet.has(s)) intersection++;
+    }
+    const union = new Set([...prev.onset_grid, ...cand.onset_grid]).size;
+    const jaccard = union > 0 ? intersection / union : 1.0;
+
+    // Anchor downbeats [0, 4, 8, 12]
+    let anchorMatches = 0;
+    for (const a of [0, 4, 8, 12]) {
+      if (prevSet.has(a) === candSet.has(a)) anchorMatches++;
+    }
+    const anchorScore = anchorMatches / 4.0;
+    const densityDiff = Math.abs((cand.density ?? 0.5) - (prev.density ?? 0.5));
+    const densityScore = Math.max(0.2, 1.0 - densityDiff * 1.2);
+    const sameGrooveBonus = (prev.groove_type === cand.groove_type) ? 0.15 : 0.0;
+
+    return Math.min(1.0, 0.45 * jaccard + 0.30 * anchorScore + 0.25 * densityScore + sameGrooveBonus);
+  }
+
+  /**
+   * Smoothly morphs a pattern (`prev`) toward a target pattern (`target`) by `blendRatio` (0..1),
+   * preserving core rhythmic anchors while introducing gentle syncopated variation.
+   */
+  public blendPatternContinuity(
+    stem: StemName,
+    prev: SerializedPattern,
+    target: SerializedPattern,
+    blendRatio: number = 0.35
+  ): SerializedPattern {
+    const prevSet = new Set(prev.onset_grid || []);
+    const targetSet = new Set(target.onset_grid || []);
+    const blendedGrid: number[] = [];
+    const prevVels = prev.velocities || new Array(16).fill(0.85);
+    const targetVels = target.velocities || new Array(16).fill(0.85);
+    const blendedVels: number[] = new Array(16).fill(0.0);
+
+    for (let s = 0; s < 16; s++) {
+      const inPrev = prevSet.has(s);
+      const inTarget = targetSet.has(s);
+      const isCoreBeat = [0, 4, 8, 12].includes(s);
+
+      if (inPrev && inTarget) {
+        blendedGrid.push(s);
+        blendedVels[s] = prevVels[s] * (1.0 - blendRatio) + targetVels[s] * blendRatio;
+      } else if (inPrev && !inTarget) {
+        // Keep core beats or retain previous onsets when blendRatio is low
+        if (isCoreBeat || blendRatio < 0.65) {
+          blendedGrid.push(s);
+          blendedVels[s] = prevVels[s] * (1.0 - blendRatio * 0.35);
+        }
+      } else if (!inPrev && inTarget) {
+        // Gradually introduce new syncopated notes from target pattern
+        if ((blendRatio >= 0.30 && [2, 6, 10, 14].includes(s)) || blendRatio >= 0.50) {
+          blendedGrid.push(s);
+          blendedVels[s] = targetVels[s] * (0.65 + 0.35 * blendRatio);
+        }
+      }
+    }
+
+    if (blendedGrid.length === 0 && target.onset_grid.length > 0) {
+      return { ...target, onset_grid: [...target.onset_grid], velocities: [...targetVels] };
+    }
+
+    return {
+      ...target,
+      id: `${prev.id}_morph_${target.id}`,
+      onset_grid: blendedGrid,
+      velocities: blendedVels,
+      density: blendedGrid.length / 16,
+    };
+  }
+
   private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
     const sec = this.arranger.getSection();
     const isNewPhrase = (phraseBar === 0);
@@ -4715,21 +4862,26 @@ export class ClientGrooveboxConductor {
     // Harmonic pacing: chords sustain for 2 bars (32 steps) across the phrase sequence
     const chordIndex = Math.floor(phraseBar / 2) % this.activeProgression.length;
     const chord = this.activeProgression[chordIndex];
-    const isChordBoundary = (phraseBar % 2 === 0);
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
-      // Dynamic Musical Phrase Evolution & Flow:
-      // - Keep foundational groove cohesive across 2-bar chord segments (bars 0-1, 2-3, 4-5)
-      // - BUT allow musical variation, fills, and evolution at:
-      //   1. Chord boundaries (bars 2, 4, 6) where harmony moves forward
-      //   2. Phrase developments (bar 4) where rhythm densifies or calls
-      //   3. Phrase buildups (bar 6) and turnarounds (bar 7)
-      //   4. Macro section transitions
-      const isVariationBar = (phraseBar === 2 || phraseBar === 4 || phraseBar === 6 || isTurnaround);
-      const shouldLockStem = !isSectionChange && !isVariationBar && (this.activeLoops[stem] || this.activePatterns[stem]);
+      // 1. Studio Loop Continuity: if a 1-bar loop is active for this section, keep it locked!
+      if (!isSectionChange && this.activeLoops[stem]) {
+        continue;
+      }
 
-      if (shouldLockStem) {
-        // Locked for 2-bar harmonic cohesion
+      // 2. Pattern Continuity Across the 8-Bar Phrase:
+      // - Keep foundational rhythm patterns locked on bars 1, 2, 3, 5, and 6 so chord changes
+      //   on bars 2 and 6 shift harmony smoothly without jumping to a different rhythmic pattern!
+      // - Only evolve patterns on:
+      //   * Section transitions (`isSectionChange`)
+      //   * New 8-bar phrase start (`phraseBar === 0`)
+      //   * Mid-phrase subtle development (`phraseBar === 4`)
+      //   * Final beat-4 drum turnaround fill (`phraseBar === 7 && stem === "drums"`)
+      const isMidPhraseEvolution = (phraseBar === 4);
+      const isDrumTurnaround = (isTurnaround && stem === "drums");
+      const shouldEvolvePattern = isSectionChange || isNewPhrase || isMidPhraseEvolution || isDrumTurnaround || !this.activePatterns[stem];
+
+      if (!shouldEvolvePattern) {
         continue;
       }
 
@@ -4775,9 +4927,34 @@ export class ClientGrooveboxConductor {
       this.activeLoops[stem] = undefined;
       const currPat = this.activePatterns[stem];
       const currG = currPat?.groove_type || "four_on_floor_hats";
-      let nextG = isTurnaround && stem === "drums"
+
+      // On bar 7 drum turnaround: preserve steps 0..11 of the current drum pattern and only add a beat-4 turnaround fill (steps 12..14)
+      if (isDrumTurnaround && !isSectionChange && currPat) {
+        const turnaroundGrid = currPat.onset_grid.filter((s) => s < 12);
+        const turnaroundVels = currPat.velocities ? [...currPat.velocities] : new Array(16).fill(0.88);
+        for (const fillStep of [12, 13, 14]) {
+          if (!turnaroundGrid.includes(fillStep)) {
+            turnaroundGrid.push(fillStep);
+          }
+          turnaroundVels[fillStep] = 0.82 + (fillStep - 12) * 0.08;
+        }
+        if (sec === "BUILDUP") {
+          turnaroundVels[15] = 0.0; // Step 15 silent breath!
+        }
+        turnaroundGrid.sort((a, b) => a - b);
+        this.activePatterns.drums = {
+          ...currPat,
+          id: `${currPat.id}_turnaround`,
+          onset_grid: turnaroundGrid,
+          velocities: turnaroundVels,
+          density: turnaroundGrid.length / 16,
+        };
+        continue;
+      }
+
+      let nextG = isDrumTurnaround
         ? "turnaround_fill"
-        : this.phraseModel.sampleNextGroove(phraseBar, stem, currG);
+        : (isMidPhraseEvolution && currPat ? currG : this.phraseModel.sampleNextGroove(phraseBar, stem, currG));
 
       // Intrinsic Pattern Compression & Authentic Song Arrangement Flow:
       // Sample transition from active compressed song model if available
@@ -4884,6 +5061,14 @@ export class ClientGrooveboxConductor {
 
       const stemTerr = this.getStemTerritory(stem);
       let cand = matchedIntrinsicPat || this.synthesizePattern(stem, nextG, stemTerr, currPat || undefined);
+
+      // Smooth Motif Morphing: When evolving within the same section (e.g., bar 4 or bar 0),
+      // blend the candidate pattern with the previous pattern so rhythm flows continuously instead of jumping!
+      if (!isSectionChange && currPat) {
+        const blendFactor = isMidPhraseEvolution ? 0.35 : 0.55;
+        cand = this.blendPatternContinuity(stem, currPat, cand, blendFactor);
+      }
+
       let goodness = this.rejectionClassifier.evaluatePattern(stem, cand, chord, stemTerr, this.computeInterStemAffinity(stem, nextG));
 
       // Adversarial rejection sampling: mutate/regularize until accepted (up to 3 attempts)
@@ -5061,15 +5246,11 @@ export class ClientGrooveboxConductor {
           const sim = pat.audio_similarity_score ?? 0.85;
           const coh = pat.cohesion_score ?? sim;
           const aff = this.computeInterStemAffinity(stem, pat.groove_type);
-          let cont = 1.0;
-          if (previousPattern) {
-            const diff = Math.abs(pat.density - previousPattern.density);
-            cont = Math.max(0.4, 1.0 - diff * 0.8);
-          }
-          return (0.40 * sim) + (0.30 * coh) + (0.15 * aff) + (0.15 * cont);
+          const cont = this.computePatternContinuity(previousPattern, pat);
+          return (0.25 * sim) + (0.20 * coh) + (0.10 * aff) + (0.45 * cont);
         });
 
-        const temp = 0.12 + Math.abs(steerY - 0.5) * 0.20;
+        const temp = 0.06 + Math.abs(steerY - 0.5) * 0.08;
         const maxScore = Math.max(...scores);
         const exps = scores.map((s) => Math.exp((s - maxScore) / temp));
         const sumExp = exps.reduce((acc, val) => acc + val, 0);

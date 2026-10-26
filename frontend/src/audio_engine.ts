@@ -356,11 +356,12 @@ export class AudioEngine {
     const chokes = [vKey, ...(opts.chokeKeys || [])];
 
     // Dynamic, click-free crossfade release duration:
-    // Drums choke quickly (12-16ms) to keep transients tight.
-    // Tonal stems (bass, other, vocals) crossfade gracefully (25-45ms) to prevent sub-bass phase tears and pops.
+    // Drums choke quickly (12-18ms for one-shots, up to 120ms for phrase loops) to keep transients tight.
+    // Tonal stems (bass, other, vocals) crossfade gracefully (25-250ms) to prevent sub-bass phase tears and pops.
+    const isLongLoop = durSec >= 1.5;
     const crossfadeSec = stem === "drums"
-      ? Math.max(0.010, Math.min(requestedFadeMs / 1000, 0.018))
-      : Math.max(0.025, Math.min(requestedFadeMs / 1000, 0.048));
+      ? Math.max(0.010, Math.min(requestedFadeMs / 1000, isLongLoop ? 0.120 : 0.018))
+      : Math.max(0.025, Math.min(requestedFadeMs / 1000, isLongLoop ? 0.250 : 0.048));
 
     for (const cKey of chokes) {
       const prev = this.activeVoices_[cKey];
