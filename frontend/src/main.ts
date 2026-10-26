@@ -70,6 +70,8 @@ export interface GrooveboxMeta {
   vocalSyllable?: string;
   vocalVowel?: string;
   vocalNote?: string;
+  vocalPersona?: string;
+  vocalTimbre?: string;
   activeSliceCoords?: Partial<Record<StemName, { x: number; y: number }>>;
   stemMixLevels?: Record<StemName, number>;
   musicScale?: {

@@ -27,6 +27,13 @@ const STAGE_CONFIGS: Record<TamagotchiStage, { name: string; minXp: number }> = 
 
 const MUSIC_NOTES = ["✨", "💖", "🐾", "🌈", "✦", "✧", "💫", "♬", "⭐", "♡"];
 
+export type VocalTimbre =
+  | "SOULFUL"   // Warm rich diva / house / chest singing (cherry red velvet lipstick, soft sensual lobes)
+  | "CYBER"     // Vocoder / vocoloid / metallic formant (electric cyan & neon magenta, digital LED teeth)
+  | "ETHEREAL"  // Wave / whisper / breathy falsetto (pastel orchid lavender, starlight gloss shimmer)
+  | "GRITTY"    // Breaks / rap MC / biting staccato (fiery ruby flame lipstick, sharp biting teeth)
+  | "BELT";     // Maximum power stadium belt (radiant gold-cherry halo, massive open megaphone jaw)
+
 export type SingingSoundShape =
   | "REST"
   | "BILABIAL"     // M, B, P (closed pressed lips)
@@ -52,6 +59,7 @@ export class PregeneratedMouthSpriteBank {
 
   public init(): void {
     if (typeof document === "undefined" || this.isInitialized) return;
+    const timbres: VocalTimbre[] = ["SOULFUL", "CYBER", "ETHEREAL", "GRITTY", "BELT"];
     const shapes: SingingSoundShape[] = [
       "REST",
       "BILABIAL",
@@ -68,23 +76,48 @@ export class PregeneratedMouthSpriteBank {
       "GASP",
     ];
 
-    for (const shape of shapes) {
-      for (let tier = 0; tier < 5; tier++) {
-        const key = `${shape}_${tier}`;
-        const canvas = this.renderSprite(shape, tier);
-        this.sprites.set(key, canvas);
+    for (const timbre of timbres) {
+      for (const shape of shapes) {
+        for (let tier = 0; tier < 5; tier++) {
+          const key = `${timbre}_${shape}_${tier}`;
+          const canvas = this.renderSprite(timbre, shape, tier);
+          this.sprites.set(key, canvas);
+        }
       }
     }
     this.isInitialized = true;
   }
 
-  public getSprite(shape: SingingSoundShape, tier: number): HTMLCanvasElement | null {
+  public getSprite(
+    timbreOrShape: VocalTimbre | SingingSoundShape,
+    shapeOrTier: SingingSoundShape | number,
+    maybeTier?: number
+  ): HTMLCanvasElement | null {
     if (!this.isInitialized) this.init();
+    let timbre: VocalTimbre = "SOULFUL";
+    let shape: SingingSoundShape = "REST";
+    let tier = 0;
+
+    if (typeof shapeOrTier === "number") {
+      shape = timbreOrShape as SingingSoundShape;
+      tier = shapeOrTier;
+    } else {
+      timbre = timbreOrShape as VocalTimbre;
+      shape = shapeOrTier;
+      tier = maybeTier ?? 0;
+    }
+
     const clampedTier = Math.max(0, Math.min(4, Math.floor(tier)));
-    return this.sprites.get(`${shape}_${clampedTier}`) ?? this.sprites.get("REST_0") ?? null;
+    const key = `${timbre}_${shape}_${clampedTier}`;
+    return (
+      this.sprites.get(key) ??
+      this.sprites.get(`SOULFUL_${shape}_${clampedTier}`) ??
+      this.sprites.get("SOULFUL_REST_0") ??
+      null
+    );
   }
 
-  private renderSprite(shape: SingingSoundShape, tier: number): HTMLCanvasElement {
+  private renderSprite(timbre: VocalTimbre, shape: SingingSoundShape, tier: number): HTMLCanvasElement {
     const canvas = document.createElement("canvas");
     canvas.width = 120;
     canvas.height = 80;
@@ -172,15 +205,70 @@ export class PregeneratedMouthSpriteBank {
         break;
     }
 
-    const cupidPeakOffset = halfW * 0.38;
-    const lipstickLip = "#ff0055";       // Primary vibrant cherry red
-    const lipstickShadow = "#a60033";    // Deep sensual burgundy shadow
-    const lipstickHighlight = "#ff1a66"; // Bright ruby gloss highlight
-    const mouthCavityBg = "#1a000a";     // Deep velvet wine inner mouth
-    const teethColor = "#fff8fa";        // Pearly white enamel
-    const tongueBase = "#ff3366";
-    const tongueTip = "#ff6b93";
+    // Timbre-specific aesthetic palettes & contours
+    let lipstickLip = "#ff0055";       // Primary cherry red
+    let lipstickShadow = "#a60033";    // Deep sensual burgundy shadow
+    let lipstickHighlight = "#ff1a66"; // Ruby gloss highlight
+    let mouthCavityBg = "#1a000a";     // Deep velvet wine inner mouth
+    let teethColor = "#fff8fa";        // Pearly white enamel
+    let tongueBase = "#ff3366";
+    let tongueTip = "#ff6b93";
+    let glossColor1 = "rgba(255, 255, 255, 0.72)";
+    let glossColor2 = "rgba(255, 180, 210, 0.45)";
+    let contourShadow = "#5a0018";
 
+    if (timbre === "CYBER") {
+      lipstickLip = "#00f0ff";
+      lipstickShadow = "#002b66";
+      lipstickHighlight = "#ff00d4";
+      mouthCavityBg = "#020c1c";
+      teethColor = "#c8ffff";
+      tongueBase = "#0066cc";
+      tongueTip = "#00e5ff";
+      glossColor1 = "rgba(220, 255, 255, 0.85)";
+      glossColor2 = "rgba(0, 240, 255, 0.50)";
+      contourShadow = "#001a40";
+      cupidDip = 1.0;
+    } else if (timbre === "ETHEREAL") {
+      lipstickLip = "#ff77e9";
+      lipstickShadow = "#700055";
+      lipstickHighlight = "#f5d0fe";
+      mouthCavityBg = "#16031b";
+      teethColor = "#fbf5ff";
+      tongueBase = "#a21caf";
+      tongueTip = "#f472b6";
+      glossColor1 = "rgba(255, 255, 255, 0.78)";
+      glossColor2 = "rgba(240, 180, 255, 0.45)";
+      contourShadow = "#4a0038";
+      cupidDip = 1.4;
+    } else if (timbre === "GRITTY") {
+      lipstickLip = "#ff2200";
+      lipstickShadow = "#6b0000";
+      lipstickHighlight = "#ff5500";
+      mouthCavityBg = "#1f0404";
+      teethColor = "#fff0e6";
+      tongueBase = "#d90429";
+      tongueTip = "#ef233c";
+      glossColor1 = "rgba(255, 255, 255, 0.82)";
+      glossColor2 = "rgba(255, 120, 60, 0.50)";
+      contourShadow = "#400000";
+      cupidDip = 2.2;
+    } else if (timbre === "BELT") {
+      lipstickLip = "#ff0055";
+      lipstickShadow = "#800020";
+      lipstickHighlight = "#ffe600";
+      mouthCavityBg = "#220000";
+      teethColor = "#ffffff";
+      tongueBase = "#ff0055";
+      tongueTip = "#ff77a8";
+      glossColor1 = "rgba(255, 255, 230, 0.88)";
+      glossColor2 = "rgba(255, 230, 100, 0.55)";
+      contourShadow = "#4a0014";
+      halfW *= 1.15;
+      openH *= 1.25;
+    }
+
+    const cupidPeakOffset = halfW * 0.38;
     const leftX = cx - halfW;
     const rightX = cx + halfW;
 
@@ -203,12 +291,11 @@ export class PregeneratedMouthSpriteBank {
 
       // Anatomical Teeth & Tongue Placement for this Sound Shape
       if (shape === "LABIODENTAL") {
-        // Upper pearly teeth clearly resting over the lower lip cushion
         ctx.fillStyle = teethColor;
         ctx.beginPath();
         ctx.rect(cx - halfW * 0.5, cy - 2, halfW, openH * 0.85);
         ctx.fill();
-        ctx.strokeStyle = "rgba(166, 0, 51, 0.4)";
+        ctx.strokeStyle = (timbre === "CYBER") ? "rgba(0, 240, 255, 0.6)" : "rgba(166, 0, 51, 0.4)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(cx, cy - 2);
@@ -219,16 +306,13 @@ export class PregeneratedMouthSpriteBank {
         ctx.lineTo(cx + halfW * 0.25, cy + openH * 0.85);
         ctx.stroke();
       } else if (shape === "SIBILANT") {
-        // Clenched pearly white teeth rim
         ctx.fillStyle = teethColor;
         ctx.beginPath();
         ctx.rect(leftX + 2, cy - 1, halfW * 2 - 4, openH + 2);
         ctx.fill();
-        // Narrow dark horizontal air slit between teeth
         ctx.fillStyle = "rgba(10, 0, 5, 0.9)";
         ctx.fillRect(leftX + 4, cy + openH * 0.45, halfW * 2 - 8, 1.4);
       } else if (shape === "DENTAL") {
-        // Upper teeth
         ctx.fillStyle = teethColor;
         ctx.beginPath();
         ctx.moveTo(leftX + 2, cy - 1);
@@ -237,13 +321,11 @@ export class PregeneratedMouthSpriteBank {
         ctx.closePath();
         ctx.fill();
 
-        // Distinct Tongue-Tip raised upward touching the upper teeth
         ctx.fillStyle = tongueTip;
         ctx.beginPath();
         ctx.ellipse(cx, cy + openH * 0.40, halfW * 0.38, openH * 0.48, 0, 0, Math.PI * 2);
         ctx.fill();
       } else if (shape === "VOWEL_AA" || shape === "VOWEL_EH" || shape === "VOWEL_AW" || shape === "BELT") {
-        // Upper Pearly Teeth Rim
         ctx.fillStyle = teethColor;
         ctx.beginPath();
         ctx.moveTo(leftX + 2, cy - 1);
@@ -252,7 +334,18 @@ export class PregeneratedMouthSpriteBank {
         ctx.closePath();
         ctx.fill();
 
-        // Relaxed pink/coral singing tongue at cavity bottom
+        // Cybernetic LED digital teeth dividers if CYBER timbre
+        if (timbre === "CYBER") {
+          ctx.strokeStyle = "rgba(0, 240, 255, 0.65)";
+          ctx.lineWidth = 1;
+          for (let gx = leftX + 4; gx < rightX - 4; gx += 5) {
+            ctx.beginPath();
+            ctx.moveTo(gx, cy - 2);
+            ctx.lineTo(gx, cy + Math.min(openH * 0.35, 6));
+            ctx.stroke();
+          }
+        }
+
         const tongueY = cy + openH * 0.48;
         ctx.beginPath();
         const tongueGrad = ctx.createRadialGradient(cx, cy + openH, 1, cx, tongueY, openH * 0.8);
@@ -265,7 +358,6 @@ export class PregeneratedMouthSpriteBank {
         ctx.closePath();
         ctx.fill();
       } else if (shape === "VOWEL_EE") {
-        // Upper teeth
         ctx.fillStyle = teethColor;
         ctx.beginPath();
         ctx.moveTo(leftX + 2, cy - 1);
@@ -274,7 +366,17 @@ export class PregeneratedMouthSpriteBank {
         ctx.closePath();
         ctx.fill();
 
-        // Lower teeth
+        if (timbre === "CYBER") {
+          ctx.strokeStyle = "rgba(0, 240, 255, 0.65)";
+          ctx.lineWidth = 1;
+          for (let gx = leftX + 4; gx < rightX - 4; gx += 5) {
+            ctx.beginPath();
+            ctx.moveTo(gx, cy - 2);
+            ctx.lineTo(gx, cy + openH * 0.30);
+            ctx.stroke();
+          }
+        }
+
         ctx.beginPath();
         ctx.moveTo(leftX + 3, cy + openH);
         ctx.quadraticCurveTo(cx, cy + openH * 0.70, rightX - 3, cy + openH);
@@ -282,13 +384,11 @@ export class PregeneratedMouthSpriteBank {
         ctx.closePath();
         ctx.fill();
 
-        // Elevated tongue body
         ctx.fillStyle = tongueBase;
         ctx.beginPath();
         ctx.ellipse(cx, cy + openH * 0.55, halfW * 0.45, openH * 0.25, 0, 0, Math.PI * 2);
         ctx.fill();
-      } else { // VOWEL_OH, VOWEL_OO, GASP
-        // Dark resonant acoustic singing cavity with subtle deep tongue floor
+      } else {
         const tongueY = cy + openH * 0.65;
         ctx.beginPath();
         const tongueGrad = ctx.createRadialGradient(cx, cy + openH, 1, cx, tongueY, openH * 0.6);
@@ -340,7 +440,7 @@ export class PregeneratedMouthSpriteBank {
 
     // Cupid's bow gloss highlight glints
     ctx.beginPath();
-    ctx.fillStyle = "rgba(255, 255, 255, 0.50)";
+    ctx.fillStyle = (timbre === "CYBER") ? "rgba(0, 240, 255, 0.70)" : "rgba(255, 255, 255, 0.50)";
     ctx.ellipse(cx - cupidPeakOffset * 0.65, cy - upperLipThickness * 0.65, 2.0, 1.0, -0.3, 0, Math.PI * 2);
     ctx.ellipse(cx + cupidPeakOffset * 0.65, cy - upperLipThickness * 0.65, 2.0, 1.0, 0.3, 0, Math.PI * 2);
     ctx.fill();
@@ -380,25 +480,41 @@ export class PregeneratedMouthSpriteBank {
     ctx.fillStyle = lowerGrad;
     ctx.fill();
 
-    // Specular High-Gloss Oval Reflection on Plump Lower Lip
+    // Specular High-Gloss Reflection on Plump Lower Lip
     const glossY = cy + Math.max(openH, 0) + lowerLipThickness * 0.48;
     const glossW = halfW * 0.42;
     const glossH = lowerLipThickness * 0.32;
-    ctx.beginPath();
-    ctx.fillStyle = "rgba(255, 255, 255, 0.72)";
-    ctx.ellipse(cx, glossY, glossW, glossH, 0, 0, Math.PI * 2);
-    ctx.fill();
 
-    // Secondary lower rim gloss reflection
-    ctx.beginPath();
-    ctx.fillStyle = "rgba(255, 180, 210, 0.45)";
-    ctx.ellipse(cx - glossW * 0.35, glossY - 0.8, glossW * 0.45, glossH * 0.55, -0.15, 0, Math.PI * 2);
-    ctx.ellipse(cx + glossW * 0.35, glossY - 0.8, glossW * 0.45, glossH * 0.55, 0.15, 0, Math.PI * 2);
-    ctx.fill();
+    if (timbre === "CYBER") {
+      // Horizontal cyber laser gleam
+      ctx.beginPath();
+      ctx.fillStyle = glossColor1;
+      ctx.fillRect(cx - glossW * 0.85, glossY - 1, glossW * 1.7, 2.0);
+    } else if (timbre === "ETHEREAL") {
+      // Starlight diamond sparkle catchlights
+      ctx.beginPath();
+      ctx.fillStyle = glossColor1;
+      ctx.arc(cx - glossW * 0.42, glossY - 0.5, 1.5, 0, Math.PI * 2);
+      ctx.arc(cx, glossY - 1.0, 2.2, 0, Math.PI * 2);
+      ctx.arc(cx + glossW * 0.42, glossY - 0.5, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.fillStyle = glossColor1;
+      ctx.ellipse(cx, glossY, glossW, glossH, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Secondary lower rim gloss reflection
+      ctx.beginPath();
+      ctx.fillStyle = glossColor2;
+      ctx.ellipse(cx - glossW * 0.35, glossY - 0.8, glossW * 0.45, glossH * 0.55, -0.15, 0, Math.PI * 2);
+      ctx.ellipse(cx + glossW * 0.35, glossY - 0.8, glossW * 0.45, glossH * 0.55, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // Corner dimple shadows
     ctx.beginPath();
-    ctx.strokeStyle = "#5a0018";
+    ctx.strokeStyle = contourShadow;
     ctx.lineWidth = 1.2;
     ctx.moveTo(leftX - 1.5, cy - 0.5);
     ctx.lineTo(leftX + 1.5, cy + 0.8);
@@ -448,6 +564,7 @@ export class TamagotchiAvatar {
   private smoothedVocalAmp: number = 0;
   private singingLoopPhase: number = 0;
   private mouthSpriteBank: PregeneratedMouthSpriteBank = new PregeneratedMouthSpriteBank();
+  private lastActiveTimbre: VocalTimbre = "SOULFUL";
 
   constructor() {
     this.loadState();
@@ -756,6 +873,53 @@ export class TamagotchiAvatar {
     return { shape: "VOWEL_EH", intensity: this.smoothedVocalAmp };
   }
 
+  public resolveVocalTimbre(
+    meta: GrooveboxMeta | null,
+    vocalsLevel: number,
+    sec: string,
+    zcr: number,
+    spectralRoughness: number = 0,
+    isSinging: boolean = false
+  ): VocalTimbre {
+    // 1. Fortissimo Stadium Belts take top priority for drops and climaxes
+    if (vocalsLevel > 0.42 || (sec === "DROP" && isSinging && vocalsLevel > 0.18)) {
+      return "BELT";
+    }
+
+    // 2. Direct Timbre / Persona from metadata
+    const metaTimbre = (meta?.vocalTimbre || "").toUpperCase();
+    if (metaTimbre === "CYBER" || metaTimbre === "ETHEREAL" || metaTimbre === "GRITTY" || metaTimbre === "SOULFUL" || metaTimbre === "BELT") {
+      return metaTimbre as VocalTimbre;
+    }
+
+    const persona = (meta?.vocalPersona || "").toLowerCase();
+    if (persona === "cyber" || persona.includes("cyber") || persona.includes("synth")) {
+      return "CYBER";
+    }
+    if (persona === "wave" || persona.includes("wave") || persona.includes("ethereal")) {
+      return "ETHEREAL";
+    }
+    if (persona === "breaks" || persona.includes("break") || persona.includes("grit")) {
+      return "GRITTY";
+    }
+    if (persona === "house" || persona.includes("house") || persona.includes("soul")) {
+      return "SOULFUL";
+    }
+
+    // 3. Acoustic Waveform Formant Timbre Detection (for sliced audio samples)
+    if (zcr > 0.28) {
+      return "CYBER"; // High-frequency metallic vocoder harmonics
+    }
+    if (spectralRoughness > 0.35) {
+      return vocalsLevel > 0.15 ? "GRITTY" : "ETHEREAL"; // Raspy chant vs breathy whisper
+    }
+    if (sec === "INTRO" || sec === "BREAKDOWN") {
+      return "ETHEREAL"; // Dreamy atmospheric sections
+    }
+
+    return "SOULFUL";
+  }
+
   private extractWaveformMouth(
     waveform: Uint8Array | null | undefined,
     isSinging: boolean,
@@ -773,11 +937,13 @@ export class TamagotchiAvatar {
     let waveRms = 0;
     let peakDev = 0;
     let zeroCrossings = 0;
+    let spectralRoughness = 0;
 
     if (waveform && waveform.length > 0) {
       const len = waveform.length;
       let sumSquares = 0;
       let prevSign = 0;
+      let diffSum = 0;
       for (let i = 0; i < len; i++) {
         const dev = (waveform[i] - 128) / 128; // Normalized -1.0 .. +1.0
         sumSquares += dev * dev;
@@ -785,9 +951,11 @@ export class TamagotchiAvatar {
         if (absDev > peakDev) peakDev = absDev;
         const sign = dev >= 0 ? 1 : -1;
         if (i > 0 && sign !== prevSign) zeroCrossings++;
+        if (i > 0) diffSum += Math.abs(waveform[i] - waveform[i - 1]);
         prevSign = sign;
       }
       waveRms = Math.sqrt(sumSquares / len);
+      spectralRoughness = Math.min(1.0, (diffSum / len) / 32.0);
     }
 
     const zcr = waveform && waveform.length > 0 ? zeroCrossings / waveform.length : 0.12;
@@ -822,7 +990,7 @@ export class TamagotchiAvatar {
     const dynAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * (1.2 + 0.32 * vibratoOsc) * 1.8));
     const tier = Math.min(4, Math.floor(dynAperture * 5));
 
-    // Resolve exact singing sound shape
+    // Resolve exact singing sound shape & vocal timbre
     const { shape } = this.resolveSoundShape(
       meta ?? null,
       waveform,
@@ -833,64 +1001,109 @@ export class TamagotchiAvatar {
       zcr
     );
 
-    // 4. Mathematical Mouth Shape Tables for all 13 Sound Shapes (Primary vs Resonant Vibrato Phase)
+    const timbre = this.resolveVocalTimbre(
+      meta ?? null,
+      vocalsLevel ?? 0,
+      sec,
+      zcr,
+      spectralRoughness,
+      isSinging
+    );
+    this.lastActiveTimbre = timbre;
+
+    // 4. Mathematical Mouth Shape Tables Specialized for each Vocal Timbre (Primary vs Resonant Vibrato Phase)
     // Every single glyph string is strictly 5 monospace characters
-    const MOUTH_SHAPES: Record<SingingSoundShape, { primary: string[]; resonant: string[] }> = {
-      REST: {
-        primary:  ["  -  ", "  ‿  ", " ─‿─ ", " ─‿─ ", " ─‿─ "],
-        resonant: ["  -  ", "  ‿  ", " ─‿─ ", " ─‿─ ", " ─‿─ "],
-      },
-      BILABIAL: {
-        primary:  [" ─── ", " ─═─ ", " ═─═ ", " ❨─❩ ", " [─] "],
-        resonant: [" ─── ", " ─═─ ", " ═─═ ", " ❨─❩ ", " [─] "],
-      },
-      LABIODENTAL: {
-        primary:  ["  -  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " [v] "],
-        resonant: ["  -  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " [v] "],
-      },
-      DENTAL: {
-        primary:  ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " [^] "],
-        resonant: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " [^] "],
-      },
-      SIBILANT: {
-        primary:  [" ─·─ ", " ═:═ ", " ◖:◗ ", " [:] ", " [x] "],
-        resonant: [" ─·─ ", " ═:═ ", " ◖:◗ ", " [:] ", " [x] "],
-      },
-      VOWEL_AA: {
-        primary:  ["  -  ", " ⌢─⌣ ", " ╭─╮ ", " ╭▽╮ ", " ╭█╮ "],
-        resonant: ["  -  ", " ⌢─⌣ ", " ╭◯╮ ", " ╭◇╮ ", " ❨█❩ "],
-      },
-      VOWEL_EE: {
-        primary:  [" ─‿─ ", " ═‿═ ", " ═─═ ", " ◖═◗ ", " [≡] "],
-        resonant: [" ─‿─ ", " ═‿═ ", " ◖─◗ ", " ◖■◗ ", " [█] "],
-      },
-      VOWEL_OH: {
-        primary:  ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◯❩ "],
-        resonant: ["  ·  ", "  o  ", "  0  ", "  ◎  ", " ❨◎❩ "],
-      },
-      VOWEL_OO: {
-        primary:  ["  ·  ", "  ∘  ", "  ᴥ  ", "  o  ", " ◖·◗ "],
-        resonant: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "],
-      },
-      VOWEL_EH: {
-        primary:  ["  ‿  ", " ─⌣─ ", " ╭‿╮ ", " ❨⌢❩ ", " ❨▲❩ "],
-        resonant: ["  ‿  ", " ─‿─ ", " ╭─╮ ", " ❨═❩ ", " ❨▼❩ "],
-      },
-      VOWEL_AW: {
-        primary:  ["  ·  ", "  v  ", "  V  ", "  ◓  ", " ❨◓❩ "],
-        resonant: ["  ·  ", "  v  ", "  U  ", "  ◒  ", " ❨◒❩ "],
-      },
-      BELT: {
-        primary:  ["  o  ", "  O  ", " ╭◯╮ ", " ╭█╮ ", " ❨█❩ "],
-        resonant: ["  o  ", "  O  ", " ╭◎╮ ", " ╭█╮ ", " ❨█❩ "],
-      },
-      GASP: {
-        primary:  ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◎❩ "],
-        resonant: ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◎❩ "],
-      },
+    const SOULFUL_SHAPES: Record<SingingSoundShape, { primary: string[]; resonant: string[] }> = {
+      REST: { primary: ["  -  ", "  ‿  ", " ─‿─ ", " ─‿─ ", " ─‿─ "], resonant: ["  -  ", "  ‿  ", " ─‿─ ", " ─‿─ ", " ─‿─ "] },
+      BILABIAL: { primary: [" ─── ", " ─═─ ", " ═─═ ", " ❨─❩ ", " [─] "], resonant: [" ─── ", " ─═─ ", " ═─═ ", " ❨─❩ ", " [─] "] },
+      LABIODENTAL: { primary: ["  -  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " [v] "], resonant: ["  -  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " [v] "] },
+      DENTAL: { primary: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " [^] "], resonant: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " [^] "] },
+      SIBILANT: { primary: [" ─·─ ", " ═:═ ", " ◖:◗ ", " [:] ", " [x] "], resonant: [" ─·─ ", " ═:═ ", " ◖:◗ ", " [:] ", " [x] "] },
+      VOWEL_AA: { primary: ["  -  ", " ⌢─⌣ ", " ╭─╮ ", " ╭▽╮ ", " ╭█╮ "], resonant: ["  -  ", " ⌢─⌣ ", " ╭◯╮ ", " ╭◇╮ ", " ❨█❩ "] },
+      VOWEL_EE: { primary: [" ─‿─ ", " ═‿═ ", " ═─═ ", " ◖═◗ ", " [≡] "], resonant: [" ─‿─ ", " ═‿═ ", " ◖─◗ ", " ◖■◗ ", " [█] "] },
+      VOWEL_OH: { primary: ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◯❩ "], resonant: ["  ·  ", "  o  ", "  0  ", "  ◎  ", " ❨◎❩ "] },
+      VOWEL_OO: { primary: ["  ·  ", "  ∘  ", "  ᴥ  ", "  o  ", " ◖·◗ "], resonant: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "] },
+      VOWEL_EH: { primary: ["  ‿  ", " ─⌣─ ", " ╭‿╮ ", " ❨⌢❩ ", " ❨▲❩ "], resonant: ["  ‿  ", " ─‿─ ", " ╭─╮ ", " ❨═❩ ", " ❨▼❩ "] },
+      VOWEL_AW: { primary: ["  ·  ", "  v  ", "  V  ", "  ◓  ", " ❨◓❩ "], resonant: ["  ·  ", "  v  ", "  U  ", "  ◒  ", " ❨◒❩ "] },
+      BELT: { primary: ["  o  ", "  O  ", " ╭◯╮ ", " ╭█╮ ", " ❨█❩ "], resonant: ["  o  ", "  O  ", " ╭◎╮ ", " ╭█╮ ", " ❨█❩ "] },
+      GASP: { primary: ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◎❩ "], resonant: ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◎❩ "] },
     };
 
-    const family = MOUTH_SHAPES[shape] ?? MOUTH_SHAPES.VOWEL_AA;
+    const CYBER_SHAPES: Record<SingingSoundShape, { primary: string[]; resonant: string[] }> = {
+      REST: { primary: [" [─] ", " [─] ", " ◖─◗ ", " ◖─◗ ", " ◖─◗ "], resonant: [" [─] ", " [─] ", " ◖─◗ ", " ◖─◗ ", " ◖─◗ "] },
+      BILABIAL: { primary: [" ─── ", " ─═─ ", " [=] ", " ❨─❩ ", " [─] "], resonant: [" ─── ", " ─═─ ", " [=] ", " ❨─❩ ", " [─] "] },
+      LABIODENTAL: { primary: ["  -  ", " ⌢v⌣ ", " [v] ", " ◖v◗ ", " [v] "], resonant: ["  -  ", " ⌢v⌣ ", " [v] ", " ◖v◗ ", " [v] "] },
+      DENTAL: { primary: ["  ·  ", " ◖^◗ ", " [^] ", " ◖^◗ ", " [^] "], resonant: ["  ·  ", " ◖^◗ ", " [^] ", " ◖^◗ ", " [^] "] },
+      SIBILANT: { primary: [" ─:─ ", " ═:═ ", " ◖:◗ ", " [:] ", " [x] "], resonant: [" ─:─ ", " ═:═ ", " ◖:◗ ", " [:] ", " [x] "] },
+      VOWEL_AA: { primary: ["  -  ", " ⌢─⌣ ", " [=] ", " ◖■◗ ", " [█] "], resonant: ["  -  ", " ⌢─⌣ ", " [≡] ", " ◖■◗ ", " [█] "] },
+      VOWEL_EE: { primary: [" ─═─ ", " [≡] ", " ═─═ ", " ◖═◗ ", " [█] "], resonant: [" ─═─ ", " [≡] ", " ◖─◗ ", " ◖■◗ ", " [█] "] },
+      VOWEL_OH: { primary: ["  o  ", "  0  ", "  ◎  ", " ❨◎❩ ", " [0] "], resonant: ["  o  ", "  0  ", "  ◎  ", " ❨◎❩ ", " [0] "] },
+      VOWEL_OO: { primary: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "], resonant: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "] },
+      VOWEL_EH: { primary: ["  =  ", " [─] ", " [=] ", " ◖▲◗ ", " [▲] "], resonant: ["  =  ", " [─] ", " [≡] ", " ◖▼◗ ", " [▼] "] },
+      VOWEL_AW: { primary: ["  v  ", " [v] ", " [V] ", " ◖◓◗ ", " [◓] "], resonant: ["  v  ", " [v] ", " [U] ", " ◖◒◗ ", " [◒] "] },
+      BELT: { primary: [" [=] ", " ◖═◗ ", " ◖■◗ ", " [█] ", " ⚡█⚡ "], resonant: [" [=] ", " ◖═◗ ", " ◖■◗ ", " [█] ", " ⚡█⚡ "] },
+      GASP: { primary: ["  o  ", "  0  ", "  O  ", "  ◎  ", " ❨◎❩ "], resonant: ["  o  ", "  0  ", "  O  ", "  ◎  ", " ❨◎❩ "] },
+    };
+
+    const ETHEREAL_SHAPES: Record<SingingSoundShape, { primary: string[]; resonant: string[] }> = {
+      REST: { primary: ["  ·  ", "  ‿  ", " ─‿─ ", " ─✧─ ", " ─✧─ "], resonant: ["  ·  ", "  ‿  ", " ─‿─ ", " ─✧─ ", " ─✧─ "] },
+      BILABIAL: { primary: ["  ·  ", " ─═─ ", " ═─═ ", " ❨─❩ ", " ❨✧❩ "], resonant: ["  ·  ", " ─═─ ", " ═─═ ", " ❨─❩ ", " ❨✧❩ "] },
+      LABIODENTAL: { primary: ["  ·  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " ❨v❩ "], resonant: ["  ·  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " ❨v❩ "] },
+      DENTAL: { primary: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " ❨^❩ "], resonant: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " ❨^❩ "] },
+      SIBILANT: { primary: [" ─✧─ ", " ═:═ ", " ◖:◗ ", " ❨:❩ ", " ❨✦❩ "], resonant: [" ─✧─ ", " ═:═ ", " ◖:◗ ", " ❨:❩ ", " ❨✦❩ "] },
+      VOWEL_AA: { primary: ["  ·  ", " ⌢─⌣ ", " ╭◯╮ ", " ╭◇╮ ", " ❨◇❩ "], resonant: ["  ·  ", " ⌢─⌣ ", " ╭◯╮ ", " ╭◇╮ ", " ❨◇❩ "] },
+      VOWEL_EE: { primary: [" ─‿─ ", " ─✧─ ", " ◖─◗ ", " ◖✧◗ ", " ❨✧❩ "], resonant: [" ─‿─ ", " ─✧─ ", " ◖─◗ ", " ◖✧◗ ", " ❨✧❩ "] },
+      VOWEL_OH: { primary: ["  ·  ", "  ∘  ", "  o  ", "  ◯  ", " ❨◯❩ "], resonant: ["  ·  ", "  ∘  ", "  o  ", "  ◯  ", " ❨◯❩ "] },
+      VOWEL_OO: { primary: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "], resonant: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "] },
+      VOWEL_EH: { primary: ["  ‿  ", " ─✧─ ", " ╭‿╮ ", " ❨⌢❩ ", " ❨▲❩ "], resonant: ["  ‿  ", " ─✧─ ", " ╭─╮ ", " ❨═❩ ", " ❨▼❩ "] },
+      VOWEL_AW: { primary: ["  ·  ", "  v  ", "  V  ", "  ◓  ", " ❨◓❩ "], resonant: ["  ·  ", "  v  ", "  U  ", "  ◒  ", " ❨◒❩ "] },
+      BELT: { primary: ["  o  ", "  ◯  ", " ╭◯╮ ", " ╭✧╮ ", " ❨✦❩ "], resonant: ["  o  ", "  ◯  ", " ╭◎╮ ", " ╭✧╮ ", " ❨✦❩ "] },
+      GASP: { primary: ["  ·  ", "  ∘  ", "  O  ", "  ◯  ", " ❨◎❩ "], resonant: ["  ·  ", "  ∘  ", "  O  ", "  ◯  ", " ❨◎❩ "] },
+    };
+
+    const GRITTY_SHAPES: Record<SingingSoundShape, { primary: string[]; resonant: string[] }> = {
+      REST: { primary: [" ─── ", " ─── ", " ─-─ ", " ─-─ ", " ─-─ "], resonant: [" ─── ", " ─── ", " ─-─ ", " ─-─ ", " ─-─ "] },
+      BILABIAL: { primary: [" ─── ", " ─═─ ", " ═─═ ", " ❨─❩ ", " [─] "], resonant: [" ─── ", " ─═─ ", " ═─═ ", " ❨─❩ ", " [─] "] },
+      LABIODENTAL: { primary: ["  -  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " ⚔v⚔ "], resonant: ["  -  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " ⚔v⚔ "] },
+      DENTAL: { primary: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " ⚔^⚔ "], resonant: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " ⚔^⚔ "] },
+      SIBILANT: { primary: [" ─x─ ", " ═x═ ", " ◖x◗ ", " [x] ", " ⚔X⚔ "], resonant: [" ─x─ ", " ═x═ ", " ◖x◗ ", " [x] ", " ⚔X⚔ "] },
+      VOWEL_AA: { primary: [" ─── ", " ─v─ ", " ╭▽╮ ", " ◖v◗ ", " ⚔█⚔ "], resonant: [" ─── ", " ─v─ ", " ╭▽╮ ", " ◖v◗ ", " ⚔█⚔ "] },
+      VOWEL_EE: { primary: [" ─-─ ", " ═-═ ", " ◖=◗ ", " ◖v◗ ", " [x] "], resonant: [" ─-─ ", " ═-═ ", " ◖=◗ ", " ◖v◗ ", " [x] "] },
+      VOWEL_OH: { primary: ["  ·  ", "  v  ", "  V  ", "  O  ", " ❨0❩ "], resonant: ["  ·  ", "  v  ", "  V  ", "  O  ", " ❨0❩ "] },
+      VOWEL_OO: { primary: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "], resonant: ["  ·  ", "  ∘  ", "  o  ", "  ●  ", " ◖●◗ "] },
+      VOWEL_EH: { primary: ["  -  ", " ─v─ ", " ╭▽╮ ", " ❨▲❩ ", " ⚔▲⚔ "], resonant: ["  -  ", " ─v─ ", " ╭▽╮ ", " ❨▼❩ ", " ⚔▼⚔ "] },
+      VOWEL_AW: { primary: ["  ·  ", "  v  ", "  V  ", "  ◓  ", " ❨◓❩ "], resonant: ["  ·  ", "  v  ", "  U  ", "  ◒  ", " ❨◒❩ "] },
+      BELT: { primary: ["  V  ", " ╭▽╮ ", " ╭█╮ ", " ❨█❩ ", " ⚔█⚔ "], resonant: ["  V  ", " ╭▽╮ ", " ╭█╮ ", " ❨█❩ ", " ⚔█⚔ "] },
+      GASP: { primary: ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◎❩ "], resonant: ["  ·  ", "  o  ", "  O  ", "  ◯  ", " ❨◎❩ "] },
+    };
+
+    const BELT_SHAPES: Record<SingingSoundShape, { primary: string[]; resonant: string[] }> = {
+      REST: { primary: ["  -  ", "  ‿  ", " ─‿─ ", " ─‿─ ", " ─‿─ "], resonant: ["  -  ", "  ‿  ", " ─‿─ ", " ─‿─ ", " ─‿─ "] },
+      BILABIAL: { primary: [" ─── ", " ─═─ ", " ═─═ ", " ❨─❩ ", " [─] "], resonant: [" ─── ", " ─═─ ", " ═─═ ", " ❨─❩ ", " [─] "] },
+      LABIODENTAL: { primary: ["  -  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " [v] "], resonant: ["  -  ", " ⌢v⌣ ", " ╭v╮ ", " ◖v◗ ", " [v] "] },
+      DENTAL: { primary: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " [^] "], resonant: ["  ·  ", "  ⌢  ", " ╭^╮ ", " ◖^◗ ", " [^] "] },
+      SIBILANT: { primary: [" ─:─ ", " ═:═ ", " ◖:◗ ", " [:] ", " [x] "], resonant: [" ─:─ ", " ═:═ ", " ◖:◗ ", " [:] ", " [x] "] },
+      VOWEL_AA: { primary: ["  O  ", " ╭◯╮ ", " ╭█╮ ", " ❨█❩ ", " ✦█✦ "], resonant: ["  O  ", " ╭◎╮ ", " ╭█╮ ", " ❨█❩ ", " ✦█✦ "] },
+      VOWEL_EE: { primary: [" ─═─ ", " ◖═◗ ", " ◖■◗ ", " [█] ", " ✦█✦ "], resonant: [" ─═─ ", " ◖═◗ ", " ◖■◗ ", " [█] ", " ✦█✦ "] },
+      VOWEL_OH: { primary: ["  0  ", "  ◯  ", "  ◎  ", " ❨◎❩ ", " ❨█❩ "], resonant: ["  0  ", "  ◯  ", "  ◎  ", " ❨◎❩ ", " ❨█❩ "] },
+      VOWEL_OO: { primary: ["  o  ", "  O  ", "  ●  ", " ◖●◗ ", " ❨●❩ "], resonant: ["  o  ", "  O  ", "  ●  ", " ◖●◗ ", " ❨●❩ "] },
+      VOWEL_EH: { primary: [" ╭‿╮ ", " ╭─╮ ", " ❨▲❩ ", " ❨█❩ ", " ✦▲✦ "], resonant: [" ╭‿╮ ", " ╭─╮ ", " ❨▲❩ ", " ❨█❩ ", " ✦▲✦ "] },
+      VOWEL_AW: { primary: ["  V  ", "  U  ", " ❨◓❩ ", " ❨█❩ ", " ✦◓✦ "], resonant: ["  V  ", "  U  ", " ❨◓❩ ", " ❨█❩ ", " ✦◓✦ "] },
+      BELT: { primary: [" ╭◯╮ ", " ╭█╮ ", " ❨█❩ ", " ✦█✦ ", " ⚡█⚡ "], resonant: [" ╭◎╮ ", " ╭█╮ ", " ❨█❩ ", " ✦█✦ ", " ⚡█⚡ "] },
+      GASP: { primary: ["  O  ", "  ◯  ", "  ◎  ", " ❨◎❩ ", " ❨✦❩ "], resonant: ["  O  ", "  ◯  ", "  ◎  ", " ❨◎❩ ", " ❨✦❩ "] },
+    };
+
+    const shapeSet =
+      timbre === "CYBER"
+        ? CYBER_SHAPES
+        : timbre === "ETHEREAL"
+        ? ETHEREAL_SHAPES
+        : timbre === "GRITTY"
+        ? GRITTY_SHAPES
+        : timbre === "BELT"
+        ? BELT_SHAPES
+        : SOULFUL_SHAPES;
+    const family = shapeSet[shape] ?? shapeSet.VOWEL_AA;
     // Alternate between primary and resonant singing loop forms at peak of vibrato phase
     const isResonantPhase = Math.cos(this.singingLoopPhase) > 0.15;
     return (isResonantPhase && tier >= 2) ? family.resonant[tier] : family.primary[tier];
@@ -957,8 +1170,9 @@ export class TamagotchiAvatar {
       nose = (Math.sin(performance.now() / 280) > 0) ? "  ><  " : "  ╳  ";
     }
 
-    // Determine Live Animated Waveform Singing Mouth matching sound shapes
+    // Determine Live Animated Waveform Singing Mouth matching sound shapes & timbre
     const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap, dt, bpm, vocalsLevel, meta, sec);
+    const timbreClass = `mouth-${this.lastActiveTimbre.toLowerCase()}`;
 
     // Render Round Orb Stages with big anime eyes, dynamic "X" nose, and pregenerated sound shape singing mouth
     let faceLines: string[] = [];
@@ -970,13 +1184,13 @@ export class TamagotchiAvatar {
         `      <span class="rave-orb">.╭─────────╮.</span>       `,
         `     <span class="rave-orb">(</span>   <span class="rave-eyes">${eyes}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">${noteChar}</span>  `,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~✦</span> `,
-        `     <span class="rave-orb">(</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~♡</span> `,
+        `     <span class="rave-orb">(</span>  <span class="rave-mouth ${timbreClass}">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~♡</span> `,
         `      <span class="rave-orb">·╰─────────╯·</span>       `,
       ] : [
         `      <span class="rave-orb">.╭─────────╮.</span>       `,
         `     <span class="rave-orb">(</span>   <span class="rave-eyes">${eyes}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">${noteChar}</span>  `,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~~*</span> `,
-        `     <span class="rave-orb">(</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~~*</span> `,
+        `     <span class="rave-orb">(</span>  <span class="rave-mouth ${timbreClass}">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~~*</span> `,
         `      <span class="rave-orb">·╰─────────╯·</span>       `,
       ];
     } else if (this.stage === 2) {
@@ -985,13 +1199,13 @@ export class TamagotchiAvatar {
         `     <span class="rave-wings">.·´</span><span class="rave-orb">╭─────────╮</span><span class="rave-wings">\`·.</span>     `,
         `   <span class="rave-wings">[o(</span>  <span class="rave-eyes">${eyes}</span>  <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~✦</span> `,
-        `     <span class="rave-orb">(</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~🌈</span> `,
+        `     <span class="rave-orb">(</span>  <span class="rave-mouth ${timbreClass}">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~🌈</span> `,
         `     <span class="rave-wings">\`·.</span><span class="rave-orb">╰─| WUB |─╯</span><span class="rave-wings">.·´</span>     `,
       ] : [
         `     <span class="rave-wings">.·´</span><span class="rave-orb">╭─────────╮</span><span class="rave-wings">\`·.</span>     `,
         `   <span class="rave-wings">[o(</span>  <span class="rave-eyes">${eyes}</span>  <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~~*</span> `,
-        `     <span class="rave-orb">(</span>  <span class="rave-mouth">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~~✨</span> `,
+        `     <span class="rave-orb">(</span>  <span class="rave-mouth ${timbreClass}">${mouth}</span>  <span class="rave-orb">)</span> <span class="rave-spark">~~✨</span> `,
         `     <span class="rave-wings">\`·.</span><span class="rave-orb">╰─| WUB |─╯</span><span class="rave-wings">.·´</span>     `,
       ];
     } else if (this.stage === 3) {
@@ -1000,13 +1214,13 @@ export class TamagotchiAvatar {
         `     <span class="rave-wings">~/</span><span class="rave-orb">╭──⚡⚡──╮</span><span class="rave-wings">\\~</span>     `,
         `   <span class="rave-wings">~/(\\</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~✦</span> `,
-        `    <span class="rave-body">&lt;[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]&gt;</span>    `,
+        `    <span class="rave-body">&lt;[~</span> <span class="rave-mouth ${timbreClass}">${mouth}</span> <span class="rave-body">~]&gt;</span>    `,
         `     <span class="rave-orb">·╰─| WUB |─╯·</span>      `,
       ] : [
         `     <span class="rave-wings">~/</span><span class="rave-orb">╭──⚡⚡──╮</span><span class="rave-wings">\\~</span>     `,
         `   <span class="rave-wings">~/\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~~*</span> `,
-        `    <span class="rave-body">\\[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]/</span>    `,
+        `    <span class="rave-body">\\[~</span> <span class="rave-mouth ${timbreClass}">${mouth}</span> <span class="rave-body">~]/</span>    `,
         `     <span class="rave-orb">·╰─| WUB |─╯·</span>      `,
       ];
     } else {
@@ -1015,13 +1229,13 @@ export class TamagotchiAvatar {
         `    <span class="rave-spark">✧</span><span class="rave-wings">~/</span><span class="rave-orb">╭──✦✦──╮</span><span class="rave-wings">\\~</span><span class="rave-spark">✧</span>    `,
         `  <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~✦</span> `,
-        `   <span class="rave-body">&lt;[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]&gt;</span>    `,
+        `   <span class="rave-body">&lt;[~</span> ✧<span class="rave-mouth ${timbreClass}">${mouth}</span>✧ <span class="rave-body">~]&gt;</span>    `,
         `    <span class="rave-orb">·╰─| 505 |─╯·</span>       `,
       ] : [
         `    <span class="rave-spark">✧</span><span class="rave-wings">~/</span><span class="rave-orb">╭──✦✦──╮</span><span class="rave-wings">\\~</span><span class="rave-spark">✧</span>    `,
         `  <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
         `     <span class="rave-orb">(</span>   <span class="rave-nose">${nose}</span>   <span class="rave-orb">)</span>  <span class="rave-spark">~~*</span> `,
-        `   <span class="rave-body">\\[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]/</span>    `,
+        `   <span class="rave-body">\\[~</span> ✧<span class="rave-mouth ${timbreClass}">${mouth}</span>✧ <span class="rave-body">~]/</span>    `,
         `    <span class="rave-orb">·╰─| 505 |─╯·</span>       `,
       ];
     }
@@ -1335,18 +1549,39 @@ export class TamagotchiAvatar {
     const mouthY = cy + 34;
     const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
     let zcr = 0.12;
+    let spectralRoughness = 0;
     if (waveform && waveform.length > 0) {
       let zeroCrossings = 0;
       let prevSign = 0;
+      let diffSum = 0;
       for (let i = 0; i < waveform.length; i++) {
         const dev = waveform[i] - 128;
         const sign = dev >= 0 ? 1 : -1;
-        if (i > 0 && sign !== prevSign) zeroCrossings++;
+        if (i > 0) {
+          if (sign !== prevSign) zeroCrossings++;
+          diffSum += Math.abs(waveform[i] - waveform[i - 1]);
+        }
         prevSign = sign;
       }
       zcr = zeroCrossings / waveform.length;
+      spectralRoughness = Math.min(1.0, diffSum / (waveform.length * 32));
     }
-    this.drawAnimeLipstickMouth(ctx, cx, mouthY, mouthAperture, isSinging, vocalsLevel, vowel, waveform, t, meta, isDropGap, sec, zcr);
+    this.drawAnimeLipstickMouth(
+      ctx,
+      cx,
+      mouthY,
+      mouthAperture,
+      isSinging,
+      vocalsLevel,
+      vowel,
+      waveform,
+      t,
+      meta,
+      isDropGap,
+      sec,
+      zcr,
+      spectralRoughness
+    );
 
     // -------------------------------------------------------------------------
     // 4. FLOATING SPARKS & MUSICAL PARTICLES
@@ -1683,7 +1918,7 @@ export class TamagotchiAvatar {
   /**
    * Dynamic anime mouth with red lipstick, sensual round curves, and audio-reactive aperture.
    * Utilizes the pregenerated singing sprite bank for exact phonetic viseme sound shapes,
-   * modulated by real-time Web Audio vocal waveform synthesis.
+   * modulated by real-time Web Audio vocal waveform synthesis and timbre aesthetics.
    */
   private drawAnimeLipstickMouth(
     ctx: CanvasRenderingContext2D,
@@ -1698,7 +1933,8 @@ export class TamagotchiAvatar {
     meta?: GrooveboxMeta | null,
     isDropGap: boolean = false,
     sec: string = "GROOVE_A",
-    zcr: number = 0.12
+    zcr: number = 0.12,
+    spectralRoughness: number = 0
   ): void {
     const isVoiceActive = isSinging || vocalsLevel > 0.01 || mouthAperture > 0.04;
     const { shape, intensity } = this.resolveSoundShape(
@@ -1710,13 +1946,21 @@ export class TamagotchiAvatar {
       sec,
       zcr
     );
+    const timbre = this.resolveVocalTimbre(
+      meta ?? null,
+      vocalsLevel,
+      sec,
+      zcr,
+      spectralRoughness,
+      isSinging
+    );
 
     // Compute tier (0..4) with musical vibrato oscillation
     const activeIntensity = isVoiceActive ? Math.max(intensity, mouthAperture) : 0;
     const tier = Math.max(0, Math.min(4, Math.floor(activeIntensity * 4.99)));
 
-    // Retrieve pregenerated sprite for this singing sound shape & tier
-    const sprite = this.mouthSpriteBank.getSprite(shape, tier);
+    // Retrieve pregenerated sprite for this vocal timbre, singing sound shape & tier
+    const sprite = this.mouthSpriteBank.getSprite(timbre, shape, tier);
     if (!sprite) return;
 
     // Sensual Red Lipstick Palette:
@@ -1727,7 +1971,18 @@ export class TamagotchiAvatar {
     ctx.save();
     const glowBlur = isVoiceActive ? (12 + 20 * Math.min(1.5, vocalsLevel * 2.5 + activeIntensity)) : 6;
     ctx.shadowBlur = glowBlur;
-    ctx.shadowColor = (shape === "BELT" || sec === "DROP") ? "#ff007f" : lipstickLip;
+
+    if (timbre === "CYBER") {
+      ctx.shadowColor = "#00f0ff";
+    } else if (timbre === "ETHEREAL") {
+      ctx.shadowColor = "#ff77e9";
+    } else if (timbre === "GRITTY") {
+      ctx.shadowColor = "#ff3300";
+    } else if (timbre === "BELT" || shape === "BELT" || sec === "DROP") {
+      ctx.shadowColor = "#ffe600";
+    } else {
+      ctx.shadowColor = lipstickLip;
+    }
 
     // Blit pregenerated sprite centered at cx, mouthY (width 120, height 80, centered at 60, 35)
     ctx.drawImage(sprite, cx - 60, mouthY - 35);
@@ -1735,12 +1990,13 @@ export class TamagotchiAvatar {
 
     // Real-time audio reactive vocal waveform reaction & Cupid's bow specular gloss ripple
     if (isVoiceActive) {
-      this.drawWaveformLipReaction(ctx, cx, mouthY, shape, tier, waveform, vocalsLevel, t);
+      this.drawWaveformLipReaction(ctx, cx, mouthY, shape, tier, waveform, vocalsLevel, t, timbre);
     }
   }
 
   /**
-   * Real-time sample-by-sample acoustic vocal waveform deformation across Cupid's bow and gloss.
+   * Real-time sample-by-sample acoustic vocal waveform deformation across Cupid's bow and gloss,
+   * specialized for each distinct vocal timbre.
    */
   private drawWaveformLipReaction(
     ctx: CanvasRenderingContext2D,
@@ -1750,7 +2006,8 @@ export class TamagotchiAvatar {
     tier: number,
     waveform: Uint8Array | null | undefined,
     vocalsLevel: number,
-    t: number
+    t: number,
+    timbre: VocalTimbre = "SOULFUL"
   ): void {
     ctx.save();
     let waveDev = 0;
@@ -1769,9 +2026,9 @@ export class TamagotchiAvatar {
 
     // Laser-thin audio reactive thread vibrating to vocal frequencies across Cupid's bow seam
     ctx.beginPath();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.strokeStyle = timbre === "CYBER" ? "rgba(0, 240, 255, 0.9)" : "rgba(255, 255, 255, 0.85)";
     ctx.shadowBlur = 8;
-    ctx.shadowColor = "#ff00a0";
+    ctx.shadowColor = timbre === "CYBER" ? "#00f0ff" : "#ff00a0";
     ctx.lineWidth = 1.2;
     ctx.moveTo(cx - halfW * 0.6, bottomLipY - 1.5);
     ctx.quadraticCurveTo(cx, bottomLipY - 1.5 + waveDev, cx + halfW * 0.6, bottomLipY - 1.5);
@@ -1780,14 +2037,67 @@ export class TamagotchiAvatar {
     // Dynamic specular gloss reflection pulsing with vocal amplitude
     const glossPulse = 1.0 + 0.3 * Math.sin(t * 10.0 + vocalsLevel * 5.0);
     ctx.beginPath();
-    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.fillStyle = timbre === "ETHEREAL" ? "rgba(245, 208, 254, 0.65)" : "rgba(255, 255, 255, 0.45)";
     ctx.shadowBlur = 6;
     ctx.shadowColor = "#ffffff";
     ctx.ellipse(cx, bottomLipY - 3, (halfW * 0.35) * glossPulse, 1.4, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    // Timbre-Specific Dynamic Acoustic Modulations:
+    if (timbre === "CYBER") {
+      // Digital pulsing vocoder brackets: [ ]
+      ctx.strokeStyle = "rgba(0, 240, 255, 0.85)";
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = "#00f0ff";
+      ctx.lineWidth = 1.4;
+      const bracketW = halfW + 6;
+      const bracketH = openH + 9;
+      // Left bracket [
+      ctx.beginPath();
+      ctx.moveTo(cx - bracketW + 4, mouthY - 4);
+      ctx.lineTo(cx - bracketW, mouthY - 4);
+      ctx.lineTo(cx - bracketW, mouthY + bracketH);
+      ctx.lineTo(cx - bracketW + 4, mouthY + bracketH);
+      ctx.stroke();
+      // Right bracket ]
+      ctx.beginPath();
+      ctx.moveTo(cx + bracketW - 4, mouthY - 4);
+      ctx.lineTo(cx + bracketW, mouthY - 4);
+      ctx.lineTo(cx + bracketW, mouthY + bracketH);
+      ctx.lineTo(cx + bracketW - 4, mouthY + bracketH);
+      ctx.stroke();
+    } else if (timbre === "ETHEREAL") {
+      // Starlight diamond catchlight sparkles floating around the mouth
+      ctx.fillStyle = "rgba(255, 220, 255, 0.9)";
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = "#f5d0fe";
+      for (let s = 0; s < 3; s++) {
+        const starAngle = t * 3.0 + s * ((Math.PI * 2) / 3);
+        const starR = halfW + 7 + Math.sin(t * 5 + s) * 3;
+        const sx = cx + Math.cos(starAngle) * starR;
+        const sy = mouthY + openH * 0.4 + Math.sin(starAngle) * 7;
+        this.drawStar(ctx, sx, sy, 3.0, 1.1);
+      }
+    } else if (timbre === "GRITTY") {
+      // Biting staccato saw/flame spikes along bottom lip seam
+      ctx.strokeStyle = "rgba(255, 85, 0, 0.9)";
+      ctx.shadowBlur = 9;
+      ctx.shadowColor = "#ff2200";
+      ctx.lineWidth = 1.4;
+      const spikes = 5;
+      const spikeSpan = halfW * 1.2;
+      ctx.beginPath();
+      for (let k = 0; k <= spikes; k++) {
+        const kx = cx - spikeSpan * 0.5 + (spikeSpan / spikes) * k;
+        const ky = bottomLipY + (k % 2 === 1 ? (3.5 + Math.abs(waveDev) * 1.5) : 0);
+        if (k === 0) ctx.moveTo(kx, ky);
+        else ctx.lineTo(kx, ky);
+      }
+      ctx.stroke();
+    }
+
     // Belting acoustic soundwave arcs
-    if (shape === "BELT" || vocalsLevel > 0.38) {
+    if (timbre === "BELT" || shape === "BELT" || vocalsLevel > 0.38) {
       ctx.strokeStyle = "rgba(255, 234, 0, 0.65)";
       ctx.shadowBlur = 12;
       ctx.shadowColor = "#ffff00";

@@ -140,3 +140,52 @@ def test_harmonic_scale_pitch_math():
     cmaj7_tones = [0, 4, 7, 11]
     for tone in cmaj7_tones:
         assert tone in c_major_pitches, f"Chord tone {tone} must be in C major scale"
+
+
+def test_vocal_timbre_mouth_sprites_and_glyphs():
+    """Verify that different mouth sprites and visual styling exist for all vocal timbres:
+    SOULFUL, CYBER, ETHEREAL, GRITTY, and BELT.
+    """
+    tg_path = Path("frontend/src/tamagotchi.ts")
+    assert tg_path.exists(), "frontend/src/tamagotchi.ts must exist"
+    tg_content = tg_path.read_text(encoding="utf-8")
+
+    # VocalTimbre type definition
+    assert "VocalTimbre" in tg_content
+    expected_timbres = ["SOULFUL", "CYBER", "ETHEREAL", "GRITTY", "BELT"]
+    for timbre in expected_timbres:
+        assert f'"{timbre}"' in tg_content, f"Timbre {timbre} must be defined in VocalTimbre"
+
+    # Multi-timbre sprite bank initialization and lookup
+    assert "resolveVocalTimbre" in tg_content
+    assert "spectralRoughness" in tg_content
+    assert "getSprite" in tg_content
+
+    # Timbre-specific aesthetic palettes & reactions in tamagotchi.ts
+    assert "SOULFUL_SHAPES" in tg_content
+    assert "CYBER_SHAPES" in tg_content
+    assert "ETHEREAL_SHAPES" in tg_content
+    assert "GRITTY_SHAPES" in tg_content
+    assert "BELT_SHAPES" in tg_content
+
+    # CSS classes for all timbres in frontend/index.html
+    html_path = Path("frontend/index.html")
+    assert html_path.exists()
+    html_content = html_path.read_text(encoding="utf-8")
+
+    for timbre in ["soulful", "cyber", "ethereal", "gritty", "belt"]:
+        assert f".rave-mouth.mouth-{timbre}" in html_content, f"CSS class .rave-mouth.mouth-{timbre} must exist"
+        assert f".tamagotchi-ascii.singing .rave-mouth.mouth-{timbre}" in html_content
+
+    # Main & Sequencer pass timbre metadata
+    main_path = Path("frontend/src/main.ts")
+    assert main_path.exists()
+    main_content = main_path.read_text(encoding="utf-8")
+    assert "vocalTimbre" in main_content
+    assert "vocalPersona" in main_content
+
+    seq_path = Path("frontend/src/client_ml_sequencer.ts")
+    assert seq_path.exists()
+    seq_content = seq_path.read_text(encoding="utf-8")
+    assert "vocalTimbre" in seq_content
+

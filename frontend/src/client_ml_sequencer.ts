@@ -5279,6 +5279,8 @@ export class ClientGrooveboxConductor {
       vocalNote: this.currentVocalMeta.note,
       vocal_persona: activePersona,
       vocalPersona: activePersona,
+      vocal_timbre: activePersona === "cyber" ? "CYBER" : activePersona === "wave" ? "ETHEREAL" : activePersona === "breaks" ? "GRITTY" : "SOULFUL",
+      vocalTimbre: activePersona === "cyber" ? "CYBER" : activePersona === "wave" ? "ETHEREAL" : activePersona === "breaks" ? "GRITTY" : "SOULFUL",
       active_slice_coords: {
         drums: this.activeSongKit?.kick?.asset?.x !== undefined ? { x: this.activeSongKit.kick.asset.x, y: this.activeSongKit.kick.asset.y! } : undefined,
         bass: this.activeSongKit?.bassSubAsset?.x !== undefined ? { x: this.activeSongKit.bassSubAsset.x, y: this.activeSongKit.bassSubAsset.y! } : undefined,
