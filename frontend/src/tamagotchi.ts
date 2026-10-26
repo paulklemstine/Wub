@@ -310,7 +310,7 @@ export class TamagotchiAvatar {
       otherWaveform,
       otherLevel ?? 0
     );
-    this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel);
+    this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel ?? 0);
     this.updateDashboard();
   }
 
@@ -436,7 +436,10 @@ export class TamagotchiAvatar {
     waveform?: Uint8Array | null,
     dt: number = 0.016,
     bpm: number = 126,
-    vocalsLevel?: number
+    vocalsLevel?: number,
+    drumLevel: number = 0,
+    bassLevel: number = 0,
+    rmsLevel: number = 0
   ): void {
     if (!this.asciiEl) return;
 
@@ -452,12 +455,12 @@ export class TamagotchiAvatar {
       this.asciiEl.classList.remove("singing");
     }
 
-    // Determine Eyes (seductive starry unicorn expressions)
-    let eyes = "✧   ✧";
+    // Determine Big Expressive Anime Eyes
+    let eyes = "◕   ◕";
     if (this.isBlinking) {
-      eyes = "˘   ˘";
+      eyes = "◡   ◡";
     } else if (isDropGap) {
-      eyes = "O   O";
+      eyes = "⊙   ⊙";
     } else if (this.temporaryAction === "PET") {
       eyes = "♥   ♥";
     } else if (sec === "DROP" || this.temporaryAction === "HYPE") {
@@ -470,65 +473,87 @@ export class TamagotchiAvatar {
       eyes = "◕   ◕";
     }
 
-    // Determine Live Animated Waveform Singing Mouth!
+    // Audio reactive dynamic "X" shaped nose in the middle of the face
+    let nose = "  ><  ";
+    if (drumLevel > 0.45 || rmsLevel > 0.40) {
+      nose = " ⚔X⚔ ";
+    } else if (isSinging) {
+      nose = " ✧X✧ ";
+    } else if (sec === "DROP") {
+      nose = " ★X★ ";
+    } else if (this.isBlinking) {
+      nose = "  x  ";
+    } else {
+      nose = (Math.sin(performance.now() / 280) > 0) ? "  ><  " : "  ╳  ";
+    }
+
+    // Determine Live Animated Waveform Singing Mouth (Moved Down)
     const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap, dt, bpm, vocalsLevel);
 
-    // Render Neko / Cat Stages without shifting borders
+    // Render Neko / Cat Stages with big anime eyes, dynamic "X" nose, and mouth moved down
     let faceLines: string[] = [];
     const noteChar = this.noteFloating.length > 0 ? this.noteFloating[0].char : "✨";
 
     if (this.stage === 1) {
-      // Stage 1: Rave Kitten (cat ears, sparkly star gaze, sweet smile)
+      // Stage 1: Rave Kitten
       faceLines = bob ? [
         `       <span class="rave-ears">/\\___/\\</span>       `,
         `      (  <span class="rave-eyes">${eyes}</span>  )   <span class="rave-spark">${noteChar}</span>  `,
+        `      (  <span class="rave-nose">${nose}</span>  )   <span class="rave-spark">~✦</span> `,
         `     (  <span class="rave-mouth">${mouth}</span>  )  <span class="rave-spark">~♡</span> `,
         `      <span class="rave-body">/     \\</span>        `,
       ] : [
         `       <span class="rave-ears">/\\___/\\</span>       `,
         `      (  <span class="rave-eyes">${eyes}</span>  )   <span class="rave-spark">${noteChar}</span>  `,
+        `      (  <span class="rave-nose">${nose}</span>  )  <span class="rave-spark">~~*</span> `,
         `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~~*</span> `,
         `      <span class="rave-body">|     |</span>        `,
       ];
     } else if (this.stage === 2) {
-      // Stage 2: Disco Cat (rave shades/headphones, perky cat ears, rainbow vibes)
+      // Stage 2: Disco Cat
       faceLines = bob ? [
         `       <span class="rave-ears">/\\___/\\</span>       `,
-        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
+        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">${eyes}</span> <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
+        `      (  <span class="rave-nose">${nose}</span>  )   <span class="rave-spark">~✦</span> `,
         `     (  <span class="rave-mouth">${mouth}</span>  )  <span class="rave-spark">~🌈</span> `,
         `      <span class="rave-body">/| WUB |\\</span>      `,
       ] : [
         `       <span class="rave-ears">/\\___/\\</span>       `,
-        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">⌐■_■</span> <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
+        `    <span class="rave-wings">[o(</span> <span class="rave-eyes">${eyes}</span> <span class="rave-wings">)o]</span>  <span class="rave-spark">${noteChar}</span> `,
+        `      (  <span class="rave-nose">${nose}</span>  )  <span class="rave-spark">~~*</span> `,
         `     (  <span class="rave-mouth">${mouth}</span>  ) <span class="rave-spark">~~✨</span> `,
         `      <span class="rave-body">\\| WUB |/</span>      `,
       ];
     } else if (this.stage === 3) {
-      // Stage 3: Cyber Neko (sleek cyber lightning ears, electric wings, star gaze)
+      // Stage 3: Cyber Neko
       faceLines = bob ? [
         `       <span class="rave-ears">/\\_⚡_/\\</span>       `,
-        `    <span class="rave-wings">~/(\\</span> (<span class="rave-eyes">★   ★</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
+        `    <span class="rave-wings">~/(\\</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
+        `      (  <span class="rave-nose">${nose}</span>  )   <span class="rave-spark">~✦</span> `,
         `     <span class="rave-body">&lt;[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]&gt;</span>   `,
         `      <span class="rave-body">/  | WUB |  \\</span>    `,
         `     <span class="rave-body">(____/   \\____)</span>   `,
       ] : [
         `       <span class="rave-ears">/\\_⚡_/\\</span>       `,
-        `    <span class="rave-wings">~/\\(</span> (<span class="rave-eyes">★   ★</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
+        `    <span class="rave-wings">~/\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\)~</span> <span class="rave-spark">${noteChar}</span>`,
+        `      (  <span class="rave-nose">${nose}</span>  )  <span class="rave-spark">~~*</span> `,
         `     <span class="rave-body">\\[~</span> <span class="rave-mouth">${mouth}</span> <span class="rave-body">~]/</span>   `,
         `      <span class="rave-body">|  | WUB |  |</span>    `,
         `     <span class="rave-body">(____/   \\____)</span>   `,
       ];
     } else {
-      // Stage 4: Astral Neko (celestial glowing ears, nebula wings, divine sparkle)
+      // Stage 4: Astral Neko
       faceLines = bob ? [
         `      . <span class="rave-ears">/\\✦/\\</span> .       `,
-        `   <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">♥   ♥</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
+        `   <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
+        `      (  <span class="rave-nose">${nose}</span>  )   <span class="rave-spark">~✦</span> `,
         `    <span class="rave-body">&lt;[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]&gt;</span>   `,
         `     <span class="rave-body">/    | 505 |    \\</span>   `,
         `    <span class="rave-body">(____/       \\____)</span>  `,
       ] : [
         `      . <span class="rave-ears">/\\✦/\\</span> .       `,
-        `   <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">♥   ♥</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
+        `   <span class="rave-wings">~/{\\(</span> (<span class="rave-eyes">${eyes}</span>) <span class="rave-wings">/\\}~</span> <span class="rave-spark">${noteChar}</span>`,
+        `      (  <span class="rave-nose">${nose}</span>  )  <span class="rave-spark">~~*</span> `,
         `    <span class="rave-body">\\[~</span> ✧<span class="rave-mouth">${mouth}</span>✧ <span class="rave-body">~]/</span>   `,
         `     <span class="rave-body">|    | 505 |    |</span>   `,
         `    <span class="rave-body">(____/       \\____)</span>  `,
@@ -745,17 +770,17 @@ export class TamagotchiAvatar {
     // -------------------------------------------------------------------------
     // 2. EXPRESSIVE FACIAL FEATURES
     // -------------------------------------------------------------------------
-    const eyeSpacing = 22 + 2 * this.stage;
-    const eyeY = cy - 4;
+    const eyeSpacing = 24 + 2 * this.stage;
+    const eyeY = cy - 7;
     const leftEyeX = cx - eyeSpacing;
     const rightEyeX = cx + eyeSpacing;
 
     // Cheeks subtle neon blush
     ctx.save();
-    ctx.fillStyle = "rgba(255, 105, 180, 0.28)";
+    ctx.fillStyle = "rgba(255, 105, 180, 0.32)";
     ctx.beginPath();
-    ctx.arc(leftEyeX - 10, eyeY + 14, 6.5, 0, Math.PI * 2);
-    ctx.arc(rightEyeX + 10, eyeY + 14, 6.5, 0, Math.PI * 2);
+    ctx.arc(leftEyeX - 12, eyeY + 16, 7.5, 0, Math.PI * 2);
+    ctx.arc(rightEyeX + 12, eyeY + 16, 7.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
@@ -771,8 +796,8 @@ export class TamagotchiAvatar {
     const wSpan = 18 + 4 * this.stage;
 
     // Left Whiskers (fanning outward left)
-    const lCheekX = leftEyeX - 12;
-    const lCheekY = eyeY + 14;
+    const lCheekX = leftEyeX - 16;
+    const lCheekY = eyeY + 16;
     ctx.beginPath();
     ctx.moveTo(lCheekX, lCheekY - 3);
     ctx.lineTo(lCheekX - wSpan, lCheekY - 7 + whiskerTwitch);
@@ -789,8 +814,8 @@ export class TamagotchiAvatar {
     ctx.stroke();
 
     // Right Whiskers (fanning outward right, mirrored)
-    const rCheekX = rightEyeX + 12;
-    const rCheekY = eyeY + 14;
+    const rCheekX = rightEyeX + 16;
+    const rCheekY = eyeY + 16;
     ctx.beginPath();
     ctx.moveTo(rCheekX, rCheekY - 3);
     ctx.lineTo(rCheekX + wSpan, rCheekY - 7 + whiskerTwitch);
@@ -807,7 +832,7 @@ export class TamagotchiAvatar {
     ctx.stroke();
     ctx.restore();
 
-    // Eyes rendering
+    // Big Anime Eyes rendering
     ctx.save();
     ctx.shadowBlur = 10;
     ctx.shadowColor = accentColor;
@@ -816,34 +841,33 @@ export class TamagotchiAvatar {
     ctx.lineWidth = 2.2;
 
     if (this.isBlinking) {
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = accentColor;
-      ctx.strokeStyle = accentColor;
-      ctx.lineWidth = 2.2;
-      ctx.beginPath();
-      ctx.arc(leftEyeX, eyeY, 6, 0.2 * Math.PI, 0.8 * Math.PI);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(rightEyeX, eyeY, 6, 0.2 * Math.PI, 0.8 * Math.PI);
-      ctx.stroke();
+      this.drawAnimeBlinkEye(ctx, leftEyeX, eyeY, accentColor, sec === "DROP");
+      this.drawAnimeBlinkEye(ctx, rightEyeX, eyeY, accentColor, sec === "DROP");
     } else if (this.temporaryAction === "PET") {
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 14;
       ctx.shadowColor = "#ff69b4";
       ctx.fillStyle = "#ff69b4";
-      this.drawHeart(ctx, leftEyeX, eyeY, 6.5);
-      this.drawHeart(ctx, rightEyeX, eyeY, 6.5);
+      this.drawHeart(ctx, leftEyeX, eyeY, 11);
+      this.drawHeart(ctx, rightEyeX, eyeY, 11);
     } else {
-      // Audio Reactive Dual Concentric Waveform Eyes:
-      // Inner Drum Pupil Ring vibrating inside Outer Bass Iris Ring!
-      this.drawWaveformEye(ctx, leftEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap);
-      this.drawWaveformEye(ctx, rightEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap);
+      // Big Anime-Like Audio Reactive Concentric Waveform Eyes:
+      // Large vertical anime iris, glowing gradient, bass ripples, drum pupil, upper lash wing & catchlights
+      this.drawWaveformEye(ctx, leftEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap, accentColor, cx);
+      this.drawWaveformEye(ctx, rightEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap, accentColor, cx);
     }
     ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 3. THE MINI LOOP AUDIO REACTIVE MOUTH (SINGS LIVE VOCAL WAVEFORM)
+    // 2.5. AUDIO REACTIVE DYNAMIC "X" SHAPED NOSE IN THE MIDDLE OF THE FACE
     // -------------------------------------------------------------------------
-    const mouthY = cy + 22;
+    const noseX = cx;
+    const noseY = cy + 13;
+    this.drawDynamicNose(ctx, noseX, noseY, drumLevel, bassLevel, vocalsLevel, rmsLevel, isSinging, waveform, accentColor);
+
+    // -------------------------------------------------------------------------
+    // 3. THE MINI LOOP AUDIO REACTIVE MOUTH (MOVED DOWN)
+    // -------------------------------------------------------------------------
+    const mouthY = cy + 34;
     const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
 
     ctx.save();
@@ -963,13 +987,30 @@ export class TamagotchiAvatar {
     ctx.fill();
   }
 
-  private drawSparkleEye(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number): void {
+  private drawAnimeBlinkEye(ctx: CanvasRenderingContext2D, eyeX: number, eyeY: number, color: string, isDrop: boolean): void {
+    ctx.save();
+    ctx.strokeStyle = isDrop ? "#ffffff" : color;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = color;
+    ctx.lineWidth = 3.6;
+    ctx.lineCap = "round";
+
+    // Cute curved anime blink arch: ( ◡ ) with outer lash flick
+    const w = 13;
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.arc(eyeX, eyeY + 2, w, 1.15 * Math.PI, 1.85 * Math.PI, false);
     ctx.stroke();
+
+    // Outer anime lash flick
+    const canvasWidth = this.canvasEl ? this.canvasEl.width : 200;
+    const flickDir = eyeX < canvasWidth * 0.5 ? -1 : 1;
+    ctx.lineWidth = 2.4;
     ctx.beginPath();
-    ctx.arc(cx - r * 0.3, cy - r * 0.3, r * 0.35, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(eyeX + flickDir * (w * 0.85), eyeY - 2);
+    ctx.lineTo(eyeX + flickDir * (w + 4), eyeY - 6);
+    ctx.stroke();
+
+    ctx.restore();
   }
 
   private drawWaveformEye(
@@ -981,25 +1022,49 @@ export class TamagotchiAvatar {
     drumLevel: number = 0,
     bassLevel: number = 0,
     isDrop: boolean = false,
-    isDropGap: boolean = false
+    isDropGap: boolean = false,
+    accentColor: string = "#00ffff",
+    faceCenterX: number = 100
   ): void {
-    const eyeSteps = 32;
+    const eyeSteps = 36;
     const t = performance.now() / 1000;
 
-    // -------------------------------------------------------------------------
-    // 1. OUTER RING: BASS IRIS WAVEFORM
-    // -------------------------------------------------------------------------
-    const baseIrisR = (isDropGap ? 11.5 : (isDrop ? 9.5 : 8.2)) + Math.min(3.2, bassLevel * 4.5);
+    // Anime Eye Dimensions: Big expressive vertical oval
+    const baseIrisRx = (isDropGap ? 13.5 : (isDrop ? 12.5 : 11.0)) + Math.min(3.5, bassLevel * 3.8);
+    const baseIrisRy = (isDropGap ? 19.5 : (isDrop ? 18.0 : 16.0)) + Math.min(4.5, bassLevel * 5.0);
+
     const bassWaveLen = bassWaveform ? bassWaveform.length : 0;
     const irisStroke = isDrop ? "#00ffff" : "#00ffcc";
     const irisGlow = isDrop ? "#00e5ff" : "#00ffaa";
 
+    // 1. Sclera / Eye White backing for crisp anime pop
     ctx.save();
-    ctx.shadowBlur = isDrop ? 12 : 8;
+    ctx.fillStyle = "rgba(240, 248, 255, 0.94)";
+    ctx.beginPath();
+    ctx.ellipse(eyeX, eyeY, baseIrisRx + 2.5, baseIrisRy + 2.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // 2. Iris: Rich Anime Multi-Color Gradient with Audio-Reactive Bass Waveform Ripple
+    ctx.save();
+    ctx.shadowBlur = isDrop ? 14 : 9;
     ctx.shadowColor = irisGlow;
     ctx.strokeStyle = irisStroke;
-    ctx.fillStyle = "rgba(0, 255, 204, 0.14)";
-    ctx.lineWidth = 1.9;
+    ctx.lineWidth = 2.2;
+
+    const grad = ctx.createLinearGradient(eyeX, eyeY - baseIrisRy, eyeX, eyeY + baseIrisRy);
+    if (isDrop) {
+      grad.addColorStop(0.0, "rgba(20, 0, 50, 0.98)");
+      grad.addColorStop(0.35, "rgba(0, 180, 255, 0.88)");
+      grad.addColorStop(0.80, "rgba(0, 255, 230, 0.95)");
+      grad.addColorStop(1.0, "rgba(255, 255, 255, 0.9)");
+    } else {
+      grad.addColorStop(0.0, "rgba(10, 15, 40, 0.96)");
+      grad.addColorStop(0.45, "rgba(0, 120, 215, 0.85)");
+      grad.addColorStop(0.85, "rgba(0, 255, 170, 0.92)");
+      grad.addColorStop(1.0, "rgba(180, 255, 235, 0.9)");
+    }
+    ctx.fillStyle = grad;
 
     ctx.beginPath();
     for (let j = 0; j <= eyeSteps; j++) {
@@ -1011,10 +1076,11 @@ export class TamagotchiAvatar {
       } else {
         bSample = Math.sin(phi * 2.0 + t * 7.0) * 0.22;
       }
-      const disp = bSample * (2.8 * Math.min(1.5, bassLevel * 2.5) + (isDropGap ? 1.5 : 0.7));
-      const r = Math.max(2.0, baseIrisR + disp);
-      const x = eyeX + r * Math.cos(phi);
-      const y = eyeY + r * Math.sin(phi);
+      const disp = bSample * (3.0 * Math.min(1.5, bassLevel * 2.5) + (isDropGap ? 1.6 : 0.7));
+      const rx = Math.max(2.0, baseIrisRx + disp * 0.7);
+      const ry = Math.max(3.0, baseIrisRy + disp);
+      const x = eyeX + rx * Math.cos(phi);
+      const y = eyeY + ry * Math.sin(phi);
       if (j === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
@@ -1023,19 +1089,18 @@ export class TamagotchiAvatar {
     ctx.stroke();
     ctx.restore();
 
-    // -------------------------------------------------------------------------
-    // 2. INNER RING: DRUM PUPIL WAVEFORM OUTLINED INSIDE BASS IRIS
-    // -------------------------------------------------------------------------
-    const basePupilR = (isDropGap ? 6.5 : (isDrop ? 4.8 : 3.8)) + Math.min(2.5, drumLevel * 3.8);
+    // 3. Inner Pupil: Dark Anime Core pulsing to Drum Waveform
+    const basePupilRx = (isDropGap ? 7.2 : (isDrop ? 6.5 : 5.5)) + Math.min(2.5, drumLevel * 3.5);
+    const basePupilRy = (isDropGap ? 11.0 : (isDrop ? 9.8 : 8.5)) + Math.min(3.5, drumLevel * 4.5);
     const drumWaveLen = drumWaveform ? drumWaveform.length : 0;
     const pupilStroke = isDrop ? "#ffffff" : "#ffe600";
     const pupilGlow = isDrop ? "#ffffff" : "#ffbb00";
 
     ctx.save();
-    ctx.shadowBlur = 7;
+    ctx.shadowBlur = 8;
     ctx.shadowColor = pupilGlow;
     ctx.strokeStyle = pupilStroke;
-    ctx.fillStyle = "rgba(10, 10, 22, 0.88)";
+    ctx.fillStyle = "rgba(10, 5, 24, 0.92)";
     ctx.lineWidth = 1.8;
 
     ctx.beginPath();
@@ -1048,22 +1113,157 @@ export class TamagotchiAvatar {
       } else {
         dSample = Math.sin(phi * 3.0 + t * 11.0) * 0.22;
       }
-      const disp = dSample * (2.2 * Math.min(1.5, drumLevel * 2.5) + (isDropGap ? 1.2 : 0.5));
-      const r = Math.max(1.2, basePupilR + disp);
-      const x = eyeX + r * Math.cos(phi);
-      const y = eyeY + r * Math.sin(phi);
+      const disp = dSample * (2.4 * Math.min(1.5, drumLevel * 2.5) + (isDropGap ? 1.4 : 0.5));
+      const rx = Math.max(1.5, basePupilRx + disp * 0.6);
+      const ry = Math.max(2.0, basePupilRy + disp);
+      const x = eyeX + rx * Math.cos(phi);
+      const y = eyeY + ry * Math.sin(phi);
       if (j === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+    ctx.restore();
 
-    // Sharp pinpoint glint highlight
-    ctx.fillStyle = "#ffffff";
+    // 4. Sweeping Anime Upper Eyelash Line & Wing Flick
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = isDrop ? "#ffffff" : "#0d1b2a";
+    ctx.lineWidth = 3.6;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = accentColor;
+
+    const isLeft = eyeX < faceCenterX;
+    const flickDir = isLeft ? -1 : 1;
+    const lashRx = baseIrisRx * 1.25;
+
     ctx.beginPath();
-    ctx.arc(eyeX - basePupilR * 0.35, eyeY - basePupilR * 0.35, 1.2, 0, Math.PI * 2);
+    ctx.moveTo(eyeX - flickDir * (lashRx * 0.65), eyeY - baseIrisRy * 0.70);
+    ctx.quadraticCurveTo(eyeX, eyeY - baseIrisRy * 1.18, eyeX + flickDir * lashRx, eyeY - baseIrisRy * 0.85);
+    // Outer anime lash flick
+    ctx.lineTo(eyeX + flickDir * (lashRx + 5), eyeY - baseIrisRy * 1.10);
+    ctx.stroke();
+
+    // Delicate lower anime lash accent
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(13, 27, 42, 0.65)";
+    ctx.beginPath();
+    ctx.arc(eyeX, eyeY + baseIrisRy * 0.92, baseIrisRx * 0.55, 0.2 * Math.PI, 0.8 * Math.PI);
+    ctx.stroke();
+    ctx.restore();
+
+    // 5. Classic Anime Catchlights (Big sparkling glint + secondary glints)
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = "#ffffff";
+
+    // Primary large anime catchlight (upper left)
+    const glintPulse = 1.0 + 0.15 * Math.sin(t * 6.0);
+    const glint1R = (isDrop ? 4.5 : 3.8) * glintPulse;
+    ctx.beginPath();
+    ctx.ellipse(eyeX - baseIrisRx * 0.36, eyeY - baseIrisRy * 0.38, glint1R, glint1R * 1.1, -0.3, 0, Math.PI * 2);
     ctx.fill();
+
+    // Secondary soft anime catchlight (lower right)
+    const glint2R = isDrop ? 2.2 : 1.8;
+    ctx.beginPath();
+    ctx.arc(eyeX + baseIrisRx * 0.38, eyeY + baseIrisRy * 0.36, glint2R, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tertiary micro sparkle (lower left iris reflection)
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    ctx.arc(eyeX - baseIrisRx * 0.25, eyeY + baseIrisRy * 0.45, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // If DROP: Add a dazzling 4-point anime star in the center!
+    if (isDrop) {
+      ctx.globalAlpha = 0.9;
+      this.drawStar(ctx, eyeX, eyeY, 5.0, 1.8);
+    }
+    ctx.restore();
+  }
+
+  private drawDynamicNose(
+    ctx: CanvasRenderingContext2D,
+    noseX: number,
+    noseY: number,
+    drumLevel: number = 0,
+    bassLevel: number = 0,
+    vocalsLevel: number = 0,
+    rmsLevel: number = 0,
+    isSinging: boolean = false,
+    waveform?: Uint8Array | null,
+    accentColor: string = "#00ffff"
+  ): void {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    const t = performance.now() / 1000;
+
+    // Dynamic audio reactivity: scales dynamically with drum hits & RMS level
+    const audioEnergy = Math.min(1.5, drumLevel * 1.8 + rmsLevel * 1.2 + (isSinging ? 0.4 : 0.0));
+    const pulse = 1.0 + 1.6 * audioEnergy;
+    const baseArm = 4.2 + 0.5 * this.stage;
+    const armLen = baseArm * pulse;
+
+    // Subtle rhythmic rotation & breathing
+    const rot = Math.sin(t * 7.0) * (0.04 + 0.12 * drumLevel);
+
+    // Waveform sample displacement for organic audio reaction
+    let waveDev = 0;
+    if (waveform && waveform.length > 0) {
+      const midIdx = Math.floor(waveform.length * 0.5);
+      waveDev = ((waveform[midIdx] - 128) / 128.0) * (2.8 * pulse);
+    } else {
+      waveDev = Math.sin(t * 14.0) * (1.0 * pulse);
+    }
+
+    const noseColor = isSinging ? "#ffff00" : (drumLevel > 0.45 ? "#ff00a0" : accentColor);
+    const noseGlow = isSinging ? "#ffea00" : (drumLevel > 0.45 ? "#ff0077" : "#00ffff");
+
+    ctx.shadowBlur = 10 + 18 * audioEnergy;
+    ctx.shadowColor = noseGlow;
+    ctx.strokeStyle = noseColor;
+    ctx.lineWidth = 2.4 + 1.8 * Math.min(1.2, drumLevel * 1.5);
+
+    ctx.translate(noseX, noseY);
+    ctx.rotate(rot);
+
+    // Dynamic "X" cross arms with audio-reactive center displacement
+    const armX = armLen;
+    const armY = armLen * 0.85;
+
+    // First diagonal arm (\)
+    ctx.beginPath();
+    ctx.moveTo(-armX, -armY);
+    ctx.quadraticCurveTo(waveDev * 0.6, -waveDev * 0.4, armX, armY);
+    ctx.stroke();
+
+    // Second diagonal arm (/)
+    ctx.beginPath();
+    ctx.moveTo(armX, -armY);
+    ctx.quadraticCurveTo(-waveDev * 0.6, waveDev * 0.4, -armX, armY);
+    ctx.stroke();
+
+    // Central Audio Reactive Nose Core (Pulsing glowing diamond/jewel)
+    const coreR = Math.max(1.2, (isSinging ? 3.0 : 1.8) * Math.min(2.0, pulse));
+    ctx.fillStyle = isSinging ? "#ffffff" : noseColor;
+    ctx.shadowBlur = 12 + 14 * audioEnergy;
+    ctx.shadowColor = "#ffffff";
+    ctx.beginPath();
+    // Glowing diamond core at intersection of X
+    ctx.moveTo(0, -coreR);
+    ctx.lineTo(coreR, 0);
+    ctx.lineTo(0, coreR);
+    ctx.lineTo(-coreR, 0);
+    ctx.closePath();
+    ctx.fill();
+
     ctx.restore();
   }
 
