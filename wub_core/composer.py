@@ -70,7 +70,7 @@ class PhraseComposerModel:
         n_transitions = 0
 
         for tr in tracks:
-            if len(tr.stems_available) < 2:
+            if not tr.stems_available:
                 continue
 
             n_tatums = len(tr.tatums)
@@ -94,6 +94,18 @@ class PhraseComposerModel:
                         self.pattern_continuations[pat_curr.id][pat_next.id] += w * 10.0
                         self.energy_by_bar[p_bar_curr].append(pat_curr.energy)
                         n_transitions += 1
+                    else:
+                        # Fallback to multi-stem pattern bar index (covers full-catalog tracks with 1..4 stems)
+                        msp_curr = bank.multistem_by_track_bar.get((tr.track_id, bar))
+                        msp_next = bank.multistem_by_track_bar.get((tr.track_id, bar + 1))
+                        if msp_curr and msp_next:
+                            g_curr = msp_curr.groove_types.get(stem)
+                            g_next = msp_next.groove_types.get(stem)
+                            if g_curr and g_next and g_curr != "none" and g_next != "none":
+                                key = (p_bar_curr, stem, g_curr)
+                                self.transitions[key][g_next] += 1.0
+                                self.energy_by_bar[p_bar_curr].append(msp_curr.energy)
+                                n_transitions += 1
 
             # Also learn consecutive phrase-to-phrase continuations within the same song
             track_phrases = bank.phrases_by_track.get(tr.track_id, [])

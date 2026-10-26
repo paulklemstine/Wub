@@ -55,9 +55,12 @@ def find_unstemmed_candidates(
             manifest = {}
 
     candidates = []
+    from collections import defaultdict
+    import hashlib
     from wub_core.separator import compute_track_id
 
-    # Prioritize pandora/good first, then general pandora
+    # Prioritize pandora/good first, then general pandora, stratified round-robin across all artists A-Z
+    by_artist: dict[str, list[tuple[Path, str, float, str]]] = defaultdict(list)
     for lib_dir in library_dirs:
         if not lib_dir.exists():
             continue
@@ -71,7 +74,20 @@ def find_unstemmed_candidates(
             key = meta.get("key", "unknown")
             sdir = stems_dir / tid
             if not stems_exist(sdir) and (min_bpm <= bpm <= max_bpm or bpm <= 0):
-                candidates.append((p, tid, bpm, key))
+                artist = p.stem.split(" - ")[0].strip() if " - " in p.stem else p.stem[:12]
+                by_artist[artist].append((p, tid, bpm, key))
+
+    # Order artists deterministically by hash so we sample uniformly across the entire A-Z catalog
+    sorted_artists = sorted(
+        by_artist.keys(),
+        key=lambda a: hashlib.md5(a.encode("utf-8", errors="ignore")).hexdigest(),
+    )
+    max_per_artist = max((len(v) for v in by_artist.values()), default=0)
+    for round_idx in range(max_per_artist):
+        for artist in sorted_artists:
+            items = by_artist[artist]
+            if round_idx < len(items):
+                candidates.append(items[round_idx])
 
     return candidates
 
@@ -175,7 +191,7 @@ def main() -> None:
 
                 # 3. Composing ML Phrase & Section Transition Models Refinement
                 log(f"[Evolution Epoch #{evolution_epoch}] Refining Composing ML Phrase & Section Transition Models...")
-                subprocess.run([sys.executable, "scripts/train_composing_ml.py", "--max-tracks", "30", "--audio-eval", "2"], check=False)
+                subprocess.run([sys.executable, "scripts/train_composing_ml.py", "--max-tracks", "200", "--audio-eval", "2"], check=False)
 
                 # 4. Rebuild UMAP
                 log(f"[Evolution Epoch #{evolution_epoch}] Updating FAISS indices and UMAP...")
@@ -286,7 +302,7 @@ def main() -> None:
 
                 # Composing ML Phrase and Section Transitions Refinement
                 log("Refining Composing ML Phrase & Section Transition Models...")
-                subprocess.run([sys.executable, "scripts/train_composing_ml.py", "--max-tracks", "30", "--audio-eval", "2"], check=False)
+                subprocess.run([sys.executable, "scripts/train_composing_ml.py", "--max-tracks", "200", "--audio-eval", "2"], check=False)
                 log("Composing ML Models refined.")
 
                 # Refresh standalone client bundle

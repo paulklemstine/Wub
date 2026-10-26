@@ -28,8 +28,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train pattern and song composing ML models.")
     parser.add_argument("--processed", default="data/processed", help="Path to processed JSON analyses")
     parser.add_argument("--stems", default="data/stems", help="Path to stems directory")
-    parser.add_argument("--max-tracks", type=int, default=100, help="Max tracks to train on (0 = all)")
-    parser.add_argument("--audio-eval", type=int, default=16, help="Generic patterns to optimize against real audio")
+    parser.add_argument("--max-tracks", type=int, default=200, help="Max tracks to train on (0 = all)")
+    parser.add_argument("--audio-eval", type=int, default=8, help="Generic patterns to optimize against real audio")
     parser.add_argument("--out", default=str(COMPOSING_WEIGHTS_FILE), help="Output weights JSON")
     args = parser.parse_args()
 
@@ -58,10 +58,10 @@ def main() -> None:
         flush=True,
     )
 
-    # 2. Train Song-Intrinsic Compression & Pattern Mining on Authentic Songs
-    print("Training Song-Intrinsic Vocabulary & Pattern Compression...", flush=True)
+    # 2. Train Song-Intrinsic Compression & Pattern Mining on Authentic Songs across the catalog
+    print("Training Song-Intrinsic Vocabulary & Pattern Compression across catalog...", flush=True)
     fb_engine = PatternAudioFeedbackEngine()
-    comp_res = fb_engine.train_song_intrinsic_compression(store, max_tracks=min(25, len(tracks)), target_vocab_per_stem=6)
+    comp_res = fb_engine.train_song_intrinsic_compression(store, max_tracks=len(tracks), target_vocab_per_stem=6)
     print(
         f"Compressed {comp_res.get('compressed_songs')} authentic songs | "
         f"Mean compression ratio: {comp_res.get('mean_compression_ratio')}",

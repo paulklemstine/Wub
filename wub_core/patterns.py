@@ -230,6 +230,38 @@ class PatternBank:
             prev_stem_seg: Dict[str, Optional[str]] = {s: None for s in tr.stems_available}
             track_multi_patterns: List[MultiStemPattern] = []
 
+            # Pre-index per-track slice references O(1) once per track (avoiding quadratic O(N^2) palette scans per bar)
+            tr_drums = slices_by_track_stem.get((tr.track_id, "drums"), [])
+            track_kicks = [s for s in tr_drums if AcousticSliceClassifier.classify(s) == "kick"]
+            track_snares = [s for s in tr_drums if AcousticSliceClassifier.classify(s) == "snare"]
+            track_hats = [s for s in tr_drums if "hat" in AcousticSliceClassifier.classify(s)]
+            track_fills = [s for s in tr_drums if AcousticSliceClassifier.classify(s) in ("fill", "percussion")]
+            k_ref = track_kicks[0] if track_kicks else (track_fills[0] if track_fills else (self.slice_palette["drums"]["kick"][0] if self.slice_palette["drums"]["kick"] else None))
+            s_ref = track_snares[0] if track_snares else (track_fills[0] if track_fills else (self.slice_palette["drums"]["snare"][0] if self.slice_palette["drums"]["snare"] else k_ref))
+            h_ref = track_hats[0] if track_hats else (self.slice_palette["drums"]["hat"][0] if self.slice_palette["drums"]["hat"] else s_ref)
+
+            track_bass = slices_by_track_stem.get((tr.track_id, "bass"), [])
+            if not track_bass:
+                for pool in self.slice_palette["bass"].values():
+                    if pool:
+                        track_bass = [pool[0]]
+                        break
+
+            track_other = slices_by_track_stem.get((tr.track_id, "other"), [])
+            if not track_other:
+                for pool in self.slice_palette["other"].values():
+                    if pool:
+                        track_other = [pool[0]]
+                        break
+
+            track_vocals = slices_by_track_stem.get((tr.track_id, "vocals"), [])
+            if not track_vocals:
+                for pool in self.slice_palette["vocals"].values():
+                    if pool:
+                        track_vocals = pool[:8]
+                        break
+            v_pool_short = [s for s in track_vocals if s.duration < 0.6] or track_vocals
+
             for start_idx in downbeat_indices:
                 if start_idx + 16 > n_tatums:
                     continue
@@ -274,15 +306,6 @@ class PatternBank:
                 has_backbeat = any(s in drum_onsets for s in (4, 12))
                 is_rhythm_broken = (len(drum_onsets) < 4) or not (has_downbeat and has_backbeat)
 
-                track_kicks = [s for s in self.slice_palette["drums"]["kick"] if s.track_id == tr.track_id]
-                track_snares = [s for s in self.slice_palette["drums"]["snare"] if s.track_id == tr.track_id]
-                track_hats = [s for s in self.slice_palette["drums"]["hat"] if s.track_id == tr.track_id]
-                track_fills = [s for s in self.slice_palette["drums"]["fill"] if s.track_id == tr.track_id]
-
-                k_ref = track_kicks[0] if track_kicks else (track_fills[0] if track_fills else (self.slice_palette["drums"]["kick"][0] if self.slice_palette["drums"]["kick"] else None))
-                s_ref = track_snares[0] if track_snares else (track_fills[0] if track_fills else (self.slice_palette["drums"]["snare"][0] if self.slice_palette["drums"]["snare"] else k_ref))
-                h_ref = track_hats[0] if track_hats else (self.slice_palette["drums"]["hat"][0] if self.slice_palette["drums"]["hat"] else s_ref)
-
                 if is_rhythm_broken and k_ref is not None:
                     # Anchor downbeats 0 and 8
                     if bar_stems["drums"][0] is None:
@@ -310,28 +333,20 @@ class PatternBank:
                     bar_onsets["drums"] = [i for i, s in enumerate(bar_stems["drums"]) if s is not None]
 
                 # Feedback check 2: Bass pocket integrity
-                if len(bar_onsets["bass"]) == 0:
-                    track_bass = [s for pool in self.slice_palette["bass"].values() for s in pool if s.track_id == tr.track_id]
-                    if not track_bass:
-                        track_bass = [s for pool in self.slice_palette["bass"].values() for s in pool]
-                    if track_bass:
-                        b_ref = track_bass[0]
-                        for ob in (2, 6, 10, 14):
-                            bar_stems["bass"][ob] = b_ref
-                            bar_vels["bass"][ob] = 0.88
-                        bar_onsets["bass"] = [2, 6, 10, 14]
+                if len(bar_onsets["bass"]) == 0 and track_bass:
+                    b_ref = track_bass[0]
+                    for ob in (2, 6, 10, 14):
+                        bar_stems["bass"][ob] = b_ref
+                        bar_vels["bass"][ob] = 0.88
+                    bar_onsets["bass"] = [2, 6, 10, 14]
 
                 # Feedback check 3: Synths/Other melodic groove integrity
-                if len(bar_onsets["other"]) == 0:
-                    track_other = [s for pool in self.slice_palette["other"].values() for s in pool if s.track_id == tr.track_id]
-                    if not track_other:
-                        track_other = [s for pool in self.slice_palette["other"].values() for s in pool]
-                    if track_other:
-                        o_ref = track_other[0]
-                        for ob in (2, 10):
-                            bar_stems["other"][ob] = o_ref
-                            bar_vels["other"][ob] = 0.85
-                        bar_onsets["other"] = [2, 10]
+                if len(bar_onsets["other"]) == 0 and track_other:
+                    o_ref = track_other[0]
+                    for ob in (2, 10):
+                        bar_stems["other"][ob] = o_ref
+                        bar_vels["other"][ob] = 0.85
+                    bar_onsets["other"] = [2, 10]
 
                 # Feedback check 4: Vocal melody & chop singing integrity
                 # Authentic dance music vocals feature continuous lyrical lines, hook motifs, and syncopated chops.
@@ -340,31 +355,26 @@ class PatternBank:
                     (bar_stems["vocals"][s] is not None and bar_stems["vocals"][s].duration >= 0.6)
                     for s in bar_onsets["vocals"]
                 )
-                if len(bar_onsets["vocals"]) == 0 or (len(bar_onsets["vocals"]) == 1 and not has_long_vocal_phrase):
-                    track_vocals = [s for pool in self.slice_palette["vocals"].values() for s in pool if s.track_id == tr.track_id]
-                    if not track_vocals:
-                        track_vocals = [s for pool in self.slice_palette["vocals"].values() for s in pool]
-                    if track_vocals:
-                        # If the available slice is a long phrase (>= 0.6s), anchor on step 0 and let it sing its whole phrase!
-                        if track_vocals[0].duration >= 0.6:
-                            bar_stems["vocals"][0] = track_vocals[0]
-                            bar_vels["vocals"][0] = 0.95
-                            bar_onsets["vocals"] = [0]
+                if (len(bar_onsets["vocals"]) == 0 or (len(bar_onsets["vocals"]) == 1 and not has_long_vocal_phrase)) and track_vocals:
+                    # If the available slice is a long phrase (>= 0.6s), anchor on step 0 and let it sing its whole phrase!
+                    if track_vocals[0].duration >= 0.6:
+                        bar_stems["vocals"][0] = track_vocals[0]
+                        bar_vels["vocals"][0] = 0.95
+                        bar_onsets["vocals"] = [0]
+                    else:
+                        if phrase_bar in (0, 2, 4, 6):
+                            v_onsets = [0, 3, 6, 8, 10, 12, 14] if (bar_num % 2 == 0) else [0, 4, 7, 10, 12]
+                        elif phrase_bar == 7:
+                            v_onsets = [0, 2, 4, 6, 8, 10, 12, 14]
                         else:
-                            if phrase_bar in (0, 2, 4, 6):
-                                v_onsets = [0, 3, 6, 8, 10, 12, 14] if (bar_num % 2 == 0) else [0, 4, 7, 10, 12]
-                            elif phrase_bar == 7:
-                                v_onsets = [0, 2, 4, 6, 8, 10, 12, 14]
-                            else:
-                                v_onsets = [0, 2, 5, 8, 11, 14]
+                            v_onsets = [0, 2, 5, 8, 11, 14]
 
-                            # Sequence consecutive slices across the onsets so words sound natural and sequential
-                            v_pool = [s for s in track_vocals if s.duration < 0.6] or track_vocals
-                            for idx, s_step in enumerate(v_onsets):
-                                slice_pick = v_pool[idx % len(v_pool)]
-                                bar_stems["vocals"][s_step] = slice_pick
-                                bar_vels["vocals"][s_step] = 0.90
-                            bar_onsets["vocals"] = v_onsets
+                        # Sequence consecutive slices across the onsets so words sound natural and sequential
+                        for idx, s_step in enumerate(v_onsets):
+                            slice_pick = v_pool_short[idx % len(v_pool_short)]
+                            bar_stems["vocals"][s_step] = slice_pick
+                            bar_vels["vocals"][s_step] = 0.90
+                        bar_onsets["vocals"] = v_onsets
 
                 # Classify groove types for each stem after reinforcement
                 bar_grooves["drums"] = classify_drum_groove(bar_onsets["drums"], 16)

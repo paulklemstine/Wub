@@ -1479,11 +1479,15 @@ class PatternAudioFeedbackEngine:
             if not an:
                 continue
 
-            # Gather candidate patterns for this track
-            candidates = [p for stem in STEMS for p in bank.patterns_by_stem.get(stem, []) if p.track_id == tid]
+            # Gather top 3 representative candidate patterns per stem for this track (avoiding 500+ STFTs per song)
+            candidates = [
+                p
+                for stem in STEMS
+                for p in [cp for cp in bank.patterns_by_stem.get(stem, []) if cp.track_id == tid][:3]
+            ]
             if not candidates:
                 # Fall back to general patterns from the bank
-                candidates = [p for stem in STEMS for p in bank.patterns_by_stem.get(stem, [])[:6]]
+                candidates = [p for stem in STEMS for p in bank.patterns_by_stem.get(stem, [])[:3]]
 
             report = miner.mine_song_patterns_and_transitions(
                 track_analysis=an,
@@ -1520,7 +1524,7 @@ class PatternAudioFeedbackEngine:
     def train_song_intrinsic_compression(
         self,
         corpus_store: Any,
-        max_tracks: int = 35,
+        max_tracks: int = 160,
         target_vocab_per_stem: int = 6,
     ) -> Dict[str, Any]:
         """Compress songs into their intrinsic reduced vocabularies and recurring patterns.
@@ -1531,14 +1535,18 @@ class PatternAudioFeedbackEngine:
         from wub_core.song_intrinsic_compressor import SongIntrinsicCompressor
 
         compressor = SongIntrinsicCompressor(target_vocab_per_stem=target_vocab_per_stem)
-        tracks = getattr(corpus_store, "tracks", [])
+        if isinstance(corpus_store, list):
+            tracks = corpus_store
+        else:
+            tracks = getattr(corpus_store, "tracks", [])
         if not tracks:
             return {"status": "empty_corpus", "compressed_songs": 0}
 
         compressed_models: Dict[str, Any] = {}
         total_compression = 0.0
 
-        for tr in tracks[:max_tracks]:
+        selected_tracks = tracks if (max_tracks is None or max_tracks <= 0) else tracks[:max_tracks]
+        for tr in selected_tracks:
             tid = tr.track_id
             try:
                 rep = compressor.compress_song(tr, k_per_stem=target_vocab_per_stem)
@@ -1547,7 +1555,7 @@ class PatternAudioFeedbackEngine:
                 for stem, p_list in rep.intrinsic_patterns.items():
                     stem_trans = rep.transition_matrices.get(stem, {})
                     formatted_list = []
-                    capped_list = p_list[:16]
+                    capped_list = p_list[:8]
                     for idx_p, p in enumerate(capped_list):
                         next_map = stem_trans.get(p.id, {})
                         # Pick dominant non-self successor if available, else next rank pattern or self
@@ -1573,7 +1581,7 @@ class PatternAudioFeedbackEngine:
                             "audio_similarity_score": round(float(p.reconstruction_fidelity), 4),
                             "cohesion_score": round(float(p.reconstruction_fidelity), 4),
                             "recurrence_ratio": round(float(p.recurrence_ratio), 4),
-                            "matching_bars": p.matching_bars[:16],
+                            "matching_bars": p.matching_bars[:12],
                             "next_pattern_id": best_next,
                             "slice_categories": p.step_categories,
                             "step_slice_ids": p.step_slice_ids,
@@ -1603,7 +1611,7 @@ class PatternAudioFeedbackEngine:
                     "vocab_by_stem": compact_vocab,
                     "pattern_counts": {s: len(p) for s, p in client_intrinsic_patterns.items()},
                     "intrinsic_patterns": client_intrinsic_patterns,
-                    "bar_pattern_sequence": rep.bar_pattern_sequence[:64],
+                    "bar_pattern_sequence": rep.bar_pattern_sequence[:48],
                     "transition_matrices": rep.transition_matrices,
                     "slice_arrangement": rep.slice_arrangement.to_dict() if rep.slice_arrangement else {},
                 }
@@ -1651,8 +1659,6 @@ class PatternAudioFeedbackEngine:
             "grooves": self.feedback_data.get("grooves", {}),
             "trained_slice_scores": slice_scores,
             "song_composition_scores": self.feedback_data.get("song_composition_scores", {}),
-            "recurrent_song_patterns": self.feedback_data.get("recurrent_song_patterns", {}),
-            "compressed_song_models": self.feedback_data.get("compressed_song_models", {}),
             "stem_mix_automation": {
                 "INTRO": {"drums": 0.65, "bass": 0.0, "other": 0.88, "vocals": 0.75},
                 "GROOVE_A": {"drums": 0.95, "bass": 0.92, "other": 0.88, "vocals": 0.95},
@@ -1675,7 +1681,7 @@ class PatternAudioFeedbackEngine:
                         cur_data = {}
                 cur_data["stem_cohesion_weights"] = cohesion_weights
                 cur_data["updated_at"] = time.time()
-                p.write_text(json.dumps(cur_data, indent=2))
+                p.write_text(json.dumps(cur_data, separators=(",", ":")))
             except Exception:
                 pass
 
@@ -1700,7 +1706,7 @@ class PatternAudioFeedbackEngine:
                         else:
                             if "cohesion_score" not in p or p["cohesion_score"] is None:
                                 p["cohesion_score"] = p.get("audio_similarity_score", 0.85)
-                standalone_patterns_path.write_text(json.dumps(manifest, indent=2))
+                standalone_patterns_path.write_text(json.dumps(manifest, separators=(",", ":")))
             except Exception:
                 pass
 

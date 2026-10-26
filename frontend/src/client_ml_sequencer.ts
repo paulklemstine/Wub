@@ -2509,6 +2509,7 @@ export class ClientGrooveboxConductor {
   private recentPhraseBlocks: string[] = [];
   private trackBarsPlayed: number = 0;
   private recentTracksPlayed: string[] = [];
+  private shuffledTrackEntries: Array<[string, CohesivePhraseManifestItem[]]> | null = null;
   private recentVocalTracks: string[] = [];
   private vocalPhraseEndAudioSec: number = 0;
   private activeVocalTrackId?: string;
@@ -2520,8 +2521,45 @@ export class ClientGrooveboxConductor {
     this.synth = new WebAudioSliceSynthesizer(ctx);
     this.phraseModel = new ClientMarkovPhraseModel();
     this.arranger = new ClientSongArranger();
+    this.loadRecentTracksFromStorage();
     this.initSidechain(ctx);
     this.initDefaultPatterns();
+  }
+
+  private loadRecentTracksFromStorage(): void {
+    try {
+      if (typeof window !== "undefined" && window.localStorage) {
+        const raw = window.localStorage.getItem("wub_recent_tracks_v1");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            this.recentTracksPlayed = parsed.filter((x): x is string => typeof x === "string").slice(-50);
+          }
+        }
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+
+  private recordTrackPlayed(trackId: string): void {
+    if (!trackId) return;
+    const totalCatalogTracks = Math.max(
+      this.phraseBlocksByTrack.size,
+      Object.keys(this.manifest?.compressed_song_models || {}).length,
+      24
+    );
+    const maxHistory = Math.max(18, Math.min(80, Math.floor(totalCatalogTracks * 0.8)));
+    const deduped = this.recentTracksPlayed.filter((t) => t !== trackId);
+    deduped.push(trackId);
+    this.recentTracksPlayed = deduped.slice(-maxHistory);
+    try {
+      if (typeof window !== "undefined" && window.localStorage) {
+        window.localStorage.setItem("wub_recent_tracks_v1", JSON.stringify(this.recentTracksPlayed));
+      }
+    } catch {
+      // Ignore storage errors
+    }
   }
 
   private initSidechain(ctx: AudioContext): void {
@@ -2905,20 +2943,36 @@ export class ClientGrooveboxConductor {
       this.phraseBlocksByTrack.set(trackId, decodedBlocks);
     };
 
-    const allTrackEntries = Array.from(blocksByTrack.entries());
-    const priorityEntries = allTrackEntries.slice(0, 3);
-    const remainingEntries = allTrackEntries.slice(3);
+    if (!this.shuffledTrackEntries || this.shuffledTrackEntries.length !== blocksByTrack.size) {
+      const allEntries = Array.from(blocksByTrack.entries());
+      const shuffleArr = <T>(arr: T[]): T[] => {
+        const copy = [...arr];
+        for (let i = copy.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const tmp = copy[i];
+          copy[i] = copy[j];
+          copy[j] = tmp;
+        }
+        return copy;
+      };
+      const unplayed = shuffleArr(allEntries.filter(([tid]) => !this.recentTracksPlayed.includes(tid)));
+      const played = shuffleArr(allEntries.filter(([tid]) => this.recentTracksPlayed.includes(tid)));
+      this.shuffledTrackEntries = [...unplayed, ...played];
+    }
+
+    const priorityEntries = this.shuffledTrackEntries.slice(0, 4);
+    const remainingEntries = this.shuffledTrackEntries.slice(4);
 
     if (priorityOnly) {
       await Promise.all(priorityEntries.map(([tid, items]) => loadSongChainAtomically(tid, items)));
       console.info(
-        `[Client ML] Ready: ${this.phraseBlockById.size} priority studio 4-bar phrase blocks (${this.phraseBlocksByTrack.size} complete 4-part songs) loaded.`
+        `[Client ML] Ready: ${this.phraseBlockById.size} priority studio 4-bar phrase blocks (${this.phraseBlocksByTrack.size} complete 4-part songs) loaded across catalog.`
       );
       return;
     }
 
-    for (let i = 0; i < remainingEntries.length; i += 2) {
-      const batch = remainingEntries.slice(i, i + 2);
+    for (let i = 0; i < remainingEntries.length; i += 3) {
+      const batch = remainingEntries.slice(i, i + 3);
       await Promise.all(batch.map(([tid, items]) => loadSongChainAtomically(tid, items)));
     }
     console.info(
@@ -2994,8 +3048,12 @@ export class ClientGrooveboxConductor {
       const chainLen = this.phraseBlocksByTrack.get(p.meta.track_id)?.length ?? 1;
       score += Math.min(4, chainLen) * 1.5;
 
-      // Track freshness bonus (avoid repeating recent songs)
-      if (!this.recentTracksPlayed.includes(p.meta.track_id)) score += 6.0;
+      // Track freshness bonus (strongly prefer unplayed tracks across the full catalog before repeating any song)
+      if (!this.recentTracksPlayed.includes(p.meta.track_id)) {
+        score += 14.0;
+      } else {
+        score -= 10.0;
+      }
       if (!this.recentPhraseBlocks.includes(p.meta.id)) score += 3.0;
 
       // Tempo proximity (crucial for seamless beat-matched transitions)
@@ -3016,12 +3074,12 @@ export class ClientGrooveboxConductor {
     });
 
     scoredCandidates.sort((a, b) => b.score - a.score);
-    const topK = scoredCandidates.slice(0, Math.min(3, scoredCandidates.length));
+    const topK = scoredCandidates.slice(0, Math.min(6, scoredCandidates.length));
     const pick = topK[Math.floor(Math.random() * topK.length)].block;
 
     const isTrackChange = this.activeTrackId !== pick.meta.track_id;
-    this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-12);
-    this.recentTracksPlayed = [...this.recentTracksPlayed, pick.meta.track_id].slice(-15);
+    this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-16);
+    this.recordTrackPlayed(pick.meta.track_id);
     this.activeTrackId = pick.meta.track_id;
 
     if (isTrackChange) {
@@ -3920,7 +3978,7 @@ export class ClientGrooveboxConductor {
       this.activeTrackId = startingBlock.meta.track_id;
       this.activePhraseBlock = startingBlock;
       this.activeVocalTrackId = startingBlock.meta.track_id;
-      this.recentTracksPlayed = [...this.recentTracksPlayed, startingBlock.meta.track_id].slice(-15);
+      this.recordTrackPlayed(startingBlock.meta.track_id);
       this.recentPhraseBlocks = [startingBlock.meta.id];
       if (startingBlock.meta.source_bpm && startingBlock.meta.source_bpm >= 80 && startingBlock.meta.source_bpm <= 175) {
         this.currentBpm = Math.round(startingBlock.meta.source_bpm);
@@ -3937,7 +3995,7 @@ export class ClientGrooveboxConductor {
         ];
         this.activeTrackId = chosenTid;
         this.activeVocalTrackId = chosenTid;
-        this.recentTracksPlayed = [...this.recentTracksPlayed, chosenTid].slice(-15);
+        this.recordTrackPlayed(chosenTid);
         const chosenModel = songModels[chosenTid];
         if (chosenModel?.bpm && chosenModel.bpm >= 80 && chosenModel.bpm <= 175) {
           this.currentBpm = Math.round(chosenModel.bpm);

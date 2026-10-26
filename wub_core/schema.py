@@ -4,12 +4,13 @@ Strictly mirrors Section 4.2 `track_analysis.json`.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Literal
+from typing import Annotated, Dict, List, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 StemName = Literal["drums", "bass", "vocals", "other"]
 STEMS: List[str] = ["drums", "bass", "vocals", "other"]
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 
 
 class Segment(BaseModel):
@@ -22,20 +23,14 @@ class Segment(BaseModel):
     loudness_start: float
     loudness_max: float
     loudness_max_time: float = Field(ge=0.0)
-    pitches: List[float] = Field(min_length=12, max_length=12)
-    timbre: List[float] = Field(min_length=12, max_length=12)
+    pitches: List[FiniteFloat] = Field(min_length=12, max_length=12)
+    timbre: List[FiniteFloat] = Field(min_length=12, max_length=12)
     spectral_centroid: float = Field(ge=0.0)
     zero_crossing_start_offset: float = Field(ge=0.0)
 
-    @field_validator("pitches", "timbre")
-    @classmethod
-    def _finite(cls, v: List[float]) -> List[float]:
-        import math
 
-        for x in v:
-            if not math.isfinite(x):
-                raise ValueError("feature vectors must be finite")
-        return v
+def _default_stem_segments() -> Dict[StemName, List[str]]:
+    return {"drums": [], "bass": [], "vocals": [], "other": []}
 
 
 class Tatum(BaseModel):
@@ -47,15 +42,13 @@ class Tatum(BaseModel):
     start: float = Field(ge=0.0)
     duration: float = Field(gt=0.0)
     confidence: float = Field(ge=0.0, le=1.0)
-    stem_segments: Dict[StemName, List[str]] = Field(default_factory=dict)
+    stem_segments: Dict[StemName, List[str]] = Field(default_factory=_default_stem_segments)
 
     @field_validator("stem_segments")
     @classmethod
     def _stems_valid(cls, v: Dict[str, List[str]]) -> Dict[str, List[str]]:
-        for k in v:
-            if k not in ("drums", "bass", "vocals", "other"):
-                raise ValueError(f"unknown stem {k}")
-        # ensure all four keys present
+        if len(v) == 4 and "drums" in v and "bass" in v and "vocals" in v and "other" in v:
+            return v
         for s in ("drums", "bass", "vocals", "other"):
             v.setdefault(s, [])  # type: ignore[typeddict-item]
         return v

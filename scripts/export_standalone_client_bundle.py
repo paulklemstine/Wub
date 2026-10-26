@@ -12,6 +12,8 @@ from __future__ import annotations
 import base64
 import json
 import shutil
+from collections import defaultdict
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -21,6 +23,70 @@ import soundfile as sf
 from wub_core.corpus import CorpusStore
 from wub_core.patterns import PatternBank, STEMS
 from wub_core.groovy_pattern_assembler import AcousticSliceClassifier
+
+
+def stratify_tracks_by_artist(tracks: List) -> List:
+    """Interleave tracks round-robin by artist so every artist across A-Z is represented equally."""
+    by_artist: Dict[str, List] = defaultdict(list)
+    for tr in tracks:
+        fname = str(getattr(tr, "filename", "")).replace(".mp3", "")
+        artist = fname.split(" - ")[0].strip() if " - " in fname else fname[:12]
+        by_artist[artist].append(tr)
+    sorted_artists = sorted(
+        by_artist.keys(),
+        key=lambda a: hashlib.md5(a.encode("utf-8", errors="ignore")).hexdigest(),
+    )
+    out: List = []
+    max_len = max((len(v) for v in by_artist.values()), default=0)
+    for r_idx in range(max_len):
+        for artist in sorted_artists:
+            items = by_artist[artist]
+            if r_idx < len(items):
+                out.append(items[r_idx])
+    return out
+
+
+def _decompose_mix_16bar_into_stems(stereo_16: np.ndarray, sr: int) -> Dict[str, np.ndarray]:
+    """Decompose a 16-bar stereo mix window into 4 acoustic frequency/spatial stems via zero-phase FFT."""
+    if stereo_16.ndim == 1:
+        mid = stereo_16.astype(np.float32)
+        side = np.zeros_like(mid)
+    else:
+        mid = stereo_16.mean(axis=1).astype(np.float32)
+        side = (0.5 * (stereo_16[:, 0] - stereo_16[:, 1])).astype(np.float32) if stereo_16.shape[1] > 1 else np.zeros_like(mid)
+
+    n = len(mid)
+    freqs = np.fft.rfftfreq(n, d=1.0 / sr)
+    mid_spec = np.fft.rfft(mid)
+    side_spec = np.fft.rfft(side)
+
+    # 1. Bass stem: smooth sub & bass fundamental band (28..175 Hz)
+    bass_mask = np.clip((freqs - 25.0) / 15.0, 0.0, 1.0) * np.clip((185.0 - freqs) / 35.0, 0.0, 1.0)
+    bass_mono = np.fft.irfft(mid_spec * bass_mask, n=n).astype(np.float32)
+
+    # 2. Vocals stem: center vocal formant band (260..3900 Hz) minus side stereo width
+    vocal_mask = np.clip((freqs - 240.0) / 60.0, 0.0, 1.0) * np.clip((4100.0 - freqs) / 400.0, 0.0, 1.0)
+    vocals_mono = np.fft.irfft((mid_spec - 0.35 * side_spec) * vocal_mask, n=n).astype(np.float32)
+
+    # 3. Other (Synths/Chords/Pads): stereo side + harmonic midrange/highs (200..11000 Hz)
+    other_mask = np.clip((freqs - 190.0) / 50.0, 0.0, 1.0) * np.clip((11500.0 - freqs) / 1000.0, 0.0, 1.0)
+    other_mono = np.fft.irfft((0.65 * mid_spec + 0.85 * side_spec) * other_mask, n=n).astype(np.float32)
+
+    # 4. Drums stem: kick punch (45..115 Hz) + snare crack (1200..3200 Hz) + crisp hats (> 4800 Hz)
+    drum_mask = (
+        0.95 * np.clip((freqs - 40.0) / 15.0, 0.0, 1.0) * np.clip((120.0 - freqs) / 25.0, 0.0, 1.0)
+        + 0.70 * np.clip((freqs - 1100.0) / 200.0, 0.0, 1.0) * np.clip((3400.0 - freqs) / 300.0, 0.0, 1.0)
+        + 0.90 * np.clip((freqs - 4600.0) / 500.0, 0.0, 1.0)
+    )
+    drums_mono = np.fft.irfft(mid_spec * drum_mask, n=n).astype(np.float32)
+
+    out: Dict[str, np.ndarray] = {}
+    for st_name, wave in (("drums", drums_mono), ("bass", bass_mono), ("other", other_mono), ("vocals", vocals_mono)):
+        pk = float(np.max(np.abs(wave)))
+        if pk >= 0.015:
+            wave = wave * min(2.2, 0.88 / pk)
+        out[st_name] = wave
+    return out
 
 
 def harvest_whole_pattern_loops(
@@ -234,9 +300,10 @@ def harvest_whole_pattern_loops(
 def harvest_cohesive_phrase_blocks(
     multistem_tracks: List,
     phrases_dir: Path,
+    fallback_mp3s: Optional[Dict[str, Path]] = None,
 ) -> List[dict]:
-    """Extract continuous multi-part 4-bar studio-grade phrase chains across iconic tracks."""
-    print("=== Harvesting Multi-Part 4-Bar Cohesive Song Phrase Chains ===", flush=True)
+    """Extract continuous multi-part 4-bar studio-grade phrase chains stratified across the A-Z song catalog."""
+    print("=== Harvesting Multi-Part 4-Bar Cohesive Song Phrase Chains Across Full A-Z Catalog ===", flush=True)
     phrases_dir.mkdir(parents=True, exist_ok=True)
     # Clean stale phrase WAVs so old single-block files don't linger
     for old_wav in phrases_dir.glob("*.wav"):
@@ -252,10 +319,11 @@ def harvest_cohesive_phrase_blocks(
     fade_in = np.sin(0.5 * np.pi * t_fade)
     fade_out = np.cos(0.5 * np.pi * t_fade)
 
-    max_songs = 18
+    max_songs = 42
     songs_harvested = 0
+    stratified_candidates = stratify_tracks_by_artist(multistem_tracks)
 
-    for tr in multistem_tracks:
+    for tr in stratified_candidates:
         if songs_harvested >= max_songs:
             break
         tid = tr.track_id
@@ -270,7 +338,9 @@ def harvest_cohesive_phrase_blocks(
             continue
 
         stem_paths = {s: Path("data/stems") / tid / f"{s}.wav" for s in STEMS}
-        if not all(p.exists() for p in stem_paths.values()):
+        has_4_stems = all(p.exists() for p in stem_paths.values())
+        src_mp3 = fallback_mp3s.get(tid) if fallback_mp3s else None
+        if not has_4_stems and not (src_mp3 and src_mp3.exists()):
             continue
 
         # Find the best continuous 16-bar (4 x 4-bar parts) active window in this song
@@ -320,25 +390,39 @@ def harvest_cohesive_phrase_blocks(
         stem_16bar_audio: Dict[str, np.ndarray] = {}
         stem_sr = 44100
         valid_16bar = True
-        for stem in STEMS:
+        if has_4_stems:
+            for stem in STEMS:
+                try:
+                    data_16, sr = sf.read(str(stem_paths[stem]), start=f0_16, frames=total_frames_16, always_2d=True, dtype="float32")
+                    stem_sr = sr
+                    mono_16 = data_16.mean(axis=1)
+                    if len(mono_16) < total_frames_16:
+                        mono_16 = np.pad(mono_16, (0, total_frames_16 - len(mono_16)))
+                    peak_16 = float(np.max(np.abs(mono_16)))
+                    if peak_16 >= 0.025:
+                        gain_scale = min(2.2, 0.88 / peak_16)
+                        mono_16 = mono_16 * gain_scale
+                    elif peak_16 < 0.012:
+                        mono_16 = mono_16 * 0.25
+                    stem_16bar_audio[stem] = mono_16
+                except Exception:
+                    valid_16bar = False
+                    break
+        elif src_mp3 and src_mp3.exists():
             try:
-                data_16, sr = sf.read(str(stem_paths[stem]), start=f0_16, frames=total_frames_16, always_2d=True, dtype="float32")
-                stem_sr = sr
-                mono_16 = data_16.mean(axis=1)
-                if len(mono_16) < total_frames_16:
-                    mono_16 = np.pad(mono_16, (0, total_frames_16 - len(mono_16)))
-                peak_16 = float(np.max(np.abs(mono_16)))
-                if peak_16 >= 0.025:
-                    gain_scale = min(2.2, 0.88 / peak_16)
-                    mono_16 = mono_16 * gain_scale
-                elif peak_16 < 0.012:
-                    mono_16 = mono_16 * 0.25
-                stem_16bar_audio[stem] = mono_16
+                mp3_info = sf.info(str(src_mp3))
+                sr_mp3 = mp3_info.samplerate
+                f0_mp3 = int(round(t_start_16 * sr_mp3))
+                part_frames = int(round(part_dur * sr_mp3))
+                total_frames_16 = part_frames * 4
+                mix_16, stem_sr = sf.read(str(src_mp3), start=f0_mp3, frames=total_frames_16, always_2d=True, dtype="float32")
+                if len(mix_16) < total_frames_16:
+                    mix_16 = np.pad(mix_16, ((0, total_frames_16 - len(mix_16)), (0, 0)))
+                stem_16bar_audio = _decompose_mix_16bar_into_stems(mix_16, stem_sr)
             except Exception:
                 valid_16bar = False
-                break
 
-        if not valid_16bar:
+        if not valid_16bar or len(stem_16bar_audio) < 4:
             continue
 
         candidate_bars = [
@@ -399,7 +483,14 @@ def harvest_cohesive_phrase_blocks(
                         mono[:fade_len] *= fade_in
                         mono[-fade_len:] *= fade_out
 
-                    sf.write(str(out_wav), mono, stem_sr, subtype="PCM_16")
+                    # Write at 22.05 kHz 16-bit mono PCM so 42 complete 4-part songs fit cleanly in the static bundle
+                    if stem_sr >= 40000:
+                        mono_out = mono[::2]
+                        sr_out = stem_sr // 2
+                    else:
+                        mono_out = mono
+                        sr_out = stem_sr
+                    sf.write(str(out_wav), mono_out, sr_out, subtype="PCM_16")
                     stem_urls[stem] = f"data/phrases/{out_wav.name}"
 
                     # Extract per-bar 16-step onset grids across the 4 bars in this phrase block
@@ -411,7 +502,7 @@ def harvest_cohesive_phrase_blocks(
                         sub_onsets: List[int] = []
                         for s in bar_segs:
                             st_name = getattr(s, "stem", s.get("stem", "") if isinstance(s, dict) else "")
-                            if st_name == stem:
+                            if st_name == stem or (not has_4_stems and st_name == "other"):
                                 s_start = float(getattr(s, "start", s.get("start", 0.0) if isinstance(s, dict) else 0.0))
                                 if sub_start - 0.03 <= s_start < sub_end:
                                     step_idx = int(round((s_start - sub_start) / (bar_dur / 16.0)))
@@ -495,37 +586,52 @@ def export_bundle() -> None:
         print(f"Warning: {src_weights} not found, generating placeholder", flush=True)
         dst_weights.write_text(json.dumps({"version": 1, "phrase_transitions": {}, "section_transitions": {}}))
 
-    # 2. Extract Multi-Stem Tracks & Patterns from Authentic Corpus
-    store = CorpusStore(Path("data/processed"), stems_base=Path("data/stems"))
-    store.refresh(max_tracks=50)
-    multistem_tracks = [t for t in store.tracks if len(t.stems_available) == 4]
+    # 2. Extract Multi-Stem & Full-Catalog Tracks Across Entire A-Z Corpus
+    store = CorpusStore(
+        Path("data/processed"),
+        stems_base=Path("data/stems"),
+        library_dirs=[Path("pandora/good"), Path("pandora")],
+    )
+    store.refresh(max_tracks=280)
+    all_loaded_tracks = stratify_tracks_by_artist(store.tracks)
+    multistem_tracks = stratify_tracks_by_artist([t for t in store.tracks if len(t.stems_available) == 4])
     if not multistem_tracks:
-        multistem_tracks = store.tracks[:20]
+        multistem_tracks = all_loaded_tracks[:40]
+    _, fallback_mp3s = store.audio_for({t.track_id for t in all_loaded_tracks})
 
     bank = PatternBank()
-    n_pats = bank.load_from_tracks(multistem_tracks)
-    print(f"✓ Extracted {n_pats} patterns and {len(bank.phrases)} phrases across {len(multistem_tracks)} tracks into memory bank", flush=True)
+    n_pats = bank.load_from_tracks(all_loaded_tracks)
+    print(
+        f"✓ Extracted {n_pats} patterns and {len(bank.phrases)} phrases across {len(all_loaded_tracks)} catalog tracks "
+        f"({len(multistem_tracks)} 4-stem + {len(all_loaded_tracks) - len(multistem_tracks)} full-catalog tracks) into memory bank",
+        flush=True,
+    )
 
-    # Train Composing ML Models (PhraseComposerModel, SongArranger, and SongIntrinsicCompressor)
+    # Train Composing ML Models (PhraseComposerModel, SongArranger, and SongIntrinsicCompressor) across catalog
     from wub_core.composer import PhraseComposerModel, SongArranger
     from wub_core.pattern_audio_trainer import PatternAudioFeedbackEngine
     phrase_model = PhraseComposerModel(weights_path=src_weights)
-    n_trans = phrase_model.train_on_tracks(multistem_tracks, bank)
+    n_trans = phrase_model.train_on_tracks(all_loaded_tracks, bank)
     phrase_model.save(src_weights)
     arranger_model = SongArranger(bank, weights_path=src_weights)
-    arranger_model.train_on_corpus(multistem_tracks)
+    arranger_model.train_on_corpus(all_loaded_tracks)
     arranger_model.save(src_weights)
 
     fb_engine = PatternAudioFeedbackEngine()
     # Purge any test mock song entries if present
     if "compressed_song_models" in fb_engine.feedback_data:
         fb_engine.feedback_data["compressed_song_models"].pop("test_song_01", None)
-    fb_engine.train_song_intrinsic_compression(store, max_tracks=25, target_vocab_per_stem=6)
+    comp_res = fb_engine.train_song_intrinsic_compression(all_loaded_tracks, max_tracks=120, target_vocab_per_stem=6)
     shutil.copy(src_weights, dst_weights)
-    print(f"✓ Trained & exported Composing ML weights ({n_trans} bar transitions, 25 compressed song models)", flush=True)
+    print(
+        f"✓ Trained & exported Composing ML weights ({n_trans} bar transitions, "
+        f"{comp_res.get('compressed_songs')} compressed song models across A-Z catalog)",
+        flush=True,
+    )
 
-    # 3. Harvest Cohesive 4-Bar Multi-Stem Phrase Blocks
-    extracted_phrase_blocks = harvest_cohesive_phrase_blocks(multistem_tracks, phrases_dir)
+    # 3. Harvest Cohesive 4-Bar Multi-Stem Phrase Blocks (all 28 stemmed artists + diverse E-Z catalog artists)
+    phrase_candidates = multistem_tracks[:30] + [t for t in all_loaded_tracks if len(t.stems_available) < 4][:24]
+    extracted_phrase_blocks = harvest_cohesive_phrase_blocks(phrase_candidates, phrases_dir, fallback_mp3s=fallback_mp3s)
 
     # Build phrase_part_transitions ML map so the client follows consecutive song parts
     phrase_part_transitions: Dict[str, Dict[str, float]] = {}
@@ -534,7 +640,7 @@ def export_bundle() -> None:
         if nxt_id:
             phrase_part_transitions[pb["id"]] = {nxt_id: 0.96}
 
-    # 4. Harvest Whole 1-Bar Pattern Loops Across Stems
+    # 4. Harvest Whole 1-Bar Pattern Loops Across Stems (stratified across all artists)
     extracted_loops_manifest = harvest_whole_pattern_loops(multistem_tracks, loops_dir)
 
     # 4. Harvest Pure Audio Slices (Zero Duplicates, Chromatic Bass/Other 0..11)
@@ -545,12 +651,13 @@ def export_bundle() -> None:
         slices_dir,
     )
 
-    # 4b. Train & Export Song-Intrinsic Vocabulary WAV Slices and Slice Arrangement Models for Compressed Songs
-    print("Training song-intrinsic slice vocabulary & arrangement models across multi-stem songs...", flush=True)
-    fb_engine.train_song_intrinsic_compression(multistem_tracks, max_tracks=25)
+    # 4b. Export Song-Intrinsic Vocabulary WAV Slices for Stratified Multi-Stem Songs
+    print("Exporting song-intrinsic slice vocabulary WAVs across stratified multi-stem songs...", flush=True)
     csm_dict = fb_engine.feedback_data.get("compressed_song_models", {})
     vocab_wavs_exported = 0
-    for tid, cmodel in list(csm_dict.items())[:18]:
+    stratified_csm_tids = [t.track_id for t in multistem_tracks if t.track_id in csm_dict][:32]
+    for tid in stratified_csm_tids:
+        cmodel = csm_dict[tid]
         v_by_stem = cmodel.get("vocab_by_stem", {})
         bpm_val = float(cmodel.get("bpm", 126.0))
         tatum_sec = 60.0 / max(60.0, bpm_val) / 4.0
@@ -616,11 +723,12 @@ def export_bundle() -> None:
         shutil.copy(src_weights, dst_weights)
         print(f"✓ Exported {vocab_wavs_exported} song-intrinsic vocabulary WAV slices with tatum-aligned crossfade tails", flush=True)
 
-    # 5. Extract authentic harmonic chord progressions from real tracks
+    # 5. Extract authentic harmonic chord progressions from real tracks across the catalog (O(1) segment lookup)
     chord_progressions: List[dict] = []
-    for tr in multistem_tracks[:35]:
+    for tr in all_loaded_tracks[:100]:
         tatums = getattr(tr, "tatums", [])
         n_bars = len(tatums) // 16
+        seg_by_id = {s.id: s for s in getattr(tr, "segments", []) if not getattr(s, "is_silent", False)}
         bar_roots: List[int] = []
         for b in range(min(8, n_bars)):
             bar_tats = tatums[b * 16:(b + 1) * 16]
@@ -629,9 +737,9 @@ def export_bundle() -> None:
                 for st in ("bass", "other"):
                     sids = getattr(t, "stem_segments", {}).get(st, [])
                     for sid in sids:
-                        for s in getattr(tr, "segments", []):
-                            if s.id == sid and not s.is_silent:
-                                chroma_sum += np.array(s.pitches)
+                        s = seg_by_id.get(sid)
+                        if s is not None:
+                            chroma_sum += np.array(s.pitches)
             if np.sum(chroma_sum) > 0.05:
                 bar_roots.append(int(np.argmax(chroma_sum)))
             else:
@@ -644,7 +752,7 @@ def export_bundle() -> None:
                 "key": getattr(tr, "key", "C major"),
                 "roots": bar_roots[:8],
             })
-    print(f"✓ Extracted {len(chord_progressions)} authentic chord progressions from corpus", flush=True)
+    print(f"✓ Extracted {len(chord_progressions)} authentic chord progressions across A-Z corpus", flush=True)
 
     # 6. Serialize Curated Pattern Bank for In-Browser ML Sequencing
     serialized_patterns: Dict[str, List[dict]] = {s: [] for s in STEMS}
@@ -832,11 +940,19 @@ def export_bundle() -> None:
         except Exception:
             pass
 
-    # Strip duplicate heavy dictionaries from stem_cohesion_weights since they live at top-level of standalone_manifest
+    # Strip duplicate heavy dictionaries and redundant inline b64 WAV blobs when URLs are present
+    standalone_manifest.pop("recurrent_song_patterns", None)
+    for stem_cats in standalone_manifest.get("slices", {}).values():
+        if isinstance(stem_cats, dict):
+            for s_list in stem_cats.values():
+                if isinstance(s_list, list):
+                    for s_item in s_list:
+                        if isinstance(s_item, dict) and s_item.get("url"):
+                            s_item.pop("b64", None)
+
     if isinstance(stem_cohesion_weights, dict):
-        for dup_k in ("compressed_song_models", "recurrent_song_patterns"):
-            if dup_k in stem_cohesion_weights and stem_cohesion_weights[dup_k]:
-                standalone_manifest.setdefault(dup_k, stem_cohesion_weights[dup_k])
+        if "compressed_song_models" in stem_cohesion_weights and stem_cohesion_weights["compressed_song_models"]:
+            standalone_manifest.setdefault("compressed_song_models", stem_cohesion_weights["compressed_song_models"])
         light_cohesion = {
             k: v for k, v in stem_cohesion_weights.items()
             if k not in ("compressed_song_models", "recurrent_song_patterns")

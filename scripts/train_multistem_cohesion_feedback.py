@@ -37,25 +37,25 @@ def main() -> None:
 
     print(f"Loading corpus from {proc_dir}...", flush=True)
     store = CorpusStore(proc_dir, stems_base=stems_dir)
-    store.refresh(max_tracks=60)
+    store.refresh(max_tracks=160)
 
     multi_tracks = [t for t in store.tracks if len(t.stems_available) == 4]
     print(f"Found {len(multi_tracks)} full 4-stem tracks in training corpus.", flush=True)
 
     print("Extracting multi-stem phrases and patterns into memory bank...", flush=True)
     bank = PatternBank()
-    n_pats = bank.load_from_tracks(multi_tracks[:40])
+    n_pats = bank.load_from_tracks(multi_tracks[:60])
     print(f"Loaded {n_pats} patterns and {len(bank.phrases)} phrases across authentic tracks.", flush=True)
 
     print("Running multi-stem inter-stem acoustic cohesion training...", flush=True)
     fb_engine = PatternAudioFeedbackEngine()
-    cohesion_res = fb_engine.train_inter_stem_cohesion(corpus_store=store, bank=bank, max_tracks=35)
+    cohesion_res = fb_engine.train_inter_stem_cohesion(corpus_store=store, bank=bank, max_tracks=40)
     print(f"✓ Cohesion Training: {cohesion_res['authentic_bars_evaluated']} authentic multi-stem bars evaluated | "
           f"{cohesion_res['pattern_combos_evaluated']} phrase combos evaluated | "
           f"Mean cohesion: {cohesion_res['mean_multistem_cohesion']}", flush=True)
 
     print("Optimizing generic pattern archetypes against real song mixes...", flush=True)
-    train_res = fb_engine.run_training_step(bank=bank, corpus_store=store, n_optimize=8)
+    train_res = fb_engine.run_training_step(bank=bank, corpus_store=store, n_optimize=4)
     print(f"✓ Feedback Engine: {train_res['evaluated']} patterns evaluated | "
           f"{train_res['optimized_generic_patterns']} generic patterns optimized | "
           f"Mean audio similarity: {train_res['mean_audio_similarity']}", flush=True)

@@ -56,8 +56,9 @@ class CorpusStore:
             stem_tids = {d.name for d in self.stems_base.iterdir() if d.is_dir() and not d.name.startswith("_")}
 
         all_files = [p for p in self.processed_dir.glob("*.json") if not p.name.startswith(("_", "meta_"))]
-        # Sort so multi-stem tracks come first (instantaneous string comparison)
-        all_files.sort(key=lambda p: 0 if p.stem in stem_tids else 1)
+        # Sort deterministically by SHA256 track_id (p.stem) with multi-stem tracks prioritized first,
+        # ensuring uniform coverage across the entire A-Z song catalog instead of alphabetical "A" bias.
+        all_files.sort(key=lambda p: (0 if p.stem in stem_tids else 1, p.stem))
 
         if max_tracks and max_tracks > 0:
             all_files = all_files[:max_tracks]
@@ -82,7 +83,35 @@ class CorpusStore:
 
     @property
     def tracks(self) -> List[TrackAnalysis]:
-        return sorted(self.analyses.values(), key=lambda t: t.filename)
+        # Sort by multi-stem completeness first, then deterministic SHA256 track_id
+        # so slices and training sample evenly across the entire A-Z artist catalog.
+        return sorted(
+            self.analyses.values(),
+            key=lambda t: (0 if len(t.stems_available) == 4 else 1, t.track_id),
+        )
+
+    def iter_catalog_tracks(self, max_tracks: Optional[int] = None):
+        """Stream TrackAnalysis across the entire processed catalog without holding all 1,724 tracks in RAM at once."""
+        from wub_core.schema import TrackAnalysis as TA
+
+        if not self.processed_dir.exists():
+            return
+        stem_tids = set()
+        if self.stems_base.exists():
+            stem_tids = {d.name for d in self.stems_base.iterdir() if d.is_dir() and not d.name.startswith("_")}
+        all_files = [p for p in self.processed_dir.glob("*.json") if not p.name.startswith(("_", "meta_"))]
+        all_files.sort(key=lambda p: (0 if p.stem in stem_tids else 1, p.stem))
+        if max_tracks and max_tracks > 0:
+            all_files = all_files[:max_tracks]
+        for jf in all_files:
+            tid = jf.stem
+            if tid in self.analyses:
+                yield self.analyses[tid]
+                continue
+            try:
+                yield TA.model_validate_json(jf.read_bytes())
+            except Exception:
+                continue
 
     # ---- audio resolution ----
 
