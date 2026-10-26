@@ -641,10 +641,10 @@ export interface NebulaRendererOptions {
 
 const RETICLE_STEMS: readonly StemName[] = ["drums", "bass", "vocals", "other"];
 const DEFAULT_RETICLES: Record<StemName, { x: number; y: number }> = {
-  drums: { x: 0.25, y: 0.3 },
-  bass: { x: 0.7, y: 0.3 },
-  vocals: { x: 0.3, y: 0.72 },
-  other: { x: 0.72, y: 0.7 },
+  drums: { x: 0.35, y: 0.75 },
+  bass: { x: 0.35, y: 0.75 },
+  vocals: { x: 0.35, y: 0.72 },
+  other: { x: 0.35, y: 0.72 },
 };
 const GRID_N = 24;
 

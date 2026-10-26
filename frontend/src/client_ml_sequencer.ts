@@ -1546,7 +1546,7 @@ export class ClientSongArranger {
   }
 
   public randomizeStartingSection(): string {
-    const choices = ["INTRO", "INTRO", "GROOVE_A", "GROOVE_A", "BUILDUP"];
+    const choices = ["GROOVE_A", "GROOVE_A", "DROP"];
     const pick = choices[Math.floor(Math.random() * choices.length)];
     this.resetToSection(pick);
     return pick;
@@ -1583,10 +1583,10 @@ export class ClientGrooveboxConductor {
 
   // Real-time Reticule Steering State (guides timbre, filters, pattern sliding & slices)
   private steering: Record<StemName, { x: number; y: number }> = {
-    drums: { x: 0.72, y: 0.65 },
-    bass: { x: 0.28, y: 0.62 },
-    vocals: { x: 0.68, y: 0.32 },
-    other: { x: 0.32, y: 0.35 },
+    drums: { x: 0.35, y: 0.75 },
+    bass: { x: 0.35, y: 0.75 },
+    vocals: { x: 0.35, y: 0.72 },
+    other: { x: 0.35, y: 0.72 },
   };
 
   // Dynamic Sidechain Nodes
@@ -2026,6 +2026,14 @@ export class ClientGrooveboxConductor {
       if (harmonicMatches.length > 0) {
         candidates = harmonicMatches;
       }
+    }
+
+    // 3. Tempo Affinity: Prefer phrase blocks within +/- 8% of current BPM to avoid pitch warping
+    const tempoMatches = candidates.filter(
+      (p) => Math.abs(p.meta.source_bpm - this.currentBpm) / this.currentBpm <= 0.08
+    );
+    if (tempoMatches.length > 0) {
+      candidates = tempoMatches;
     }
 
     // High variety across different tracks: avoid recently played phrase blocks
@@ -3293,46 +3301,42 @@ export class ClientGrooveboxConductor {
           this.synth.playRiser(when, (60 / this.currentBpm) * 8, dInput);
         }
       } else {
-        // Standard Groove / Drop: Multi-territory rhythm driving forward
-        const hasHit = dPat.onset_grid.includes(step);
+        // Standard Groove / Drop: Rock-solid 4-on-the-floor dance pocket with acoustic clarity
         const vel = dPat.velocities ? dPat.velocities[step] : 1.0;
 
-        // Kick triggers based on active Map-Territory quadrant
+        // 1. Kick: Rock-solid 4-on-the-floor [0, 4, 8, 12] across dance sections
         let isKickStep = false;
-        if (dTerr === "wave") {
-          // Wave: Halftime / ambient dub kicks
-          isKickStep = (step % 16 === 0 || step % 16 === 8) || ((step % 16 === 10) && dSteer.y > 0.55);
-        } else if (dTerr === "cyber") {
-          // Cyber: Phonk syncopated kicks on step 10 & 14 (+ 0, 4, 8)
-          isKickStep = [0, 4, 8, 10, 14].includes(step % 16);
-        } else if (dTerr === "breaks") {
+        if (dTerr === "breaks") {
           // Breaks: 2-step / syncopated breakbeat (kicks on 0, 6, 10)
           isKickStep = [0, 6, 10].includes(step % 16);
+        } else if (dTerr === "wave" && dSteer.y < 0.35) {
+          // Ambient Wave: Halftime kicks on 0 & 8
+          isKickStep = (step % 16 === 0 || step % 16 === 8);
         } else {
-          // House: Classic 4-on-the-floor
-          isKickStep = [0, 4, 8, 12].includes(step % 16) || ((step % 16 === 10) && (dSteer.y > 0.65 || dPat.groove_type.includes("syncopated")));
+          // House / Cyber / Electro: Driving 4-on-the-floor [0, 4, 8, 12] + optional groove kick on 10
+          isKickStep = [0, 4, 8, 12].includes(step % 16) ||
+            ((step % 16 === 10) && (dSteer.y > 0.55 || dTerr === "cyber" || dPat.groove_type.includes("syncopated")));
         }
 
-        // If the authentic pattern has an onset here and it's not a snare step, treat it as a kick
-        const isSnareTiming = (step % 16 === 4 || step % 16 === 12);
-        if (isKickStep || (hasHit && !isSnareTiming)) {
+        if (isKickStep) {
           const kickSlice = this.activeSongKit?.kick || this.getBestSlice("drums:kick", undefined, 0, dTerr);
+          const kickGain = (step % 16 === 10) ? vel * 0.75 : vel;
           if (kickSlice) {
             this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
               rate: 1.0,
               fadeMs: 1.5,
-              gain: vel,
+              gain: kickGain,
               voiceKey: "drums:kick",
             });
           } else {
-            this.synth.playKick(when, vel, dInput, dTerr);
+            this.synth.playKick(when, kickGain, dInput, dTerr);
           }
           this.applySidechainDucking(when);
         }
 
-        // Snare / Clap triggers based on active territory
+        // 2. Snare / Clap: Crisp snap on backbeats [4, 12] + turnaround rolls
         let isSnareStep = false;
-        if (dTerr === "wave") {
+        if (dTerr === "wave" && dSteer.y < 0.35) {
           isSnareStep = (step % 16 === 8) || (phraseBar === 7 && step % 16 >= 8 && step % 16 !== 15);
         } else if (dTerr === "breaks") {
           isSnareStep = (step % 16 === 4 || step % 16 === 12) || (dSteer.y > 0.65 && (step % 16 === 7 || (step % 16 === 15 && phraseBar !== 7)));
@@ -3356,7 +3360,7 @@ export class ClientGrooveboxConductor {
           }
         }
 
-        // Hi-Hats: Open hat on upbeats (2, 6, 10, 14) + closed 16th hats with choking
+        // 3. Hi-Hats: Sizzling open hat on upbeats (2, 6, 10, 14)
         if ([2, 6, 10, 14].includes(step % 16)) {
           const hatSlice = this.activeSongKit?.hatOpen || this.getBestSlice("drums:hat_open", undefined, 0, dTerr);
           if (hatSlice) {
@@ -3369,24 +3373,31 @@ export class ClientGrooveboxConductor {
           } else {
             this.synth.playHat(when, 0.90, true, dInput, dTerr);
           }
-        } else if (step % 2 === 1 && sec !== "INTRO" && (dSteer.y > 0.25 || dTerr === "cyber")) {
-          const hatSlice = this.activeSongKit?.hatClosed || this.getBestSlice("drums:hat_closed", undefined, 0, dTerr);
-          const hatVel = (step % 4 === 1 || step % 4 === 3) ? 0.72 : 0.58;
-          if (hatSlice) {
-            this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
-              rate: 1.0,
-              fadeMs: 1.0,
-              gain: hatVel,
-              voiceKey: "drums:hat_closed",
-              chokeKeys: ["drums:hat_open"],
-            });
-          } else {
-            this.synth.playHat(when, hatVel, false, dInput, dTerr);
+        }
+
+        // 4. Closed 16th Hi-Hats: Driving continuous groove with choking & micro-velocity accents
+        if (sec !== "INTRO") {
+          const isUpbeat = [2, 6, 10, 14].includes(step % 16);
+          const isGhost16th = [1, 3, 5, 7, 9, 11, 13, 15].includes(step % 16);
+          if (isGhost16th || (dSteer.y > 0.40 && !isUpbeat)) {
+            const hatSlice = this.activeSongKit?.hatClosed || this.getBestSlice("drums:hat_closed", undefined, 0, dTerr);
+            const hatVel = isGhost16th ? 0.68 : 0.52;
+            if (hatSlice) {
+              this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
+                rate: 1.0,
+                fadeMs: 1.0,
+                gain: hatVel,
+                voiceKey: "drums:hat_closed",
+                chokeKeys: isUpbeat ? [] : ["drums:hat_open"],
+              });
+            } else {
+              this.synth.playHat(when, hatVel, false, dInput, dTerr);
+            }
           }
         }
 
-        // Syncopated Percussion
-        if ([3, 7, 11].includes(step % 16) && (sec === "DROP" || sec === "GROOVE_A" || dSteer.y > 0.60 || dTerr === "cyber")) {
+        // 5. Syncopated Percussion & Accents
+        if ([3, 7, 11].includes(step % 16) && (sec === "DROP" || sec === "GROOVE_A" || dSteer.y > 0.55 || dTerr === "cyber")) {
           const percSlice = this.activeSongKit?.percussion || this.getBestSlice("drums:percussion", undefined, 0, dTerr);
           if (percSlice) {
             this.engine.scheduleSlice("drums", percSlice.buffer, when, {
@@ -3401,7 +3412,7 @@ export class ClientGrooveboxConductor {
           }
         }
 
-        // Dramatic Turnaround Fill on Bar 7
+        // 6. Dramatic Turnaround Fill on Bar 7 Step 14
         if (phraseBar === 7 && step === 14) {
           const fillSlice = this.activeSongKit?.fill || this.getBestSlice("drums:fill", undefined, 0, dTerr);
           if (fillSlice) {
@@ -3431,7 +3442,7 @@ export class ClientGrooveboxConductor {
         ? (step % 16 === 0 || step % 16 === 8)
         : (isDenseBass
           ? ([0, 2, 3, 5, 6, 8, 10, 11, 13, 14].includes(step % 16) || bPat.onset_grid.includes(step))
-          : bPat.onset_grid.includes(step));
+          : ([2, 6, 10, 14].includes(step % 16) || bPat.onset_grid.includes(step)));
 
       if (shouldPlayBass) {
         let vel = bPat.velocities ? (bPat.velocities[step] || 0.90) : 0.90;
@@ -3468,7 +3479,7 @@ export class ClientGrooveboxConductor {
 
       const shouldPlayOther = isSparsePad
         ? (step % 16 === 0 || step % 16 === 8)
-        : (isArpMode ? (step % 2 === 0 || oPat.onset_grid.includes(step)) : oPat.onset_grid.includes(step));
+        : (isArpMode ? (step % 2 === 0 || oPat.onset_grid.includes(step)) : ([2, 6, 10, 14].includes(step % 16) || oPat.onset_grid.includes(step)));
 
       if (shouldPlayOther) {
         const vel = oPat.velocities ? (oPat.velocities[step] || 0.85) : 0.85;
