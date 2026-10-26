@@ -1805,8 +1805,8 @@ export class ClientGrooveboxConductor {
       if (!stemSlices) continue;
       for (const [cat, list] of Object.entries(stemSlices)) {
         const assets: SliceAsset[] = [];
-        // Load up to 36 slices for vocals (3 variations per 12 pitches) or 16 for other stems
-        const maxSlices = stem === "vocals" ? 36 : 16;
+        // Big Codebook: Load up to 128 slices per stem category from the authentic training corpus
+        const maxSlices = 128;
         for (let i = 0; i < Math.min(maxSlices, list.length); i++) {
           const item = list[i];
           try {

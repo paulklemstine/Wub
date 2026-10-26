@@ -78,12 +78,12 @@ def harvest_pure_slices(
     # 1. DRUMS
     # --------------------------------------------------------------------------
     drum_targets = {
-        "kick": {"c_max": 750.0, "dur_min": 0.18, "dur_max": 0.38, "loud_min": -14.0, "shape_dur": 0.30, "fade_out": 20.0, "peak": 0.95, "count": 4},
-        "snare": {"c_min": 1300.0, "c_max": 2900.0, "dur_min": 0.14, "dur_max": 0.40, "loud_min": -14.0, "shape_dur": 0.28, "fade_out": 25.0, "peak": 0.92, "count": 4},
-        "hat_closed": {"c_min": 5500.0, "dur_max": 0.09, "loud_min": -22.0, "shape_dur": 0.05, "fade_out": 12.0, "peak": 0.72, "count": 4},
-        "hat_open": {"c_min": 4800.0, "dur_min": 0.18, "dur_max": 0.35, "loud_min": -18.0, "shape_dur": 0.22, "fade_out": 30.0, "peak": 0.82, "count": 4},
-        "percussion": {"c_min": 900.0, "c_max": 3800.0, "dur_min": 0.06, "dur_max": 0.18, "loud_min": -18.0, "shape_dur": 0.16, "fade_out": 20.0, "peak": 0.85, "count": 4},
-        "fill": {"c_min": 1100.0, "c_max": 3200.0, "dur_min": 0.25, "loud_min": -16.0, "shape_dur": 0.42, "fade_out": 35.0, "peak": 0.92, "count": 4},
+        "kick": {"c_max": 750.0, "dur_min": 0.18, "dur_max": 0.38, "loud_min": -14.0, "shape_dur": 0.30, "fade_out": 20.0, "peak": 0.95, "count": 16},
+        "snare": {"c_min": 1300.0, "c_max": 2900.0, "dur_min": 0.14, "dur_max": 0.40, "loud_min": -14.0, "shape_dur": 0.28, "fade_out": 25.0, "peak": 0.92, "count": 16},
+        "hat_closed": {"c_min": 5500.0, "dur_max": 0.09, "loud_min": -22.0, "shape_dur": 0.05, "fade_out": 12.0, "peak": 0.72, "count": 16},
+        "hat_open": {"c_min": 4800.0, "dur_min": 0.18, "dur_max": 0.35, "loud_min": -18.0, "shape_dur": 0.22, "fade_out": 30.0, "peak": 0.82, "count": 16},
+        "percussion": {"c_min": 900.0, "c_max": 3800.0, "dur_min": 0.06, "dur_max": 0.18, "loud_min": -18.0, "shape_dur": 0.16, "fade_out": 20.0, "peak": 0.85, "count": 16},
+        "fill": {"c_min": 1100.0, "c_max": 3200.0, "dur_min": 0.25, "loud_min": -16.0, "shape_dur": 0.42, "fade_out": 35.0, "peak": 0.92, "count": 16},
     }
 
     for cat, cfg in drum_targets.items():
@@ -193,8 +193,10 @@ def harvest_pure_slices(
 
         for p in range(12):
             cands = sorted(candidates_by_pitch[p], key=lambda x: x[0], reverse=True)
-            saved = False
+            taken_pitch = 0
             for loud, tid, s in cands:
+                if taken_pitch >= 3:
+                    break
                 stem_path = stems_dir / tid / "bass.wav"
                 try:
                     info = sf.info(str(stem_path))
@@ -211,7 +213,7 @@ def harvest_pure_slices(
                         continue
                     seen_hashes.add(h)
 
-                    out_name = f"bass_{cat}_p{p}.wav"
+                    out_name = f"bass_{cat}_p{p}.wav" if taken_pitch == 0 else f"bass_{cat}_p{p}_v{taken_pitch+1}.wav"
                     out_path = out_dir / out_name
                     sf.write(str(out_path), mono, sr, subtype="PCM_16")
 
@@ -228,8 +230,7 @@ def harvest_pure_slices(
                         "track_id": tid,
                         "segment_id": s.get("id", ""),
                     })
-                    saved = True
-                    break
+                    taken_pitch += 1
                 except Exception:
                     continue
 
@@ -265,7 +266,10 @@ def harvest_pure_slices(
 
         for p in range(12):
             cands = sorted(candidates_by_pitch[p], key=lambda x: x[0], reverse=True)
+            taken_pitch = 0
             for loud, tid, s in cands:
+                if taken_pitch >= 3:
+                    break
                 stem_path = stems_dir / tid / "other.wav"
                 try:
                     info = sf.info(str(stem_path))
@@ -282,7 +286,7 @@ def harvest_pure_slices(
                         continue
                     seen_hashes.add(h)
 
-                    out_name = f"other_{cat}_p{p}.wav"
+                    out_name = f"other_{cat}_p{p}.wav" if taken_pitch == 0 else f"other_{cat}_p{p}_v{taken_pitch+1}.wav"
                     out_path = out_dir / out_name
                     sf.write(str(out_path), mono, sr, subtype="PCM_16")
 
@@ -299,7 +303,7 @@ def harvest_pure_slices(
                         "track_id": tid,
                         "segment_id": s.get("id", ""),
                     })
-                    break
+                    taken_pitch += 1
                 except Exception:
                     continue
 
@@ -309,9 +313,9 @@ def harvest_pure_slices(
     # 4. VOCALS
     # --------------------------------------------------------------------------
     vocal_targets = {
-        "chop": {"dur_min": 0.10, "dur_max": 0.35, "loud_min": -22.0, "shape_dur": 0.28, "fade_out": 25.0, "peak": 0.90, "count": 8},
-        "hook": {"dur_min": 1.0, "dur_max": 3.5, "loud_min": -20.0, "shape_dur": 2.2, "fade_out": 50.0, "peak": 0.92, "count": 6},
-        "call": {"dur_min": 0.38, "dur_max": 0.95, "loud_min": -22.0, "shape_dur": 0.75, "fade_out": 35.0, "peak": 0.90, "count": 6},
+        "chop": {"dur_min": 0.10, "dur_max": 0.35, "loud_min": -22.0, "shape_dur": 0.28, "fade_out": 25.0, "peak": 0.90, "count": 32},
+        "hook": {"dur_min": 1.0, "dur_max": 3.5, "loud_min": -20.0, "shape_dur": 2.2, "fade_out": 50.0, "peak": 0.92, "count": 24},
+        "call": {"dur_min": 0.38, "dur_max": 0.95, "loud_min": -22.0, "shape_dur": 0.75, "fade_out": 35.0, "peak": 0.90, "count": 24},
     }
 
     for cat, cfg in vocal_targets.items():
