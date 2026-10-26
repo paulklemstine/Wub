@@ -2457,6 +2457,9 @@ export class ClientGrooveboxConductor {
   private kitKeyRoot: number = -1;
   private kitTerritory: StyleTerritory | null = null;
   private recentPhraseBlocks: string[] = [];
+  private trackBarsPlayed: number = 0;
+  private recentTracksPlayed: string[] = [];
+  private recentVocalTracks: string[] = [];
   private vocalPhraseEndAudioSec: number = 0;
   private activeVocalTrackId?: string;
   private activeVocalChainIndex: number = 0;
@@ -2705,6 +2708,45 @@ export class ClientGrooveboxConductor {
         }
       }
     }
+
+    // Preload rich multi-track vocal corpus (426 phrases, hooks, and spoken word segments across 101 tracks)
+    const vocalCorpus = (this.manifest as any)?.vocal_corpus as any[];
+    if (vocalCorpus && Array.isArray(vocalCorpus)) {
+      const corpusAssets: SliceAsset[] = [];
+      for (const item of vocalCorpus) {
+        try {
+          const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const bytes = await res.arrayBuffer();
+            const decoded = await this.engine.decodeWav(bytes);
+            const asset: SliceAsset = {
+              buffer: decoded,
+              pitch: typeof item.pitch === "number" ? item.pitch : 0,
+              centroid: typeof item.centroid === "number" ? item.centroid : 0,
+              duration: typeof item.duration === "number" ? item.duration : decoded.duration,
+              loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
+              name: item.name,
+              vowel: item.vowel,
+              trackTitle: item.track_title,
+              trackId: item.track_id,
+              segmentId: item.segment_id,
+              start: typeof item.start === "number" ? item.start : 0,
+            };
+            corpusAssets.push(asset);
+            const cat = item.category || "phrase";
+            const currentCatList = this.sliceRegistry.get(`vocals:${cat}`) || [];
+            currentCatList.push(asset);
+            this.sliceRegistry.set(`vocals:${cat}`, currentCatList);
+          }
+        } catch {
+          // Graceful fallback
+        }
+      }
+      this.sliceRegistry.set("vocals:corpus", corpusAssets);
+      console.info(`[Client ML] Preloaded ${corpusAssets.length} authentic vocal corpus phrases across tracks.`);
+    }
+
     // Initialize default curated song kit with preloaded slices
     this.initSongKit("house", 0);
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
@@ -2797,7 +2839,7 @@ export class ClientGrooveboxConductor {
     console.info(`[Client ML] Preloaded ${totalBlocks} studio 4-bar cohesive multi-stem phrase blocks across ${this.phraseBlockRegistry.size} sections.`);
   }
 
-  public getBestPhraseBlock(section: string, preferredTrackId?: string): LoadedPhraseBlock | null {
+  public getBestPhraseBlock(section: string, preferredTrackId?: string, forceNewTrack: boolean = false): LoadedPhraseBlock | null {
     let list = this.phraseBlockRegistry.get(section);
     if (!list || list.length === 0) {
       for (const fallbackSec of ["GROOVE_A", "DROP", "BUILDUP", "BREAKDOWN", "INTRO"]) {
@@ -2810,31 +2852,18 @@ export class ClientGrooveboxConductor {
     }
     if (!list || list.length === 0) return null;
 
-    // 1. Same-Track Cohesive Match: Prioritize blocks from the same authentic track
-    const targetTrack = preferredTrackId || this.activeTrackId;
-    if (targetTrack) {
-      // First check exact section match
-      const trackMatches = list.filter((p) => p.meta.track_id === targetTrack);
+    // 1. Same-Track Cohesive Progression: Only if continuing current track and played < 16 bars
+    const targetTrack = !forceNewTrack ? (preferredTrackId || this.activeTrackId) : undefined;
+    if (targetTrack && this.trackBarsPlayed < 16) {
+      const trackMatches = list.filter((p) => p.meta.track_id === targetTrack && !this.recentPhraseBlocks.includes(p.meta.id));
       if (trackMatches.length > 0) {
-        return trackMatches[Math.floor(Math.random() * trackMatches.length)];
-      }
-
-      // Next check other sections from the SAME authentic track session:
-      // A song's GROOVE_A or DROP block can easily play BUILDUP (with snare acceleration & bass cutoff),
-      // or INTRO/BREAKDOWN (with bass & drum muting). This preserves 100% of the song's sonic DNA!
-      for (const altSec of ["DROP", "GROOVE_A", "BUILDUP", "BREAKDOWN", "INTRO"]) {
-        const altList = this.phraseBlockRegistry.get(altSec);
-        if (altList) {
-          const altMatches = altList.filter((p) => p.meta.track_id === targetTrack);
-          if (altMatches.length > 0) {
-            console.info(`[Client ML] Song Continuity: Kept active track ${altMatches[0].meta.track_title} for ${section} (adapted from ${altSec})`);
-            return altMatches[0];
-          }
-        }
+        const pick = trackMatches[Math.floor(Math.random() * trackMatches.length)];
+        this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-10);
+        return pick;
       }
     }
 
-    // 2. Harmonic Affinity: Prefer phrase blocks in the active Camelot key or adjacent Camelot keys
+    // 2. Harmonic Affinity: Prefer phrase blocks in the active Camelot key
     const activeKey = CAMELOT_KEYS[this.currentCamelotCode]?.name?.toLowerCase();
     let candidates = list;
     if (activeKey) {
@@ -2844,20 +2873,30 @@ export class ClientGrooveboxConductor {
       }
     }
 
-    // 3. Tempo Affinity: Prefer phrase blocks within +/- 8% of current BPM to avoid pitch warping
+    // 3. Tempo Affinity: Prefer phrase blocks within +/- 10% of current BPM
     const tempoMatches = candidates.filter(
-      (p) => Math.abs(p.meta.source_bpm - this.currentBpm) / this.currentBpm <= 0.08
+      (p) => Math.abs(p.meta.source_bpm - this.currentBpm) / this.currentBpm <= 0.10
     );
     if (tempoMatches.length > 0) {
       candidates = tempoMatches;
     }
 
-    // High variety across different tracks: avoid recently played phrase blocks
-    const freshCandidates = candidates.filter((p) => !this.recentPhraseBlocks.includes(p.meta.id));
-    const pool = freshCandidates.length > 0 ? freshCandidates : candidates;
-    const pick = pool[Math.floor(Math.random() * pool.length)];
+    // 4. Maximum Song Variety: Strictly prioritize authentic tracks NOT played recently!
+    const freshTrackCandidates = candidates.filter(
+      (p) => !this.recentTracksPlayed.includes(p.meta.track_id) && !this.recentPhraseBlocks.includes(p.meta.id)
+    );
+    const pool = freshTrackCandidates.length > 0
+      ? freshTrackCandidates
+      : candidates.filter((p) => !this.recentPhraseBlocks.slice(-4).includes(p.meta.id));
 
-    this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-6);
+    const pick = (pool.length > 0 ? pool : candidates)[
+      Math.floor(Math.random() * (pool.length > 0 ? pool.length : candidates.length))
+    ];
+
+    this.recentPhraseBlocks = [...this.recentPhraseBlocks, pick.meta.id].slice(-10);
+    this.recentTracksPlayed = [...this.recentTracksPlayed, pick.meta.track_id].slice(-15);
+    this.activeTrackId = pick.meta.track_id;
+    this.trackBarsPlayed = 0;
     return pick;
   }
 
@@ -3077,7 +3116,7 @@ export class ClientGrooveboxConductor {
     targetVowel?: string,
     advance: boolean = false
   ): { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null {
-    // 1. Gather all vocal slice assets
+    // 1. Gather all vocal slice assets across phrase, hook, call, chop, and corpus
     const pool: SliceAsset[] = [];
     for (const [key, assets] of this.sliceRegistry) {
       if (!key.startsWith("vocals")) continue;
@@ -3093,20 +3132,34 @@ export class ClientGrooveboxConductor {
     }
 
     // 2. Filter to slices matching active track or style territory
-    let filtered = pool.filter((a) => {
-      if (this.activeVocalTrackId && a.trackId === this.activeVocalTrackId) return true;
-      return false;
-    });
-
-    if (filtered.length === 0) {
-      filtered = pool.filter((a) => {
-        const catMatch = a.name.includes(territory) || a.trackTitle?.toLowerCase().includes(territory);
-        return catMatch;
-      });
+    let filtered: SliceAsset[] = [];
+    if (this.activeVocalTrackId) {
+      const trackSlices = pool.filter((a) => a.trackId === this.activeVocalTrackId);
+      if (trackSlices.length > 0 && this.activeVocalChainIndex < trackSlices.length) {
+        filtered = trackSlices;
+      } else {
+        // Track completed its vocal lines! Transition to a fresh new vocal song from corpus
+        this.recentVocalTracks = [...this.recentVocalTracks, this.activeVocalTrackId].slice(-12);
+        this.activeVocalTrackId = undefined;
+        this.activeVocalChainIndex = 0;
+      }
     }
 
-    if (filtered.length === 0) {
-      filtered = pool;
+    if (!this.activeVocalTrackId || filtered.length === 0) {
+      // Find candidate tracks from pool not in recentVocalTracks for high variety
+      const availableTracks = Array.from(new Set(pool.map((a) => a.trackId).filter(Boolean))) as string[];
+      const freshTracks = availableTracks.filter((t) => !this.recentVocalTracks.includes(t));
+      const chosenTrack = freshTracks.length > 0
+        ? freshTracks[Math.floor(Math.random() * freshTracks.length)]
+        : availableTracks[Math.floor(Math.random() * availableTracks.length)];
+
+      if (chosenTrack) {
+        this.activeVocalTrackId = chosenTrack;
+        filtered = pool.filter((a) => a.trackId === chosenTrack);
+        this.activeVocalChainIndex = 0;
+      } else {
+        filtered = pool;
+      }
     }
 
     // 3. Sort chronologically by original song start timestamp
@@ -3119,10 +3172,15 @@ export class ClientGrooveboxConductor {
     });
 
     if (advance) {
-      this.activeVocalChainIndex = (this.activeVocalChainIndex + 1) % filtered.length;
+      this.activeVocalChainIndex++;
+      if (this.activeVocalChainIndex >= filtered.length) {
+        this.recentVocalTracks = [...this.recentVocalTracks, this.activeVocalTrackId || ""].slice(-12);
+        this.activeVocalTrackId = undefined;
+        this.activeVocalChainIndex = 0;
+      }
     }
 
-    const chosen = filtered[this.activeVocalChainIndex % filtered.length];
+    const chosen = filtered[this.activeVocalChainIndex % Math.max(1, filtered.length)];
     if (!chosen) return null;
 
     if (chosen.trackId) {
@@ -3651,7 +3709,33 @@ export class ClientGrooveboxConductor {
     this.nextStepTime = this.engine.now() + 0.05;
     this.tatumIndex = 0;
     this.totalBarsPlayed = 0;
+    this.trackBarsPlayed = 0;
     this.recentLoops = { drums: [], bass: [], vocals: [], other: [] };
+
+    // Reset previous track locking completely so every Play press starts with a fresh, exciting sound!
+    this.activeTrackId = undefined;
+    this.pendingTrackId = undefined;
+    this.activePhraseBlock = null;
+    this.activeLoops = {};
+    this.activeVocalTrackId = undefined;
+    this.activeVocalChainIndex = 0;
+
+    // Pick a fresh starting track from the 33+ authentic phrase blocks
+    const allPhraseBlocks = Array.from(this.phraseBlockRegistry.values()).flat();
+    if (allPhraseBlocks.length > 0) {
+      const unplayed = allPhraseBlocks.filter((b) => !this.recentTracksPlayed.includes(b.meta.track_id));
+      const startingBlock = (unplayed.length > 0 ? unplayed : allPhraseBlocks)[
+        Math.floor(Math.random() * (unplayed.length > 0 ? unplayed.length : allPhraseBlocks.length))
+      ];
+      this.activeTrackId = startingBlock.meta.track_id;
+      this.activePhraseBlock = startingBlock;
+      this.recentTracksPlayed = [...this.recentTracksPlayed, startingBlock.meta.track_id].slice(-15);
+      this.recentPhraseBlocks = [startingBlock.meta.id];
+      if (startingBlock.meta.source_bpm && startingBlock.meta.source_bpm >= 80 && startingBlock.meta.source_bpm <= 175) {
+        this.currentBpm = Math.round(startingBlock.meta.source_bpm);
+      }
+      console.info(`[Client ML] Fresh Play: Started new track "${startingBlock.meta.track_title}" (${startingBlock.meta.section} • ${this.currentBpm} BPM)`);
+    }
 
     // 1. Randomize starting section for rich variety (atmospheric INTRO, punchy GROOVE_A, or rising BUILDUP)
     const startingSec = this.arranger.randomizeStartingSection();
@@ -3692,6 +3776,10 @@ export class ClientGrooveboxConductor {
     this.vocalPhraseEndAudioSec = 0;
     this.activeVocalTrackId = undefined;
     this.activeVocalChainIndex = 0;
+    this.activeTrackId = undefined;
+    this.activePhraseBlock = null;
+    this.activeLoops = {};
+    this.trackBarsPlayed = 0;
   }
 
   private clockTick(): void {
@@ -4007,26 +4095,21 @@ export class ClientGrooveboxConductor {
     // 0. Downbeat handling: phrase blocks mode vs jukebox studio loops mode vs live slice mode
     if (this.playbackMode === "phrase_blocks" || this.playbackMode === "jukebox") {
       if (step % 16 === 0) {
-        // Cohesive 4-bar phrase blocks loop continuously across the section without jumping between random tracks!
+        // Cohesive 4-bar phrase blocks advance continuously across sections with high song variety
         if (barInSec % 4 === 0) {
-          // If a new track was steered via reticule, smoothly transition to it at phrase boundary!
-          if (this.pendingTrackId && this.pendingTrackId !== this.activeTrackId) {
-            const steeredBlock = this.getBestPhraseBlock(sec, this.pendingTrackId);
-            if (steeredBlock) {
-              this.activePhraseBlock = steeredBlock;
-              this.activeTrackId = this.pendingTrackId;
-              this.pendingTrackId = undefined;
-              console.info(`[Client ML] DJ Crossfade: Steered to authentic track ${steeredBlock.meta.track_title} at phrase boundary.`);
+          this.trackBarsPlayed += 4;
+          // After 8-16 bars on one song, or if reticule steered, DJ crossfade to a new authentic song!
+          const shouldCrossfade = this.trackBarsPlayed >= 12 || Boolean(this.pendingTrackId);
+          const targetTrack = this.pendingTrackId || (shouldCrossfade ? undefined : this.activeTrackId);
+          this.pendingTrackId = undefined;
+
+          const nextBlock = this.getBestPhraseBlock(sec, targetTrack, shouldCrossfade);
+          if (nextBlock) {
+            this.activePhraseBlock = nextBlock;
+            if (shouldCrossfade) {
+              console.info(`[Client ML] DJ Crossfade: Smoothly transitioned to fresh track "${nextBlock.meta.track_title}" (${nextBlock.meta.section})`);
             }
-          }
-          if (!this.activePhraseBlock) {
-            this.activePhraseBlock = this.getBestPhraseBlock(sec, this.activeTrackId);
-            if (this.activePhraseBlock && !this.activeTrackId) {
-              this.activeTrackId = this.activePhraseBlock.meta.track_id;
-            }
-          }
-          if (this.activePhraseBlock) {
-            this.schedulePhraseBlock(this.activePhraseBlock, when, sec, barInSec);
+            this.schedulePhraseBlock(nextBlock, when, sec, barInSec);
           }
         }
         if (!this.activePhraseBlock) {
@@ -4479,6 +4562,12 @@ export class ClientGrooveboxConductor {
         songTitle: activeTitle,
         sectionName: sec,
       };
+    }
+
+    // If an authentic multi-stem studio phrase block is actively singing its vocal stem,
+    // let it ride in full without collision!
+    if (isLoopVocalActive) {
+      return;
     }
 
     if (!isDropGap && vPat) {
