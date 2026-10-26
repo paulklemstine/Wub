@@ -119,10 +119,11 @@ export function drawWaveformAnalysis(
       const barW = (w - 180) / numBars;
       const startX = 110;
       ctx2d.fillStyle = color;
-      ctx2d.globalAlpha = 0.12;
+      ctx2d.globalAlpha = 0.14;
+      const fftBoost = (stem === "vocals" || stem === "other") ? 1.6 : 1.0;
       for (let b = 0; b < numBars; b++) {
         const bin = Math.floor((b / numBars) * (freq.length * 0.6));
-        const val = freq[bin] / 255.0;
+        const val = Math.min(1.0, (freq[bin] / 255.0) * fftBoost);
         const barH = val * (laneH * 0.72);
         ctx2d.fillRect(startX + b * barW, laneY + laneH - barH, barW - 1, barH);
       }
@@ -138,11 +139,12 @@ export function drawWaveformAnalysis(
       const waveEndX = w - 70;
       const waveWidth = waveEndX - waveStartX;
       const maxAmp = laneH * 0.42;
+      const visualGain = (stem === "vocals" || stem === "other") ? 2.2 : 1.0;
 
       let pIdx = 0;
       for (let tIdx = 0; tIdx < time.length; tIdx += step) {
         const norm = (time[tIdx] - 128) / 128.0;
-        const amp = Math.abs(norm);
+        const amp = Math.min(1.0, Math.abs(norm) * visualGain);
         const x = waveStartX + (pIdx / (time.length / step)) * waveWidth;
         const yOff = Math.max(1, amp * maxAmp);
         points.push({ x, topY: midY - yOff, botY: midY + yOff });

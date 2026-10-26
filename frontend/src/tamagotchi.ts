@@ -191,7 +191,9 @@ export class TamagotchiAvatar {
     drumWaveform?: Uint8Array | null,
     bassWaveform?: Uint8Array | null,
     drumLevel?: number,
-    bassLevel?: number
+    bassLevel?: number,
+    otherWaveform?: Uint8Array | null,
+    otherLevel?: number
   ): void {
     const dt = this.lastRenderSec > 0 ? Math.max(0.001, audioNow - this.lastRenderSec) : 0.016;
     this.lastRenderSec = audioNow;
@@ -304,7 +306,9 @@ export class TamagotchiAvatar {
       drumWaveform,
       bassWaveform,
       drumLevel ?? 0,
-      bassLevel ?? 0
+      bassLevel ?? 0,
+      otherWaveform,
+      otherLevel ?? 0
     );
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel);
     this.updateDashboard();
@@ -575,7 +579,9 @@ export class TamagotchiAvatar {
     drumWaveform?: Uint8Array | null,
     bassWaveform?: Uint8Array | null,
     drumLevel: number = 0,
-    bassLevel: number = 0
+    bassLevel: number = 0,
+    otherWaveform?: Uint8Array | null,
+    otherLevel: number = 0
   ): void {
     if (!this.canvasEl) return;
     if (!this.ctx2d) {
@@ -590,7 +596,7 @@ export class TamagotchiAvatar {
 
     const sec = meta?.section ?? "GROOVE_A";
     const vowel = meta?.vocalVowel ?? "";
-    const isSinging = Boolean(meta?.vocalSyllable) || (vocalsLevel >= 0.02);
+    const isSinging = Boolean(meta?.vocalSyllable) || (vocalsLevel >= 0.008);
     const bob = this.isHeadBobbed;
     const t = performance.now() / 1000;
 
@@ -623,12 +629,34 @@ export class TamagotchiAvatar {
       this.canvasEl.classList.remove("singing");
     }
 
+    // Circular angular distance with full 2*PI wrap-around
+    const angDist = (a: number, b: number): number => {
+      let diff = Math.abs(a - b) % (Math.PI * 2);
+      if (diff > Math.PI) diff = Math.PI * 2 - diff;
+      return diff;
+    };
+
     // -------------------------------------------------------------------------
     // 1. THE AUDIO REACTIVE SINGLE LINE LOOP (CREATURE HEAD & CAT EARS SILHOUETTE)
     // -------------------------------------------------------------------------
     const N = 180;
     const baseR = 44 + 4 * this.stage;
     const audioExpansion = 1.0 + 0.20 * Math.min(1.5, rmsLevel);
+
+    // Mirrored Cat Ears across the vertical axis (-0.5 * Math.PI)
+    // Symmetrical offsets wrapped with circular angular distance (2*PI)
+    const earOffset = 0.20 * Math.PI; // ~36 degrees offset each side
+    const leftEarAngle = -0.5 * Math.PI - earOffset;  // ~ -0.70 * PI (left cat ear)
+    const rightEarAngle = -0.5 * Math.PI + earOffset; // ~ -0.30 * PI (right cat ear)
+
+    // Audio-reactive ear twitching to 'other' instrument (synths/chords/leads)
+    let otherTwitch = 0;
+    if (otherWaveform && otherWaveform.length > 0) {
+      const oDev = (otherWaveform[0] - 128) / 128.0;
+      otherTwitch = Math.abs(oDev) * 0.22;
+    }
+    const earHeight = (0.85 + 0.20 * this.stage) * (1.0 + otherLevel * 0.40 + otherTwitch);
+    const earWidth = 0.082;
 
     ctx.save();
     ctx.lineCap = "round";
@@ -641,24 +669,16 @@ export class TamagotchiAvatar {
       // Cute pear/kawaii head outline
       const headProfile = 1.0 + 0.12 * Math.sin(theta);
 
-      // Mirrored Cat Ears across the vertical axis (-0.5 * Math.PI)
-      // Mirror the horn bump across the vertical axis with symmetrical offsets
-      const earOffset = 0.20 * Math.PI; // ~36 degrees offset each side
-      const leftEarAngle = -0.5 * Math.PI - earOffset;  // ~ -0.70 * PI (left cat ear)
-      const rightEarAngle = -0.5 * Math.PI + earOffset; // ~ -0.30 * PI (right cat ear)
-
-      const dLeftEar = Math.abs(theta - leftEarAngle);
-      const dRightEar = Math.abs(theta - rightEarAngle);
+      const dLeftEar = angDist(theta, leftEarAngle);
+      const dRightEar = angDist(theta, rightEarAngle);
 
       // Sharp pointed cat ear peaks
-      const earHeight = 0.85 + 0.20 * this.stage;
-      const earWidth = 0.082;
       const leftEarPeak = earHeight * Math.exp(-Math.pow(dLeftEar / earWidth, 2));
       const rightEarPeak = earHeight * Math.exp(-Math.pow(dRightEar / earWidth, 2));
       const catEars = leftEarPeak + rightEarPeak;
 
       // Forehead dip between the ears at the vertical axis
-      const dCenter = Math.abs(theta - (-0.5 * Math.PI));
+      const dCenter = angDist(theta, -0.5 * Math.PI);
       const foreheadDip = -0.06 * Math.exp(-Math.pow(dCenter / 0.10, 2));
 
       // Audio reactive standing waves rippling around the perimeter
@@ -692,6 +712,35 @@ export class TamagotchiAvatar {
     ctx.globalAlpha = 1.0;
     ctx.stroke();
     ctx.restore();
+
+    // 1.5. HARMONIC SYNTH CROWN / AURA (Vibrating to Other instrument)
+    if (otherLevel > 0.015 || (otherWaveform && otherWaveform.length > 0)) {
+      ctx.save();
+      ctx.strokeStyle = "#ff007f"; // Vibrant neon magenta for 'other' instrument
+      ctx.shadowBlur = 10 + 12 * otherLevel;
+      ctx.shadowColor = "#ff00a0";
+      ctx.lineWidth = 1.8;
+      ctx.globalAlpha = 0.55 + 0.45 * Math.min(1.0, otherLevel * 1.8);
+      ctx.beginPath();
+      const haloR = baseR * 0.62;
+      const haloY = cy - baseR * 0.82;
+      const oLen = otherWaveform ? otherWaveform.length : 0;
+      for (let j = 0; j <= 32; j++) {
+        const phi = Math.PI + (j / 32) * Math.PI; // semi-circle arc above forehead
+        let oNorm = 0;
+        if (oLen > 0 && otherWaveform) {
+          const idx = Math.floor((j / 32) * (oLen - 1));
+          oNorm = (otherWaveform[idx] - 128) / 128.0;
+        }
+        const hR = haloR + oNorm * 6.0;
+        const hx = cx + hR * Math.cos(phi);
+        const hy = haloY + hR * Math.sin(phi) * 0.45;
+        if (j === 0) ctx.moveTo(hx, hy);
+        else ctx.lineTo(hx, hy);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // -------------------------------------------------------------------------
     // 2. EXPRESSIVE FACIAL FEATURES
@@ -812,7 +861,7 @@ export class TamagotchiAvatar {
     ctx.lineWidth = 2.4;
 
     ctx.beginPath();
-    if (!isSinging && vocalsLevel < 0.015) {
+    if (!isSinging && vocalsLevel < 0.006) {
       // Resting / Breathing cute smiling mini loop
       const breathe = Math.sin(t * 2.5) * 1.2;
       const rx = 10 + breathe;

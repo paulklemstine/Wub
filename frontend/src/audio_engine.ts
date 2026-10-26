@@ -48,8 +48,8 @@ interface StemFilterSpec {
 const STEM_FILTERS: Record<StemName, StemFilterSpec> = {
   drums: { type: "lowpass", frequency: 18000, q: 0.7 },
   bass: { type: "lowpass", frequency: 800, q: 0.7 },
-  other: { type: "lowpass", frequency: 16000, q: 0.7 },
-  vocals: { type: "lowpass", frequency: 12000, q: 0.7 },
+  other: { type: "lowpass", frequency: 18000, q: 0.7 },
+  vocals: { type: "lowpass", frequency: 18000, q: 0.7 },
 };
 
 interface StemBus {
