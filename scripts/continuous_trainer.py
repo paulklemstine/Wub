@@ -173,15 +173,19 @@ def main() -> None:
                 log(f"[Evolution Epoch #{evolution_epoch}] Refining Multi-Stem Cohesion Feedback Weights...")
                 subprocess.run([sys.executable, "scripts/train_multistem_cohesion_feedback.py", "--bars", "50"], check=False)
 
-                # 3. Rebuild UMAP
+                # 3. Composing ML Phrase & Section Transition Models Refinement
+                log(f"[Evolution Epoch #{evolution_epoch}] Refining Composing ML Phrase & Section Transition Models...")
+                subprocess.run([sys.executable, "scripts/train_composing_ml.py", "--max-tracks", "30", "--audio-eval", "2"], check=False)
+
+                # 4. Rebuild UMAP
                 log(f"[Evolution Epoch #{evolution_epoch}] Updating FAISS indices and UMAP...")
                 subprocess.run([sys.executable, "scripts/build_umap.py"], check=False)
 
-                # 4. Refresh standalone client bundle
+                # 5. Refresh standalone client bundle
                 log(f"[Evolution Epoch #{evolution_epoch}] Exporting updated standalone client bundle...")
                 subprocess.run([sys.executable, "scripts/export_standalone_client_bundle.py"], check=False)
 
-                # 5. Push live to GitHub Pages
+                # 6. Push live to GitHub Pages
                 if args.auto_push:
                     commit_and_push_models(tracks_count=separated_this_session, epoch=evolution_epoch)
             except Exception as e:
@@ -282,7 +286,7 @@ def main() -> None:
 
                 # Composing ML Phrase and Section Transitions Refinement
                 log("Refining Composing ML Phrase & Section Transition Models...")
-                subprocess.run([sys.executable, "scripts/train_composing_ml.py", "--max-tracks", "60"], check=False)
+                subprocess.run([sys.executable, "scripts/train_composing_ml.py", "--max-tracks", "30", "--audio-eval", "2"], check=False)
                 log("Composing ML Models refined.")
 
                 # Refresh standalone client bundle

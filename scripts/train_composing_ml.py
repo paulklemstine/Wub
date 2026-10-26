@@ -59,15 +59,16 @@ def main() -> None:
     )
 
     # 2. Run real-audio waveform assembly & acoustic similarity scoring
-    print("Assembling pattern audio waveforms & scoring similarity against real training songs...", flush=True)
-    fb_engine = PatternAudioFeedbackEngine()
-    fb_res = fb_engine.run_training_step(bank=bank, corpus_store=store, n_optimize=args.audio_eval)
-    print(
-        f"Acoustic feedback loop evaluated {fb_res.get('evaluated')} patterns | "
-        f"Optimized {fb_res.get('optimized_generic_patterns')} generic patterns | "
-        f"Mean real-audio match score: {fb_res.get('mean_audio_similarity')}",
-        flush=True,
-    )
+    if args.audio_eval > 0:
+        print("Assembling pattern audio waveforms & scoring similarity against real training songs...", flush=True)
+        fb_engine = PatternAudioFeedbackEngine()
+        fb_res = fb_engine.run_training_step(bank=bank, corpus_store=store, n_optimize=args.audio_eval)
+        print(
+            f"Acoustic feedback loop evaluated {fb_res.get('evaluated')} patterns | "
+            f"Optimized {fb_res.get('optimized_generic_patterns')} generic patterns | "
+            f"Mean real-audio match score: {fb_res.get('mean_audio_similarity')}",
+            flush=True,
+        )
 
     # 3. Train Tier 2 Phrase Composer Model (weighted by audio similarity)
     print("Training Tier 2 Phrase Composer Markov Model across all 4 stems...", flush=True)

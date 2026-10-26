@@ -414,6 +414,19 @@ class SongArranger:
         """Learn section-to-section transitions, phrase durations, and energy profiles from corpus."""
         n_transitions = 0
         section_energies: Dict[str, List[float]] = defaultdict(list)
+        self.section_transition_counts = defaultdict(lambda: defaultdict(float))
+
+        # Seed authentic macro-section transition priors so every section has rich, variety-packed flow paths
+        priors = {
+            "INTRO": {"GROOVE_A": 6.5, "BUILDUP": 3.5},
+            "GROOVE_A": {"BUILDUP": 5.0, "BREAKDOWN": 3.0, "DROP": 2.0},
+            "BUILDUP": {"DROP": 10.0},
+            "DROP": {"BREAKDOWN": 5.0, "GROOVE_A": 3.5, "BUILDUP": 1.5},
+            "BREAKDOWN": {"BUILDUP": 7.0, "GROOVE_A": 3.0},
+        }
+        for sec, trans in priors.items():
+            for target_sec, weight in trans.items():
+                self.section_transition_counts[sec][target_sec] += weight
 
         for tr in tracks:
             phrases = self.bank.phrases_by_track.get(tr.track_id, [])
@@ -422,10 +435,12 @@ class SongArranger:
             for i in range(len(phrases) - 1):
                 s_curr = phrases[i].section
                 s_next = phrases[i + 1].section
-                w = 1.0 + float(phrases[i + 1].energy)
-                self.section_transition_counts[s_curr][s_next] += w
                 section_energies[s_curr].append(phrases[i].energy)
-                n_transitions += 1
+                # Count inter-section transitions to learn authentic macro song progression
+                if s_curr != s_next:
+                    w = 1.0 + float(phrases[i + 1].energy)
+                    self.section_transition_counts[s_curr][s_next] += w
+                    n_transitions += 1
 
         for sec, energies in section_energies.items():
             if energies:
@@ -588,7 +603,7 @@ class SongArranger:
             data = json.loads(p.read_text())
             raw_sec = data.get("section_transitions", {})
             for sec, trans in raw_sec.items():
-                self.section_transition_counts[sec].update({k: float(v) for k, v in trans.items()})
+                self.section_transition_counts[sec].update({k: float(v) for k, v in trans.items() if k != sec})
             targets = data.get("section_energy_targets", {})
             for sec, target in targets.items():
                 self.section_energy_targets[sec] = float(target)

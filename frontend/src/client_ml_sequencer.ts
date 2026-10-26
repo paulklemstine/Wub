@@ -2094,7 +2094,7 @@ export class ClientSongArranger {
   private currentSection: string = "GROOVE_A";
   private barInSection: number = 0;
   private totalBars: number = 0;
-  private sectionDuration: number = 48;
+  private sectionDuration: number = 16;
   private sectionEnergyTargets: Record<string, number> = {
     INTRO: 0.25,
     BUILDUP: 0.65,
@@ -2104,11 +2104,11 @@ export class ClientSongArranger {
   };
 
   private sectionTransitions: Record<string, Record<string, number>> = {
-    INTRO: { GROOVE_A: 7.0, BUILDUP: 3.0 },
+    INTRO: { GROOVE_A: 6.5, BUILDUP: 3.5 },
     BUILDUP: { DROP: 10.0 },
-    DROP: { GROOVE_A: 5.0, BREAKDOWN: 5.0 },
-    GROOVE_A: { BUILDUP: 6.5, DROP: 2.5, BREAKDOWN: 1.0 },
-    BREAKDOWN: { BUILDUP: 8.5, GROOVE_A: 1.5 },
+    DROP: { BREAKDOWN: 5.0, GROOVE_A: 3.5, BUILDUP: 1.5 },
+    GROOVE_A: { BUILDUP: 5.0, BREAKDOWN: 3.0, DROP: 2.0 },
+    BREAKDOWN: { BUILDUP: 7.0, GROOVE_A: 3.0 },
   };
 
   constructor(weights?: ComposingMLWeights) {
@@ -2117,7 +2117,18 @@ export class ClientSongArranger {
         this.sectionEnergyTargets = { ...this.sectionEnergyTargets, ...weights.section_energy_targets };
       }
       if (weights.section_transitions) {
-        this.sectionTransitions = { ...this.sectionTransitions, ...weights.section_transitions };
+        // Filter out self-transitions so the song always flows and transitions into fresh sections
+        for (const [sec, trans] of Object.entries(weights.section_transitions)) {
+          const nonSelfTrans: Record<string, number> = {};
+          for (const [nextSec, weight] of Object.entries(trans)) {
+            if (nextSec !== sec && (weight as number) > 0) {
+              nonSelfTrans[nextSec] = weight as number;
+            }
+          }
+          if (Object.keys(nonSelfTrans).length > 0) {
+            this.sectionTransitions[sec] = nonSelfTrans;
+          }
+        }
       }
     }
   }
@@ -2176,17 +2187,17 @@ export class ClientSongArranger {
 
     this.currentSection = nextSec;
     this.barInSection = 0;
-    // Section-Wide Groove Persistence:
-    // Dance movements hold the feel for 48 to 64 bars (768 to 1024 tatums),
-    // giving listeners an extended 2-3 minute steady, hypnotic groove that breathes and evolves
-    if (nextSec === "GROOVE_A" || nextSec === "DROP") {
-      this.sectionDuration = Math.random() < 0.5 ? 48 : 64; // 768 or 1024 tatums (2 to 3 minutes of steady hypnotic groove)
+    // Song Variety & Flow: Dynamic musical section lengths with tension & release
+    if (nextSec === "GROOVE_A") {
+      this.sectionDuration = Math.random() < 0.6 ? 16 : 24; // 16 or 24 bars (dynamic verse groove)
+    } else if (nextSec === "DROP") {
+      this.sectionDuration = Math.random() < 0.5 ? 16 : 24; // 16 or 24 bars of high energy drop
     } else if (nextSec === "INTRO") {
-      this.sectionDuration = Math.random() < 0.5 ? 16 : 32; // 256 or 512 tatums
+      this.sectionDuration = Math.random() < 0.5 ? 8 : 16;
     } else if (nextSec === "BREAKDOWN") {
-      this.sectionDuration = Math.random() < 0.5 ? 16 : 32; // 256 or 512 tatums
+      this.sectionDuration = Math.random() < 0.5 ? 8 : 16; // 8 or 16 bars of ethereal breathing space
     } else {
-      this.sectionDuration = 16; // BUILDUP is 16 bars (256 tatums) for a true gradual buildup arc!
+      this.sectionDuration = 8; // BUILDUP is strictly 8 bars for a focused, rising tension arc!
     }
   }
 
@@ -2194,11 +2205,11 @@ export class ClientSongArranger {
     this.currentSection = section;
     this.barInSection = 0;
     if (section === "GROOVE_A" || section === "DROP") {
-      this.sectionDuration = 48;
-    } else if (section === "INTRO" || section === "BREAKDOWN") {
-      this.sectionDuration = 24;
-    } else {
       this.sectionDuration = 16;
+    } else if (section === "INTRO" || section === "BREAKDOWN") {
+      this.sectionDuration = 8;
+    } else {
+      this.sectionDuration = 8;
     }
   }
 
@@ -2206,11 +2217,11 @@ export class ClientSongArranger {
     this.currentSection = section;
     this.barInSection = 0;
     if (section === "GROOVE_A" || section === "DROP") {
-      this.sectionDuration = 48;
-    } else if (section === "INTRO" || section === "BREAKDOWN") {
-      this.sectionDuration = 24;
-    } else {
       this.sectionDuration = 16;
+    } else if (section === "INTRO" || section === "BREAKDOWN") {
+      this.sectionDuration = 8;
+    } else {
+      this.sectionDuration = 8;
     }
   }
 
@@ -4496,9 +4507,9 @@ export class ClientGrooveboxConductor {
 
         // If an authentic long vocal phrase is currently singing, DO NOT interrupt or choke it!
         // The vocal track is heard in its entire phrase without disjointed chopped noise.
+        // Disable vocoloid expressions: ONLY real acoustic vocal slices are used!
         if (isPhraseSinging) {
-          const vocaloidBlend = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.40 : 0.28;
-          this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vel * vocaloidBlend, vInput, vTerr);
+          // Authentic acoustic phrase is singing naturally, let it ride without synthetic vocoloid layer!
         } else {
           // Ready for a new vocal phrase or consecutive slice from the active song!
           // Words always move into the future: advance to the next chronological vocal slice
@@ -4516,7 +4527,8 @@ export class ClientGrooveboxConductor {
             this.getBestSlice("vocals:phrase", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
             this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
             this.getBestSlice("vocals:call", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
-            this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId);
+            this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr, syl.vowel, this.activeVocalTrackId) ||
+            this.getBestSlice("vocals", melodyPitch, 0, vTerr);
 
           if (slice) {
             if (slice.asset?.trackId) {
@@ -4537,23 +4549,15 @@ export class ClientGrooveboxConductor {
               this.vocalPhraseEndAudioSec = when + durSec;
             }
 
-            // 1. Primary Lead Vocal: Authentic Acoustic Vocal Slice (heard in its entire phrase)
-            const sliceGain = isLoopVocalActive ? vel * 1.20 : vel * 1.45;
+            // Authentic Acoustic Vocal Slice (heard in its entire phrase, 100% real vocal audio)
+            const sliceGain = isLoopVocalActive ? vel * 1.25 : vel * 1.50;
             this.engine.scheduleSlice("vocals", slice.buffer, when, {
               rate: slice.rate,
               fadeMs: naturalDur >= 0.50 ? 12 : 6,
               gain: sliceGain,
               voiceKey: "vocals:phrase",
             });
-
-            // 2. Harmonic Vocaloid Layer: Formant vocoder harmony underlay
-            const vocaloidBlend = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.65 : (sec === "DROP" ? 0.45 : 0.52);
-            const vocaloidGain = vel * vocaloidBlend;
-            this.synth.playSingingVoice(when, noteHz, syl.vowel, Math.min(durSec, naturalDur), vocaloidGain, vInput, vTerr);
-          } else {
-            // Fallback: vocaloid carries full lead singing
-            const synthVel = isLoopVocalActive ? vel * 1.05 : vel * 1.30;
-            this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, synthVel, vInput, vTerr);
+            // ZERO vocoloid synthesis! No playSingingVoice layer.
           }
         }
       }
@@ -4610,16 +4614,18 @@ export class ClientGrooveboxConductor {
     const isChordBoundary = (phraseBar % 2 === 0);
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
-      // Section-Wide Rhythm & Harmonic Lock:
-      // - DRUMS, BASS & OTHER (synths/chords): Firmly lock for the ENTIRE SECTION!
-      //   Never swap out the foundational groove or harmonic feel in the middle of a section or after 128 ticks!
-      // - VOCALS: Stay locked to the active theme but alternate verse/call-and-response every 2 bars and phrase builds on bar 6/7
-      const shouldLockStem = !isSectionChange &&
-        ((stem === "drums" || stem === "bass" || stem === "other") ||
-         (stem === "vocals" && !isNewPhrase && (phraseBar % 2 !== 0) && phraseBar < 6));
+      // Dynamic Musical Phrase Evolution & Flow:
+      // - Keep foundational groove cohesive across 2-bar chord segments (bars 0-1, 2-3, 4-5)
+      // - BUT allow musical variation, fills, and evolution at:
+      //   1. Chord boundaries (bars 2, 4, 6) where harmony moves forward
+      //   2. Phrase developments (bar 4) where rhythm densifies or calls
+      //   3. Phrase buildups (bar 6) and turnarounds (bar 7)
+      //   4. Macro section transitions
+      const isVariationBar = (phraseBar === 2 || phraseBar === 4 || phraseBar === 6 || isTurnaround);
+      const shouldLockStem = !isSectionChange && !isVariationBar && (this.activeLoops[stem] || this.activePatterns[stem]);
 
-      if (shouldLockStem && (this.activeLoops[stem] || this.activePatterns[stem])) {
-        // Locked! Keep existing groove/pattern playing without frantic swapping
+      if (shouldLockStem) {
+        // Locked for 2-bar harmonic cohesion
         continue;
       }
 
