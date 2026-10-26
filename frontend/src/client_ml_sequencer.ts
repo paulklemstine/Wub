@@ -1680,28 +1680,8 @@ export class ClientGrooveboxConductor {
     const cy = Math.max(0, Math.min(1, y));
     this.steering[stem] = { x: cx, y: cy };
 
-    // Real-time Audio Filter manipulation based on X
-    if (stem === "bass") {
-      // 70 Hz (deep sub) to 3200 Hz (gritty acid growl)
-      const freq = 70 * Math.pow(3200 / 70, cx);
-      const q = 0.7 + 3.8 * cx;
-      this.engine.setStemFilter("bass", freq, q);
-    } else if (stem === "drums") {
-      // 1200 Hz (warm muffled punch) to 20000 Hz (crisp sizzle)
-      const freq = 1200 * Math.pow(20000 / 1200, cx);
-      const q = 0.7 + 1.2 * cx;
-      this.engine.setStemFilter("drums", freq, q);
-    } else if (stem === "other") {
-      // 250 Hz (warm floating ambient pad) to 18000 Hz (cutting saw lead)
-      const freq = 250 * Math.pow(18000 / 250, cx);
-      const q = 0.7 + 2.8 * cx;
-      this.engine.setStemFilter("other", freq, q);
-    } else if (stem === "vocals") {
-      // 600 Hz (warm telephone/muffled) to 15000 Hz (bright shimmering vocal)
-      const freq = 600 * Math.pow(15000 / 600, cx);
-      const q = 0.8 + 1.6 * cx;
-      this.engine.setStemFilter("vocals", freq, q);
-    }
+    // Pure acoustic slices: keep filters transparently wide open at 20 kHz for maximum punch, clarity and grit
+    this.engine.setStemFilter(stem, 20000, 0.7);
 
     // Dynamic Reticule Slice Steering: immediately update the set of slices used by this stem's pattern!
     this.updateStemSlicesForReticle(stem, { x: cx, y: cy });
@@ -2780,15 +2760,9 @@ export class ClientGrooveboxConductor {
     const startKey = (this.activeProgression && this.activeProgression.length > 0) ? this.activeProgression[0].rootPitch : 0;
     this.initSongKit(startTerritory, startKey);
 
-    // 5. Initial filter staging for starting section
-    if (startingSec === "INTRO") {
-      this.engine.setStemFilter("drums", 2800, 1.0);
-      this.engine.setStemFilter("other", 3600, 1.0);
-    } else if (startingSec === "BUILDUP") {
-      this.engine.setStemFilter("drums", 12000, 0.7);
-    } else {
-      this.engine.setStemFilter("drums", 18000, 0.7);
-      this.engine.setStemFilter("other", 16000, 0.7);
+    // 5. Initial filters: pure acoustic slices wide open at 20 kHz
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      this.engine.setStemFilter(stem, 20000, 0.7);
     }
 
     this.composeBarPatterns(0, true);
@@ -2858,18 +2832,9 @@ export class ClientGrooveboxConductor {
 
     if (isSectionChange) {
       // Dynamic section transition filter staging
-      if (section === "DROP") {
-        this.engine.setStemFilter("drums", 20000, 0.7);
-        this.engine.setStemFilter("other", 18000, 1.2);
-        this.engine.setStemFilter("bass", 800, 1.5);
-      } else if (section === "BREAKDOWN") {
-        this.engine.setStemFilter("drums", 2200, 0.7);
-        this.engine.setStemFilter("other", 3600, 1.0);
-      } else if (section === "INTRO") {
-        this.engine.setStemFilter("drums", 2800, 1.0);
-        this.engine.setStemFilter("other", 4000, 1.0);
-      } else if (section === "BUILDUP") {
-        this.engine.setStemFilter("drums", 14000, 0.7);
+      // Keep all stem filters wide open at 20 kHz for pure, un-muffled slice clarity
+      for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) {
+        this.engine.setStemFilter(s, 20000, 0.7);
       }
 
       // Section transition: reset active phrase block & loops so new section selects section-appropriate audio!
@@ -2924,17 +2889,6 @@ export class ClientGrooveboxConductor {
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       const buffer = phrase.buffers[stem];
       if (!buffer) continue;
-
-      // Invariant section muting rules:
-      if (sec === "BREAKDOWN" && (stem === "drums" || stem === "bass")) {
-        continue;
-      }
-      if (sec === "INTRO" && stem === "bass") {
-        continue;
-      }
-      if (sec === "BUILDUP" && stem === "bass" && barInSec >= totalSecBars - 4) {
-        continue;
-      }
 
       // Boost acoustic presence for vocals and other (synths/chords) so they cut clearly through driving drums and bass
       const stemGain = stem === "vocals" ? 1.55 : (stem === "other" ? 1.40 : 1.0);
@@ -2991,19 +2945,19 @@ export class ClientGrooveboxConductor {
   }
 
   private applySidechainDucking(when: number): void {
-    // Dip bass by -9 dB (gain 0.35) and exponential release over 70ms
+    // Subtle, transparent ducking: dip bass slightly by -2 dB (gain 0.78) and quick 38ms release so punch is preserved
     if (this.bassSidechainGain) {
       const t = Math.max(this.engine.now(), when);
       this.bassSidechainGain.gain.cancelScheduledValues(t);
-      this.bassSidechainGain.gain.setValueAtTime(0.35, t);
-      this.bassSidechainGain.gain.exponentialRampToValueAtTime(1.0, t + 0.075);
+      this.bassSidechainGain.gain.setValueAtTime(0.78, t);
+      this.bassSidechainGain.gain.exponentialRampToValueAtTime(1.0, t + 0.038);
     }
-    // Dip synths slightly by -4 dB (gain 0.63) and release over 60ms
+    // Dip synths slightly by -3 dB (gain 0.72) and release over 45ms
     if (this.synthSidechainGain) {
       const t = Math.max(this.engine.now(), when);
       this.synthSidechainGain.gain.cancelScheduledValues(t);
-      this.synthSidechainGain.gain.setValueAtTime(0.63, t);
-      this.synthSidechainGain.gain.exponentialRampToValueAtTime(1.0, t + 0.060);
+      this.synthSidechainGain.gain.setValueAtTime(0.72, t);
+      this.synthSidechainGain.gain.exponentialRampToValueAtTime(1.0, t + 0.045);
     }
   }
 
@@ -3037,43 +2991,33 @@ export class ClientGrooveboxConductor {
     const isTransitioning = barsLeft <= 2;
     const nextSec = sec === "BUILDUP" ? "DROP" : (sec === "DROP" ? "BREAKDOWN" : (sec === "BREAKDOWN" ? "GROOVE_A" : (sec === "INTRO" ? "GROOVE_A" : "BUILDUP")));
 
-    // Baseline mix profiles per section: Other & Vocals given rich presence
+    // Baseline mix profiles per section: pure slices of goodness unmuted
     const secProfiles: Record<string, Record<StemName, number>> = {
-      INTRO: { drums: 0.60, bass: 0.00, other: 1.15, vocals: 1.10 },
-      GROOVE_A: { drums: 0.95, bass: 0.92, other: 1.12, vocals: 1.18 },
-      BUILDUP: { drums: 0.98, bass: 0.70, other: 1.20, vocals: 1.25 },
-      DROP: { drums: 1.05, bass: 1.05, other: 1.08, vocals: 1.22 },
-      BREAKDOWN: { drums: 0.00, bass: 0.00, other: 1.25, vocals: 1.30 },
+      INTRO: { drums: 0.90, bass: 0.90, other: 1.15, vocals: 1.10 },
+      GROOVE_A: { drums: 1.00, bass: 1.00, other: 1.12, vocals: 1.18 },
+      BUILDUP: { drums: 1.00, bass: 0.95, other: 1.20, vocals: 1.25 },
+      DROP: { drums: 1.08, bass: 1.08, other: 1.08, vocals: 1.22 },
+      BREAKDOWN: { drums: 0.85, bass: 0.85, other: 1.25, vocals: 1.30 },
     };
 
-    const trainedAuto = this.stemCohesionWeights?.stem_mix_automation;
     const currProfile = secProfiles[sec] || secProfiles.GROOVE_A;
     const nextProfile = secProfiles[nextSec] || secProfiles.GROOVE_A;
 
-    let dTarget = currProfile.drums ?? 0.95;
-    let bTarget = currProfile.bass ?? 0.92;
+    let dTarget = currProfile.drums ?? 1.00;
+    let bTarget = currProfile.bass ?? 1.00;
     let oTarget = currProfile.other ?? 1.12;
     let vTarget = currProfile.vocals ?? 1.18;
 
     if (sec === "INTRO") {
-      // Gentle swell from ethereal ambient pad to driving groove introduction
-      dTarget = 0.40 + 0.45 * progressInSec;
-      bTarget = 0.00;
+      dTarget = 0.85 + 0.15 * progressInSec;
+      bTarget = 0.85 + 0.15 * progressInSec;
       oTarget = 0.95 + 0.25 * progressInSec;
       vTarget = 0.90 + 0.30 * progressInSec;
     } else if (sec === "BUILDUP") {
-      // Snare riser crescendo, bass rolling off, synths & vocals rising
-      dTarget = 0.85 + 0.20 * progressInSec;
-      if (barInSec < 4) {
-        bTarget = 0.75;
-      } else if (barInSec < 6) {
-        const subProgress = ((barInSec - 4) * 16 + stepInBar) / 32;
-        bTarget = 0.75 * (1.0 - subProgress);
-      } else {
-        bTarget = 0.00; // Completely muted on bar 7
-      }
-      oTarget = 1.05 + 0.25 * progressInSec; // Saw riser & chords swell up
-      vTarget = 1.05 + 0.28 * progressInSec; // Vocal chops & chants build anticipation
+      dTarget = 0.95 + 0.10 * progressInSec;
+      bTarget = 0.90 + 0.10 * progressInSec;
+      oTarget = 1.05 + 0.25 * progressInSec;
+      vTarget = 1.05 + 0.28 * progressInSec;
 
       // Drop Gap Breath: Bar 7 Step 15 is 100% SILENT for maximum drop impact!
       if (barInSec >= totalSecBars - 1 && stepInBar === 15) {
@@ -3083,7 +3027,6 @@ export class ClientGrooveboxConductor {
         vTarget = 0.0;
       }
     } else if (sec === "DROP") {
-      // Explosive impact on bar 0, then full driving energy
       if (barInSec === 0) {
         dTarget = 1.08;
         bTarget = 1.08;
@@ -3096,15 +3039,8 @@ export class ClientGrooveboxConductor {
         vTarget = 1.22;
       }
     } else if (sec === "BREAKDOWN") {
-      // Transcendent fade: drums and bass smoothly dissolve out over bars 0-1
-      if (barInSec < 2) {
-        const fadeProg = (barInSec * 16 + stepInBar) / 32;
-        dTarget = Math.max(0, 0.75 * (1.0 - fadeProg));
-        bTarget = Math.max(0, 0.70 * (1.0 - fadeProg));
-      } else {
-        dTarget = 0.0;
-        bTarget = 0.0;
-      }
+      dTarget = 0.85;
+      bTarget = 0.85;
       oTarget = 1.25;
       vTarget = 1.30;
     }
@@ -3279,18 +3215,29 @@ export class ClientGrooveboxConductor {
       const isBreakdown = (sec === "BREAKDOWN");
 
       if (isBreakdown) {
-        // Breakdown: Kicks completely muted, gentle closed hats on 2, 6, 10, 14
+        // Breakdown: Minimal acoustic groove with deep warm kicks on 0 & 8 and gentle hats
+        if (step % 16 === 0 || step % 16 === 8) {
+          const kickSlice = this.activeSongKit?.kick || this.getBestSlice("drums:kick", undefined, 0, dTerr);
+          if (kickSlice) {
+            this.engine.scheduleSlice("drums", kickSlice.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: 0.80,
+              voiceKey: "drums:kick",
+            });
+          }
+        }
         if ([2, 6, 10, 14].includes(step % 16)) {
           const hatSlice = this.activeSongKit?.hatClosed || this.getBestSlice("drums:hat_closed", undefined, 0, dTerr);
           if (hatSlice) {
             this.engine.scheduleSlice("drums", hatSlice.buffer, when, {
               rate: 1.0,
               fadeMs: 1.0,
-              gain: 0.45,
+              gain: 0.55,
               voiceKey: "drums:hat_closed",
             });
           } else {
-            this.synth.playHat(when, 0.45, false, dInput, dTerr);
+            this.synth.playHat(when, 0.55, false, dInput, dTerr);
           }
         }
       } else if (isBuildup) {
@@ -3475,7 +3422,7 @@ export class ClientGrooveboxConductor {
     const bPat = this.activePatterns.bass;
     const bSteer = this.steering.bass;
     const isLoopBassActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.bass || this.activePhraseBlock?.buffers?.bass));
-    if (bPat && !isLoopBassActive && sec !== "BREAKDOWN" && !(sec === "BUILDUP" && barInSec >= 6)) {
+    if (bPat && !isLoopBassActive && !(sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15)) {
       const bassCat = bSteer.x < 0.38 ? "bass:sub" : (bSteer.x < 0.72 ? "bass:rolling" : "bass:stab");
       const isSparseBass = (bSteer.y < 0.35 && bTerr !== "cyber");
       const isDenseBass = (bSteer.y > 0.70 || bTerr === "cyber");
@@ -3678,18 +3625,7 @@ export class ClientGrooveboxConductor {
       const loop = this.activeLoops[stem];
       if (!loop) continue;
 
-      // Invariant section muting rules:
-      if (sec === "BREAKDOWN" && (stem === "drums" || stem === "bass")) {
-        continue;
-      }
-      if (sec === "INTRO" && stem === "bass" && barInSec < 8) {
-        continue; // First 8 bars of INTRO: bass is completely muted
-      }
-      if (sec === "BUILDUP" && stem === "bass" && phraseBar >= 6) {
-        continue; // Bar 6-7 of BUILDUP: bass cuts out for tension
-      }
-
-      // Staged Vocal Layering in INTRO:
+      // Pure acoustic slice groove across all sections
       if (stem === "vocals" && sec === "INTRO" && phraseBar !== 0 && phraseBar !== 4) {
         continue; // Ethereal calls on bars 0 & 4 in ambient intro
       }

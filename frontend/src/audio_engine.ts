@@ -46,10 +46,10 @@ interface StemFilterSpec {
 // Sensible per-stem defaults: drums wide open, bass tightly low-passed so
 // sub content stays clean, other/vocals low-passed high enough to be neutral.
 const STEM_FILTERS: Record<StemName, StemFilterSpec> = {
-  drums: { type: "lowpass", frequency: 18000, q: 0.7 },
-  bass: { type: "lowpass", frequency: 800, q: 0.7 },
-  other: { type: "lowpass", frequency: 18000, q: 0.7 },
-  vocals: { type: "lowpass", frequency: 18000, q: 0.7 },
+  drums: { type: "lowpass", frequency: 20000, q: 0.7 },
+  bass: { type: "lowpass", frequency: 20000, q: 0.7 },
+  other: { type: "lowpass", frequency: 20000, q: 0.7 },
+  vocals: { type: "lowpass", frequency: 20000, q: 0.7 },
 };
 
 interface StemBus {
