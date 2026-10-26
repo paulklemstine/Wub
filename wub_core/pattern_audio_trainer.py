@@ -1517,6 +1517,59 @@ class PatternAudioFeedbackEngine:
             "mean_recurrence_utility": mean_ut,
         }
 
+    def train_song_intrinsic_compression(
+        self,
+        corpus_store: Any,
+        max_tracks: int = 35,
+        target_vocab_per_stem: int = 6,
+    ) -> Dict[str, Any]:
+        """Compress songs into their intrinsic reduced vocabularies and recurring patterns.
+
+        Evaluates compression ratio, builds Markov transition matrices between intrinsic patterns,
+        and saves compressed song models for the infinite jukebox.
+        """
+        from wub_core.song_intrinsic_compressor import SongIntrinsicCompressor
+
+        compressor = SongIntrinsicCompressor(target_vocab_per_stem=target_vocab_per_stem)
+        tracks = getattr(corpus_store, "tracks", [])
+        if not tracks:
+            return {"status": "empty_corpus", "compressed_songs": 0}
+
+        compressed_models: Dict[str, Any] = {}
+        total_compression = 0.0
+
+        for tr in tracks[:max_tracks]:
+            tid = tr.track_id
+            try:
+                rep = compressor.compress_song(tr, k_per_stem=target_vocab_per_stem)
+                compressed_models[tid] = {
+                    "track_id": rep.track_id,
+                    "title": rep.track_title,
+                    "bpm": rep.bpm,
+                    "key": rep.key,
+                    "total_bars": rep.total_bars,
+                    "compression_ratio": rep.compression_ratio,
+                    "mean_fidelity": rep.mean_fidelity,
+                    "total_vocab_slices": rep.vocabulary.total_slices,
+                    "pattern_counts": {s: len(p) for s, p in rep.intrinsic_patterns.items()},
+                    "transition_matrices": rep.transition_matrices,
+                }
+                total_compression += rep.compression_ratio
+            except Exception as e:
+                logger.warning(f"Failed to compress song {tid}: {e}")
+                continue
+
+        self.feedback_data["compressed_song_models"] = compressed_models
+        self._save()
+        self.export_locked_feedback_weights()
+
+        mean_comp = round(total_compression / max(1, len(compressed_models)), 4)
+        return {
+            "status": "ok",
+            "compressed_songs": len(compressed_models),
+            "mean_compression_ratio": mean_comp,
+        }
+
     def export_locked_feedback_weights(
         self,
         weights_path: Path = ROOT_DIR / "data" / "composing_ml_weights.json",
@@ -1539,6 +1592,7 @@ class PatternAudioFeedbackEngine:
             "trained_slice_scores": slice_scores,
             "song_composition_scores": self.feedback_data.get("song_composition_scores", {}),
             "recurrent_song_patterns": self.feedback_data.get("recurrent_song_patterns", {}),
+            "compressed_song_models": self.feedback_data.get("compressed_song_models", {}),
             "stem_mix_automation": {
                 "INTRO": {"drums": 0.65, "bass": 0.0, "other": 0.88, "vocals": 0.75},
                 "GROOVE_A": {"drums": 0.95, "bass": 0.92, "other": 0.88, "vocals": 0.95},
@@ -1571,6 +1625,7 @@ class PatternAudioFeedbackEngine:
                 manifest["stem_cohesion_weights"] = cohesion_weights
                 manifest["song_composition_scores"] = self.feedback_data.get("song_composition_scores", {})
                 manifest["recurrent_song_patterns"] = self.feedback_data.get("recurrent_song_patterns", {})
+                manifest["compressed_song_models"] = self.feedback_data.get("compressed_song_models", {})
                 pat_scores = self.feedback_data.get("patterns", {})
                 for stem, pats in manifest.get("patterns", {}).items():
                     for p in pats:
@@ -1670,6 +1725,9 @@ class PatternAudioFeedbackEngine:
         # 5. Multi-bar recurrence pattern & transition mining
         recurrent_res = self.evaluate_song_recurrent_patterns(corpus_store=corpus_store, bank=bank, max_tracks=15, sr=sr)
 
+        # 6. Song-intrinsic reduced vocabulary compression & pattern training
+        compression_res = self.train_song_intrinsic_compression(corpus_store=corpus_store, max_tracks=20)
+
         self._save()
         self.export_locked_feedback_weights()
 
@@ -1683,4 +1741,5 @@ class PatternAudioFeedbackEngine:
             "multistem_cohesion_status": cohesion_res,
             "song_composition_economy": economy_res,
             "recurrent_patterns_status": recurrent_res,
+            "song_intrinsic_compression": compression_res,
         }

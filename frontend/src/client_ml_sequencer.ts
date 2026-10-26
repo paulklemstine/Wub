@@ -130,6 +130,8 @@ export interface StandaloneManifest {
   style_kits?: Record<string, any>;
   stem_cohesion_weights?: StemCohesionWeights;
   song_composition_scores?: Record<string, any>;
+  recurrent_song_patterns?: Record<string, any>;
+  compressed_song_models?: Record<string, any>;
 }
 
 export interface StemCohesionWeights {
@@ -148,6 +150,8 @@ export interface StemCohesionWeights {
   grooves?: Record<string, Record<string, number>>;
   trained_slice_scores?: Record<string, number>;
   song_composition_scores?: Record<string, any>;
+  recurrent_song_patterns?: Record<string, any>;
+  compressed_song_models?: Record<string, any>;
   stem_mix_automation?: Record<string, any>;
 }
 
@@ -158,6 +162,8 @@ export interface ComposingMLWeights {
   section_energy_targets: Record<string, number>;
   stem_cohesion_weights?: StemCohesionWeights;
   song_composition_scores?: Record<string, any>;
+  recurrent_song_patterns?: Record<string, any>;
+  compressed_song_models?: Record<string, any>;
 }
 
 export interface CuratedSongKit {
@@ -3797,6 +3803,22 @@ export class ClientGrooveboxConductor {
       let nextG = isTurnaround && stem === "drums"
         ? "turnaround_fill"
         : this.phraseModel.sampleNextGroove(phraseBar, stem, currG);
+
+      // Intrinsic Pattern Compression: If active song has compressed intrinsic transitions, sample from them!
+      const songModel = this.activeTrackId ? (this.manifest?.compressed_song_models?.[this.activeTrackId] || (this.manifest?.stem_cohesion_weights as any)?.compressed_song_models?.[this.activeTrackId]) : undefined;
+      const songTransitions = songModel?.transition_matrices?.[stem];
+      if (songTransitions && songTransitions[currG]) {
+        const transMap = songTransitions[currG];
+        const r = Math.random();
+        let cum = 0;
+        for (const [targetG, prob] of Object.entries(transMap)) {
+          cum += (prob as number);
+          if (r <= cum) {
+            nextG = targetG;
+            break;
+          }
+        }
+      }
 
       // Section-specific musical arrangement logic & Reticule Y steering
       const steerY = this.steering[stem].y;

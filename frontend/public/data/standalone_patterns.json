@@ -31013,10 +31013,11 @@
         "total_tatums_count": 128,
         "core_pattern_count": 1,
         "total_bars_count": 8,
-        "evaluated_at": 1792983630.4187963
+        "evaluated_at": 1792984276.416588
       }
     },
     "recurrent_song_patterns": {},
+    "compressed_song_models": {},
     "stem_mix_automation": {
       "INTRO": {
         "drums": 0.65,
@@ -79046,8 +79047,9 @@
       "total_tatums_count": 128,
       "core_pattern_count": 1,
       "total_bars_count": 8,
-      "evaluated_at": 1792983630.4187963
+      "evaluated_at": 1792984276.416588
     }
   },
-  "recurrent_song_patterns": {}
+  "recurrent_song_patterns": {},
+  "compressed_song_models": {}
 }

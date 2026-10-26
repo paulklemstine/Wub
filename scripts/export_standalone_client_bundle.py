@@ -568,10 +568,12 @@ def export_bundle() -> None:
         "stem_cohesion_weights": stem_cohesion_weights,
     }
 
-    # Preserve rich style_kits and vocal corpora
-    for key in ("style_kits", "patterns_by_style", "vocal_patterns", "vocal_themes", "vocal_corpus"):
+    # Preserve rich style_kits, compressed song models, and vocal corpora
+    for key in ("style_kits", "patterns_by_style", "compressed_song_models", "song_composition_scores", "recurrent_song_patterns", "vocal_patterns", "vocal_themes", "vocal_corpus"):
         if key in existing_manifest:
             standalone_manifest[key] = existing_manifest[key]
+        elif key in stem_cohesion_weights:
+            standalone_manifest[key] = stem_cohesion_weights[key]
 
     vocal_json = public_dir / "vocal_patterns.json"
     if "vocal_patterns" not in standalone_manifest and vocal_json.exists():
