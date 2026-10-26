@@ -19,6 +19,7 @@ from typing import Dict, List, Set, Tuple
 
 import numpy as np
 import soundfile as sf
+from scripts.audio_encode import write_opus
 
 
 def clean_slice(mono: np.ndarray, sr: int, target_dur: float | None = None, peak_target: float = 0.90, fade_out_ms: float = 15.0) -> np.ndarray:
@@ -135,11 +136,11 @@ def harvest_pure_slices(
                     continue
                 seen_hashes.add(h)
 
-                out_name = f"drums_{cat}_{taken+1}.wav"
+                out_name = f"drums_{cat}_{taken+1}.opus"
                 out_path = out_dir / out_name
-                sf.write(str(out_path), mono, sr, subtype="PCM_16")
+                write_opus(out_path, mono, sr)
 
-                b64 = f"data:audio/wav;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
+                b64 = f"data:audio/ogg;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
 
                 manifest["drums"][cat].append({
                     "name": out_name,
@@ -215,11 +216,11 @@ def harvest_pure_slices(
                         continue
                     seen_hashes.add(h)
 
-                    out_name = f"bass_{cat}_p{p}.wav" if taken_pitch == 0 else f"bass_{cat}_p{p}_v{taken_pitch+1}.wav"
+                    out_name = f"bass_{cat}_p{p}.opus" if taken_pitch == 0 else f"bass_{cat}_p{p}_v{taken_pitch+1}.opus"
                     out_path = out_dir / out_name
-                    sf.write(str(out_path), mono, sr, subtype="PCM_16")
+                    write_opus(out_path, mono, sr)
 
-                    b64 = f"data:audio/wav;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
+                    b64 = f"data:audio/ogg;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
 
                     manifest["bass"][cat].append({
                         "name": out_name,
@@ -288,11 +289,11 @@ def harvest_pure_slices(
                         continue
                     seen_hashes.add(h)
 
-                    out_name = f"other_{cat}_p{p}.wav" if taken_pitch == 0 else f"other_{cat}_p{p}_v{taken_pitch+1}.wav"
+                    out_name = f"other_{cat}_p{p}.opus" if taken_pitch == 0 else f"other_{cat}_p{p}_v{taken_pitch+1}.opus"
                     out_path = out_dir / out_name
-                    sf.write(str(out_path), mono, sr, subtype="PCM_16")
+                    write_opus(out_path, mono, sr)
 
-                    b64 = f"data:audio/wav;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
+                    b64 = f"data:audio/ogg;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
 
                     manifest["other"][cat].append({
                         "name": out_name,
@@ -366,11 +367,11 @@ def harvest_pure_slices(
                     continue
                 seen_hashes.add(h)
 
-                out_name = f"vocals_{cat}_{taken+1}.wav"
+                out_name = f"vocals_{cat}_{taken+1}.opus"
                 out_path = out_dir / out_name
-                sf.write(str(out_path), mono, sr, subtype="PCM_16")
+                write_opus(out_path, mono, sr)
 
-                b64 = f"data:audio/wav;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
+                b64 = f"data:audio/ogg;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
 
                 pitch = int(np.argmax(s.get("pitches", [0]))) if s.get("pitches") else 0
                 centroid_val = float(s.get("spectral_centroid", 2000.0))

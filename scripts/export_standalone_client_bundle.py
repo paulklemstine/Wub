@@ -4,7 +4,7 @@ Packages:
 1. data/composing_ml_weights.json -> frontend/public/data/composing_ml_weights.json
 2. Curated standalone patterns & phrases -> frontend/public/data/standalone_patterns.json
 3. 1-bar studio-grade whole pattern stem loops -> frontend/public/data/loops/
-4. Clean authentic audio slice WAVs -> frontend/public/data/slices/
+4. Clean authentic audio slice Opus files -> frontend/public/data/slices/
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Set
 
 import numpy as np
 import soundfile as sf
+from scripts.audio_encode import write_opus
 
 from wub_core.corpus import CorpusStore
 from wub_core.patterns import PatternBank, STEMS
@@ -220,7 +221,7 @@ def harvest_whole_pattern_loops(
                         "max_loud": max_loud,
                     })
 
-    # Pick top 2-3 per category across diverse tracks and render 16-bit WAVs
+    # Pick top 2-3 per category across diverse tracks and render Opus files
     total_rendered = 0
     for stem, cat_dict in pool.items():
         for cat, cand_list in cat_dict.items():
@@ -258,8 +259,8 @@ def harvest_whole_pattern_loops(
                         mono[:fade_len] *= fade_in
                         mono[-fade_len:] *= fade_out
 
-                    loop_fname = f"{stem}_{cat}_{idx+1}.wav"
-                    sf.write(str(loops_dir / loop_fname), mono, sr, subtype="PCM_16")
+                    loop_fname = f"{stem}_{cat}_{idx+1}.opus"
+                    write_opus(loops_dir / loop_fname, mono, sr)
 
                     grid = [1 if i in item["onsets"] else 0 for i in range(16)]
 
@@ -305,8 +306,8 @@ def harvest_cohesive_phrase_blocks(
     """Extract continuous multi-part 4-bar studio-grade phrase chains stratified across the A-Z song catalog."""
     print("=== Harvesting Multi-Part 4-Bar Cohesive Song Phrase Chains Across Full A-Z Catalog ===", flush=True)
     phrases_dir.mkdir(parents=True, exist_ok=True)
-    # Clean stale phrase WAVs so old single-block files don't linger
-    for old_wav in phrases_dir.glob("*.wav"):
+    # Clean stale phrase audio so old single-block files don't linger (WAV legacy + prior Opus runs)
+    for old_wav in list(phrases_dir.glob("*.wav")) + list(phrases_dir.glob("*.opus")):
         try:
             old_wav.unlink()
         except Exception:
@@ -474,7 +475,7 @@ def harvest_cohesive_phrase_blocks(
 
             valid_extraction = True
             for stem in STEMS:
-                out_wav = phrases_dir / f"{phrase_id}_{stem}.wav"
+                out_wav = phrases_dir / f"{phrase_id}_{stem}.opus"
                 try:
                     p_start_frame = part_idx * part_frames
                     mono = stem_16bar_audio[stem][p_start_frame : p_start_frame + part_frames].copy()
@@ -490,7 +491,7 @@ def harvest_cohesive_phrase_blocks(
                     else:
                         mono_out = mono
                         sr_out = stem_sr
-                    sf.write(str(out_wav), mono_out, sr_out, subtype="PCM_16")
+                    write_opus(out_wav, mono_out, sr_out, bitrate="96k")
                     stem_urls[stem] = f"data/phrases/{out_wav.name}"
 
                     # Extract per-bar 16-step onset grids across the 4 bars in this phrase block
@@ -667,11 +668,11 @@ def export_bundle() -> None:
         slices_dir,
     )
 
-    # 4b. Export Song-Intrinsic Vocabulary WAV Slices for Stratified Multi-Stem Songs
-    print("Exporting song-intrinsic slice vocabulary WAVs across stratified multi-stem songs...", flush=True)
+    # 4b. Export Song-Intrinsic Vocabulary Opus Slices for ALL Stemmed Corpus Songs
+    print("Exporting song-intrinsic slice vocabulary Opus files across ALL stemmed corpus songs...", flush=True)
     csm_dict = compact_corpus_models
     vocab_wavs_exported = 0
-    stratified_csm_tids = [t.track_id for t in multistem_tracks if t.track_id in csm_dict][:36]
+    stratified_csm_tids = [t.track_id for t in multistem_tracks if t.track_id in csm_dict]
     for tid in stratified_csm_tids:
         cmodel = csm_dict[tid]
         v_by_stem = cmodel.get("vocab_by_stem", {})
@@ -711,9 +712,9 @@ def export_bundle() -> None:
                             chunk[:fade_in] *= np.linspace(0.0, 1.0, fade_in, dtype=np.float32)
                         if fade_out > 1:
                             chunk[-fade_out:] *= (0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, fade_out, dtype=np.float32))))
-                        out_wav = slices_dir / f"{vid}.wav"
-                        sf.write(str(out_wav), chunk, sr, subtype="PCM_16")
-                        rel_url = f"data/slices/{vid}.wav"
+                        out_wav = slices_dir / f"{vid}.opus"
+                        write_opus(out_wav, chunk, sr)
+                        rel_url = f"data/slices/{vid}.opus"
                         vs["url"] = rel_url
                         vs["duration"] = round(float(len(chunk) / sr), 3)
                         cat_full = vs.get("category", f"{stem}:kick" if stem == "drums" else f"{stem}:sub")
@@ -779,9 +780,16 @@ def export_bundle() -> None:
                 bound_vocab_count += 1
 
     print(
-        f"✓ Exported {vocab_wavs_exported} direct vocab WAVs & bound all {bound_vocab_count} vocabulary slices across {len(compact_corpus_models)} corpus songs",
+        f"✓ Exported {vocab_wavs_exported} direct vocab Opus files & bound all {bound_vocab_count} vocabulary slices across {len(compact_corpus_models)} corpus songs",
         flush=True,
     )
+    # Format migration: Opus replaces WAV everywhere; drop legacy WAVs so the Pages bundle stays under 1 GB
+    for _adir in (slices_dir, loops_dir):
+        for _stale in _adir.glob("*.wav"):
+            try:
+                _stale.unlink()
+            except Exception:
+                pass
 
     # 5. Export Full-Corpus UMAP Nebula Indices (all 1,724 songs = 3,448 points per stem)
     indices_dir = public_dir / "indices"
@@ -991,11 +999,65 @@ def export_bundle() -> None:
     }
 
     # Preserve rich style_kits, compressed song models, and vocal corpora (prefer fresh stem_cohesion_weights for trained models)
-    for key in ("style_kits", "patterns_by_style", "vocal_patterns", "vocal_themes", "vocal_corpus"):
+    for key in ("style_kits", "patterns_by_style", "vocal_patterns", "vocal_themes"):
         if key in existing_manifest:
             standalone_manifest[key] = existing_manifest[key]
         elif key in stem_cohesion_weights:
             standalone_manifest[key] = stem_cohesion_weights[key]
+
+    # Rebuild vocal_corpus fresh from THIS run's harvest: older generations
+    # reference deleted WAV filenames (dead 404s). The fresh items carry every
+    # field the client preloads (url/b64/pitch/vowel/track/segment/start).
+    fresh_vocal_corpus: List[dict] = []
+    for _vcat, _vitems in (extracted_slices_manifest.get("vocals", {}) or {}).items():
+        for _it in _vitems or []:
+            if not isinstance(_it, dict):
+                continue
+            _e = dict(_it)
+            _e.setdefault("category", _vcat)
+            _e.setdefault("stem", "vocals")
+            fresh_vocal_corpus.append(_e)
+    if fresh_vocal_corpus:
+        standalone_manifest["vocal_corpus"] = fresh_vocal_corpus
+    elif "vocal_corpus" in existing_manifest:
+        standalone_manifest["vocal_corpus"] = existing_manifest["vocal_corpus"]
+
+    # Remap legacy style_kit slice URLs onto this run's fresh harvest so no
+    # entry points at a deleted WAV name (older generations used a `_wave`
+    # infix scheme). Match by stem + category + pitch/centroid proximity.
+    _sk = standalone_manifest.get("style_kits")
+    if isinstance(_sk, dict):
+        _flat: Dict[str, List[dict]] = {}
+        for _st, _cat_dict in extracted_slices_manifest.items():
+            if isinstance(_cat_dict, dict):
+                for _ck, _items in _cat_dict.items():
+                    if isinstance(_items, list):
+                        _flat.setdefault(_st, []).extend([_i for _i in _items if isinstance(_i, dict) and _i.get("url")])
+        for _style, _sdata in _sk.items():
+            _stems = _sdata.get("stems", {}) if isinstance(_sdata, dict) else {}
+            for _st, _cats in _stems.items():
+                for _ck, _slist in (_cats.items() if isinstance(_cats, dict) else []):
+                    for _entry in _slist or []:
+                        if not isinstance(_entry, dict):
+                            continue
+                        _url = str(_entry.get("url", ""))
+                        if _url.endswith(".opus"):
+                            continue
+                        _cands = _flat.get(_st, [])
+                        if not _cands:
+                            _entry.pop("url", None)
+                            continue
+                        _tp = int(_entry.get("pitch", 0))
+                        _tc = float(_entry.get("centroid", 1200.0))
+                        _best = min(
+                            _cands,
+                            key=lambda _c: (
+                                0.0 if str(_c.get("name", "")).startswith(f"{_st}_{_ck}") else 2.5
+                            ) + (abs((_tp - int(_c.get("pitch", 0))) % 12) * 0.25)
+                            + (abs(_tc - float(_c.get("centroid", 1200.0))) / 2000.0 * 0.5),
+                        )
+                        _entry["url"] = _best["url"]
+                        _entry["name"] = _best["name"]
 
     for key in ("song_composition_scores", "recurrent_song_patterns"):
         if key in stem_cohesion_weights and stem_cohesion_weights[key]:
@@ -1003,7 +1065,7 @@ def export_bundle() -> None:
         elif key in existing_manifest:
             standalone_manifest[key] = existing_manifest[key]
 
-    # Core compressed song models kept inline (phrase-audio songs + 4-stem songs + direct vocab-WAV songs);
+    # Core compressed song models kept inline (phrase-audio songs + 4-stem songs + direct vocab-Opus songs);
     # every other corpus song is lazily loaded on demand from data/catalog/shard_XX.json via full_catalog_manifest.json
     core_tids: List[str] = []
     for tid in list(phrase_track_ids) + stratified_csm_tids + [t.track_id for t in multistem_tracks]:
@@ -1039,7 +1101,7 @@ def export_bundle() -> None:
         except Exception:
             pass
 
-    # Strip duplicate heavy dictionaries and redundant inline b64 WAV blobs when URLs are present
+    # Strip duplicate heavy dictionaries and redundant inline b64 audio blobs when URLs are present
     standalone_manifest.pop("recurrent_song_patterns", None)
     for stem_cats in standalone_manifest.get("slices", {}).values():
         if isinstance(stem_cats, dict):

@@ -2850,7 +2850,7 @@ export class ClientGrooveboxConductor {
             try {
               const res = await fetch(url);
               if (!res.ok) return null;
-              return await this.engine.decodeWav(await res.arrayBuffer());
+              return await this.engine.decodeAudio(await res.arrayBuffer());
             } catch {
               return null;
             }
@@ -2994,7 +2994,7 @@ export class ClientGrooveboxConductor {
               }
             }
             if (bytes) {
-              const decoded = await this.engine.decodeWav(bytes);
+              const decoded = await this.engine.decodeAudio(bytes);
               let segPos = item.segment_id
                 ? (this.segmentPositions.get(item.segment_id) ?? (item.track_id ? this.segmentPositions.get(`${item.track_id}:${item.segment_id}`) : undefined))
                 : undefined;
@@ -3064,7 +3064,7 @@ export class ClientGrooveboxConductor {
           const res = await fetch(url);
           if (res.ok) {
             const bytes = await res.arrayBuffer();
-            const decoded = await this.engine.decodeWav(bytes);
+            const decoded = await this.engine.decodeAudio(bytes);
             const asset: SliceAsset = {
               buffer: decoded,
               pitch: typeof item.pitch === "number" ? item.pitch : 0,
@@ -3117,7 +3117,7 @@ export class ClientGrooveboxConductor {
           const res = await fetch(url);
           if (res.ok) {
             const bytes = await res.arrayBuffer();
-            const decoded = await this.engine.decodeWav(bytes);
+            const decoded = await this.engine.decodeAudio(bytes);
             loaded.push({ meta: item, buffer: decoded });
           }
         } catch {
@@ -3158,7 +3158,7 @@ export class ClientGrooveboxConductor {
             const res = await fetch(url);
             if (res.ok) {
               const bytes = await res.arrayBuffer();
-              const decoded = await this.engine.decodeWav(bytes);
+              const decoded = await this.engine.decodeAudio(bytes);
               buffers[stem] = decoded;
             }
           } catch {

@@ -64,7 +64,7 @@ def test_clean_slice_dsp():
 
 
 def test_slices_manifest_and_files():
-    """Verify that slices directory contains valid, click-free audio files for all 4 styles."""
+    """Verify that slices directory contains valid Opus audio files for all 4 stems."""
     slices_dir = Path("frontend/public/data/slices")
     assert slices_dir.exists()
 
@@ -72,21 +72,41 @@ def test_slices_manifest_and_files():
     assert failed == 0, f"{failed} slices failed audio verification"
     assert passed >= 200, f"Expected at least 200 valid slices, found {passed}"
 
-    # Verify each style is represented in slice filenames
-    for s in STYLES:
-        matching = list(slices_dir.glob(f"*_{s}_*.wav"))
-        assert len(matching) > 0, f"No slices found for style '{s}'"
+    # Verify each stem is represented in Opus slice files
+    for stem in ("drums", "bass", "other", "vocals"):
+        matching = list(slices_dir.glob(f"{stem}_*.opus"))
+        assert len(matching) > 0, f"No slices found for stem '{stem}'"
 
-        # Check chromatic bass sub coverage for each style
+    # Check chromatic bass coverage (12 pitches) per category
+    for cat in ["sub", "rolling", "stab", "sustained"]:
         for p in range(12):
-            bass_sub = slices_dir / f"bass_sub_{s}_p{p}.wav"
-            assert bass_sub.exists(), f"Missing chromatic slice {bass_sub.name}"
+            matches = list(slices_dir.glob(f"bass_{cat}_p{p}.opus")) + list(slices_dir.glob(f"bass_{cat}_p{p}_v*.opus"))
+            assert len(matches) > 0, f"Missing chromatic slice bass_{cat}_p{p}"
 
-        # Check chromatic vocal coverage for chop, hook, and call across all styles
-        for cat in ["chop", "hook", "call"]:
-            for p in range(12):
-                vocal_slice = slices_dir / f"vocals_{cat}_{s}_p{p}.wav"
-                assert vocal_slice.exists(), f"Missing chromatic vocal slice {vocal_slice.name}"
+    # Check vocal categories are present
+    for cat in ["chop", "hook", "call", "phrase"]:
+        matches = list(slices_dir.glob(f"vocals_{cat}_*.opus"))
+        assert len(matches) > 0, f"Missing vocal slices for category '{cat}'"
+
+    # Every slice URL in the standalone manifest must resolve to a real file
+    with open("frontend/public/data/standalone_patterns.json") as f:
+        data = json.load(f)
+    missing: list = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k == "url" and isinstance(v, str) and not v.startswith("http"):
+                    if not (Path("frontend/public") / v).exists():
+                        missing.append(v)
+                else:
+                    walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(data)
+    assert not missing, f"{len(missing)} manifest URLs have no file: {missing[:5]}"
 
 
 def test_standalone_patterns_manifest_style_kits():

@@ -314,7 +314,10 @@ export class AudioEngine {
     return this.ctx_ !== null ? this.ctx_.currentTime : 0;
   }
 
-  async decodeWav(bytes: ArrayBuffer): Promise<AudioBuffer> {
+  /** Decode fetched audio bytes (WAV legacy or Ogg Opus) into an AudioBuffer.
+   * decodeAudioData sniffs the container; anything it rejects falls back to
+   * the shared-slice synth path at the call site. */
+  async decodeAudio(bytes: ArrayBuffer): Promise<AudioBuffer> {
     const ctx = this.ensureCtx();
     // decodeAudioData detaches its input; decode a copy instead.
     const copy = bytes.slice(0);

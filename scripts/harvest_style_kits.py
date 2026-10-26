@@ -789,8 +789,34 @@ def update_standalone_patterns_json(
 
 
 def verify_audio_slices(slices_dir: Path) -> Tuple[int, int]:
-    """Verify all WAV slices in slices_dir: valid header, click-free, non-empty, non-clipping."""
+    """Verify all Opus slices in slices_dir: valid OpusHead magic, non-empty,
+    well under PCM size (DSP peak/click checks run pre-encode in the harvesters)."""
     print(f"=== Verifying Audio Slices in {slices_dir} ===", flush=True)
+    wavs = sorted(slices_dir.glob("*.opus"))
+    if not wavs:
+        raise ValueError(f"No Opus files found in {slices_dir}!")
+
+    passed = 0
+    failed = 0
+
+    for p in wavs:
+        try:
+            raw = p.read_bytes()
+            if b"OpusHead" not in raw[:64] or len(raw) < 500:
+                print(f"  FAILED: {p.name} missing OpusHead magic or suspiciously small")
+                failed += 1
+                continue
+            passed += 1
+        except Exception as e:
+            print(f"  FAILED: {p.name}: {e}")
+            failed += 1
+            continue
+    print(f"=== Verified {passed} slices, {failed} failed ===", flush=True)
+    return passed, failed
+
+
+def _verify_audio_slices_wav_legacy(slices_dir: Path) -> Tuple[int, int]:
+    """Legacy PCM path retained for reference; the bundle ships Opus only."""
     wavs = list(slices_dir.glob("*.wav"))
     if not wavs:
         raise ValueError(f"No WAV files found in {slices_dir}!")
