@@ -1547,7 +1547,8 @@ class PatternAudioFeedbackEngine:
                 for stem, p_list in rep.intrinsic_patterns.items():
                     stem_trans = rep.transition_matrices.get(stem, {})
                     formatted_list = []
-                    for idx_p, p in enumerate(p_list):
+                    capped_list = p_list[:16]
+                    for idx_p, p in enumerate(capped_list):
                         next_map = stem_trans.get(p.id, {})
                         # Pick dominant non-self successor if available, else next rank pattern or self
                         non_self = {k: v for k, v in next_map.items() if k != p.id and not k.endswith("_var")}
@@ -1556,7 +1557,7 @@ class PatternAudioFeedbackEngine:
                         elif next_map:
                             best_next = max(next_map.items(), key=lambda kv: kv[1])[0]
                         else:
-                            best_next = p_list[(idx_p + 1) % len(p_list)].id if p_list else p.id
+                            best_next = capped_list[(idx_p + 1) % len(capped_list)].id if capped_list else p.id
 
                         formatted_list.append({
                             "id": p.id,
@@ -1572,11 +1573,23 @@ class PatternAudioFeedbackEngine:
                             "audio_similarity_score": round(float(p.reconstruction_fidelity), 4),
                             "cohesion_score": round(float(p.reconstruction_fidelity), 4),
                             "recurrence_ratio": round(float(p.recurrence_ratio), 4),
-                            "matching_bars": p.matching_bars,
+                            "matching_bars": p.matching_bars[:16],
                             "next_pattern_id": best_next,
-                            "slice_categories": [s.category if s is not None else None for s in p.steps],
+                            "slice_categories": p.step_categories,
+                            "step_slice_ids": p.step_slice_ids,
+                            "step_spans": p.step_spans,
+                            "step_pitches": p.step_pitches,
                         })
                     client_intrinsic_patterns[stem] = formatted_list
+
+                raw_vocab = rep.vocabulary.to_dict().get("vocab_by_stem", {})
+                compact_vocab = {
+                    st: [
+                        {k: v for k, v in vs.items() if k != "feature_vector"}
+                        for vs in v_items
+                    ]
+                    for st, v_items in raw_vocab.items()
+                }
 
                 compressed_models[tid] = {
                     "track_id": rep.track_id,
@@ -1587,10 +1600,12 @@ class PatternAudioFeedbackEngine:
                     "compression_ratio": rep.compression_ratio,
                     "mean_fidelity": rep.mean_fidelity,
                     "total_vocab_slices": rep.vocabulary.total_slices,
-                    "pattern_counts": {s: len(p) for s, p in rep.intrinsic_patterns.items()},
+                    "vocab_by_stem": compact_vocab,
+                    "pattern_counts": {s: len(p) for s, p in client_intrinsic_patterns.items()},
                     "intrinsic_patterns": client_intrinsic_patterns,
-                    "bar_pattern_sequence": rep.bar_pattern_sequence,
+                    "bar_pattern_sequence": rep.bar_pattern_sequence[:64],
                     "transition_matrices": rep.transition_matrices,
+                    "slice_arrangement": rep.slice_arrangement.to_dict() if rep.slice_arrangement else {},
                 }
                 total_compression += rep.compression_ratio
             except Exception as e:

@@ -326,4 +326,35 @@ def test_phrase_composer_and_arranger_next_pattern_and_part_continuity():
     assert "updatePhraseBlockBarPatterns" in seq_ts
     assert "predictNextPatternId" in seq_ts
     assert "predictNextPhraseId" in seq_ts
+    assert "step_slice_ids" in seq_ts
+    assert "step_spans" in seq_ts
+    assert "step_pitches" in seq_ts
+    assert "isUserDrag" in seq_ts
+
+
+def test_slice_arrangement_model_and_step_tokens():
+    """Verify SliceArrangementModel learns step-level slice transitions, spans, pitches, and category priors."""
+    song = _make_mock_song(n_bars=16)
+    compressor = SongIntrinsicCompressor(target_vocab_per_stem=4)
+    compressed = compressor.compress_song(song, k_per_stem=4)
+
+    assert compressed.slice_arrangement is not None
+    arr = compressed.slice_arrangement
+    for stem in STEMS:
+        assert stem in arr.slice_transitions
+        assert len(arr.slice_transitions[stem]) > 0
+        assert stem in arr.step_category_priors
+        assert len(arr.step_category_priors[stem]) >= 1
+
+    for stem in STEMS:
+        pats = compressed.intrinsic_patterns[stem]
+        assert len(pats) > 0
+        p0 = pats[0]
+        assert len(p0.step_slice_ids) == 16
+        assert len(p0.step_categories) == 16
+        assert len(p0.step_spans) == 16
+        assert len(p0.step_pitches) == 16
+        if p0.onset_grid:
+            assert sum(p0.step_spans[i] for i in p0.onset_grid) >= 12
+
 

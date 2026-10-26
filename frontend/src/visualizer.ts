@@ -670,14 +670,13 @@ export class NebulaRenderer {
     vocals: { ...DEFAULT_RETICLES.vocals },
     other: { ...DEFAULT_RETICLES.other },
   };
-  private lastDriftNotifySec: number = 0;
 
-  // Autonomous Lissajous drift profiles with unique incommensurate frequencies
+  // Subtle visual breathing profiles when reticles are idle (never triggers track/pattern switches)
   private static readonly DRIFT_PROFILES: Record<StemName, { sx: number; sy: number; px: number; py: number; r: number }> = {
-    drums:  { sx: 0.048, sy: 0.035, px: 0.0, py: 1.4, r: 0.075 },
-    bass:   { sx: 0.032, sy: 0.046, px: 2.2, py: 0.7, r: 0.080 },
-    vocals: { sx: 0.039, sy: 0.028, px: 4.1, py: 3.3, r: 0.070 },
-    other:  { sx: 0.044, sy: 0.039, px: 1.6, py: 5.2, r: 0.075 },
+    drums:  { sx: 0.024, sy: 0.018, px: 0.0, py: 1.4, r: 0.014 },
+    bass:   { sx: 0.018, sy: 0.022, px: 2.2, py: 0.7, r: 0.014 },
+    vocals: { sx: 0.020, sy: 0.015, px: 4.1, py: 3.3, r: 0.014 },
+    other:  { sx: 0.022, sy: 0.019, px: 1.6, py: 5.2, r: 0.014 },
   };
 
   private onReticleMove?: ReticleMoveHandler;
@@ -819,13 +818,10 @@ export class NebulaRenderer {
     ctx.fillStyle = "#0b0b14";
     ctx.fillRect(0, 0, w, h);
 
-    // Apply autonomous organic Lissajous drift when stems are not manually dragged
+    // Apply subtle visual breathing when stems are not manually dragged.
+    // IMPORTANT: Never call `onReticleMove` during passive visual drift, so autonomous
+    // song/phrase progression is never hijacked or forced to switch songs every 4 bars!
     const t = frame.timeSec;
-    const shouldNotify = (t - this.lastDriftNotifySec) > 0.08;
-    if (shouldNotify) {
-      this.lastDriftNotifySec = t;
-    }
-
     for (const stem of RETICLE_STEMS) {
       if (this.dragStem !== stem) {
         const prof = NebulaRenderer.DRIFT_PROFILES[stem];
@@ -835,9 +831,6 @@ export class NebulaRenderer {
         const driftedX = clamp01(base.x + dx);
         const driftedY = clamp01(base.y + dy);
         this.reticleMap[stem] = { x: driftedX, y: driftedY };
-        if (shouldNotify && this.onReticleMove) {
-          this.onReticleMove(stem, driftedX, driftedY);
-        }
       }
     }
 

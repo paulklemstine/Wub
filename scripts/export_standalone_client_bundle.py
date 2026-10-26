@@ -300,7 +300,47 @@ def harvest_cohesive_phrase_blocks(
                 best_start_bar = cand_b
 
         # Extract 4 consecutive 4-bar parts (16 continuous bars) from best_start_bar
-        # plus an early INTRO/BREAKDOWN 4-bar part if available, ordered chronologically
+        # Slice all 4 parts from a SINGLE contiguous 16-bar read with a SINGLE uniform gain scale
+        # and identical exact sample length so Part 1 -> Part 2 -> Part 3 -> Part 4 is 100% sample-continuous!
+        if best_start_bar + 16 >= n_bars:
+            continue
+        t_start_16 = float(getattr(tatums[best_start_bar * 16], "start", tatums[best_start_bar * 16]["start"] if isinstance(tatums[best_start_bar * 16], dict) else 0.0))
+        t_end_16 = float(getattr(tatums[(best_start_bar + 16) * 16], "start", tatums[(best_start_bar + 16) * 16]["start"] if isinstance(tatums[(best_start_bar + 16) * 16], dict) else 0.0))
+        total_dur_16 = t_end_16 - t_start_16
+        part_dur = total_dur_16 / 4.0
+        if part_dur < 5.0 or part_dur > 13.0:
+            continue
+
+        exact_bpm = round(60.0 * 16.0 / part_dur, 4)
+        f0_16 = int(round(t_start_16 * 44100))
+        part_frames = int(round(part_dur * 44100))
+        total_frames_16 = part_frames * 4
+
+        # Pre-load and uniformly normalize all 4 stems across the entire 16-bar span
+        stem_16bar_audio: Dict[str, np.ndarray] = {}
+        stem_sr = 44100
+        valid_16bar = True
+        for stem in STEMS:
+            try:
+                data_16, sr = sf.read(str(stem_paths[stem]), start=f0_16, frames=total_frames_16, always_2d=True, dtype="float32")
+                stem_sr = sr
+                mono_16 = data_16.mean(axis=1)
+                if len(mono_16) < total_frames_16:
+                    mono_16 = np.pad(mono_16, (0, total_frames_16 - len(mono_16)))
+                peak_16 = float(np.max(np.abs(mono_16)))
+                if peak_16 >= 0.025:
+                    gain_scale = min(2.2, 0.88 / peak_16)
+                    mono_16 = mono_16 * gain_scale
+                elif peak_16 < 0.012:
+                    mono_16 = mono_16 * 0.25
+                stem_16bar_audio[stem] = mono_16
+            except Exception:
+                valid_16bar = False
+                break
+
+        if not valid_16bar:
+            continue
+
         candidate_bars = [
             best_start_bar,
             best_start_bar + 4,
@@ -310,15 +350,9 @@ def harvest_cohesive_phrase_blocks(
 
         track_phrases: List[dict] = []
         for part_idx, b in enumerate(candidate_bars):
-            if b + 4 >= n_bars:
-                continue
-            t0 = tatums[b * 16]
-            t1 = tatums[(b + 4) * 16]
-            start = float(getattr(t0, "start", t0["start"] if isinstance(t0, dict) else 0.0))
-            end = float(getattr(t1, "start", t1["start"] if isinstance(t1, dict) else 0.0))
-            dur = end - start
-            if dur < 5.0 or dur > 13.0:
-                continue
+            start = t_start_16 + part_idx * part_dur
+            end = start + part_dur
+            dur = part_dur
 
             bar_segs = [
                 s for s in segments
@@ -349,8 +383,6 @@ def harvest_cohesive_phrase_blocks(
             else:
                 sec = "GROOVE_A" if part_idx < 2 else "DROP"
 
-            f0 = int(round(start * 44100))
-            flen = int(round(dur * 44100))
             phrase_id = f"phrase_{tid[:6]}_p{part_idx + 1}_{sec.lower()}"
             stem_urls = {}
             onset_grids = {}
@@ -360,23 +392,14 @@ def harvest_cohesive_phrase_blocks(
             for stem in STEMS:
                 out_wav = phrases_dir / f"{phrase_id}_{stem}.wav"
                 try:
-                    data, sr = sf.read(str(stem_paths[stem]), start=f0, frames=flen, always_2d=True, dtype="float32")
-                    mono = data.mean(axis=1)
-
-                    # Preserve natural dynamic balance: never amplify low-level stem bleed (>2.2x cap),
-                    # and attenuate quiet noise floors (<0.015 peak) so silent stems stay clean!
-                    peak = float(np.max(np.abs(mono)))
-                    if peak >= 0.025:
-                        gain_scale = min(2.2, 0.88 / peak)
-                        mono = mono * gain_scale
-                    elif peak < 0.012:
-                        mono = mono * 0.25
+                    p_start_frame = part_idx * part_frames
+                    mono = stem_16bar_audio[stem][p_start_frame : p_start_frame + part_frames].copy()
 
                     if len(mono) > fade_len * 2:
                         mono[:fade_len] *= fade_in
                         mono[-fade_len:] *= fade_out
 
-                    sf.write(str(out_wav), mono, sr, subtype="PCM_16")
+                    sf.write(str(out_wav), mono, stem_sr, subtype="PCM_16")
                     stem_urls[stem] = f"data/phrases/{out_wav.name}"
 
                     # Extract per-bar 16-step onset grids across the 4 bars in this phrase block
@@ -414,7 +437,7 @@ def harvest_cohesive_phrase_blocks(
                 "track_id": tid,
                 "track_title": clean_title,
                 "key": key,
-                "source_bpm": bpm,
+                "source_bpm": exact_bpm,
                 "section": sec,
                 "part_index": part_idx,
                 "start_bar": b,
@@ -522,6 +545,77 @@ def export_bundle() -> None:
         slices_dir,
     )
 
+    # 4b. Train & Export Song-Intrinsic Vocabulary WAV Slices and Slice Arrangement Models for Compressed Songs
+    print("Training song-intrinsic slice vocabulary & arrangement models across multi-stem songs...", flush=True)
+    fb_engine.train_song_intrinsic_compression(multistem_tracks, max_tracks=25)
+    csm_dict = fb_engine.feedback_data.get("compressed_song_models", {})
+    vocab_wavs_exported = 0
+    for tid, cmodel in list(csm_dict.items())[:18]:
+        v_by_stem = cmodel.get("vocab_by_stem", {})
+        bpm_val = float(cmodel.get("bpm", 126.0))
+        tatum_sec = 60.0 / max(60.0, bpm_val) / 4.0
+        for stem, v_list in v_by_stem.items():
+            wav_path = Path("data/stems") / tid / f"{stem}.wav"
+            if not wav_path.exists():
+                continue
+            try:
+                with sf.SoundFile(str(wav_path)) as f:
+                    sr = f.samplerate
+                    total_frames = len(f)
+                    for vs in v_list:
+                        vid = vs.get("id", f"vocab_{tid[:6]}_{stem}_v1")
+                        start_sec = float(vs.get("start", 0.0))
+                        raw_dur = float(vs.get("duration", 0.25))
+                        # Align slice duration to integer tatums + 15ms crossfade tail for seamless concatenation
+                        n_tatums_span = max(1, min(8, round(raw_dur / max(0.05, tatum_sec))))
+                        target_dur = n_tatums_span * tatum_sec + 0.015
+                        start_frame = max(0, min(total_frames - 1, int(start_sec * sr)))
+                        num_frames = max(int(0.08 * sr), min(total_frames - start_frame, int(target_dur * sr)))
+                        if num_frames <= 64:
+                            continue
+                        f.seek(start_frame)
+                        chunk = f.read(num_frames, dtype="float32", always_2d=False)
+                        if chunk.ndim > 1:
+                            chunk = np.mean(chunk, axis=1)
+                        peak = float(np.max(np.abs(chunk)))
+                        if peak >= 0.015:
+                            gain = min(2.4, 0.88 / peak)
+                            chunk = chunk * gain
+                        # Apply smooth 4ms attack and 12ms cosine release tail for click-free concatenation
+                        fade_in = min(int(0.004 * sr), len(chunk) // 4)
+                        fade_out = min(int(0.012 * sr), len(chunk) // 3)
+                        if fade_in > 1:
+                            chunk[:fade_in] *= np.linspace(0.0, 1.0, fade_in, dtype=np.float32)
+                        if fade_out > 1:
+                            chunk[-fade_out:] *= (0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, fade_out, dtype=np.float32))))
+                        out_wav = slices_dir / f"{vid}.wav"
+                        sf.write(str(out_wav), chunk, sr, subtype="PCM_16")
+                        rel_url = f"data/slices/{vid}.wav"
+                        vs["url"] = rel_url
+                        vs["duration"] = round(float(len(chunk) / sr), 3)
+                        cat_full = vs.get("category", f"{stem}:kick" if stem == "drums" else f"{stem}:sub")
+                        cat_short = cat_full.split(":")[-1] if ":" in cat_full else cat_full
+                        extracted_slices_manifest.setdefault(stem, {}).setdefault(cat_short, []).append({
+                            "name": vid,
+                            "url": rel_url,
+                            "pitch": int(vs.get("pitch", 0)),
+                            "centroid": 1200.0,
+                            "duration": vs["duration"],
+                            "loudness": 0.90,
+                            "track_id": tid,
+                            "track_title": cmodel.get("title", tid),
+                            "segment_id": vs.get("segment_id", vid),
+                            "start": start_sec,
+                        })
+                        vocab_wavs_exported += 1
+            except Exception:
+                continue
+    if vocab_wavs_exported > 0:
+        fb_engine._save()
+        fb_engine.export_locked_feedback_weights()
+        shutil.copy(src_weights, dst_weights)
+        print(f"✓ Exported {vocab_wavs_exported} song-intrinsic vocabulary WAV slices with tatum-aligned crossfade tails", flush=True)
+
     # 5. Extract authentic harmonic chord progressions from real tracks
     chord_progressions: List[dict] = []
     for tr in multistem_tracks[:35]:
@@ -579,10 +673,30 @@ def export_bundle() -> None:
                 if len(curated_for_gt) >= 8:
                     break
 
+            from wub_core.groovy_pattern_assembler import AcousticSliceClassifier
             for idx_p, p in enumerate(curated_for_gt):
                 # Find the next consecutive pattern from the same track and stem
                 next_pat = bank.get_track_pattern(p.track_id, stem, p.bar_num + 1)
                 next_pid = next_pat.id if next_pat else curated_for_gt[(idx_p + 1) % len(curated_for_gt)].id
+
+                # Compute per-step slice categories, contiguous tatum spans (1..16), and melodic pitches
+                step_cats: List[Optional[str]] = [None] * p.length
+                step_spans: List[int] = [1] * p.length
+                step_pitches: List[int] = [0] * p.length
+                p_steps = getattr(p, "steps", []) or []
+                for s_i in range(min(p.length, len(p_steps))):
+                    sref = p_steps[s_i]
+                    if sref is not None:
+                        role = AcousticSliceClassifier.classify(sref)
+                        step_cats[s_i] = f"{stem}:{role}" if not role.startswith(f"{stem}:") else role
+                        chroma = getattr(sref, "chroma", None)
+                        if chroma is not None and len(chroma) == 12:
+                            step_pitches[s_i] = int(np.argmax(chroma))
+                for o_idx, o_step in enumerate(p.onset_grid):
+                    if 0 <= o_step < p.length:
+                        nxt_o = p.onset_grid[o_idx + 1] if o_idx + 1 < len(p.onset_grid) else p.length
+                        step_spans[o_step] = max(1, min(16, nxt_o - o_step))
+
                 serialized_patterns[stem].append({
                     "id": p.id,
                     "track_id": p.track_id,
@@ -594,6 +708,9 @@ def export_bundle() -> None:
                     "density": round(float(p.density), 3),
                     "onset_grid": p.onset_grid,
                     "velocities": p.velocities if p.velocities else [1.0 if i in p.onset_grid else 0.0 for i in range(p.length)],
+                    "slice_categories": step_cats,
+                    "step_spans": step_spans,
+                    "step_pitches": step_pitches,
                     "length": p.length,
                     "key": p.key,
                     "audio_similarity_score": round(float(getattr(p, "audio_similarity_score", 0.95)), 3),
@@ -715,7 +832,25 @@ def export_bundle() -> None:
         except Exception:
             pass
 
-    dst_patterns.write_text(json.dumps(standalone_manifest, indent=2))
+    # Strip duplicate heavy dictionaries from stem_cohesion_weights since they live at top-level of standalone_manifest
+    if isinstance(stem_cohesion_weights, dict):
+        for dup_k in ("compressed_song_models", "recurrent_song_patterns"):
+            if dup_k in stem_cohesion_weights and stem_cohesion_weights[dup_k]:
+                standalone_manifest.setdefault(dup_k, stem_cohesion_weights[dup_k])
+        light_cohesion = {
+            k: v for k, v in stem_cohesion_weights.items()
+            if k not in ("compressed_song_models", "recurrent_song_patterns")
+        }
+        standalone_manifest["stem_cohesion_weights"] = light_cohesion
+        try:
+            w_light = json.loads(dst_weights.read_text())
+            w_light["stem_cohesion_weights"] = light_cohesion
+            dst_weights.write_text(json.dumps(w_light, separators=(",", ":")))
+            src_weights.write_text(json.dumps(w_light, separators=(",", ":")))
+        except Exception:
+            pass
+
+    dst_patterns.write_text(json.dumps(standalone_manifest, separators=(",", ":")))
     print(f"✓ Exported {dst_patterns} ({dst_patterns.stat().st_size} bytes)", flush=True)
 
     print("=== Standalone Client Bundle Export Complete ===", flush=True)

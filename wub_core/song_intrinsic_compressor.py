@@ -107,6 +107,9 @@ class DownConvertedBar:
     steps: Dict[str, List[Optional[VocabSlice]]]  # stem -> 16 steps
     velocities: Dict[str, List[float]]             # stem -> 16 velocities
     raw_slice_ids: Dict[str, List[Optional[str]]]  # original slice IDs for distortion scoring
+    step_spans: Dict[str, List[int]] = field(default_factory=lambda: {s: [1] * 16 for s in STEMS})
+    step_pitches: Dict[str, List[int]] = field(default_factory=lambda: {s: [0] * 16 for s in STEMS})
+    bar_fidelity: Dict[str, float] = field(default_factory=lambda: {s: 0.90 for s in STEMS})
 
     def signature(self, stem: Optional[str] = None) -> str:
         """Hashable signature representing the discrete sequence of vocabulary tokens."""
@@ -136,6 +139,16 @@ class IntrinsicPattern:
     recurrence_ratio: float             # recurrence_count / total_bars
     reconstruction_fidelity: float = 0.85
     utility_score: float = 0.0
+    step_spans: List[int] = field(default_factory=lambda: [1] * 16)
+    step_pitches: List[int] = field(default_factory=lambda: [0] * 16)
+
+    @property
+    def step_slice_ids(self) -> List[Optional[str]]:
+        return [s.id if s is not None else None for s in self.steps]
+
+    @property
+    def step_categories(self) -> List[Optional[str]]:
+        return [s.category if s is not None else None for s in self.steps]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -151,7 +164,28 @@ class IntrinsicPattern:
             "reconstruction_fidelity": round(self.reconstruction_fidelity, 4),
             "utility_score": round(self.utility_score, 4),
             "steps": [s.to_dict() if s is not None else None for s in self.steps],
+            "step_slice_ids": self.step_slice_ids,
+            "step_categories": self.step_categories,
+            "step_spans": list(self.step_spans),
+            "step_pitches": list(self.step_pitches),
             "velocities": [round(v, 3) for v in self.velocities],
+        }
+
+
+@dataclass
+class SliceArrangementModel:
+    """Learned intra-bar slice-to-slice transitions, melodic pitch intervals, and cross-stem pairings."""
+    slice_transitions: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=lambda: {s: {} for s in STEMS})
+    step_category_priors: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=lambda: {s: {} for s in STEMS})
+    pitch_interval_transitions: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=lambda: {s: {} for s in STEMS})
+    cross_stem_cooccurrence: Dict[str, Dict[str, float]] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "slice_transitions": self.slice_transitions,
+            "step_category_priors": self.step_category_priors,
+            "pitch_interval_transitions": self.pitch_interval_transitions,
+            "cross_stem_cooccurrence": self.cross_stem_cooccurrence,
         }
 
 
@@ -169,6 +203,7 @@ class CompressedSongRepresentation:
     transition_matrices: Dict[str, Dict[str, Dict[str, float]]]  # stem -> {patA: {patB: prob}}
     compression_ratio: float                                # Ratio of space saved
     mean_fidelity: float                                    # Acoustic spectrogram match vs original
+    slice_arrangement: Optional[SliceArrangementModel] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -186,6 +221,7 @@ class CompressedSongRepresentation:
             },
             "bar_pattern_sequence": self.bar_pattern_sequence,
             "transition_matrices": self.transition_matrices,
+            "slice_arrangement": self.slice_arrangement.to_dict() if self.slice_arrangement else {},
         }
 
 
@@ -213,8 +249,9 @@ class SongIntrinsicCompressor:
         track: TrackAnalysis,
         k_per_stem: Optional[int] = None,
     ) -> SongReducedVocabulary:
-        """Extract the minimal representative acoustic vocabulary for the song."""
+        """Extract the minimal representative acoustic vocabulary for the song with acoustic role classification."""
         from sklearn.cluster import KMeans
+        from wub_core.groovy_pattern_assembler import AcousticSliceClassifier
 
         k_target = k_per_stem or self.target_vocab_per_stem
         tid = track.track_id
@@ -242,12 +279,14 @@ class SongIntrinsicCompressor:
             if not cands:
                 continue
 
-            # Extract 26-D feature vectors
+            # Extract 26-D feature vectors alongside valid candidates
             feat_list = []
+            valid_cands = []
             for c in cands:
                 try:
                     f = slice_feature_raw(c)
                     feat_list.append(f)
+                    valid_cands.append(c)
                 except Exception:
                     continue
 
@@ -259,16 +298,17 @@ class SongIntrinsicCompressor:
             k = max(1, min(k_target, n_samples))
 
             if n_samples <= k:
-                # Keep all candidates
-                for i, c in enumerate(cands):
+                for i, c in enumerate(valid_cands):
                     sref = self._seg_to_sliceref(c, stem, tid, track.bpm)
                     dur = getattr(sref, "duration", 0.25)
                     pitches = getattr(sref, "chroma", [0.0] * 12)
                     pitch = int(np.argmax(pitches)) if len(pitches) == 12 else 0
+                    role = AcousticSliceClassifier.classify(sref)
+                    cat = f"{stem}:{role}" if not role.startswith(f"{stem}:") else role
                     vslice = VocabSlice(
-                        id=f"{stem}_v{i+1}",
+                        id=f"vocab_{tid[:6]}_{stem}_v{i+1}",
                         stem=stem,
-                        category=f"{stem}:{i+1}",
+                        category=cat,
                         feature_vector=feat_list[i].tolist(),
                         slice_ref=sref,
                         duration=dur,
@@ -295,16 +335,18 @@ class SongIntrinsicCompressor:
                 total_distortion += float(np.sum(dists))
                 distortion_counts += len(cluster_members)
 
-                chosen_seg = cands[medoid_idx]
+                chosen_seg = valid_cands[medoid_idx]
                 sref = self._seg_to_sliceref(chosen_seg, stem, tid, track.bpm)
                 dur = getattr(sref, "duration", 0.25)
                 pitches = getattr(sref, "chroma", [0.0] * 12)
                 pitch = int(np.argmax(pitches)) if len(pitches) == 12 else 0
+                role = AcousticSliceClassifier.classify(sref)
+                cat = f"{stem}:{role}" if not role.startswith(f"{stem}:") else role
 
                 vslice = VocabSlice(
-                    id=f"{stem}_v{c_idx+1}",
+                    id=f"vocab_{tid[:6]}_{stem}_v{c_idx+1}",
                     stem=stem,
-                    category=f"{stem}:{c_idx+1}",
+                    category=cat,
                     feature_vector=X[medoid_idx].tolist(),
                     slice_ref=sref,
                     duration=dur,
@@ -326,7 +368,7 @@ class SongIntrinsicCompressor:
         )
 
     # --------------------------------------------------------------------------
-    # 2. Down-Convert Song to Reduced Vocabulary
+    # 2. Down-Convert Song to Reduced Vocabulary (with Tatum-Span & Pitch Contour)
     # --------------------------------------------------------------------------
 
     def downconvert_song(
@@ -334,20 +376,25 @@ class SongIntrinsicCompressor:
         track: TrackAnalysis,
         vocab: SongReducedVocabulary,
     ) -> List[DownConvertedBar]:
-        """Down-convert every bar and step of the song onto the reduced vocabulary codebook."""
+        """Down-convert every bar and step of the song onto the reduced vocabulary codebook,
+        recording exact tatum-span durations, melodic pitch contours, and step reconstruction fidelity.
+        """
         tatums = getattr(track, "tatums", [])
         n_tatums = len(tatums)
         n_bars = n_tatums // 16
         if n_bars <= 0:
             return []
 
-        # Build segment ID -> feature vector map
+        # Build segment ID -> (feature vector, pitch) map
         seg_feat_map: Dict[str, np.ndarray] = {}
+        seg_pitch_map: Dict[str, int] = {}
         for seg in getattr(track, "segments", []):
             sid = getattr(seg, "id", None) or (seg.get("id") if isinstance(seg, dict) else "")
             if sid:
                 try:
                     seg_feat_map[sid] = slice_feature_raw(seg)
+                    pitches = getattr(seg, "pitches", None) or (seg.get("pitches") if isinstance(seg, dict) else None) or [0.0] * 12
+                    seg_pitch_map[sid] = int(np.argmax(pitches)) if len(pitches) == 12 else 0
                 except Exception:
                     pass
 
@@ -359,6 +406,9 @@ class SongIntrinsicCompressor:
             bar_steps: Dict[str, List[Optional[VocabSlice]]] = {s: [None] * 16 for s in STEMS}
             bar_vels: Dict[str, List[float]] = {s: [0.0] * 16 for s in STEMS}
             raw_sids: Dict[str, List[Optional[str]]] = {s: [None] * 16 for s in STEMS}
+            step_spans: Dict[str, List[int]] = {s: [1] * 16 for s in STEMS}
+            step_pitches: Dict[str, List[int]] = {s: [0] * 16 for s in STEMS}
+            bar_fidelity: Dict[str, float] = {s: 0.92 for s in STEMS}
 
             for step_idx in range(16):
                 t_idx = start_idx + step_idx
@@ -385,8 +435,28 @@ class SongIntrinsicCompressor:
                             vel = float(min(1.0, max(0.40, (loud + 40.0) / 40.0)))
                             bar_vels[stem][step_idx] = round(vel, 3)
                             raw_sids[stem][step_idx] = curr_sid
+                            step_pitches[stem][step_idx] = seg_pitch_map.get(curr_sid, matched_vslice.pitch)
 
                     prev_stem_seg[stem] = curr_sid
+
+            # Compute contiguous tatum spans (1..16) between consecutive onsets and step cosine fidelity
+            for stem in STEMS:
+                onsets = [i for i, vs in enumerate(bar_steps[stem]) if vs is not None]
+                sims: List[float] = []
+                for idx_o, o_step in enumerate(onsets):
+                    next_o = onsets[idx_o + 1] if idx_o + 1 < len(onsets) else 16
+                    span = max(1, min(16, next_o - o_step))
+                    step_spans[stem][o_step] = span
+
+                    sid = raw_sids[stem][o_step]
+                    vs = bar_steps[stem][o_step]
+                    if sid and sid in seg_feat_map and vs is not None:
+                        v_orig = seg_feat_map[sid]
+                        v_code = np.asarray(vs.feature_vector, dtype=np.float32)
+                        norm_prod = float(np.linalg.norm(v_orig) * np.linalg.norm(v_code))
+                        cos_sim = float(np.dot(v_orig, v_code) / norm_prod) if norm_prod > 1e-6 else 0.90
+                        sims.append(float(np.clip(0.5 + 0.5 * cos_sim, 0.50, 1.0)))
+                bar_fidelity[stem] = round(float(np.mean(sims)), 4) if sims else 0.92
 
             # Infer musical section from bar index
             section = "GROOVE_A"
@@ -413,6 +483,9 @@ class SongIntrinsicCompressor:
                     steps=bar_steps,
                     velocities=bar_vels,
                     raw_slice_ids=raw_sids,
+                    step_spans=step_spans,
+                    step_pitches=step_pitches,
+                    bar_fidelity=bar_fidelity,
                 )
             )
 
@@ -451,6 +524,8 @@ class SongIntrinsicCompressor:
                 b_match = downconverted_bars[first_bar_num]
                 steps = b_match.steps[stem]
                 vels = b_match.velocities[stem]
+                spans = b_match.step_spans.get(stem, [1] * 16)
+                pitches = b_match.step_pitches.get(stem, [0] * 16)
 
                 onsets = [i for i, s in enumerate(steps) if s is not None]
                 density = len(onsets) / 16.0
@@ -471,8 +546,12 @@ class SongIntrinsicCompressor:
                 rec_count = len(matching_bars)
                 rec_ratio = rec_count / float(total_bars)
 
-                # Utility balances recurrence ratio with musical onset density
-                utility = float(np.clip((rec_ratio ** 0.5) * (0.6 + 0.4 * min(1.0, density * 2.0)), 0.0, 1.0))
+                # Average reconstruction fidelity across matching bars
+                fids = [downconverted_bars[mb].bar_fidelity.get(stem, 0.92) for mb in matching_bars]
+                rec_fidelity = round(float(np.mean(fids)), 4) if fids else 0.92
+
+                # Utility balances recurrence ratio, onset density, and reconstruction fidelity
+                utility = float(np.clip((rec_ratio ** 0.5) * (0.55 + 0.25 * min(1.0, density * 2.0) + 0.20 * rec_fidelity), 0.0, 1.0))
 
                 pat_id = f"{track_id}_{stem}_pat{rank+1}"
                 ipat = IntrinsicPattern(
@@ -487,12 +566,100 @@ class SongIntrinsicCompressor:
                     recurrence_count=rec_count,
                     matching_bars=matching_bars,
                     recurrence_ratio=rec_ratio,
-                    reconstruction_fidelity=0.92,
+                    reconstruction_fidelity=rec_fidelity,
                     utility_score=utility,
+                    step_spans=list(spans),
+                    step_pitches=list(pitches),
                 )
                 patterns_by_stem[stem].append(ipat)
 
         return patterns_by_stem
+
+    # --------------------------------------------------------------------------
+    # 3b. Train Slice-Level Arrangement & Concatenation Model
+    # --------------------------------------------------------------------------
+
+    def train_slice_arrangement(
+        self,
+        downconverted_bars: List[DownConvertedBar],
+    ) -> SliceArrangementModel:
+        """Train intra-bar slice-to-slice bigrams, melodic pitch interval probabilities,
+        step category priors, and cross-stem slice co-occurrence weights from the down-converted bars.
+        """
+        model = SliceArrangementModel()
+
+        for stem in STEMS:
+            trans_counts: Dict[str, Dict[str, int]] = {}
+            step_cat_counts: Dict[str, Dict[str, int]] = {}
+            pitch_trans_counts: Dict[str, Dict[str, int]] = {}
+
+            prev_slice_id: Optional[str] = None
+            prev_pitch: Optional[int] = None
+
+            for b in downconverted_bars:
+                steps = b.steps.get(stem, [])
+                pitches = b.step_pitches.get(stem, [0] * 16)
+                for s_idx, vs in enumerate(steps):
+                    if vs is None:
+                        continue
+                    s_key = str(s_idx)
+                    step_cat_counts.setdefault(s_key, {}).setdefault(vs.category, 0)
+                    step_cat_counts[s_key][vs.category] += 1
+
+                    if prev_slice_id is not None:
+                        trans_counts.setdefault(prev_slice_id, {}).setdefault(vs.id, 0)
+                        trans_counts[prev_slice_id][vs.id] += 1
+
+                    curr_p = pitches[s_idx]
+                    if prev_pitch is not None and stem in ("bass", "other", "vocals"):
+                        p_key = str(prev_pitch)
+                        nxt_p_key = str(curr_p)
+                        pitch_trans_counts.setdefault(p_key, {}).setdefault(nxt_p_key, 0)
+                        pitch_trans_counts[p_key][nxt_p_key] += 1
+
+                    prev_slice_id = vs.id
+                    prev_pitch = curr_p
+
+            for cur_id, nxt_map in trans_counts.items():
+                tot = sum(nxt_map.values())
+                if tot > 0:
+                    model.slice_transitions[stem][cur_id] = {
+                        k: round(v / tot, 3) for k, v in nxt_map.items()
+                    }
+
+            for s_key, cat_map in step_cat_counts.items():
+                tot = sum(cat_map.values())
+                if tot > 0:
+                    model.step_category_priors[stem][s_key] = {
+                        k: round(v / tot, 3) for k, v in cat_map.items()
+                    }
+
+            for p_key, nxt_p_map in pitch_trans_counts.items():
+                tot = sum(nxt_p_map.values())
+                if tot > 0:
+                    model.pitch_interval_transitions[stem][p_key] = {
+                        k: round(v / tot, 3) for k, v in nxt_p_map.items()
+                    }
+
+        # Cross-stem vertical slice co-occurrence (which bass/other/vocal slices pair with which drum slices)
+        pair_counts: Dict[str, Dict[str, int]] = {}
+        for b in downconverted_bars:
+            d_slices = {vs.id for vs in b.steps.get("drums", []) if vs is not None}
+            for d_id in d_slices:
+                for partner_stem in ("bass", "other", "vocals"):
+                    for p_vs in b.steps.get(partner_stem, []):
+                        if p_vs is not None:
+                            pair_counts.setdefault(d_id, {}).setdefault(p_vs.id, 0)
+                            pair_counts[d_id][p_vs.id] += 1
+
+        for d_id, p_map in pair_counts.items():
+            tot = sum(p_map.values())
+            if tot > 0:
+                model.cross_stem_cooccurrence[d_id] = {
+                    k: round(v / tot, 3) for k, v in p_map.items()
+                }
+
+        return model
 
     # --------------------------------------------------------------------------
     # 4. Complete End-to-End Song Compression
@@ -503,11 +670,14 @@ class SongIntrinsicCompressor:
         track: TrackAnalysis,
         k_per_stem: Optional[int] = None,
     ) -> CompressedSongRepresentation:
-        """Compress the entire song into its reduced vocabulary and recurring intrinsic pattern sequence."""
+        """Compress the entire song into its reduced vocabulary, recurring intrinsic pattern sequence,
+        and trained intra-bar/cross-stem slice arrangement model.
+        """
         k = k_per_stem or self.target_vocab_per_stem
         vocab = self.extract_song_vocabulary(track, k_per_stem=k)
         downconverted = self.downconvert_song(track, vocab)
         patterns = self.mine_intrinsic_patterns(downconverted, track.track_id)
+        slice_arrangement = self.train_slice_arrangement(downconverted)
 
         # Build pattern signature -> pattern ID map
         sig_to_pat_id: Dict[str, str] = {}
@@ -545,13 +715,18 @@ class SongIntrinsicCompressor:
                     for nxt_p, c in nxt_counts.items()
                 }
 
-        # Calculate Compression Ratio:
-        # Original: n_tatums * 4 stems * float32 features (or continuous WAVs)
-        # Compressed: reduced vocabulary (<= 24 slices) + ~4-6 patterns per stem
+        # Calculate Compression Ratio & Empirical Mean Reconstruction Fidelity
         total_tatums = max(1, len(downconverted) * 16 * 4)
         active_vocab_slices = vocab.total_slices
         active_patterns_count = sum(len(p) for p in patterns.values())
         compression_ratio = float(np.clip(1.0 - (active_vocab_slices + active_patterns_count) / total_tatums, 0.70, 0.98))
+
+        all_fids = [
+            p.reconstruction_fidelity
+            for p_list in patterns.values()
+            for p in p_list
+        ]
+        mean_fidelity = round(float(np.mean(all_fids)), 4) if all_fids else 0.92
 
         fn_stem = Path(getattr(track, "filename", "")).stem if getattr(track, "filename", None) else ""
         title = getattr(track, "title", None) or getattr(track, "track_title", None) or fn_stem or track.track_id
@@ -567,7 +742,8 @@ class SongIntrinsicCompressor:
             bar_pattern_sequence=bar_sequence,
             transition_matrices=transitions,
             compression_ratio=compression_ratio,
-            mean_fidelity=0.91,
+            mean_fidelity=mean_fidelity,
+            slice_arrangement=slice_arrangement,
         )
 
     # --------------------------------------------------------------------------

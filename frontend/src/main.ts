@@ -260,7 +260,7 @@ class WubApp {
 
     this.nebula = new NebulaRenderer(el<HTMLCanvasElement>("nebula-canvas"), {
       onReticleMove: (stem, x, y) => {
-        this.clientConductor?.setReticleSteering(stem, x, y);
+        this.clientConductor?.setReticleSteering(stem, x, y, true);
       },
     });
     this.nebula.setPoints(demoPoints());
@@ -295,7 +295,7 @@ class WubApp {
       }
       for (const stem of STEMS) {
         const r = this.nebula.getReticle(stem);
-        this.clientConductor.setReticleSteering(stem, r.x, r.y);
+        this.clientConductor.setReticleSteering(stem, r.x, r.y, false);
       }
       void this.clientConductor.loadStaticBundle("data").then(() => {
         if (this.segmentPositions.size > 0 && this.clientConductor) {
@@ -448,8 +448,16 @@ class WubApp {
 
     this.applyAllMixerState();
 
-    this.setStatus(`Playing — 🧠 Direct In-Browser ML Engine (Sample-Accurate Sequencer @ ${Math.round(this.bpm)} BPM)`);
     this.clientConductor?.start(this.bpm);
+    if (this.clientConductor) {
+      this.bpm = this.clientConductor.getBpm();
+      const slider = document.getElementById("bpm-slider");
+      if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
+      const label = document.getElementById("bpm-value");
+      if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
+      this.engine.setTargetBpm(this.bpm);
+    }
+    this.setStatus(`Playing — 🧠 Direct In-Browser ML Engine (Sample-Accurate Sequencer @ ${Math.round(this.bpm)} BPM)`);
   }
 
   private async stop(): Promise<void> {
