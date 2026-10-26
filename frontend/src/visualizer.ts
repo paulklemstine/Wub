@@ -120,7 +120,7 @@ export function drawWaveformAnalysis(
       const startX = 110;
       ctx2d.fillStyle = color;
       ctx2d.globalAlpha = 0.14;
-      const fftBoost = (stem === "vocals" || stem === "other") ? 1.6 : 1.0;
+      const fftBoost = 1.0;
       for (let b = 0; b < numBars; b++) {
         const bin = Math.floor((b / numBars) * (freq.length * 0.6));
         const val = Math.min(1.0, (freq[bin] / 255.0) * fftBoost);
@@ -139,7 +139,7 @@ export function drawWaveformAnalysis(
       const waveEndX = w - 70;
       const waveWidth = waveEndX - waveStartX;
       const maxAmp = laneH * 0.42;
-      const visualGain = (stem === "vocals" || stem === "other") ? 2.2 : 1.0;
+      const visualGain = 1.0;
 
       let pIdx = 0;
       for (let tIdx = 0; tIdx < time.length; tIdx += step) {
