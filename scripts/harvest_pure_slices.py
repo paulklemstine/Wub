@@ -313,9 +313,9 @@ def harvest_pure_slices(
     # 4. VOCALS
     # --------------------------------------------------------------------------
     vocal_targets = {
-        "chop": {"dur_min": 0.10, "dur_max": 0.35, "loud_min": -22.0, "shape_dur": 0.28, "fade_out": 25.0, "peak": 0.90, "count": 32},
-        "hook": {"dur_min": 1.0, "dur_max": 3.5, "loud_min": -20.0, "shape_dur": 2.2, "fade_out": 50.0, "peak": 0.92, "count": 24},
-        "call": {"dur_min": 0.38, "dur_max": 0.95, "loud_min": -22.0, "shape_dur": 0.75, "fade_out": 35.0, "peak": 0.90, "count": 24},
+        "chop": {"dur_min": 0.10, "dur_max": 0.35, "loud_min": -22.0, "shape_dur": 0.28, "fade_out": 25.0, "peak": 0.90, "count": 48},
+        "hook": {"dur_min": 1.0, "dur_max": 3.5, "loud_min": -20.0, "shape_dur": 2.2, "fade_out": 50.0, "peak": 0.92, "count": 36},
+        "call": {"dur_min": 0.38, "dur_max": 0.95, "loud_min": -22.0, "shape_dur": 0.75, "fade_out": 35.0, "peak": 0.90, "count": 36},
     }
 
     for cat, cfg in vocal_targets.items():
@@ -368,14 +368,28 @@ def harvest_pure_slices(
                 b64 = f"data:audio/wav;base64,{base64.b64encode(out_path.read_bytes()).decode('ascii')}"
 
                 pitch = int(np.argmax(s.get("pitches", [0]))) if s.get("pitches") else 0
+                centroid_val = float(s.get("spectral_centroid", 2000.0))
+                if centroid_val < 1100.0:
+                    vowel_label = "OO"
+                elif centroid_val < 1900.0:
+                    vowel_label = "OH"
+                elif centroid_val < 2700.0:
+                    vowel_label = "AH"
+                elif centroid_val < 3800.0:
+                    vowel_label = "AY"
+                else:
+                    vowel_label = "EE"
+
                 manifest["vocals"][cat].append({
                     "name": out_name,
                     "url": f"data/slices/{out_name}",
                     "b64": b64 if len(b64) < 65000 else None,
                     "duration": round(len(mono) / sr, 3),
-                    "centroid": float(s.get("spectral_centroid", 0.0)),
+                    "centroid": centroid_val,
                     "pitch": pitch,
                     "loudness": float(loud),
+                    "vowel": vowel_label,
+                    "track_title": meta.get("filename", "").replace(".mp3", ""),
                     "track_id": tid,
                     "segment_id": s.get("id", ""),
                 })

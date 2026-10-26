@@ -2128,7 +2128,8 @@ export class ClientGrooveboxConductor {
     stemCategory: string,
     targetPitch?: number,
     variationFraction?: number,
-    territory?: StyleTerritory
+    territory?: StyleTerritory,
+    targetVowel?: string
   ): { buffer: AudioBuffer; rate: number; asset?: SliceAsset } | null {
     // 1. Look for style-specific slices first (e.g. drums:kick:wave / drums:kick_wave)
     let list: SliceAsset[] | undefined;
@@ -2224,18 +2225,23 @@ export class ClientGrooveboxConductor {
 
     // High-variety slice selection across qualified candidates
     if (candidates.length > 0) {
+      let pool = candidates;
+      if (targetVowel) {
+        const vowelMatches = candidates.filter((c) => c.item.vowel === targetVowel);
+        if (vowelMatches.length > 0) pool = vowelMatches;
+      }
       const trainedScores = this.stemCohesionWeights?.trained_slice_scores;
       if (trainedScores) {
-        candidates.sort((a, b) => {
+        pool.sort((a, b) => {
           const sA = trainedScores[a.item.name] ?? 0.8;
           const sB = trainedScores[b.item.name] ?? 0.8;
           return sB - sA;
         });
       }
       const v = variationFraction !== undefined ? Math.max(0, Math.min(0.999, variationFraction)) : Math.random();
-      const cIdx = Math.floor(v * candidates.length) % candidates.length;
-      best = candidates[cIdx].item;
-      bestShift = candidates[cIdx].shift;
+      const cIdx = Math.floor(v * pool.length) % pool.length;
+      best = pool[cIdx].item;
+      bestShift = pool[cIdx].shift;
     }
 
     // If exact chromatic pitch exists (bestDiff == 0), rate is 1.0 (zero drift!).
@@ -3614,10 +3620,10 @@ export class ClientGrooveboxConductor {
           ? (this.activeSongKit?.vocalChopAsset || this.activeSongKit?.vocalHookAsset)
           : (this.activeSongKit?.vocalHookAsset || this.activeSongKit?.vocalCallAsset);
         const slice = this.getPitchedSliceFromAsset(lockedVocalAsset, melodyPitch, 6) ||
-          this.getBestSlice(vocalCat, melodyPitch, 0, vTerr) ||
-          this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr) ||
-          this.getBestSlice("vocals:call", melodyPitch, 0, vTerr) ||
-          this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr);
+          this.getBestSlice(vocalCat, melodyPitch, 0, vTerr, syl.vowel) ||
+          this.getBestSlice("vocals:hook", melodyPitch, 0, vTerr, syl.vowel) ||
+          this.getBestSlice("vocals:call", melodyPitch, 0, vTerr, syl.vowel) ||
+          this.getBestSlice("vocals:chop", melodyPitch, 0, vTerr, syl.vowel);
 
         if (slice) {
           if (slice.asset?.trackTitle) {
@@ -3626,17 +3632,23 @@ export class ClientGrooveboxConductor {
           if (slice.asset?.vowel) {
             this.currentVocalMeta.vowel = slice.asset.vowel as any;
           }
-          // Sing current melody note using authentic acoustic vocal slice
-          const sliceGain = isLoopVocalActive ? vel * 1.15 : vel * 1.35;
+          // 1. Primary Lead Vocal: Authentic Acoustic Vocal Slice
+          const sliceGain = isLoopVocalActive ? vel * 1.20 : vel * 1.40;
           this.engine.scheduleSlice("vocals", slice.buffer, when, {
             rate: slice.rate,
             fadeMs: 6,
             gain: sliceGain,
             voiceKey: "vocals",
           });
+
+          // 2. Harmonic Vocaloid Layer: Mixed in alongside the acoustic vocal slice!
+          // Blends resonant formant body, glottal tone, and sustained warmth under the authentic slice
+          const vocaloidBlend = (sec === "BREAKDOWN" || sec === "INTRO") ? 0.65 : (sec === "DROP" ? 0.45 : 0.52);
+          const vocaloidGain = vel * vocaloidBlend;
+          this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, vocaloidGain, vInput, vTerr);
         } else {
-          // Sing expressive vocaloid vocalization
-          const synthVel = isLoopVocalActive ? vel * 0.95 : vel * 1.15;
+          // If no acoustic slice is found, vocaloid carries full lead singing
+          const synthVel = isLoopVocalActive ? vel * 1.05 : vel * 1.30;
           this.synth.playSingingVoice(when, noteHz, syl.vowel, durSec, synthVel, vInput, vTerr);
         }
       }
@@ -3696,10 +3708,10 @@ export class ClientGrooveboxConductor {
       // Section-Wide Rhythm & Harmonic Lock:
       // - DRUMS, BASS & OTHER (synths/chords): Firmly lock for the ENTIRE SECTION!
       //   Never swap out the foundational groove or harmonic feel in the middle of a section or after 128 ticks!
-      // - VOCALS: Stay locked to the current song theme for the section (re-phrase only on new phrase).
+      // - VOCALS: Stay locked to the active theme but alternate verse/call-and-response every 2 bars and phrase builds on bar 6/7
       const shouldLockStem = !isSectionChange &&
         ((stem === "drums" || stem === "bass" || stem === "other") ||
-         (stem === "vocals" && !isNewPhrase));
+         (stem === "vocals" && !isNewPhrase && (phraseBar % 2 !== 0) && phraseBar < 6));
 
       if (shouldLockStem && (this.activeLoops[stem] || this.activePatterns[stem])) {
         // Locked! Keep existing groove/pattern playing without frantic swapping
