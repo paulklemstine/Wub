@@ -83,11 +83,20 @@ def find_unstemmed_candidates(
         key=lambda a: hashlib.md5(a.encode("utf-8", errors="ignore")).hexdigest(),
     )
     max_per_artist = max((len(v) for v in by_artist.values()), default=0)
+    seen_tids = set()
     for round_idx in range(max_per_artist):
         for artist in sorted_artists:
             items = by_artist[artist]
             if round_idx < len(items):
-                candidates.append(items[round_idx])
+                p, tid, bpm, key = items[round_idx]
+                # library_dirs overlap (pandora/good is inside pandora/): the
+                # same file appears twice, so dedupe by content track_id and
+                # keep the first hit (good/ priority) to avoid re-separating
+                # and re-analyzing the same song.
+                if tid in seen_tids:
+                    continue
+                seen_tids.add(tid)
+                candidates.append((p, tid, bpm, key))
 
     return candidates
 
