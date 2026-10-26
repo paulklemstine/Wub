@@ -211,6 +211,218 @@ class SongCompositionEconomyScorer:
         )
 
 
+@dataclass
+class RecurrentPatternCoverage:
+    """Metrics tracking how many places (bars) across a song a pattern matches with high acoustic similarity."""
+    pattern_id: str
+    track_id: str
+    stem: str
+    groove_type: str
+    total_bars_evaluated: int
+    coverage_bars_count: int         # Number of bars where acoustic similarity >= threshold
+    coverage_ratio: float            # coverage_bars_count / total_bars_evaluated (0.0 .. 1.0)
+    matching_bar_indices: List[int]  # List of matching bar indices
+    similarity_by_bar: List[float]   # Similarity score for each bar in the song
+    mean_match_similarity: float     # Average similarity among matching bars
+    max_similarity: float            # Peak similarity
+    recurrence_utility_score: float  # Multi-bar utility score for repeated song playback
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pattern_id": self.pattern_id,
+            "track_id": self.track_id,
+            "stem": self.stem,
+            "groove_type": self.groove_type,
+            "total_bars_evaluated": self.total_bars_evaluated,
+            "coverage_bars_count": self.coverage_bars_count,
+            "coverage_ratio": round(self.coverage_ratio, 4),
+            "matching_bar_indices": self.matching_bar_indices,
+            "similarity_by_bar": [round(s, 3) for s in self.similarity_by_bar],
+            "mean_match_similarity": round(self.mean_match_similarity, 4),
+            "max_similarity": round(self.max_similarity, 4),
+            "recurrence_utility_score": round(self.recurrence_utility_score, 4),
+        }
+
+
+@dataclass
+class SongMinedPatternReport:
+    """Complete report of recurring canonical patterns and transition patterns mined from a song."""
+    track_id: str
+    track_title: str
+    total_bars: int
+    stem_patterns: Dict[str, List[RecurrentPatternCoverage]]  # stem -> ranked recurring patterns
+    transitions: Dict[str, List[Dict[str, Any]]]             # stem -> transition bars / turnaround fills
+    mean_recurrence_utility: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "track_id": self.track_id,
+            "track_title": self.track_title,
+            "total_bars": self.total_bars,
+            "stem_patterns": {
+                s: [cov.to_dict() for cov in covs]
+                for s, covs in self.stem_patterns.items()
+            },
+            "transitions": self.transitions,
+            "mean_recurrence_utility": round(self.mean_recurrence_utility, 4),
+        }
+
+
+class SongPatternRecurrenceMiner:
+    """Mines and evaluates patterns from a song to maximize multi-bar recurrence coverage.
+
+    Finds patterns whose synthesized audio data is closest to matching the original song
+    in the maximum number of places (bars), maximizing how many times that pattern can be
+    recurrently and musically deployed throughout the track.
+    """
+
+    def __init__(self, match_threshold: float = 0.72) -> None:
+        self.match_threshold = match_threshold
+
+    def evaluate_pattern_coverage_across_song(
+        self,
+        pat: SequencerPattern,
+        track_analysis: TrackAnalysis,
+        audio_for: Dict[Tuple[str, str], Path],
+        fallback_audio: Dict[str, Path],
+        sr: int = DEFAULT_SR,
+        max_bars_to_scan: int = 48,
+    ) -> RecurrentPatternCoverage:
+        """Scan candidate pattern audio across ALL bars of the song to calculate recurrence coverage."""
+        synth_wave = assemble_pattern_waveform(pat.steps, audio_for, fallback_audio, stem=pat.stem, bpm=pat.bpm, sr=sr)
+
+        n_tatums = len(track_analysis.tatums)
+        total_bars = min(max_bars_to_scan, n_tatums // 16)
+        if total_bars <= 0:
+            return RecurrentPatternCoverage(
+                pattern_id=pat.id,
+                track_id=pat.track_id,
+                stem=pat.stem,
+                groove_type=pat.groove_type,
+                total_bars_evaluated=0,
+                coverage_bars_count=0,
+                coverage_ratio=0.0,
+                matching_bar_indices=[],
+                similarity_by_bar=[],
+                mean_match_similarity=0.0,
+                max_similarity=0.0,
+                recurrence_utility_score=0.0,
+            )
+
+        sims: List[float] = []
+        matching_bars: List[int] = []
+
+        for b in range(total_bars):
+            ref_wave = extract_reference_bar_audio(
+                track_id=pat.track_id,
+                stem=pat.stem,
+                bar_num=b,
+                analysis=track_analysis,
+                audio_for=audio_for,
+                fallback_audio=fallback_audio,
+                sr=sr,
+            )
+            if ref_wave is None or np.max(np.abs(ref_wave)) < 0.01:
+                sims.append(0.0)
+                continue
+
+            m = compute_audio_similarity(
+                synth_wave=synth_wave,
+                real_wave=ref_wave,
+                sr=sr,
+                stem=pat.stem,
+                groove_type=pat.groove_type,
+                ref_track_id=pat.track_id,
+            )
+            sim = float(m.composite_score)
+            sims.append(sim)
+            if sim >= self.match_threshold:
+                matching_bars.append(b)
+
+        cov_count = len(matching_bars)
+        cov_ratio = float(cov_count / max(1, total_bars))
+        mean_match = float(np.mean([sims[i] for i in matching_bars])) if matching_bars else 0.0
+        max_sim = float(np.max(sims)) if sims else 0.0
+
+        # Utility maximizes both how many places it matches AND how well it matches:
+        # Utility = (coverage_ratio ^ 0.6) * (mean_match_similarity ^ 1.2)
+        utility = float(np.clip((cov_ratio ** 0.6) * (mean_match ** 1.2), 0.0, 1.0)) if cov_count > 0 else 0.0
+
+        return RecurrentPatternCoverage(
+            pattern_id=pat.id,
+            track_id=pat.track_id,
+            stem=pat.stem,
+            groove_type=pat.groove_type,
+            total_bars_evaluated=total_bars,
+            coverage_bars_count=cov_count,
+            coverage_ratio=cov_ratio,
+            matching_bar_indices=matching_bars,
+            similarity_by_bar=sims,
+            mean_match_similarity=mean_match,
+            max_similarity=max_sim,
+            recurrence_utility_score=utility,
+        )
+
+    def mine_song_patterns_and_transitions(
+        self,
+        track_analysis: TrackAnalysis,
+        candidate_patterns: List[SequencerPattern],
+        audio_for: Dict[Tuple[str, str], Path],
+        fallback_audio: Dict[str, Path],
+        sr: int = DEFAULT_SR,
+        max_bars_to_scan: int = 48,
+    ) -> SongMinedPatternReport:
+        """Analyze a song to extract the highest multi-bar recurrence patterns and transitions."""
+        tid = track_analysis.track_id
+        fn_stem = Path(getattr(track_analysis, "filename", "")).stem if getattr(track_analysis, "filename", None) else ""
+        title = getattr(track_analysis, "title", None) or getattr(track_analysis, "track_title", None) or fn_stem or tid
+        n_tatums = len(track_analysis.tatums)
+        total_bars = min(max_bars_to_scan, n_tatums // 16)
+
+        stem_covs: Dict[str, List[RecurrentPatternCoverage]] = {s: [] for s in STEMS}
+        for pat in candidate_patterns:
+            if pat.track_id == tid or not pat.track_id:
+                cov = self.evaluate_pattern_coverage_across_song(
+                    pat=pat,
+                    track_analysis=track_analysis,
+                    audio_for=audio_for,
+                    fallback_audio=fallback_audio,
+                    sr=sr,
+                    max_bars_to_scan=max_bars_to_scan,
+                )
+                stem_covs[pat.stem].append(cov)
+
+        # Rank each stem's patterns by recurrence utility score
+        for s in STEMS:
+            stem_covs[s].sort(key=lambda x: x.recurrence_utility_score, reverse=True)
+
+        # Identify transition bars: bars where top pattern similarity dips, especially near phrase boundaries
+        transitions: Dict[str, List[Dict[str, Any]]] = {s: [] for s in STEMS}
+        for s in STEMS:
+            top_cov = stem_covs[s][0] if stem_covs[s] else None
+            if top_cov and top_cov.similarity_by_bar:
+                for b, sim in enumerate(top_cov.similarity_by_bar):
+                    is_turnaround_pos = (b % 8 == 7) or (b % 4 == 3)
+                    if sim < 0.60 and is_turnaround_pos:
+                        transitions[s].append({
+                            "bar_num": b,
+                            "similarity_to_core": round(sim, 3),
+                            "type": "turnaround_fill" if (b % 8 == 7) else "phrase_transition",
+                        })
+
+        all_utilities = [c.recurrence_utility_score for covs in stem_covs.values() for c in covs[:3]]
+        mean_utility = float(np.mean(all_utilities)) if all_utilities else 0.50
+
+        return SongMinedPatternReport(
+            track_id=tid,
+            track_title=title,
+            total_bars=total_bars,
+            stem_patterns=stem_covs,
+            transitions=transitions,
+            mean_recurrence_utility=mean_utility,
+        )
+
+
 class SliceAudioCache:
     """Fast in-memory cache for loaded audio slices to accelerate synthesis and search."""
 
@@ -1236,6 +1448,75 @@ class PatternAudioFeedbackEngine:
             "mean_song_composition_score": mean_score,
         }
 
+    def evaluate_song_recurrent_patterns(
+        self,
+        corpus_store: Any,
+        bank: PatternBank,
+        max_tracks: int = 20,
+        match_threshold: float = 0.72,
+        sr: int = DEFAULT_SR,
+    ) -> Dict[str, Any]:
+        """Analyzes corpus tracks to mine candidate patterns that maximize multi-bar recurrence coverage.
+
+        Finds patterns whose synthesized audio data is closest to matching the original song
+        in the highest number of places (bars), maximizing how many times that pattern can be
+        recurrently and musically deployed throughout the track.
+        """
+        analyses = corpus_store.analyses
+        if not analyses:
+            return {"status": "empty_corpus", "mined_tracks": 0}
+
+        audio_for, fallback = corpus_store.audio_for(set(analyses.keys()))
+        miner = SongPatternRecurrenceMiner(match_threshold=match_threshold)
+
+        recurrent_reports: Dict[str, Any] = {}
+        total_utility = 0.0
+        patterns_boosted = 0
+
+        for tr in corpus_store.tracks[:max_tracks]:
+            tid = tr.track_id
+            an = analyses.get(tid)
+            if not an:
+                continue
+
+            # Gather candidate patterns for this track
+            candidates = [p for stem in STEMS for p in bank.patterns_by_stem.get(stem, []) if p.track_id == tid]
+            if not candidates:
+                # Fall back to general patterns from the bank
+                candidates = [p for stem in STEMS for p in bank.patterns_by_stem.get(stem, [])[:6]]
+
+            report = miner.mine_song_patterns_and_transitions(
+                track_analysis=an,
+                candidate_patterns=candidates,
+                audio_for=audio_for,
+                fallback_audio=fallback,
+                sr=sr,
+            )
+            recurrent_reports[tid] = report.to_dict()
+            total_utility += report.mean_recurrence_utility
+
+            # Reward constituent patterns and slices based on multi-bar recurrence utility
+            for stem, cov_list in report.stem_patterns.items():
+                for cov in cov_list:
+                    cur_p = self.feedback_data["patterns"].get(cov.pattern_id, {})
+                    cur_p["recurrence_utility"] = cov.recurrence_utility_score
+                    cur_p["coverage_ratio"] = cov.coverage_ratio
+                    cur_p["coverage_bars_count"] = cov.coverage_bars_count
+                    self.feedback_data["patterns"][cov.pattern_id] = cur_p
+                    patterns_boosted += 1
+
+        self.feedback_data["recurrent_song_patterns"] = recurrent_reports
+        self._save()
+        self.export_locked_feedback_weights()
+
+        mean_ut = round(total_utility / max(1, len(recurrent_reports)), 4)
+        return {
+            "status": "ok",
+            "mined_tracks": len(recurrent_reports),
+            "patterns_boosted": patterns_boosted,
+            "mean_recurrence_utility": mean_ut,
+        }
+
     def export_locked_feedback_weights(
         self,
         weights_path: Path = ROOT_DIR / "data" / "composing_ml_weights.json",
@@ -1257,6 +1538,7 @@ class PatternAudioFeedbackEngine:
             "grooves": self.feedback_data.get("grooves", {}),
             "trained_slice_scores": slice_scores,
             "song_composition_scores": self.feedback_data.get("song_composition_scores", {}),
+            "recurrent_song_patterns": self.feedback_data.get("recurrent_song_patterns", {}),
             "stem_mix_automation": {
                 "INTRO": {"drums": 0.65, "bass": 0.0, "other": 0.88, "vocals": 0.75},
                 "GROOVE_A": {"drums": 0.95, "bass": 0.92, "other": 0.88, "vocals": 0.95},
@@ -1288,6 +1570,7 @@ class PatternAudioFeedbackEngine:
                 manifest = json.loads(standalone_patterns_path.read_text())
                 manifest["stem_cohesion_weights"] = cohesion_weights
                 manifest["song_composition_scores"] = self.feedback_data.get("song_composition_scores", {})
+                manifest["recurrent_song_patterns"] = self.feedback_data.get("recurrent_song_patterns", {})
                 pat_scores = self.feedback_data.get("patterns", {})
                 for stem, pats in manifest.get("patterns", {}).items():
                     for p in pats:
@@ -1295,6 +1578,10 @@ class PatternAudioFeedbackEngine:
                         if pid and pid in pat_scores:
                             p["audio_similarity_score"] = pat_scores[pid].get("spectral_similarity", 0.90)
                             p["cohesion_score"] = pat_scores[pid].get("composite_score", 0.90)
+                            if "recurrence_utility" in pat_scores[pid]:
+                                p["recurrence_utility"] = pat_scores[pid]["recurrence_utility"]
+                            if "coverage_ratio" in pat_scores[pid]:
+                                p["coverage_ratio"] = pat_scores[pid]["coverage_ratio"]
                         else:
                             if "cohesion_score" not in p or p["cohesion_score"] is None:
                                 p["cohesion_score"] = p.get("audio_similarity_score", 0.85)
@@ -1380,6 +1667,9 @@ class PatternAudioFeedbackEngine:
         # 4. Song composition economy evaluation
         economy_res = self.evaluate_song_composition_economy(corpus_store=corpus_store, bank=bank, max_tracks=25)
 
+        # 5. Multi-bar recurrence pattern & transition mining
+        recurrent_res = self.evaluate_song_recurrent_patterns(corpus_store=corpus_store, bank=bank, max_tracks=15, sr=sr)
+
         self._save()
         self.export_locked_feedback_weights()
 
@@ -1392,4 +1682,5 @@ class PatternAudioFeedbackEngine:
             "feedback_db_entries": len(self.feedback_data.get("patterns", {})),
             "multistem_cohesion_status": cohesion_res,
             "song_composition_economy": economy_res,
+            "recurrent_patterns_status": recurrent_res,
         }

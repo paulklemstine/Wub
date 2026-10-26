@@ -344,3 +344,101 @@ def test_feedback_engine_evaluate_song_composition_economy(tmp_path: Path):
     assert engine.feedback_data["song_composition_scores"]["tr_001"]["slice_compression_ratio"] > 0.80
 
 
+def test_song_pattern_recurrence_miner():
+    from wub_core.pattern_audio_trainer import (
+        SongPatternRecurrenceMiner,
+        RecurrentPatternCoverage,
+        SongMinedPatternReport,
+    )
+    from wub_core.schema import TrackAnalysis, Tatum
+
+    miner = SongPatternRecurrenceMiner(match_threshold=0.70)
+
+    # Mock track analysis with 32 tatums (2 bars)
+    tatums = [
+        Tatum(
+            id=f"tat_{i}",
+            index=i,
+            bar_position=i // 16,
+            beat_position=(i % 16) // 4,
+            tatum_position=i % 4,
+            start=i * 0.12,
+            duration=0.12,
+            confidence=0.9,
+            stem_segments={"drums": ["d1"], "bass": [], "vocals": [], "other": []},
+        )
+        for i in range(32)
+    ]
+    analysis = TrackAnalysis(
+        track_id="tr_recurrence_test",
+        filename="Hypnotic Groove Track.mp3",
+        duration=32 * 0.12,
+        sample_rate=22050,
+        bpm=126.0,
+        bpm_confidence=0.9,
+        key="A minor",
+        key_confidence=0.8,
+        mode=0,
+        mode_confidence=0.8,
+        time_signature=4,
+        time_signature_confidence=0.9,
+        bars=[],
+        beats=[],
+        segments=[],
+        energy=0.82,
+        danceability=0.85,
+        stems_available=["drums"],
+        tatums=tatums,
+    )
+
+    s_kick = _make_dummy_slice(tid="tr_recurrence_test", seg_id="k1")
+    dummy_steps = [s_kick if i in (0, 4, 8, 12) else None for i in range(16)]
+
+    candidate_pat = SequencerPattern(
+        id="pat_kick_4onfloor",
+        stem="drums",
+        track_id="tr_recurrence_test",
+        pattern_name="Kick 4-on-floor",
+        length=16,
+        energy=0.8,
+        density=0.25,
+        onset_grid=[0, 4, 8, 12],
+        groove_type="four_on_floor",
+        steps=dummy_steps,
+        bpm=126.0,
+    )
+
+    cov = miner.evaluate_pattern_coverage_across_song(
+        pat=candidate_pat,
+        track_analysis=analysis,
+        audio_for={},
+        fallback_audio={},
+        sr=22050,
+        max_bars_to_scan=16,
+    )
+
+    assert isinstance(cov, RecurrentPatternCoverage)
+    assert cov.pattern_id == "pat_kick_4onfloor"
+    assert cov.total_bars_evaluated == 2
+    assert cov.track_id == "tr_recurrence_test"
+
+    report = miner.mine_song_patterns_and_transitions(
+        track_analysis=analysis,
+        candidate_patterns=[candidate_pat],
+        audio_for={},
+        fallback_audio={},
+        sr=22050,
+        max_bars_to_scan=16,
+    )
+
+    assert isinstance(report, SongMinedPatternReport)
+    assert report.track_id == "tr_recurrence_test"
+    assert "drums" in report.stem_patterns
+    assert len(report.stem_patterns["drums"]) == 1
+    assert report.total_bars == 2
+    rep_dict = report.to_dict()
+    assert rep_dict["track_title"] == "Hypnotic Groove Track"
+    assert "drums" in rep_dict["stem_patterns"]
+
+
+

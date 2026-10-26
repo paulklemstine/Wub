@@ -2400,9 +2400,10 @@ export class ClientGrooveboxConductor {
 
       const sim = item.pat.audio_similarity_score ?? 0.85;
       const coh = item.pat.cohesion_score ?? sim;
+      const rec = (item.pat as any).recurrence_utility ?? 0.80;
       const isMatchingTerr = (item.style === terr) ? 0.40 : 0.0;
 
-      const score = -12.0 * dist + 1.2 * sim + 0.8 * coh + isMatchingTerr;
+      const score = -12.0 * dist + 1.2 * sim + 0.8 * coh + 1.5 * rec + isMatchingTerr;
       if (score > bestScore) {
         bestScore = score;
         bestPat = item.pat;
@@ -2505,10 +2506,14 @@ export class ClientGrooveboxConductor {
     // 1. Immediately snap active pattern for this stem to nearest REAL extracted pattern from training data!
     const realPat = this.selectNearestRealPattern(stem, coord);
     if (realPat) {
+      const prevVels = this.activePatterns[stem]?.velocities || new Array(16).fill(0.9);
+      const targetVels = realPat.velocities ? [...realPat.velocities] : new Array(16).fill(0.9);
+      // Smoothly blend velocities (75% target, 25% previous) for fluid interpolation
+      const blendedVels = targetVels.map((tv, idx) => tv * 0.75 + (prevVels[idx] || 0.8) * 0.25);
       this.activePatterns[stem] = {
         ...realPat,
         onset_grid: [...realPat.onset_grid],
-        velocities: realPat.velocities ? [...realPat.velocities] : new Array(16).fill(0.9),
+        velocities: blendedVels,
       };
       console.info(`[Client ML] Reticule locked nearest real pattern for ${stem}: ${realPat.name || realPat.id} (${realPat.groove_type})`);
     }
