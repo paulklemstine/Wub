@@ -101,6 +101,35 @@ def find_unstemmed_candidates(
     return candidates
 
 
+def wait_for_vram(min_free_gb: float = 2.5, poll_sec: int = 60) -> None:
+    """Block until enough VRAM is free for a Demucs run.
+
+    Another workload on this box periodically owns the GPU; separating on
+    CPU instead would be ~20x slower, so idle-log until VRAM frees up.
+    """
+    import torch
+
+    need = int(min_free_gb * (1 << 30))
+    waited = 0
+    while True:
+        try:
+            if torch.cuda.is_available() and hasattr(torch.cuda, "mem_get_info"):
+                free_b = torch.cuda.mem_get_info()[0]
+                if free_b >= need:
+                    if waited:
+                        log(f"VRAM free again ({free_b / (1 << 30):.1f} GB). Resuming separation.")
+                    return
+                if waited % (5 * poll_sec) == 0:
+                    log(f"GPU busy ({free_b / (1 << 30):.1f} GB free < {min_free_gb} GB). Waiting for VRAM...")
+            else:
+                return
+        except Exception as e:
+            log(f"VRAM check note: {e}. Proceeding anyway.")
+            return
+        time.sleep(poll_sec)
+        waited += poll_sec
+
+
 def commit_and_push_models(tracks_count: int, epoch: Optional[int] = None) -> None:
     """Auto-commits and pushes updated ML model checkpoints and client bundles to GitHub Pages."""
     try:
@@ -227,6 +256,9 @@ def main() -> None:
         p, tid, bpm, key = candidates[0]
         log(f"Separating [{tid}]: {p.name} | BPM: {bpm:.1f} | Key: {key}")
 
+        # Don't burn hours on CPU fallback while another job owns the GPU
+        wait_for_vram(min_free_gb=2.5)
+
         t0 = time.time()
         try:
             use_fast_cpu = True
@@ -342,4 +374,18 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Crash supervisor: an uncaught transient (CUDA hiccup, killed
+    # subprocess, etc.) restarts the queue instead of dying silently.
+    # A clean --max-tracks pause returns normally and stops here.
+    crashes = 0
+    while True:
+        try:
+            main()
+            break
+        except Exception as e:
+            crashes += 1
+            log(f"Supervisor: uncaught {type(e).__name__}: {e} (crash #{crashes}). Restarting queue in 60s...")
+            if crashes >= 20:
+                log("Supervisor: 20 crashes, giving up.")
+                raise
+            time.sleep(60)
