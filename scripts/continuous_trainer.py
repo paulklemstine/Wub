@@ -145,6 +145,9 @@ def main() -> None:
     ap.add_argument("--max-tracks", type=int, default=0, help="0 = continuous non-stop daemon")
     ap.add_argument("--train-interval", type=int, default=5, help="train WubGPT and export bundle after every N separated tracks")
     ap.add_argument("--epochs", type=int, default=6, help="epochs per WubGPT refinement step")
+    ap.add_argument("--skip-per-song-feedback", action="store_true", default=False,
+                    help="skip the per-song PatternAudioFeedback step (separate+analyze only); "
+                         "feedback still runs in bulk at every --train-interval")
     ap.add_argument("--auto-push", action="store_true", default=True, help="auto commit and push checkpoints live to GitHub Pages")
     args = ap.parse_args()
 
@@ -261,26 +264,30 @@ def main() -> None:
             separated_this_session += 1
             log(f"Successfully processed {p.name} in {elapsed:.1f}s (Total stemmed: {len([d for d in stems_dir.iterdir() if d.is_dir() and not d.name.startswith('_')])})")
 
-            # Pattern Audio Feedback Training Step (with capped memory load)
-            try:
-                from wub_core.corpus import CorpusStore
-                from wub_core.patterns import PatternBank
-                from wub_core.pattern_audio_trainer import PatternAudioFeedbackEngine
+            # Pattern Audio Feedback Training Step (with capped memory load).
+            # Skipped per-song when --skip-per-song-feedback is set; bulk
+            # feedback still runs at every --train-interval via
+            # train_multistem_cohesion_feedback.py + train_composing_ml.py.
+            if not args.skip_per_song_feedback:
+                try:
+                    from wub_core.corpus import CorpusStore
+                    from wub_core.patterns import PatternBank
+                    from wub_core.pattern_audio_trainer import PatternAudioFeedbackEngine
 
-                c_store = CorpusStore(proc_dir, stems_base=stems_dir, library_dirs=library_dirs)
-                # Load max 35 multi-stem tracks to keep RAM lean and avoid OOM spikes
-                c_store.refresh(max_tracks=35)
-                p_bank = PatternBank()
-                p_bank.load_from_tracks(c_store.tracks[:35])
+                    c_store = CorpusStore(proc_dir, stems_base=stems_dir, library_dirs=library_dirs)
+                    # Load max 35 multi-stem tracks to keep RAM lean and avoid OOM spikes
+                    c_store.refresh(max_tracks=35)
+                    p_bank = PatternBank()
+                    p_bank.load_from_tracks(c_store.tracks[:35])
 
-                fb_engine = PatternAudioFeedbackEngine()
-                fb_res = fb_engine.run_training_step(bank=p_bank, corpus_store=c_store, n_optimize=4)
-                log(f"[PatternAudioFeedback] Evaluated {fb_res.get('evaluated')} patterns | Optimized {fb_res.get('optimized_generic_patterns')} generic patterns | Mean real-audio similarity: {fb_res.get('mean_audio_similarity')} (DB total: {fb_res.get('feedback_db_entries')})")
+                    fb_engine = PatternAudioFeedbackEngine()
+                    fb_res = fb_engine.run_training_step(bank=p_bank, corpus_store=c_store, n_optimize=4)
+                    log(f"[PatternAudioFeedback] Evaluated {fb_res.get('evaluated')} patterns | Optimized {fb_res.get('optimized_generic_patterns')} generic patterns | Mean real-audio similarity: {fb_res.get('mean_audio_similarity')} (DB total: {fb_res.get('feedback_db_entries')})")
 
-                del c_store, p_bank, fb_engine
-                gc.collect()
-            except Exception as e:
-                log(f"Pattern audio feedback training note: {e}")
+                    del c_store, p_bank, fb_engine
+                    gc.collect()
+                except Exception as e:
+                    log(f"Pattern audio feedback training note: {e}")
 
             # Periodically train WubGPT and deploy evolving checkpoints live
             if separated_this_session % args.train_interval == 0:
