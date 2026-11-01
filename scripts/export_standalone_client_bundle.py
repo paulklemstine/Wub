@@ -985,7 +985,7 @@ def export_bundle() -> None:
             pass
 
     standalone_manifest = {
-        "version": 4,
+        "version": 5,
         "default_bpm": 126.0,
         "chord_progressions": chord_progressions,
         "groove_templates": groove_templates,
@@ -1064,6 +1064,19 @@ def export_bundle() -> None:
             standalone_manifest[key] = stem_cohesion_weights[key]
         elif key in existing_manifest:
             standalone_manifest[key] = existing_manifest[key]
+
+    # Next-generation generative models (joint 4-stem transitions, harmonic
+    # compat, learned transition operators). Trained by
+    # scripts/train_generative_models.py; embedded here so the static client
+    # can sample jointly-composed bars instead of per-stem dice rolls.
+    for _gname in ("joint_bar_transitions", "harmonic_compat", "transition_templates"):
+        _gpath = Path("data/generative") / f"{_gname}.json"
+        if _gpath.exists():
+            try:
+                standalone_manifest[_gname] = json.loads(_gpath.read_text())
+                print(f"✓ Embedded {_gname} ({_gpath.stat().st_size} bytes)", flush=True)
+            except Exception as e:
+                print(f"Note: could not embed {_gname}: {e}", flush=True)
 
     # Core compressed song models kept inline (phrase-audio songs + 4-stem songs + direct vocab-Opus songs);
     # every other corpus song is lazily loaded on demand from data/catalog/shard_XX.json via full_catalog_manifest.json

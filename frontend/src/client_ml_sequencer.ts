@@ -155,6 +155,10 @@ export interface StandaloneManifest {
     total_catalog_files: number;
     total_shards: number;
   };
+  // Next-generation generative models (small JSON, bundled for static hosting)
+  joint_bar_transitions?: any;
+  harmonic_compat?: any;
+  transition_templates?: any;
 }
 
 // One entry per analyzed song in the full corpus (data/full_catalog_manifest.json)
@@ -2522,6 +2526,12 @@ export class ClientGrooveboxConductor {
   private catalogSongActive: boolean = false;
   private catalogSongBarsLeft: number = 0;
   private pendingCatalogSongId?: string;
+  // Joint 4-stem composition: one sampled tuple per bar keeps all stems
+  // composed together (learned co-occurrence) instead of independent rolls
+  private jointHistory: number[] = [];
+  private jointTemperature: number = 0.9;
+  private jointMaxCopyRun: number = 4;
+  private lastComposedSection: string = "INTRO";
   private phraseBarCount: number = 0;
   private totalBarsPlayed: number = 0;
   private recentLoops: Record<StemName, string[]> = {
@@ -2931,6 +2941,8 @@ export class ClientGrooveboxConductor {
     this.activeVocalChainIndex = 0;
     this.trackBarsPlayed = 0;
     this.lockedCategorySlices.clear();
+    this.jointHistory = [];
+    this.lastComposedSection = "INTRO";
     this.recordTrackPlayed(trackId);
     if (typeof model.bpm === "number" && model.bpm >= 85 && model.bpm <= 175) {
       const bpmDelta = Math.max(-3, Math.min(3, Math.round(model.bpm - this.currentBpm)));
@@ -3333,6 +3345,8 @@ export class ClientGrooveboxConductor {
     if (isTrackChange) {
       this.trackBarsPlayed = 0;
       this.lockedCategorySlices.clear();
+    this.jointHistory = [];
+    this.lastComposedSection = "INTRO";
       // Gently glide tempo toward new track's natural groove (max +/- 3 BPM step so rhythm never jerks)
       if (pick.meta.source_bpm >= 85 && pick.meta.source_bpm <= 170) {
         const bpmDelta = Math.max(-3, Math.min(3, Math.round(pick.meta.source_bpm - this.currentBpm)));
@@ -3941,6 +3955,8 @@ export class ClientGrooveboxConductor {
     this.kitTerritory = territory;
     this.kitTrackId = this.activeTrackId;
     this.lockedCategorySlices.clear();
+    this.jointHistory = [];
+    this.lastComposedSection = "INTRO";
     console.info(`[Client ML] Curated unified song kit locked in for territory: ${territory.toUpperCase()}, key root: ${ROOT_NAMES[keyRoot % 12]}`);
   }
 
@@ -4232,6 +4248,8 @@ export class ClientGrooveboxConductor {
     this.activeVocalTrackId = undefined;
     this.activeVocalChainIndex = 0;
     this.lockedCategorySlices.clear();
+    this.jointHistory = [];
+    this.lastComposedSection = "INTRO";
 
     // Pick a fresh starting track from the authentic multi-part phrase blocks (preferring Part 1 of a complete 4-part chain)
     const allPhraseBlocks = Array.from(this.phraseBlockById.values());
@@ -4337,6 +4355,8 @@ export class ClientGrooveboxConductor {
     this.activePhraseBlock = null;
     this.activeLoops = {};
     this.lockedCategorySlices.clear();
+    this.jointHistory = [];
+    this.lastComposedSection = "INTRO";
     this.trackBarsPlayed = 0;
     this.catalogSongActive = false;
     this.catalogSongBarsLeft = 0;
@@ -5430,6 +5450,134 @@ export class ClientGrooveboxConductor {
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // Joint 4-Stem Bar Composition (learned co-occurrence across all stems)
+  // ---------------------------------------------------------------------------
+  private decodeJointCode(code: number): number[] {
+    // Inverse of pack: code = (gid * 4 + density_q) * 4 + db_mask
+    const mask = code % 4;
+    const rest = Math.floor(code / 4);
+    const dens = rest % 4;
+    const gid = Math.floor(rest / 4);
+    return [gid, dens, mask];
+  }
+
+  private grooveNameToId(groove: string): number {
+    const list = this.manifest?.joint_bar_transitions?.grooves as string[] | undefined;
+    if (!list) return -1;
+    // Steering-layer aliases -> canonical classifier vocabulary
+    const alias: Record<string, string> = {
+      minimal_downbeats: "minimal",
+      syncopated_breaks: "breakbeat",
+      turnaround_fill: "fill",
+      sub: "sustained",
+      chords: "hook",
+      call: "vocal_call_response",
+      verse: "vocal_verse",
+      build: "breakbeat",
+    };
+    const canon = alias[groove] || groove;
+    const i = list.indexOf(canon);
+    return i >= 0 ? i : list.indexOf("none");
+  }
+
+  private currentJointTupleId(): number {
+    const model = this.manifest?.joint_bar_transitions;
+    if (!model || !model.tuple_to_id) return -1;
+    const codes: number[] = [];
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const pat = this.activePatterns[stem];
+      const gid = pat ? this.grooveNameToId(pat.groove_type) : -1;
+      if (gid < 0 || !pat) return -1;
+      const n = pat.onset_grid.length;
+      const dq = n <= 0 ? 0 : (n <= 2 ? 1 : (n <= 6 ? 2 : 3));
+      const has0 = pat.onset_grid.includes(0) ? 1 : 0;
+      const has8 = pat.onset_grid.includes(8) ? 2 : 0;
+      codes.push((gid * 4 + dq) * 4 + (has0 + has8));
+    }
+    const key = codes.join("-");
+    const id = (model.tuple_to_id as Record<string, number>)[key];
+    return typeof id === "number" ? id : -1;
+  }
+
+  private sampleJointNext(curId: number, section: string): number {
+    const model = this.manifest?.joint_bar_transitions;
+    if (!model) return -1;
+    const sec = (model.transitions as Record<string, any>)?.[section] || {};
+    let counts = sec[String(curId)] as Record<string, number> | undefined;
+    if (!counts || Object.keys(counts).length === 0) {
+      // Back off to the section prior (most common joint bars in this section)
+      counts = (model.priors as Record<string, any>)?.[section];
+    }
+    if (!counts || Object.keys(counts).length === 0) return -1;
+    const k = typeof model.k === "number" ? model.k : 0.5;
+    const temp = this.jointTemperature <= 0 ? 1 : this.jointTemperature;
+    const entries = Object.entries(counts);
+    const weights = entries.map(([, c]) => Math.pow((c as number) + k, 1 / temp));
+    // Anti-stall guard: refuse candidates that would repeat the same joint
+    // tuple more than maxCopyRun bars in a row (keeps the endless mix moving)
+    const recent = this.jointHistory.slice(-Math.max(0, this.jointMaxCopyRun));
+    let total = 0;
+    const allowed: number[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const id = Number(entries[i][0]);
+      let run = 1;
+      for (let j = recent.length - 1; j >= 0; j--) {
+        if (recent[j] === id) run++;
+        else break;
+      }
+      if (run <= this.jointMaxCopyRun) {
+        allowed.push(i);
+        total += weights[i];
+      }
+    }
+    if (allowed.length === 0 || total <= 0) return -1;
+    let r = Math.random() * total;
+    for (const i of allowed) {
+      r -= weights[i];
+      if (r <= 0) return Number(entries[i][0]);
+    }
+    return Number(entries[allowed[allowed.length - 1]][0]);
+  }
+
+  private jointGrooveTargets(section: string): Record<StemName, string> | null {
+    const model = this.manifest?.joint_bar_transitions;
+    if (!model || !model.tuples) return null;
+    const curId = this.currentJointTupleId();
+    const nextId = this.sampleJointNext(curId, section);
+    if (nextId < 0 || nextId >= (model.tuples as number[][]).length) return null;
+    const grooves = model.grooves as string[];
+    const codes = (model.tuples as number[][])[nextId];
+    const out = {} as Record<StemName, string>;
+    (["drums", "bass", "other", "vocals"] as StemName[]).forEach((stem, i) => {
+      const [gid] = this.decodeJointCode(codes[i]);
+      out[stem] = (grooves && grooves[gid]) || "none";
+    });
+    this.jointHistory.push(nextId);
+    if (this.jointHistory.length > 64) {
+      this.jointHistory.splice(0, this.jointHistory.length - 64);
+    }
+    return out;
+  }
+
+  private applyTransitionEntry(stem: StemName, pat: SerializedPattern, fromSec: string, toSec: string): void {
+    // On section boundaries, enrich the bar with the learned entry template
+    // (e.g. real BUILDUP->DROP entries) instead of a generic pattern start.
+    const table = this.manifest?.transition_templates?.transitions as Record<string, any> | undefined;
+    if (!table || stem !== "drums") return;
+    const entry = table[`${fromSec}->${toSec}`] || table[`${fromSec}->${fromSec}`];
+    const probs = entry?.entry_prob as number[] | undefined;
+    if (!probs) return;
+    for (let s = 0; s < 16; s++) {
+      if ((probs[s] ?? 0) >= 0.5 && !pat.onset_grid.includes(s)) {
+        pat.onset_grid.push(s);
+        if (pat.velocities) pat.velocities[s] = 0.9;
+      }
+    }
+    pat.onset_grid.sort((a, b) => a - b);
+    pat.density = pat.onset_grid.length / 16;
+  }
+
   private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
     const sec = this.arranger.getSection();
     const isNewPhrase = (phraseBar === 0);
@@ -5455,6 +5603,19 @@ export class ClientGrooveboxConductor {
     }
     const songModel = this.activeTrackId ? songModels?.[this.activeTrackId] : undefined;
     const hasBarSequence = Boolean(songModel?.bar_pattern_sequence && songModel.bar_pattern_sequence.length > 0);
+
+    // Joint 4-stem composition: sample ONE tuple per bar so every stem draws
+    // its groove from the same learned co-occurrence (surprising hybrids that
+    // still sound composed together). Skipped for phrase-block / catalog /
+    // loop playback, which already carry authentic joint audio.
+    let jointTargets: Record<StemName, string> | null = null;
+    const jointEligible = !this.activePhraseBlock && !this.catalogSongActive &&
+      !hasBarSequence && (this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks" || this.playbackMode === "slices");
+    if (jointEligible) {
+      jointTargets = this.jointGrooveTargets(sec);
+    }
+    const fromSec = this.lastComposedSection;
+    this.lastComposedSection = sec;
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       // 1. Studio Loop Continuity: if a 1-bar loop is active for this section, keep it locked!
@@ -5546,6 +5707,12 @@ export class ClientGrooveboxConductor {
       let nextG = isDrumTurnaround
         ? "turnaround_fill"
         : (isMidPhraseEvolution && currPat ? currG : this.phraseModel.sampleNextGroove(phraseBar, stem, currG));
+      // Joint composition overrides the independent per-stem roll with the
+      // jointly-sampled groove (user reticle steering below still wins).
+      const jointG = jointTargets?.[stem];
+      if (jointG && jointG !== "none" && jointG !== "missing" && !isDrumTurnaround) {
+        nextG = jointG;
+      }
 
       // Intrinsic Pattern Compression & Trained Next-Pattern Continuity:
       // 1. First check if the active song has an authentic `bar_pattern_sequence` or `next_pattern_id`
@@ -5720,6 +5887,11 @@ export class ClientGrooveboxConductor {
 
       this.activePatterns[stem] = cand;
       this.activeGoodness[stem] = goodness;
+      // Learned section entry: enrich the first bar of a new section with
+      // the mined entry template (real transition behavior, not generic).
+      if (isSectionChange) {
+        this.applyTransitionEntry(stem, this.activePatterns[stem], fromSec, sec);
+      }
     }
   }
 
