@@ -290,6 +290,18 @@ class WubApp {
     // Initialize Autonomous In-Browser ML Sequencer
     try {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
+      // A/B evaluation flags (?joint=0&harm=0): compare next-gen joint
+      // composition + harmonic fit against the legacy independent engine.
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("joint") === "0") this.clientConductor.jointEnabled = false;
+        if (params.get("harm") === "0") this.clientConductor.harmonicFitEnabled = false;
+        if (params.get("joint") === "0" || params.get("harm") === "0") {
+          console.info(`[Wub] A/B mode: joint=${this.clientConductor.jointEnabled} harm=${this.clientConductor.harmonicFitEnabled}`);
+        }
+      } catch {
+        // Non-browser context; keep defaults
+      }
       if (this.segmentPositions.size > 0) {
         this.clientConductor.setSegmentPositions(this.segmentPositions);
       }

@@ -2532,6 +2532,11 @@ export class ClientGrooveboxConductor {
   private jointTemperature: number = 0.9;
   private jointMaxCopyRun: number = 4;
   private lastComposedSection: string = "INTRO";
+  // Phase-2 switches (A/B evaluation via ?joint=0&harm=0 URL params)
+  public jointEnabled: boolean = true;
+  public harmonicFitEnabled: boolean = true;
+  private lastChordRoot: number = 0;
+  private lastChordMinor: boolean = false;
   private phraseBarCount: number = 0;
   private totalBarsPlayed: number = 0;
   private recentLoops: Record<StemName, string[]> = {
@@ -3565,6 +3570,7 @@ export class ClientGrooveboxConductor {
     }
 
     // For pitched stems (bass, other, vocals): score by trained quality + harmonic pitch proximity
+    const scoreStem = stemCategory.split(":")[0];
     const scoredCandidates = list.map((item) => {
       let diff = (targetPitch - item.pitch) % 12;
       if (diff > 6) diff -= 12;
@@ -3573,7 +3579,11 @@ export class ClientGrooveboxConductor {
       const baseQuality = (trainedScores && trainedScores[item.name]) ? trainedScores[item.name] : 0.85;
       const vowelBonus = (targetVowel && item.vowel === targetVowel) ? 0.50 : 0.0;
       const trackBonus = (effectiveTrackId && item.trackId === effectiveTrackId) ? 2.5 : 0.0;
-      const score = baseQuality * 2.0 + trackBonus + vowelBonus - absDiff * 0.25;
+      // Learned harmonic fit: slices whose native pitch co-occurred in this
+      // harmonic context across real songs need less repitch and sit better.
+      const fitBonus = (scoreStem === "bass" || scoreStem === "other" || scoreStem === "vocals")
+        ? this.harmonicFit(scoreStem, item.pitch) * 0.75 : 0.0;
+      const score = baseQuality * 2.0 + trackBonus + vowelBonus + fitBonus - absDiff * 0.25;
       return { item, shift: diff, score };
     });
 
@@ -5578,6 +5588,36 @@ export class ClientGrooveboxConductor {
     pat.density = pat.onset_grid.length / 16;
   }
 
+  // ---------------------------------------------------------------------------
+  // Harmonic Fit (learned pitch co-occurrence: prefer slices whose native
+  // pitch was actually observed in this harmonic context across real songs)
+  // ---------------------------------------------------------------------------
+  private harmonicFit(stem: string, pitchPc: number): number {
+    if (!this.harmonicFitEnabled) return 0;
+    const table = this.manifest?.harmonic_compat as any;
+    const hist = table?.hist as Record<string, Record<string, Record<string, number>>> | undefined;
+    if (!hist) return 0;
+    const sec = this.arranger.getSection();
+    const root = ((this.lastChordRoot % 12) + 12) % 12;
+    const pc = ((Math.round(pitchPc) % 12) + 12) % 12;
+    const keys = [
+      `${sec}|${root}|${this.lastChordMinor ? "min" : "maj"}`,
+      `${sec}|${root}|maj`,
+      `${sec}|${root}|min`,
+    ];
+    for (const key of keys) {
+      const stemHist = hist[key]?.[stem];
+      if (!stemHist) continue;
+      let max = 0;
+      for (const v of Object.values(stemHist)) {
+        if ((v as number) > max) max = v as number;
+      }
+      if (max <= 0) continue;
+      return ((stemHist[String(pc)] ?? 0) as number) / max;
+    }
+    return 0.25;
+  }
+
   private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
     const sec = this.arranger.getSection();
     const isNewPhrase = (phraseBar === 0);
@@ -5595,6 +5635,8 @@ export class ClientGrooveboxConductor {
     // Harmonic pacing: chords sustain for 4 bars across the phrase sequence for smooth song flow
     const chordIndex = Math.floor(phraseBar / 4) % this.activeProgression.length;
     const chord = this.activeProgression[chordIndex];
+    this.lastChordRoot = chord.rootPitch;
+    this.lastChordMinor = chord.isMinor;
 
     const songModels = this.manifest?.compressed_song_models || (this.manifest?.stem_cohesion_weights as any)?.compressed_song_models;
     if (!this.activeTrackId && songModels && Object.keys(songModels).length > 0) {
@@ -5609,7 +5651,7 @@ export class ClientGrooveboxConductor {
     // still sound composed together). Skipped for phrase-block / catalog /
     // loop playback, which already carry authentic joint audio.
     let jointTargets: Record<StemName, string> | null = null;
-    const jointEligible = !this.activePhraseBlock && !this.catalogSongActive &&
+    const jointEligible = this.jointEnabled && !this.activePhraseBlock && !this.catalogSongActive &&
       !hasBarSequence && (this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks" || this.playbackMode === "slices");
     if (jointEligible) {
       jointTargets = this.jointGrooveTargets(sec);
