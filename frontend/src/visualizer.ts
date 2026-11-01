@@ -631,6 +631,8 @@ export interface NebulaFrame {
   bpm: number;
   /** Optional per-stem RMS levels 0..1 for reticle pulse. */
   levels?: Partial<Record<StemName, number>>;
+  /** Currently playing song title, rendered under the drums reticle. */
+  activeTitle?: string;
 }
 
 export type ReticleMoveHandler = (stem: StemName, x: number, y: number) => void;
@@ -683,6 +685,14 @@ export class NebulaRenderer {
   private dragStem: StemName | null = null;
   private dragOffset: { x: number; y: number } = { x: 0, y: 0 };
   private activeSliceMarkers: Partial<Record<StemName, { x: number; y: number; timeSec: number }>> = {};
+  // Reticle motion trails (recorded while dragging, fade after release)
+  private trails: Record<StemName, Array<{ x: number; y: number; t: number }>> = {
+    drums: [], bass: [], vocals: [], other: [],
+  };
+  // Last timeSec a magnetic snap engaged per stem (snap-range ring flash)
+  private snapFlash: Record<StemName, number> = {
+    drums: -10, bass: -10, vocals: -10, other: -10,
+  };
 
   setActiveSlice(stem: StemName, x: number, y: number, timeSec: number): void {
     this.activeSliceMarkers[stem] = { x: clamp01(x), y: clamp01(y), timeSec };
@@ -815,7 +825,12 @@ export class NebulaRenderer {
     const h = rect.height > 0 ? rect.height : canvas.height / dpr;
 
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#0b0b14";
+    // Deep-space vignette: indigo core fading to near-black edges
+    const bg = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.1, w / 2, h / 2, Math.max(w, h) * 0.75);
+    bg.addColorStop(0, "#141428");
+    bg.addColorStop(0.55, "#0b0b16");
+    bg.addColorStop(1, "#050509");
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
     // Apply subtle visual breathing when stems are not manually dragged.
@@ -848,28 +863,60 @@ export class NebulaRenderer {
       ctx.stroke();
     }
 
-    // Scatter points.
+    // Scatter points as additive glowing stardust with a gentle twinkle.
+    // Dense cluster cores render brighter and slightly larger.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
     for (let i = 0; i < this.points.length; i++) {
       const p = this.points[i];
-      ctx.globalAlpha = this.alphas[i] ?? 0.5;
+      const density = this.alphas[i] ?? 0.5;
+      const twinkle = 0.72 + 0.28 * Math.sin(t * 1.7 + i * 2.39996);
+      ctx.globalAlpha = density * twinkle;
       ctx.fillStyle = STEM_COLORS[p.stem];
       ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, 2, 0, 2 * Math.PI);
+      ctx.arc(p.x * w, p.y * h, 1.1 + density * 1.4, 0, 2 * Math.PI);
       ctx.fill();
     }
+    ctx.restore();
     ctx.globalAlpha = 1;
 
     // Gravity reticles with beat-synced bouncing pulse (draggable to steer sound)
     const bpm = Number.isFinite(frame.bpm) && frame.bpm > 0 ? frame.bpm : 120;
+    this.pruneTrails(frame.timeSec);
     const beatPhase = (frame.timeSec * bpm) / 60;
     const pulse = 0.5 + 0.5 * Math.sin(2 * Math.PI * (beatPhase - Math.floor(beatPhase)));
+    const snapRange = 0.055 * Math.min(w, h);
     for (const stem of RETICLE_STEMS) {
       const r = this.reticleMap[stem];
       const px = r.x * w;
       const py = r.y * h;
       const level = frame.levels !== undefined ? (frame.levels[stem] ?? 0) : 0;
-      const radius = 12 + 4 * pulse + 12 * Math.min(1, Math.max(0, level));
+      const clampedLevel = Math.min(1, Math.max(0, level));
+      const radius = 12 + 4 * pulse + 12 * clampedLevel;
       const color = STEM_COLORS[stem];
+
+      // Gravity well: soft radial disc pulling the eye toward the reticle
+      const wellR = radius * 3.2;
+      const well = ctx.createRadialGradient(px, py, radius * 0.4, px, py, wellR);
+      well.addColorStop(0, this.hexToRgba(color, 0.16 + 0.10 * clampedLevel));
+      well.addColorStop(1, this.hexToRgba(color, 0));
+      ctx.fillStyle = well;
+      ctx.beginPath();
+      ctx.arc(px, py, wellR, 0, 2 * Math.PI);
+      ctx.fill();
+
+      // Magnetic snap-range ring (flashes when a snap engages while dragging)
+      const sinceSnap = frame.timeSec - (this.snapFlash[stem] ?? -10);
+      const snapHot = sinceSnap < 0.6 ? 1 - sinceSnap / 0.6 : 0;
+      ctx.beginPath();
+      ctx.arc(px, py, snapRange, 0, 2 * Math.PI);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 5]);
+      ctx.globalAlpha = 0.14 + 0.55 * snapHot;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
 
       // Subtle drift orbit guide ring
       const prof = NebulaRenderer.DRIFT_PROFILES[stem];
@@ -884,6 +931,35 @@ export class NebulaRenderer {
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
 
+      // Motion trail (recorded while dragging)
+      const trail = this.trails[stem];
+      if (trail.length > 1) {
+        ctx.save();
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+        for (let i = 1; i < trail.length; i++) {
+          const a = (i / trail.length) * 0.45;
+          ctx.globalAlpha = a;
+          ctx.strokeStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(trail[i - 1].x * w, trail[i - 1].y * h);
+          ctx.lineTo(trail[i].x * w, trail[i].y * h);
+          ctx.stroke();
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+
+      // Level-reactive inner fill
+      if (clampedLevel > 0.02) {
+        ctx.beginPath();
+        ctx.arc(px, py, radius * 0.55, 0, 2 * Math.PI);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.10 + 0.30 * clampedLevel;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
       // Outer glow pulse
       ctx.beginPath();
       ctx.arc(px, py, radius + 4, 0, 2 * Math.PI);
@@ -892,13 +968,18 @@ export class NebulaRenderer {
       ctx.globalAlpha = 0.3 * (0.5 + 0.5 * pulse);
       ctx.stroke();
 
-      // Main pulsing circle
+      // Main pulsing circle with soft neon glow
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 14;
       ctx.beginPath();
       ctx.arc(px, py, radius, 0, 2 * Math.PI);
       ctx.strokeStyle = color;
       ctx.lineWidth = 2.2;
       ctx.globalAlpha = 0.95;
       ctx.stroke();
+      ctx.restore();
+      ctx.globalAlpha = 1;
 
       // Center crosshairs
       ctx.beginPath();
@@ -926,6 +1007,13 @@ export class NebulaRenderer {
       ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
       ctx.font = "9px monospace";
       ctx.fillText(`X:${Math.round(r.x * 100)}% Y:${Math.round(r.y * 100)}%`, px, py + radius + 13);
+
+      // Now-playing song title under the drums reticle
+      if (stem === "drums" && frame.activeTitle) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+        ctx.font = "bold 10px system-ui, sans-serif";
+        ctx.fillText(this.truncateTitle(frame.activeTitle, 34), px, py + radius + 27);
+      }
     }
 
     // Active playing slice highlights with white pixel and expanding ping ring
@@ -957,6 +1045,30 @@ export class NebulaRenderer {
       ctx.globalAlpha = alpha;
       ctx.fill();
       ctx.restore();
+    }
+  }
+
+  private hexToRgba(hex: string, alpha: number): string {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return `rgba(255,255,255,${alpha})`;
+    const v = parseInt(m[1], 16);
+    return `rgba(${(v >> 16) & 255},${(v >> 8) & 255},${v & 255},${alpha})`;
+  }
+
+  private truncateTitle(title: string, maxChars: number): string {
+    if (title.length <= maxChars) return title;
+    return `${title.slice(0, Math.max(0, maxChars - 1))}…`;
+  }
+
+  private pruneTrails(nowSec: number): void {
+    for (const stem of RETICLE_STEMS) {
+      const trail = this.trails[stem];
+      while (trail.length > 0 && nowSec - trail[0].t > 0.7) {
+        trail.shift();
+      }
+      if (trail.length > 16) {
+        trail.splice(0, trail.length - 16);
+      }
     }
   }
 
@@ -1013,6 +1125,18 @@ export class NebulaRenderer {
     targetY = clamp01(targetY);
 
     this.reticleMap[stem] = { x: targetX, y: targetY };
+
+    // Record the drag trail and flag magnetic snap engagement
+    const nowSec = performance.now() / 1000;
+    const trail = this.trails[stem];
+    const last = trail[trail.length - 1];
+    if (!last || Math.hypot(targetX - last.x, targetY - last.y) > 0.004) {
+      trail.push({ x: targetX, y: targetY, t: nowSec });
+      if (trail.length > 16) trail.shift();
+    }
+    if (minSnapDist < 0.03) {
+      this.snapFlash[stem] = nowSec;
+    }
 
     // Align base position with drift equation so at release time t: base + drift(t) == target
     // This completely prevents the reticle from jumping or offsetting when dropped!

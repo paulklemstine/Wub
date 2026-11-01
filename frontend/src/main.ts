@@ -1289,6 +1289,7 @@ class WubApp {
           vocals: this.analyserLevel("vocals"),
           other: this.analyserLevel("other"),
         },
+        activeTitle: (this.lastGrooveboxMeta as any)?.activeTrackTitle || this.lastGrooveboxMeta?.vocalSongTitle,
       });
     }
     if (this.psychedelicBg !== null) {
