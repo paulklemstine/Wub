@@ -1066,9 +1066,24 @@ def export_bundle() -> None:
             standalone_manifest[key] = existing_manifest[key]
 
     # Next-generation generative models (joint 4-stem transitions, harmonic
-    # compat, learned transition operators). Trained by
-    # scripts/train_generative_models.py; embedded here so the static client
-    # can sample jointly-composed bars instead of per-stem dice rolls.
+    # compat, learned transition operators). Retrained here every export so
+    # the tables track the growing corpus; embedded below so the static
+    # client can sample jointly-composed bars instead of per-stem dice rolls.
+    try:
+        import subprocess as _sp
+        import sys as _sys
+        import os as _os
+        _repo = str(Path(__file__).resolve().parents[1])
+        _env = dict(_os.environ)
+        _env["PYTHONPATH"] = _repo + (_os.pathsep + _env["PYTHONPATH"] if _env.get("PYTHONPATH") else "")
+        _sp.run(
+            [_sys.executable, "scripts/train_generative_models.py"],
+            check=False,
+            cwd=_repo,
+            env=_env,
+        )
+    except Exception as e:
+        print(f"Note: generative retrain skipped: {e}", flush=True)
     for _gname in ("joint_bar_transitions", "harmonic_compat", "transition_templates"):
         _gpath = Path("data/generative") / f"{_gname}.json"
         if _gpath.exists():
