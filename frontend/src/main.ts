@@ -169,11 +169,12 @@ function mulberry32(seed: number): () => number {
 }
 
 function demoPoints(): NebulaPoint[] {
+  // Galaxy-like fallback: one cluster per stem spread across the square.
   const centers: Record<StemName, { x: number; y: number }> = {
-    drums: { x: 0.35, y: 0.75 },
-    bass: { x: 0.35, y: 0.75 },
-    vocals: { x: 0.35, y: 0.72 },
-    other: { x: 0.35, y: 0.72 },
+    drums: { x: 0.22, y: 0.68 },
+    bass: { x: 0.72, y: 0.30 },
+    vocals: { x: 0.68, y: 0.72 },
+    other: { x: 0.30, y: 0.28 },
   };
   const rand = mulberry32(1337);
   const pts: NebulaPoint[] = [];
@@ -369,12 +370,40 @@ class WubApp {
       }
 
       if (fallbackPts.length === 0) return;
+      // Galaxy spread: raw UMAP output clumps into part of the square
+      // (x lives ~0.4..0.9). Percentile-stretch to fill the canvas while
+      // preserving cluster structure. Applied BEFORE positions are stored,
+      // so visuals, snapping, and sound-mapping share one space.
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (const item of fallbackPts) {
+        if (!isRecord(item)) continue;
+        const x = asNumber(item["x"], -1);
+        const y = asNumber(item["y"], -1);
+        if (x >= 0 && y >= 0) {
+          xs.push(x);
+          ys.push(y);
+        }
+      }
+      const percentile = (arr: number[], p: number): number => {
+        if (arr.length === 0) return p === 0 ? 0 : 1;
+        const sorted = [...arr].sort((a, b) => a - b);
+        return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+      };
+      const x0 = percentile(xs, 1);
+      const x1 = percentile(xs, 99);
+      const y0 = percentile(ys, 1);
+      const y1 = percentile(ys, 99);
+      const stretch = (v: number, lo: number, hi: number): number => {
+        if (!(hi > lo)) return Math.min(1, Math.max(0, v));
+        return Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
+      };
       const pts: NebulaPoint[] = [];
       for (const item of fallbackPts) {
         if (!isRecord(item)) continue;
         const stem = asStem(item["stem"]);
-        const x = asNumber(item["x"], -1);
-        const y = asNumber(item["y"], -1);
+        const x = stretch(asNumber(item["x"], -1), x0, x1);
+        const y = stretch(asNumber(item["y"], -1), y0, y1);
         const segId = asString(item["segment_id"], "");
         const trackId = asString(item["track_id"], "");
         if (stem !== null && x >= 0 && y >= 0) {
