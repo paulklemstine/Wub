@@ -15,6 +15,6 @@ export const VERSION_INFO: VersionInfo = {
   patch: 133,
   build: 133,
   version: "0.2.133",
-  commit: "853db9fc",
-  timestamp: "2026-11-01T15:44:27Z",
+  commit: "282887f2",
+  timestamp: "2026-11-01T23:03:29Z",
 } as const;
