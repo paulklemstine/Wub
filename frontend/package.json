@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
-  "dependencies": {},
+  "dependencies": {
+    "onnxruntime-web": "^1.31.1"
+  },
   "devDependencies": {
     "typescript": "^5.4.0",
     "vite": "^5.2.0"

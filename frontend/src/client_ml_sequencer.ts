@@ -2811,6 +2811,12 @@ export class ClientGrooveboxConductor {
         // 0. Global reusable vocab (new two-stage compression). Merges into manifest.slices.
         await this.loadGlobalVocabulary(basePath);
         void this.loadGlobalPatterns(basePath);
+        // Bar-arranger GPT (ONNX worker): whole-bar plans from arrangement history.
+        try {
+          this.ensureArrangerModel(basePath);
+        } catch {
+          // Worker unsupported; Markov planner covers generation.
+        }
         // 1. Await priority 4-part cohesive song chains FIRST before queuing hundreds of slice/loop HTTP fetches!
         // This guarantees complete 4-part (16-bar) songs are in memory immediately when Play is clicked.
         // (phrase_blocks empty since static room reclaimed for global vocab; no-op.)
@@ -3090,10 +3096,95 @@ export class ClientGrooveboxConductor {
     return this.abSeeded ? this.abSeeded() : Math.random();
   }
 
+  // Bar-arranger GPT (ONNX worker): plans whole 4-stem bars from arrangement
+  // history. Consumed ONLY at phrase anchors (phraseBar 0/4) so all stems stay
+  // synchronized; Markov + holds cover everything between. Null = use Markov.
+  private arrangerWorker: Worker | null = null;
+  private arrangerReady = false;
+  private planInFlight = false;
+  private modelPlan: { sec: string; chord: number; ranks: Record<StemName, number> } | null = null;
+  private barHistory: number[][] = []; // committed model-planned bars, 6 tokens each
+  private static readonly ARR_SECTIONS = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
+
+  /** Boot the ONNX planner worker (lazy; Markov fallback on any failure). */
+  public ensureArrangerModel(basePath: string = "data"): void {
+    if (this.arrangerWorker || typeof Worker === "undefined") return;
+    try {
+      const w = new Worker(new URL("./arranger_worker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (ev: MessageEvent) => {
+        const msg = ev.data as { type?: string; bars?: number[][]; message?: string };
+        if (msg.type === "ready") {
+          this.arrangerReady = true;
+          console.info("[Client ML] Bar-arranger GPT ready (ONNX worker).");
+        } else if (msg.type === "plan" && Array.isArray(msg.bars) && msg.bars.length > 0) {
+          this.planInFlight = false;
+          this.modelPlan = this.decodePlannedBar(msg.bars[0]);
+          if (!this.modelPlan) this.requestBarPlan(); // undecodable: retry with fresh draw
+        } else if (msg.type === "error") {
+          console.warn("[Client ML] Arranger worker error, Markov fallback:", msg.message);
+          this.planInFlight = false;
+          this.arrangerReady = false;
+        }
+      };
+      w.onerror = () => {
+        this.arrangerReady = false;
+        this.planInFlight = false;
+      };
+      w.postMessage({ type: "init", basePath });
+      this.arrangerWorker = w;
+    } catch {
+      this.arrangerReady = false;
+    }
+  }
+
+  /** Decode one worker-planned 6-token bar; null when unusable (caller falls back). */
+  private decodePlannedBar(tokens: number[]): { sec: string; chord: number; ranks: Record<StemName, number> } | null {
+    if (!tokens || tokens.length < 6) return null;
+    const secIdx = tokens[0] - 1204;
+    const sec = secIdx >= 0 && secIdx < 5 ? (["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"] as const)[secIdx] : null;
+    if (!sec) return null;
+    const chord = tokens[1] >= 1209 && tokens[1] <= 1220 ? tokens[1] - 1209 : 0;
+    const ranks = {} as Record<StemName, number>;
+    (["drums", "bass", "other", "vocals"] as StemName[]).forEach((stem, i) => {
+      ranks[stem] = tokens[2 + i];
+    });
+    return { sec, chord, ranks };
+  }
+
+  /** Ask the worker for the bar after history (single inflight; silent no-op otherwise). */
+  private requestBarPlan(): void {
+    if (!this.arrangerReady || !this.arrangerWorker || this.planInFlight || this.modelPlan) return;
+    const flat: number[] = [];
+    for (const b of this.barHistory.slice(-32)) flat.push(...b);
+    if (flat.length < 6) return; // need at least one committed bar to continue from
+    this.planInFlight = true;
+    const seed = this.abSeeded ? Math.floor(this.abSeeded() * 1e9) : Math.floor(Math.random() * 1e9);
+    this.arrangerWorker.postMessage({ type: "plan", history: flat, nBars: 1, temp: 1.0, topK: 20, seed });
+  }
+
+  /** Prototype rank -> 16-step tokens; null when the rank is out of range. */
+  private tokensForRank(stem: StemName, rank: number): Array<string | null> | null {
+    const protos = this.globalPatterns?.bar_prototypes?.[stem];
+    if (!protos || rank < 0 || rank >= protos.length) return null;
+    return [...protos[rank].tokens];
+  }
+
+  /** Prototype signature -> rank; -1 when the bar isn't a known prototype. */
+  private rankForSig(stem: StemName, sig: string): number {
+    const protos = this.globalPatterns?.bar_prototypes?.[stem];
+    if (!protos) return -1;
+    for (let i = 0; i < protos.length; i++) {
+      if (protos[i].signature === sig) return i;
+    }
+    return -1;
+  }
+
   /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
    * Returns 16-step global slice IDs for a stem given previous bar signature. */
   // Last committed bar sigs per stem (previous bar) for call-response bias.
   private prevBarGlobalSig: Record<StemName, string | null> = { drums: null, bass: null, other: null, vocals: null };
+  // Ranks driving the current bar per stem (model plan or Markov lookup).
+  private usedRankByStem: Record<StemName, number> = { drums: -1, bass: -1, other: -1, vocals: -1 };
 
   /** Cross-stem call-response bonus: how likely is `candSig` on `stem` as an
    * answer to the other stems' *previous*-bar sigs (mined `other->stem` pairs). */
@@ -5963,11 +6054,22 @@ export class ClientGrooveboxConductor {
   }
 
   private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
+    // Model anchor: whole-bar GPT plans land only on phrase anchors (0/4) so
+    // all stems resample in lockstep; the 4-bar hold carries the bar between
+    // anchors. Markov + holds cover everything else (incl. section changes).
+    const modelGates = this.globalPatterns && !this.catalogSongActive && !this.activePhraseBlock
+      && (this.playbackMode === "jukebox" || this.playbackMode === "slices") && this.abVariant !== "old";
+    const takeModelBar = Boolean(modelGates && this.modelPlan && (phraseBar === 0 || phraseBar === 4));
+    if (takeModelBar) {
+      for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) this.globalBarHeld[s] = 4;
+    }
+    for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) this.usedRankByStem[s] = -1;
     // Journey follow: mined full-song arcs override Markov section hops so the
     // song travels INTRO->...->DROP like real arrangements instead of wandering.
     // Seeded lazily (arranger's own pick stands as journey head); overrides
     // begin at the *next* change, and any drift reseeds from the live section.
-    if (isSectionChange && !this.activePhraseBlock && !this.catalogSongActive
+    // Skipped on model bars (the plan carries its own section).
+    if (!takeModelBar && isSectionChange && !this.activePhraseBlock && !this.catalogSongActive
       && (this.playbackMode === "jukebox" || this.playbackMode === "slices")) {
       const cur = this.arranger.getSection();
       if (!this.activeJourney || this.journeyIdx >= this.activeJourney.length) {
@@ -6066,30 +6168,45 @@ export class ClientGrooveboxConductor {
       const gpUsable = gp && this.abVariant !== "old" && !this.catalogSongActive && !this.activePhraseBlock
         && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
       if (gpUsable && this.globalBarHeld[stem] >= 4) {
-        // Joint-biased draw: sample up to 3 candidates, keep the one whose
-        // 4-stem combination actually co-occurred in training (PMI wins) with
-        // call-response answers preferred as tiebreak. Fixes "stems fight".
+        // Model-planned bar (GPT): whole-arrangement prediction from history.
+        // Falls back to joint-biased Markov draws when the rank is unusable.
         let tokens: Array<string | null> = [];
-        let bestScore = -Infinity;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const cand = this.sampleGlobalBar(stem, this.globalBarSig[stem]);
-          if (cand.length !== 16) continue;
-          const candSig = cand.map((t) => t || ".").join("-");
-          const combo: Record<StemName, string> = {
-            drums: stem === "drums" ? candSig : (this.globalBarSig.drums || "."),
-            bass: stem === "bass" ? candSig : (this.globalBarSig.bass || "."),
-            other: stem === "other" ? candSig : (this.globalBarSig.other || "."),
-            vocals: stem === "vocals" ? candSig : (this.globalBarSig.vocals || "."),
-          };
-          const pmi = this.jointPmiFor(combo);
-          const cross = this.callResponseBonus(stem, candSig);
-          const score = pmi + cross * 2;
-          if (tokens.length === 0 || score > bestScore) {
-            tokens = cand;
-            bestScore = score;
+        let usedRank = -1;
+        if (takeModelBar && this.modelPlan) {
+          const rank = this.modelPlan.ranks[stem];
+          const ranked = this.tokensForRank(stem, rank);
+          if (ranked && ranked.length === 16 && ranked.some((t) => t)) {
+            tokens = ranked;
+            usedRank = rank;
           }
-          if (pmi > 0 && cross > 0) break; // heard together AND answers the last bar
         }
+        if (tokens.length === 0) {
+          // Joint-biased draw: sample up to 3 candidates, keep the one whose
+          // 4-stem combination actually co-occurred in training (PMI wins) with
+          // call-response answers preferred as tiebreak. Fixes "stems fight".
+          let bestScore = -Infinity;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const cand = this.sampleGlobalBar(stem, this.globalBarSig[stem]);
+            if (cand.length !== 16) continue;
+            const candSig = cand.map((t) => t || ".").join("-");
+            const combo: Record<StemName, string> = {
+              drums: stem === "drums" ? candSig : (this.globalBarSig.drums || "."),
+              bass: stem === "bass" ? candSig : (this.globalBarSig.bass || "."),
+              other: stem === "other" ? candSig : (this.globalBarSig.other || "."),
+              vocals: stem === "vocals" ? candSig : (this.globalBarSig.vocals || "."),
+            };
+            const pmi = this.jointPmiFor(combo);
+            const cross = this.callResponseBonus(stem, candSig);
+            const score = pmi + cross * 2;
+            if (tokens.length === 0 || score > bestScore) {
+              tokens = cand;
+              bestScore = score;
+            }
+            if (pmi > 0 && cross > 0) break; // heard together AND answers the last bar
+          }
+        }
+        // Record the rank driving this bar for arrangement-history + A/B.
+        this.usedRankByStem[stem] = usedRank >= 0 ? usedRank : this.rankForSig(stem, tokens.map((t) => t || ".").join("-"));
         if (tokens.length === 16) {
           const onset: number[] = [];
           const vels = new Array(16).fill(0.0);
@@ -6394,6 +6511,32 @@ export class ClientGrooveboxConductor {
       if (isSectionChange) {
         this.applyTransitionEntry(stem, this.activePatterns[stem], fromSec, sec);
       }
+    }
+    // Model-plan bookkeeping (once per bar): commit the played bar to history,
+    // drive the section the plan predicted, and prefetch the next bar.
+    // Markov-planned global bars also seed history so the worker has context
+    // before the first model bar lands.
+    const ranks = (["drums", "bass", "other", "vocals"] as StemName[]).map((s) => this.usedRankByStem[s]);
+    if (ranks.every((r) => r >= 0)) {
+      const secName = takeModelBar && this.modelPlan ? this.modelPlan.sec : sec;
+      const secIdx = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"].indexOf(secName);
+      const bar = [secIdx >= 0 ? 1204 + secIdx : 1205, 1209 + (((chord?.rootPitch ?? 0) % 12 + 12) % 12)];
+      for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) {
+        const off = { drums: 0, bass: 301, other: 602, vocals: 903 }[s];
+        bar.push(off + this.usedRankByStem[s]);
+      }
+      this.barHistory.push(bar);
+      if (this.barHistory.length > 32) this.barHistory.splice(0, this.barHistory.length - 32);
+      if (!this.modelPlan) this.requestBarPlan(); // Markov-seeded: ask worker to take over
+    }
+    if (takeModelBar) {
+      const planSec = this.modelPlan?.sec;
+      if (planSec && planSec !== this.arranger.getSection()) {
+        const durMean = this.globalPatterns?.section_arcs?.durations?.[planSec]?.mean;
+        this.arranger.setSection(planSec, typeof durMean === "number" ? durMean : undefined);
+      }
+      this.modelPlan = null;
+      this.requestBarPlan();
     }
   }
 
