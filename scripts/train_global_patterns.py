@@ -48,7 +48,7 @@ def main() -> None:
         if not tatums:
             continue
         tatums = tatums[: args.max_bars_per_track * 16]
-        bars, _fid = builder.remap_bars(segs, tatums, vocab)
+        bars, _fid = builder.remap_bars_fast(segs, tatums, vocab)
         # Reset usages mutated during remap scoring (keep counts clean for training)
         for stem in ("drums", "bass", "other", "vocals"):
             for vs in vocab.vocab_by_stem.get(stem, []):

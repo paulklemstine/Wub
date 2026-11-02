@@ -2558,6 +2558,9 @@ export class ClientGrooveboxConductor {
   private globalVocab: GlobalVocabularyManifest | null = null;
   private globalVocabById: Map<string, GlobalVocabItem> = new Map();
   private globalPatterns: GlobalPatternsManifest | null = null;
+  // Global-bar planner state: hold each bar 4 bars for long-phrase feel
+  private globalBarSig: Record<StemName, string | null> = { drums: null, bass: null, other: null, vocals: null };
+  private globalBarHeld: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private nextCatalogSongId?: string;
   private catalogPrefetching: boolean = false;
   private catalogSongActive: boolean = false;
@@ -5844,6 +5847,63 @@ export class ClientGrooveboxConductor {
 
       if (!shouldEvolvePattern) {
         continue;
+      }
+
+      // Global-bar planner (two-stage vocab + full-corpus transitions): holds each
+      // bar 4 bars for long-phrase feel, harmonized to the active chord at schedule
+      // time. Takes precedence over 1-bar loops so songs evolve instead of looping.
+      if (isSectionChange) {
+        this.globalBarHeld[stem] = 4; // force resample on section change
+      }
+      const gp = this.globalPatterns;
+      const gpUsable = gp && !hasBarSequence && !this.catalogSongActive && !this.activePhraseBlock
+        && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
+      if (gpUsable && this.globalBarHeld[stem] >= 4) {
+        const tokens = this.sampleGlobalBar(stem, this.globalBarSig[stem]);
+        if (tokens.length === 16) {
+          const onset: number[] = [];
+          const vels = new Array(16).fill(0.0);
+          const spans = new Array(16).fill(1);
+          const pitches = new Array(16).fill(chord.rootPitch);
+          for (let i = 0; i < 16; i++) {
+            if (tokens[i]) {
+              onset.push(i);
+              vels[i] = sec === "DROP" ? 0.95 : sec === "BUILDUP" ? 0.85 : 0.9;
+              // Span to next onset for legato pitched phrases (holds long phrases)
+              let span = 1;
+              for (let j = i + 1; j < 16; j++) {
+                if (tokens[j]) break;
+                span++;
+              }
+              spans[i] = Math.min(8, span);
+              const gi = this.globalVocabById.get(tokens[i] as string);
+              pitches[i] = gi ? gi.pitch : chord.rootPitch;
+            }
+          }
+          if (onset.length > 0) {
+            const sig = tokens.map((t) => t || ".").join("-");
+            this.globalBarSig[stem] = sig;
+            this.globalBarHeld[stem] = 1;
+            this.activeLoops[stem] = undefined;
+            this.activePatterns[stem] = {
+              id: `global_${stem}_${sig.slice(0, 12)}`,
+              name: `Global ${stem} [${sec}]`,
+              groove_type: this.activePatterns[stem]?.groove_type || "global",
+              energy: sec === "DROP" ? 0.9 : 0.7,
+              density: onset.length / 16,
+              onset_grid: onset,
+              velocities: vels,
+              step_slice_ids: [...tokens],
+              step_spans: spans,
+              step_pitches: pitches,
+              length: 16,
+            };
+            continue;
+          }
+        }
+      } else if (gpUsable && this.globalBarSig[stem] && this.activePatterns[stem]?.id?.startsWith("global_")) {
+        this.globalBarHeld[stem] = Math.min(4, this.globalBarHeld[stem] + 1);
+        continue; // hold long phrase
       }
 
       if ((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && !this.catalogSongActive) {

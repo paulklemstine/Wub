@@ -140,7 +140,7 @@ def main() -> None:
         tatums = raw.get("tatums") or []
         if not tatums:
             continue
-        bars, fid = builder.remap_bars(segs, tatums, vocab)
+        bars, fid = builder.remap_bars_fast(segs, tatums, vocab)
         n_bars_total += len(bars)
         for s in STEMS:
             fid_acc[s].append(fid.get(s, 0.92))
