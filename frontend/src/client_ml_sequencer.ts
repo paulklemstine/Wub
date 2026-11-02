@@ -2567,6 +2567,9 @@ export class ClientGrooveboxConductor {
   // Global-bar planner state: hold each bar 4 bars for long-phrase feel
   private globalBarSig: Record<StemName, string | null> = { drums: null, bass: null, other: null, vocals: null };
   private globalBarHeld: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
+  // Section journey state: follow mined full-song arcs instead of Markov hops
+  private activeJourney: string[] | null = null;
+  private journeyIdx: number = 0;
   private nextCatalogSongId?: string;
   private catalogPrefetching: boolean = false;
   private catalogSongActive: boolean = false;
@@ -2946,6 +2949,7 @@ export class ClientGrooveboxConductor {
       const gp = (await res.json()) as GlobalPatternsManifest;
       if (!gp || !gp.bar_transitions) return false;
       this.globalPatterns = gp;
+      this.pickJourney("INTRO");
       console.info(`[Client ML] Global patterns ready: ${gp.total_bars} bars, ${Object.keys(gp.bar_transitions.drums || {}).length} drum bar states.`);
       return true;
     } catch {
@@ -2991,6 +2995,32 @@ export class ClientGrooveboxConductor {
       if (t.sig === key) return t.pmi;
     }
     return 0;
+  }
+
+  /** Pick a full-song section journey weighted by mined counts, preferring arcs
+   * that start at `from` so transitions sound intentional. */
+  private pickJourney(from: string | null): void {
+    const arcs = this.globalPatterns?.section_arcs?.arcs;
+    if (!arcs || arcs.length === 0) {
+      this.activeJourney = null;
+      this.journeyIdx = 0;
+      return;
+    }
+    const matches = from ? arcs.filter((a) => a.sections[0] === from) : [];
+    const pool = matches.length > 0 ? matches : arcs;
+    let total = 0;
+    for (const a of pool) total += a.count;
+    let r = Math.random() * total;
+    let picked = pool[0];
+    for (const a of pool) {
+      r -= a.count;
+      if (r <= 0) {
+        picked = a;
+        break;
+      }
+    }
+    this.activeJourney = [...picked.sections];
+    this.journeyIdx = 0;
   }
 
   /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
@@ -5837,6 +5867,27 @@ export class ClientGrooveboxConductor {
   }
 
   private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
+    // Journey follow: mined full-song arcs override Markov section hops so the
+    // song travels INTRO->...->DROP like real arrangements instead of wandering.
+    // Seeded lazily (arranger's own pick stands as journey head); overrides
+    // begin at the *next* change, and any drift reseeds from the live section.
+    if (isSectionChange && !this.activePhraseBlock && !this.catalogSongActive
+      && (this.playbackMode === "jukebox" || this.playbackMode === "slices")) {
+      const cur = this.arranger.getSection();
+      if (!this.activeJourney || this.journeyIdx >= this.activeJourney.length) {
+        this.pickJourney(cur);
+        this.journeyIdx = 0;
+      } else if (this.activeJourney[this.journeyIdx] !== cur) {
+        this.pickJourney(cur);
+        this.journeyIdx = 0;
+      } else if (this.journeyIdx + 1 < this.activeJourney.length) {
+        this.journeyIdx++;
+        this.arranger.setSection(this.activeJourney[this.journeyIdx]);
+      } else {
+        this.pickJourney(cur);
+        this.journeyIdx = 0;
+      }
+    }
     const sec = this.arranger.getSection();
     const isNewPhrase = (phraseBar === 0);
     const isTurnaround = (phraseBar === 7);
@@ -5907,7 +5958,28 @@ export class ClientGrooveboxConductor {
       const gpUsable = gp && !hasBarSequence && !this.catalogSongActive && !this.activePhraseBlock
         && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
       if (gpUsable && this.globalBarHeld[stem] >= 4) {
-        const tokens = this.sampleGlobalBar(stem, this.globalBarSig[stem]);
+        // Joint-biased draw: sample up to 3 candidates, keep the one whose
+        // 4-stem combination actually co-occurred in training (PMI>0 wins;
+        // all-unseen falls back to the first draw). Fixes "stems fight".
+        let tokens: Array<string | null> = [];
+        let bestPmi = -Infinity;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const cand = this.sampleGlobalBar(stem, this.globalBarSig[stem]);
+          if (cand.length !== 16) continue;
+          const candSig = cand.map((t) => t || ".").join("-");
+          const combo: Record<StemName, string> = {
+            drums: stem === "drums" ? candSig : (this.globalBarSig.drums || "."),
+            bass: stem === "bass" ? candSig : (this.globalBarSig.bass || "."),
+            other: stem === "other" ? candSig : (this.globalBarSig.other || "."),
+            vocals: stem === "vocals" ? candSig : (this.globalBarSig.vocals || "."),
+          };
+          const pmi = this.jointPmiFor(combo);
+          if (tokens.length === 0 || pmi > bestPmi) {
+            tokens = cand;
+            bestPmi = pmi;
+          }
+          if (pmi > 0) break; // heard together in training — take it
+        }
         if (tokens.length === 16) {
           const onset: number[] = [];
           const vels = new Array(16).fill(0.0);
