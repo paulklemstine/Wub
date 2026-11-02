@@ -241,6 +241,39 @@ export interface CuratedSongKit {
 // Semitone pitch constants: 0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B
 export const ROOT_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
+// Global reusable slice vocabulary (two-stage compression: per-song medoids -> global KMeans).
+// Stored static at data/global_vocabulary.json, audio at data/slices/g_{stem}_*.opus.
+// Playback pitch-shifts live with playbackRate=2^(shift/12), |shift|<=6.
+export interface GlobalVocabItem {
+  id: string;
+  stem: string;
+  category: string;
+  pitch: number;
+  duration: number;
+  clarity: number;
+  centroid: number;
+  track_id: string;
+  segment_id: string;
+  start: number;
+  url: string;
+}
+
+export interface GlobalVocabularyManifest {
+  version: number;
+  budget: Record<string, number>;
+  total: number;
+  vocab_by_stem: Record<string, GlobalVocabItem[]>;
+}
+
+export interface GlobalPatternsManifest {
+  version: number;
+  total_bars: number;
+  tracks: number;
+  bar_prototypes: Record<string, Array<{ signature: string; count: number; tokens: Array<string | null> }>>;
+  bar_transitions: Record<string, Record<string, Record<string, number>>>;
+  slice_bigrams: Record<string, Record<string, Record<string, number>>>;
+}
+
 // -----------------------------------------------------------------------------
 // 4 Map-Territory Quadrants & Sound Territories
 // -----------------------------------------------------------------------------
@@ -2521,6 +2554,10 @@ export class ClientGrooveboxConductor {
   private loadedCatalogShards: Set<number> = new Set();
   private catalogShardLoads: Map<number, Promise<boolean>> = new Map();
   private catalogVocabLoaded: Set<string> = new Set();
+  // Global reusable slice vocabulary (data/global_vocabulary.json). Lazy audio decode.
+  private globalVocab: GlobalVocabularyManifest | null = null;
+  private globalVocabById: Map<string, GlobalVocabItem> = new Map();
+  private globalPatterns: GlobalPatternsManifest | null = null;
   private nextCatalogSongId?: string;
   private catalogPrefetching: boolean = false;
   private catalogSongActive: boolean = false;
@@ -2750,8 +2787,12 @@ export class ClientGrooveboxConductor {
         }
         // Initialize default active patterns with the nearest real patterns from the authentic manifest
         this.initDefaultPatterns();
+        // 0. Global reusable vocab (new two-stage compression). Merges into manifest.slices.
+        await this.loadGlobalVocabulary(basePath);
+        void this.loadGlobalPatterns(basePath);
         // 1. Await priority 4-part cohesive song chains FIRST before queuing hundreds of slice/loop HTTP fetches!
         // This guarantees complete 4-part (16-bar) songs are in memory immediately when Play is clicked.
+        // (phrase_blocks empty since static room reclaimed for global vocab; no-op.)
         await this.preloadPhraseBlocks(basePath, true);
         // 2. Background load remaining song chains, slice vocabulary, and 1-bar loops without starving phrase playback
         void (async () => {
@@ -2803,6 +2844,132 @@ export class ClientGrooveboxConductor {
     } catch {
       // Catalog is optional; core bundle still plays
     }
+  }
+
+  /** Loads the global reusable slice vocabulary (data/global_vocabulary.json).
+   * Merges entries into manifest.slices so existing preload + synthesis paths reuse them,
+   * and registers global IDs in sliceById metadata for hierarchical (bar + tatum) generation. */
+  public async loadGlobalVocabulary(basePath: string = "data"): Promise<boolean> {
+    try {
+      const res = await fetch(`${basePath}/global_vocabulary.json`);
+      if (!res.ok) return false;
+      const gv = (await res.json()) as GlobalVocabularyManifest;
+      if (!gv || !gv.vocab_by_stem) return false;
+      this.globalVocab = gv;
+      this.globalVocabById.clear();
+      for (const [stem, list] of Object.entries(gv.vocab_by_stem)) {
+        for (const vs of list || []) {
+          this.globalVocabById.set(vs.id, vs as GlobalVocabItem);
+        }
+      }
+      // Merge into manifest.slices grouped by short category for existing preload path
+      if (this.manifest) {
+        if (!this.manifest.slices) this.manifest.slices = {} as StandaloneManifest["slices"];
+        for (const stem of Object.keys(gv.vocab_by_stem) as StemName[]) {
+          const byCat: Record<string, typeof gv.vocab_by_stem[string]> = {};
+          for (const vs of gv.vocab_by_stem[stem] || []) {
+            const cat = (vs.category || stem).split(":").pop() || "default";
+            (byCat[cat] = byCat[cat] || []).push(vs);
+          }
+          const target = this.manifest.slices[stem] || (this.manifest.slices[stem] = {});
+          for (const [cat, arr] of Object.entries(byCat)) {
+            const existing = new Set((target[cat] || []).map((x) => x.name));
+            const merged = [...(target[cat] || [])];
+            for (const vs of arr) {
+              const item = {
+                name: vs.id,
+                url: vs.url || `data/slices/${vs.id}.opus`,
+                pitch: vs.pitch,
+                centroid: vs.centroid,
+                duration: vs.duration,
+                loudness: 0.9,
+                track_id: vs.track_id,
+                trackTitle: vs.track_id,
+                segment_id: vs.segment_id,
+                start: vs.start,
+              };
+              if (!existing.has(vs.id)) merged.push(item);
+            }
+            // Highest clarity first so preloadAudioSlices (cap 128/cat) keeps the best
+            merged.sort((a, b) => (b as { clarity?: number }).clarity as number - ((a as { clarity?: number }).clarity as number || 0));
+            target[cat] = merged as typeof target[string];
+          }
+        }
+      }
+      console.info(`[Client ML] Global vocab ready: ${gv.total} reusable slices.`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Nearest global slice for a stem + pitch-shift in semitones (-6..6). Live transposition. */
+  public pickGlobalSlice(stem: StemName, targetPitch: number): { item: GlobalVocabItem; shift: number } | null {
+    const list = this.globalVocab?.vocab_by_stem?.[stem];
+    if (!list || list.length === 0) return null;
+    // Lightweight: sample up to 400 candidates for speed, prefer same-category proximity by pitch
+    let best: GlobalVocabItem | null = null;
+    let bestDist = Infinity;
+    const n = list.length;
+    const stride = Math.max(1, Math.floor(n / 400));
+    for (let i = 0; i < n; i += stride) {
+      const vs = list[i];
+      let d = Math.abs(vs.pitch - targetPitch);
+      if (d > 6) d = 12 - d;
+      const score = d - (vs.clarity || 0) * 0.5;
+      if (score < bestDist) {
+        bestDist = score;
+        best = vs;
+      }
+    }
+    if (!best) return null;
+    let shift = (targetPitch - best.pitch) % 12;
+    if (shift > 6) shift -= 12;
+    if (shift < -6) shift += 6;
+    return { item: best, shift };
+  }
+
+  /** Loads hierarchical global patterns (data/global_patterns.json): bar planner + tatum bigrams. */
+  public async loadGlobalPatterns(basePath: string = "data"): Promise<boolean> {
+    try {
+      const res = await fetch(`${basePath}/global_patterns.json`);
+      if (!res.ok) return false;
+      const gp = (await res.json()) as GlobalPatternsManifest;
+      if (!gp || !gp.bar_transitions) return false;
+      this.globalPatterns = gp;
+      console.info(`[Client ML] Global patterns ready: ${gp.total_bars} bars, ${Object.keys(gp.bar_transitions.drums || {}).length} drum bar states.`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
+   * Returns 16-step global slice IDs for a stem given previous bar signature. */
+  public sampleGlobalBar(stem: StemName, prevSig: string | null): Array<string | null> {
+    const gp = this.globalPatterns;
+    if (!gp) return [];
+    const protos = gp.bar_prototypes?.[stem] || [];
+    if (!prevSig) {
+      const top = protos[0];
+      return top ? [...top.tokens] : [];
+    }
+    const nexts = gp.bar_transitions?.[stem]?.[prevSig];
+    if (nexts) {
+      let r = Math.random();
+      const entries = Object.entries(nexts);
+      for (const [sig, p] of entries) {
+        r -= p as number;
+        if (r <= 0) {
+          const found = protos.find((x) => x.signature === sig);
+          if (found) return [...found.tokens];
+          return sig.split("-").map((t) => (t === "." ? null : t));
+        }
+      }
+    }
+    // Fallback: most reusable prototype (max compression = max reuse)
+    const top = protos[0];
+    return top ? [...top.tokens] : [];
   }
 
   private loadCatalogShard(shard: number): Promise<boolean> {
