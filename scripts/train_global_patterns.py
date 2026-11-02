@@ -37,6 +37,14 @@ def main() -> None:
     slice_bigram: dict = {s: defaultdict(Counter) for s in ("drums", "bass", "other", "vocals")}
     prev_bar_sig: dict = {s: None for s in ("drums", "bass", "other", "vocals")}
     total_bars = 0
+    section_seqs: list = []  # per-track List[SectionSpan] for full-arc mining
+    try:
+        from wub_core.section_arcs import bar_features as _bar_features
+        from wub_core.section_arcs import segment_sections as _segment_sections
+    except Exception:
+        _bar_features = None  # type: ignore[assignment]
+        _segment_sections = None  # type: ignore[assignment]
+    all_bars_tracks: list = []
 
     for jf in files:
         try:
@@ -53,6 +61,7 @@ def main() -> None:
         for stem in ("drums", "bass", "other", "vocals"):
             for vs in vocab.vocab_by_stem.get(stem, []):
                 pass
+        all_bars_tracks.append(list(bars))
         for bar in bars:
             total_bars += 1
             for stem in ("drums", "bass", "other", "vocals"):
@@ -71,6 +80,17 @@ def main() -> None:
         # Reset bar continuity across tracks
         for stem in ("drums", "bass", "other", "vocals"):
             prev_bar_sig[stem] = None
+
+        # Real section detection from the same raw analysis (never breaks
+        # training: one bad track is skipped, never the whole corpus).
+        if _bar_features is not None and _segment_sections is not None:
+            try:
+                _feats = _bar_features(segs, tatums)
+                _spans = _segment_sections(_feats)
+                if _spans:
+                    section_seqs.append(_spans)
+            except Exception:
+                pass
 
     # Top 300 bars per stem by reuse
     prototypes: dict = {}
@@ -98,6 +118,26 @@ def main() -> None:
         "bar_transitions": {s: norm(bar_trans[s]) for s in bar_trans},
         "slice_bigrams": {s: norm(slice_bigram[s]) for s in slice_bigram},
     }
+    # Additive section-arc model (top 50 full-song arcs + durations).
+    # Existing keys above are untouched.
+    try:
+        from wub_core.section_arcs import mine_arcs as _mine_arcs
+        out["section_arcs"] = _mine_arcs(section_seqs).to_dict()
+    except Exception as e:
+        print(f"  section_arcs skipped: {e}", flush=True)
+    # Hierarchical joint stem-cohesion on GLOBAL vocab IDs (keeps existing keys).
+    try:
+        from wub_core.global_joint_cohesion import mine_call_response, mine_joint_tuples
+
+        joint = mine_joint_tuples(all_bars_tracks, top_n=2000)
+        out["joint_tuples"] = [
+            {"sig": e["sig"], "count": e["count"], "pmi": e["pmi"]} for e in joint
+        ]
+        out["call_response"] = mine_call_response(all_bars_tracks, max_next=8)
+    except Exception as exc:  # never break legacy training on mining failure
+        print(f"  [warn] joint cohesion mining skipped: {exc}", flush=True)
+        out.setdefault("joint_tuples", [])
+        out.setdefault("call_response", {})
     Path("data/global_patterns.json").write_text(json.dumps(out, separators=(",", ":")))
     Path("frontend/public/data/global_patterns.json").write_text(json.dumps(out, separators=(",", ":")))
     print(f"Trained global patterns: {total_bars} bars across {len(files)} tracks", flush=True)

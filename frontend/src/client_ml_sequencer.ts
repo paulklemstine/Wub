@@ -272,6 +272,12 @@ export interface GlobalPatternsManifest {
   bar_prototypes: Record<string, Array<{ signature: string; count: number; tokens: Array<string | null> }>>;
   bar_transitions: Record<string, Record<string, Record<string, number>>>;
   slice_bigrams: Record<string, Record<string, Record<string, number>>>;
+  joint_tuples?: Array<{ sig: string; count: number; pmi: number }>;
+  call_response?: Record<string, Record<string, Record<string, number>>>;
+  section_arcs?: {
+    arcs: Array<{ sections: string[]; count: number }>;
+    durations: Record<string, { mean: number; std: number; count: number }>;
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -2947,6 +2953,46 @@ export class ClientGrooveboxConductor {
     }
   }
 
+  /** Groove pocket: per-step microtiming nudge in ms (ported from wub_core/fill_pocket_spec.py).
+   * Kick pushes (-2), snare sits back (+4), hats swing late on off-16ths (+8), bass lays back (+6). Bounded ±15ms. */
+  public pocketNudge(stem: StemName | string, step: number): number {
+    const s = ((step % 16) + 16) % 16;
+    const key = String(stem).toLowerCase();
+    const clamp = (v: number): number => Math.max(-15, Math.min(15, v));
+    const off16 = (s % 2 === 1) || (s % 4 === 2);
+    if (key === "kick") return clamp(-2);
+    if (key === "snare") return clamp(4);
+    if (key === "hat" || key === "hats" || key === "hat_closed" || key === "hat_open") return clamp(off16 ? 8 : 0);
+    if (key === "bass") return clamp(6);
+    if (key === "drums") {
+      if (s === 0 || s === 8) return clamp(-2);
+      if (s === 4 || s === 12) return clamp(4);
+      if (s === 2 || s === 6 || s === 10 || s === 14 || s % 2 === 1) return clamp(8);
+      return 0;
+    }
+    return 0;
+  }
+
+  /** Deterministic ±8% velocity humanize from hashed (bar, step) — A/B safe. */
+  public humanizeVelocity(velocity: number, bar: number, step: number): number {
+    const h = (((bar * 16 + step) * 2654435761) % 1000) / 1000 * 2 - 1;
+    return Math.max(0, Math.min(1.5, velocity * (1 + 0.08 * h)));
+  }
+
+  /** Joint-tuple PMI lookup: how strongly these 4 stem bars co-occurred in training.
+   * sig order: drums|bass|other|vocals (per-stem bar signatures joined). Unseen => 0. */
+  private jointPmiFor(barSigs: Record<StemName, string>): number {
+    const gp = this.globalPatterns;
+    const tuples = gp?.joint_tuples;
+    if (!tuples || tuples.length === 0) return 0;
+    const key = (["drums", "bass", "other", "vocals"] as StemName[]).map((s) => barSigs[s] || ".").join("|");
+    // Linear scan is fine: top-2000 list, checked once per bar, not per tatum.
+    for (const t of tuples) {
+      if (t.sig === key) return t.pmi;
+    }
+    return 0;
+  }
+
   /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
    * Returns 16-step global slice IDs for a stem given previous bar signature. */
   public sampleGlobalBar(stem: StemName, prevSig: string | null): Array<string | null> {
@@ -5015,8 +5061,9 @@ export class ClientGrooveboxConductor {
           rate: 1.0,
           duration: dSpan > 1 ? dSpan * tatumSec + 0.012 : undefined,
           fadeMs: 2.0,
-          gain: dVel,
+          gain: this.humanizeVelocity(dVel, phraseBar, step % 16),
           voiceKey: dCat,
+          whenOffsetMs: this.pocketNudge("drums", step % 16),
         });
         if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
           this.applySidechainDucking(when);
@@ -5286,8 +5333,9 @@ export class ClientGrooveboxConductor {
             rate: subSlice.rate,
             duration: Math.min(subSlice.buffer.duration / (subSlice.rate || 1.0), spanDurSec),
             fadeMs: 14,
-            gain: vel,
+            gain: this.humanizeVelocity(vel, phraseBar, step % 16),
             voiceKey: "bass",
+            whenOffsetMs: this.pocketNudge("bass", step % 16),
           });
         } else {
           const noteHz = 440 * Math.pow(2, (targetPitch - 9 - 24) / 12);

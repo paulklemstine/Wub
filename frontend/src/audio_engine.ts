@@ -33,7 +33,8 @@ export interface SliceScheduleOptions {
   gain?: number;
   /** Dedicated voice track key (e.g. "drums:kick", "drums:snare", "drums:hat_closed", "drums:hat_open", "bass"). */
   voiceKey?: string;
-  /** Voice keys to choke (fade out over crossfadeSec). E.g. ["drums:hat_open"] choked by hat_closed. */
+  /** Microtiming nudge in ms (+ = late/laid-back). Bounded ±15ms by scheduler. */
+  whenOffsetMs?: number;  /** Voice keys to choke (fade out over crossfadeSec). E.g. ["drums:hat_open"] choked by hat_closed. */
   chokeKeys?: string[];
 }
 
@@ -347,7 +348,7 @@ export class AudioEngine {
     const requestedFadeMs =
       typeof opts.fadeMs === "number" && Number.isFinite(opts.fadeMs) ? Math.max(0, opts.fadeMs) : DEFAULT_FADE_MS;
 
-    const startAt = Math.max(when, ctx.currentTime + 0.005);
+    const startAt = Math.max(when + (typeof opts.whenOffsetMs === "number" && Number.isFinite(opts.whenOffsetMs) ? Math.max(-15, Math.min(15, opts.whenOffsetMs)) / 1000 : 0), ctx.currentTime + 0.005);
     const naturalDurSec = buffer.duration / rate;
     const durSec =
       typeof opts.duration === "number" && Number.isFinite(opts.duration) && opts.duration > 0 && opts.duration < naturalDurSec
