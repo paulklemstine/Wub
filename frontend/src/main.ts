@@ -292,6 +292,18 @@ class WubApp {
     // Initialize Autonomous In-Browser ML Sequencer
     try {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
+      // Play-path diagnostics: __wubStats() in the console shows which brain
+      // drove each bar (global planner vs legacy patterns vs studio loops).
+      try {
+        (window as any).__wubStats = () => {
+          const c = this.clientConductor as any;
+          return c?.playStats
+            ? { ...c.playStats, section: c.arranger?.getSection?.() }
+            : { error: "engine not ready" };
+        };
+      } catch {
+        // Non-browser context; skip
+      }
       // A/B evaluation flags (?joint=0&harm=0): compare next-gen joint
       // composition + harmonic fit against the legacy independent engine.
       try {

@@ -2571,9 +2571,11 @@ export class ClientGrooveboxConductor {
   private globalVocab: GlobalVocabularyManifest | null = null;
   private globalVocabById: Map<string, GlobalVocabItem> = new Map();
   private globalPatterns: GlobalPatternsManifest | null = null;
+  // Play-path stats: proves which brain is actually driving the speakers.
+  public playStats = { globalBars: 0, legacyBars: 0, loopBars: 0 };
   // Global-bar planner state: hold each bar 4 bars for long-phrase feel
   private globalBarSig: Record<StemName, string | null> = { drums: null, bass: null, other: null, vocals: null };
-  private globalBarHeld: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
+  private globalBarHeld: Record<StemName, number> = { drums: 4, bass: 4, other: 4, vocals: 4 };
   // Section journey state: follow mined full-song arcs instead of Markov hops
   private activeJourney: string[] | null = null;
   private journeyIdx: number = 0;
@@ -3112,7 +3114,10 @@ export class ClientGrooveboxConductor {
   public sampleGlobalBar(stem: StemName, prevSig: string | null): Array<string | null> {
     const gp = this.globalPatterns;
     if (!gp) return [];
-    const protos = gp.bar_prototypes?.[stem] || [];
+    // Never plan silence: empty bars (mix-only tracks, gaps) teach nothing and
+    // would hold the kit mute for 4 bars. Densest first keeps the groove alive.
+    const protos = (gp.bar_prototypes?.[stem] || []).filter((p) => p.tokens.some((t) => t));
+    if (protos.length === 0) return [];
     if (!prevSig) {
       const top = protos[0];
       return top ? [...top.tokens] : [];
@@ -6052,7 +6057,13 @@ export class ClientGrooveboxConductor {
         this.globalBarHeld[stem] = 4; // force resample on section change
       }
       const gp = this.globalPatterns;
-      const gpUsable = gp && this.abVariant !== "old" && !hasBarSequence && !this.catalogSongActive && !this.activePhraseBlock
+      // Global planner drives jukebox/slices whenever its data is loaded —
+      // per-song bar sequences stay available to catalog mode (which sets
+      // catalogSongActive) and to the A/B "old" control. Requiring
+      // !hasBarSequence here previously starved the planner (song models
+      // almost always carry sequences), so none of the joint/call-response
+      // machinery ever executed.
+      const gpUsable = gp && this.abVariant !== "old" && !this.catalogSongActive && !this.activePhraseBlock
         && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
       if (gpUsable && this.globalBarHeld[stem] >= 4) {
         // Joint-biased draw: sample up to 3 candidates, keep the one whose
@@ -6104,6 +6115,7 @@ export class ClientGrooveboxConductor {
             this.globalBarSig[stem] = sig;
             this.globalBarHeld[stem] = 1;
             this.activeLoops[stem] = undefined;
+            this.playStats.globalBars++;
             this.activePatterns[stem] = {
               id: `global_${stem}_${sig.slice(0, 12)}`,
               name: `Global ${stem} [${sec}]`,
@@ -6160,11 +6172,13 @@ export class ClientGrooveboxConductor {
             length: 16,
             key: loopMatch.loop.meta.key,
           };
+          this.playStats.loopBars++;
           continue;
         }
       }
 
       this.activeLoops[stem] = undefined;
+      this.playStats.legacyBars++;
       const currPat = this.activePatterns[stem];
       const currG = currPat?.groove_type || "four_on_floor_hats";
 

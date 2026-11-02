@@ -61,10 +61,23 @@ def main() -> None:
         for stem in ("drums", "bass", "other", "vocals"):
             for vs in vocab.vocab_by_stem.get(stem, []):
                 pass
-        all_bars_tracks.append(list(bars))
+        # Only stems actually present in the recording teach arrangement:
+        # mix-only tracks carry no drum/bass/vocal signal, and their empty bars
+        # would otherwise dominate prototypes (86% silence) and mute the kit.
+        stems_avail = set(raw.get("stems_available") or [])
+        use_stem = {s: (not stems_avail or s in stems_avail or s == "other") for s in ("drums", "bass", "other", "vocals")}
+        # Joint mining only on full 4-stem bars (real pocket, never silence combos).
         for bar in bars:
-            total_bars += 1
+            if all(any(bar[s]) for s in ("drums", "bass", "other", "vocals")):
+                all_bars_tracks.append({s: list(bar[s]) for s in ("drums", "bass", "other", "vocals")})
+        for bar in bars:
+            recorded = False
             for stem in ("drums", "bass", "other", "vocals"):
+                if not use_stem[stem]:
+                    continue
+                if not any(bar[stem]):
+                    continue  # silence teaches nothing; never plan an empty bar
+                recorded = True
                 sig = "-".join([g if g else "." for g in bar[stem]])
                 bar_counter[(stem, sig)] += 1
                 if (stem, sig) not in bar_by_sig:
@@ -77,6 +90,8 @@ def main() -> None:
                 seq = [g for g in bar[stem] if g]
                 for a, b in zip(seq, seq[1:]):
                     slice_bigram[stem][a][b] += 1
+            if recorded:
+                total_bars += 1
         # Reset bar continuity across tracks
         for stem in ("drums", "bass", "other", "vocals"):
             prev_bar_sig[stem] = None
