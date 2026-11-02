@@ -59,6 +59,7 @@ export interface SliceManifestItem {
   vowel?: string;
   track_title?: string;
   loudness?: number;
+  loudDb?: number; // analysis loud_max in dB (preferred over 0..1 loudness placeholder)
   track_id: string;
   segment_id: string;
   start?: number;
@@ -70,6 +71,7 @@ export interface SliceAsset {
   centroid: number;
   duration: number;
   loudness: number;
+  loudDb?: number; // analysis loud_max in dB; -14 = neutral (see loudnessNormalizeGain)
   name: string;
   vowel?: string;
   trackTitle?: string;
@@ -255,6 +257,7 @@ export interface GlobalVocabItem {
   track_id: string;
   segment_id: string;
   start: number;
+  loud_max?: number; // analysis loud_max in dB for loudness normalization
   url: string;
 }
 
@@ -2319,9 +2322,13 @@ export class ClientSongArranger {
     }
   }
 
-  public setSection(section: string): void {
+  public setSection(section: string, durationBars?: number): void {
     this.currentSection = section;
     this.barInSection = 0;
+    if (typeof durationBars === "number" && Number.isFinite(durationBars)) {
+      this.sectionDuration = Math.max(4, Math.min(32, Math.round(durationBars)));
+      return;
+    }
     if (section === "GROOVE_A" || section === "DROP") {
       this.sectionDuration = 16;
     } else if (section === "INTRO" || section === "BREAKDOWN") {
@@ -2895,6 +2902,7 @@ export class ClientGrooveboxConductor {
                 centroid: vs.centroid,
                 duration: vs.duration,
                 loudness: 0.9,
+                loudDb: typeof vs.loud_max === "number" ? vs.loud_max : -14,
                 track_id: vs.track_id,
                 trackTitle: vs.track_id,
                 segment_id: vs.segment_id,
@@ -2960,6 +2968,7 @@ export class ClientGrooveboxConductor {
   /** Groove pocket: per-step microtiming nudge in ms (ported from wub_core/fill_pocket_spec.py).
    * Kick pushes (-2), snare sits back (+4), hats swing late on off-16ths (+8), bass lays back (+6). Bounded ±15ms. */
   public pocketNudge(stem: StemName | string, step: number): number {
+    if (this.abVariant === "old") return 0; // A/B control: no microtiming
     const s = ((step % 16) + 16) % 16;
     const key = String(stem).toLowerCase();
     const clamp = (v: number): number => Math.max(-15, Math.min(15, v));
@@ -2981,6 +2990,23 @@ export class ClientGrooveboxConductor {
   public humanizeVelocity(velocity: number, bar: number, step: number): number {
     const h = (((bar * 16 + step) * 2654435761) % 1000) / 1000 * 2 - 1;
     return Math.max(0, Math.min(1.5, velocity * (1 + 0.08 * h)));
+  }
+
+  /** Slice loudness normalization (ported from wub_core/fill_pocket_spec.py).
+   * Mapping decision: uses analysis loud_max in dB (loudDb), NOT the 0..1
+   * `loudness` placeholder (which is a constant 0.9 in our manifests).
+   * gain = 10^((target - sliceDb)/20), clamped 0.5..2. -14 dBFS = neutral. */
+  public loudnessNormalizeGain(sliceDb: number | undefined, targetDb: number = -14): number {
+    const db = typeof sliceDb === "number" && Number.isFinite(sliceDb) ? sliceDb : targetDb;
+    return Math.max(0.5, Math.min(2.0, Math.pow(10, (targetDb - db) / 20)));
+  }
+
+  /** Combined musical gain: humanized velocity × loudness normalization,
+   * clamped to the engine's 0..1.5 range. A/B control ("old") = raw velocity. */
+  public finalGain(velocity: number, bar: number, step: number, loudDb?: number): number {
+    const v = Math.max(0, Math.min(1.5, velocity));
+    if (this.abVariant === "old") return v;
+    return Math.max(0, Math.min(1.5, this.humanizeVelocity(v, bar, step) * this.loudnessNormalizeGain(loudDb)));
   }
 
   /** Joint-tuple PMI lookup: how strongly these 4 stem bars co-occurred in training.
@@ -3010,7 +3036,7 @@ export class ClientGrooveboxConductor {
     const pool = matches.length > 0 ? matches : arcs;
     let total = 0;
     for (const a of pool) total += a.count;
-    let r = Math.random() * total;
+    let r = this.rnd() * total;
     let picked = pool[0];
     for (const a of pool) {
       r -= a.count;
@@ -3023,8 +3049,66 @@ export class ClientGrooveboxConductor {
     this.journeyIdx = 0;
   }
 
+  // Blind A/B rig: variant forces old renderer (null = normal live behavior).
+  // "new" = global planner + joint + pocket + loudness norm; "old" = legacy
+  // per-song/loop path with raw velocities and no microtiming.
+  private abVariant: "new" | "old" | null = null;
+  private abSeeded: (() => number) | null = null;
+
+  public setABVariant(v: "new" | "old" | null): void {
+    this.abVariant = v;
+  }
+
+  public getABVariant(): "new" | "old" | null {
+    return this.abVariant;
+  }
+
+  /** Blind A/B helper: force the arranger onto a trial section. */
+  public abForceSection(sec: string): void {
+    this.arranger.setSection(sec);
+  }
+
+  /** Seeded RNG for A/B trials (mulberry32); null = live Math.random. */
+  public setABSeed(seed: number | null): void {
+    if (seed === null) {
+      this.abSeeded = null;
+      return;
+    }
+    let a = seed | 0;
+    this.abSeeded = () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  private rnd(): number {
+    return this.abSeeded ? this.abSeeded() : Math.random();
+  }
+
   /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
    * Returns 16-step global slice IDs for a stem given previous bar signature. */
+  // Last committed bar sigs per stem (previous bar) for call-response bias.
+  private prevBarGlobalSig: Record<StemName, string | null> = { drums: null, bass: null, other: null, vocals: null };
+
+  /** Cross-stem call-response bonus: how likely is `candSig` on `stem` as an
+   * answer to the other stems' *previous*-bar sigs (mined `other->stem` pairs). */
+  private callResponseBonus(stem: StemName, candSig: string): number {
+    const cr = this.globalPatterns?.call_response;
+    if (!cr) return 0;
+    let bonus = 0;
+    for (const o of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      if (o === stem) continue;
+      const prev = this.prevBarGlobalSig[o];
+      if (!prev) continue;
+      const p = (cr[`${o}->${stem}`] as Record<string, Record<string, number>> | undefined)?.[prev]?.[candSig];
+      if (typeof p === "number") bonus += p;
+    }
+    return bonus;
+  }
+
   public sampleGlobalBar(stem: StemName, prevSig: string | null): Array<string | null> {
     const gp = this.globalPatterns;
     if (!gp) return [];
@@ -3035,7 +3119,7 @@ export class ClientGrooveboxConductor {
     }
     const nexts = gp.bar_transitions?.[stem]?.[prevSig];
     if (nexts) {
-      let r = Math.random();
+      let r = this.rnd();
       const entries = Object.entries(nexts);
       for (const [sig, p] of entries) {
         r -= p as number;
@@ -3128,6 +3212,7 @@ export class ClientGrooveboxConductor {
             centroid: typeof vs.centroid === "number" ? vs.centroid : 1200,
             duration: buf.duration,
             loudness: 0.9,
+            loudDb: typeof vs.loud_max === "number" ? vs.loud_max : -14,
             name: vid,
             trackTitle: model.title,
             trackId,
@@ -3284,6 +3369,9 @@ export class ClientGrooveboxConductor {
                 centroid: typeof item.centroid === "number" ? item.centroid : 0,
                 duration: typeof item.duration === "number" ? item.duration : decoded.duration,
                 loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
+                loudDb: typeof (item as { loudDb?: unknown }).loudDb === "number"
+                  ? (item as { loudDb: number }).loudDb
+                  : -14,
                 name: item.name,
                 vowel: item.vowel,
                 trackTitle: item.track_title,
@@ -3334,6 +3422,9 @@ export class ClientGrooveboxConductor {
               centroid: typeof item.centroid === "number" ? item.centroid : 0,
               duration: typeof item.duration === "number" ? item.duration : decoded.duration,
               loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
+              loudDb: typeof (item as { loudDb?: unknown }).loudDb === "number"
+                ? (item as { loudDb: number }).loudDb
+                : -14,
               name: item.name,
               vowel: item.vowel,
               trackTitle: item.track_title,
@@ -5091,7 +5182,7 @@ export class ClientGrooveboxConductor {
           rate: 1.0,
           duration: dSpan > 1 ? dSpan * tatumSec + 0.012 : undefined,
           fadeMs: 2.0,
-          gain: this.humanizeVelocity(dVel, phraseBar, step % 16),
+          gain: this.finalGain(dVel, phraseBar, step % 16, vocabDrumAsset.loudDb),
           voiceKey: dCat,
           whenOffsetMs: this.pocketNudge("drums", step % 16),
         });
@@ -5363,7 +5454,7 @@ export class ClientGrooveboxConductor {
             rate: subSlice.rate,
             duration: Math.min(subSlice.buffer.duration / (subSlice.rate || 1.0), spanDurSec),
             fadeMs: 14,
-            gain: this.humanizeVelocity(vel, phraseBar, step % 16),
+            gain: this.finalGain(vel, phraseBar, step % 16, subSlice.asset?.loudDb),
             voiceKey: "bass",
             whenOffsetMs: this.pocketNudge("bass", step % 16),
           });
@@ -5411,7 +5502,7 @@ export class ClientGrooveboxConductor {
               rate: arpSlice.rate,
               duration: Math.min(arpSlice.buffer.duration / (arpSlice.rate || 1.0), otherSpanDurSec),
               fadeMs: 16,
-              gain: vel,
+              gain: this.finalGain(vel, phraseBar, step % 16, arpSlice.asset?.loudDb),
               voiceKey: "other:arp",
             });
           } else {
@@ -5443,7 +5534,7 @@ export class ClientGrooveboxConductor {
               rate: chordSlice.rate,
               duration: Math.min(chordSlice.buffer.duration / (chordSlice.rate || 1.0), otherSpanDurSec),
               fadeMs: 18,
-              gain: vel,
+              gain: this.finalGain(vel, phraseBar, step % 16, chordSlice.asset?.loudDb),
               voiceKey: isSparsePad ? "other:pad" : "other:chord",
             });
           } else {
@@ -5574,7 +5665,7 @@ export class ClientGrooveboxConductor {
             this.engine.scheduleSlice("vocals", slice.buffer, when, {
               rate: slice.rate,
               fadeMs: naturalDur >= 0.50 ? 12 : 6,
-              gain: sliceGain,
+              gain: this.finalGain(sliceGain, phraseBar, step % 16, slice.asset?.loudDb),
               voiceKey: "vocals:phrase",
             });
             // ZERO vocoloid synthesis! No playSingingVoice layer.
@@ -5882,7 +5973,10 @@ export class ClientGrooveboxConductor {
         this.journeyIdx = 0;
       } else if (this.journeyIdx + 1 < this.activeJourney.length) {
         this.journeyIdx++;
-        this.arranger.setSection(this.activeJourney[this.journeyIdx]);
+        const nextSec = this.activeJourney[this.journeyIdx];
+        // Mined duration target for this section (bars), else arranger default.
+        const durMean = this.globalPatterns?.section_arcs?.durations?.[nextSec]?.mean;
+        this.arranger.setSection(nextSec, typeof durMean === "number" ? durMean : undefined);
       } else {
         this.pickJourney(cur);
         this.journeyIdx = 0;
@@ -5927,6 +6021,9 @@ export class ClientGrooveboxConductor {
     }
     const fromSec = this.lastComposedSection;
     this.lastComposedSection = sec;
+    // Snapshot last bar's committed sigs for call-response bias (must precede
+    // the per-stem updates below, which overwrite globalBarSig in place).
+    this.prevBarGlobalSig = { ...this.globalBarSig };
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       // 1. Studio Loop Continuity: if a 1-bar loop is active for this section, keep it locked!
@@ -5955,14 +6052,14 @@ export class ClientGrooveboxConductor {
         this.globalBarHeld[stem] = 4; // force resample on section change
       }
       const gp = this.globalPatterns;
-      const gpUsable = gp && !hasBarSequence && !this.catalogSongActive && !this.activePhraseBlock
+      const gpUsable = gp && this.abVariant !== "old" && !hasBarSequence && !this.catalogSongActive && !this.activePhraseBlock
         && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
       if (gpUsable && this.globalBarHeld[stem] >= 4) {
         // Joint-biased draw: sample up to 3 candidates, keep the one whose
-        // 4-stem combination actually co-occurred in training (PMI>0 wins;
-        // all-unseen falls back to the first draw). Fixes "stems fight".
+        // 4-stem combination actually co-occurred in training (PMI wins) with
+        // call-response answers preferred as tiebreak. Fixes "stems fight".
         let tokens: Array<string | null> = [];
-        let bestPmi = -Infinity;
+        let bestScore = -Infinity;
         for (let attempt = 0; attempt < 3; attempt++) {
           const cand = this.sampleGlobalBar(stem, this.globalBarSig[stem]);
           if (cand.length !== 16) continue;
@@ -5974,11 +6071,13 @@ export class ClientGrooveboxConductor {
             vocals: stem === "vocals" ? candSig : (this.globalBarSig.vocals || "."),
           };
           const pmi = this.jointPmiFor(combo);
-          if (tokens.length === 0 || pmi > bestPmi) {
+          const cross = this.callResponseBonus(stem, candSig);
+          const score = pmi + cross * 2;
+          if (tokens.length === 0 || score > bestScore) {
             tokens = cand;
-            bestPmi = pmi;
+            bestScore = score;
           }
-          if (pmi > 0) break; // heard together in training — take it
+          if (pmi > 0 && cross > 0) break; // heard together AND answers the last bar
         }
         if (tokens.length === 16) {
           const onset: number[] = [];

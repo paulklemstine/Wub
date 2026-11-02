@@ -2147,7 +2147,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.141 <span class="mc-build-num">#141</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.142 <span class="mc-build-num">#142</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -2205,6 +2205,16 @@
             <button class="gb-cycle-btn active" data-mode="8x16" type="button" title="8 Patterns of 16 Steps (128 Tatums)">8×16</button>
             <button class="gb-cycle-btn" data-mode="8x32" type="button" title="8 Compound Patterns of 32 Steps (256 Tatums)">8×32</button>
             <button class="gb-cycle-btn" data-mode="16x32" type="button" title="16 Compound Patterns of 32 Steps (512 Tatums)">16×32</button>
+          </div>
+          <div class="gb-cycle-selector" id="ab-panel">
+            <span class="gb-cycle-label">BLIND A/B:</span>
+            <button class="gb-cycle-btn" id="btn-ab-new" type="button" title="Start a blind pair: same section, hidden old/new mapping">A/B</button>
+            <button class="gb-cycle-btn" id="btn-ab-x" type="button" title="Listen to X">X</button>
+            <button class="gb-cycle-btn" id="btn-ab-y" type="button" title="Listen to Y">Y</button>
+            <button class="gb-cycle-btn" id="btn-ab-vote-x" type="button" title="Prefer X">✓X</button>
+            <button class="gb-cycle-btn" id="btn-ab-vote-y" type="button" title="Prefer Y">✓Y</button>
+            <button class="gb-cycle-btn" id="btn-ab-skip" type="button" title="Skip this pair">SKIP</button>
+            <span id="ab-pair-label" style="color: #94a3b8;">—</span>
           </div>
           <span style="color: #94a3b8;">PATTERN: <b id="gb-bar-num" style="color: var(--neon-green); font-size: 1rem;">1</b>/<span id="gb-patterns-per-cycle">8</span></span>
           <div id="gb-bars-dots" style="display: flex; gap: 4px; align-items: center;">
@@ -2891,7 +2901,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.141 (Build #141 • rev 87ed1d9e3)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.142 (Build #142 • rev 9256572ac)</span>
     </div>
   </div>
 
