@@ -28,13 +28,25 @@ def test_token_layout_disjoint():
         seen.add(CHORD_OFF + i)
 
 
+def test_loss_mask_for_missing_stems():
+    from scripts.train_bar_arranger import loss_mask_for
+    # full band: everything trains
+    toks = [1204, 1209, 5, 306, 607, 908]
+    assert loss_mask_for(toks, ["drums", "bass", "other", "vocals"]) == [1, 1, 1, 1, 1, 1]
+    # mix-only track: missing-stem UNKs are masked out, other trains
+    toks = [1204, 1209, 300, 601, 605, 1203]
+    assert loss_mask_for(toks, ["other"]) == [1, 1, 0, 0, 1, 0]
+    # real silence inside a stemmed track still trains
+    assert loss_mask_for(toks, ["drums", "bass", "other", "vocals"]) == [1, 1, 1, 1, 1, 1]
+
+
 def test_windows_deterministic_shapes():
     seqs = [{"tokens": list(range(6 * 40))}]  # 40 bars
     w1 = windows(seqs, ctx=192, stride=48)
     w2 = windows(seqs, ctx=192, stride=48)
     assert w1 == w2 and len(w1) > 0
-    for w, ln in w1:
-        assert len(w) == 192 and 0 < ln <= 192
+    for w, ln, mk in w1:
+        assert len(w) == 192 and 0 < ln <= 192 and len(mk) == 192
 
 
 def test_model_forward_loss_finite():

@@ -168,7 +168,9 @@ def main() -> None:
         n_tracks += 1
         n_bars += len(seq) // 6
         h = int(hashlib.sha256(tid.encode()).hexdigest(), 16) % 100
-        (val if h < args.val_pct else train).append({"track_id": tid, "bars": len(seq) // 6, "tokens": seq})
+        entry = {"track_id": tid, "bars": len(seq) // 6, "tokens": seq,
+                 "stems": sorted(stems_avail) if stems_avail else ["other"]}
+        (val if h < args.val_pct else train).append(entry)
 
     Path("data/arranger_dataset.json").write_text(json.dumps({
         "version": 1, "vocab": VOCAB, "tokens_per_bar": 6,

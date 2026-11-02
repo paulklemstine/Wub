@@ -52,17 +52,46 @@ class BarGPT(nn.Module):
         return self.head(self.ln(h))
 
 
+STEMS = ("drums", "bass", "other", "vocals")
+# token positions within a bar: 0 SEC, 1 CHORD, 2 D, 3 B, 4 O, 5 V
+STEM_POS = {"drums": 2, "bass": 3, "other": 4, "vocals": 5}
+POS_UNK = {2: 300, 3: 601, 4: 902, 5: 1203}  # per-position UNK token ids
+
+
+def loss_mask_for(seq_tokens, stems):
+    """1/0 per token: 0 where a stem is missing from the recording (don't
+    teach the model to predict silence for instruments that were never
+    separated). Real silence inside stemmed tracks keeps mask 1."""
+    present = set(stems or [])
+    m = []
+    for i, t in enumerate(seq_tokens):
+        pos = i % 6
+        if pos in (0, 1):
+            m.append(1)
+            continue
+        stem = STEMS[pos - 2]
+        if stem not in present and t == POS_UNK[pos]:
+            m.append(0)
+        else:
+            m.append(1)
+    return m
+
+
 def windows(seqs, ctx=192, stride=48):
     out = []
     for s in seqs:
         t = s["tokens"]
+        mask = loss_mask_for(t, s.get("stems", STEMS))
         for i in range(0, max(1, len(t) - ctx), stride):
             w = t[i:i + ctx]
+            mw = mask[i:i + ctx]
             if len(w) < 16:
                 continue
             if len(w) < ctx:
-                w = w + [0] * (ctx - len(w))  # pad (loss masked)
-            out.append((w, min(len(t[i:i + ctx]), ctx)))
+                pad = ctx - len(w)
+                w = w + [0] * pad
+                mw = mw + [0] * pad  # pad (loss masked)
+            out.append((w, min(len(t[i:i + ctx]), ctx), mw))
     return out
 
 
@@ -75,19 +104,20 @@ def batch_iter(data, bs, shuffle=True):
         x = torch.tensor([c[0][:-1] for c in chunk], dtype=torch.long)
         y = torch.tensor([c[0][1:] for c in chunk], dtype=torch.long)
         ln = torch.tensor([c[1] - 1 for c in chunk], dtype=torch.long)
-        yield x, y, ln
+        mk = torch.tensor([c[2][1:] for c in chunk], dtype=torch.float)
+        yield x, y, ln, mk
 
 
 @torch.no_grad()
 def evaluate(model, data, bs, device):
     model.eval()
     tot_loss, tot_tok = 0.0, 0
-    for x, y, ln in batch_iter(data, bs, shuffle=False):
-        x, y, ln = x.to(device), y.to(device), ln.to(device)
+    for x, y, ln, mk in batch_iter(data, bs, shuffle=False):
+        x, y, ln, mk = x.to(device), y.to(device), ln.to(device), mk.to(device)
         logits = model(x)
         loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1), reduction="none")
         loss = loss.reshape_as(y)
-        mask = (torch.arange(y.size(1), device=device)[None, :] < ln[:, None]).float()
+        mask = (torch.arange(y.size(1), device=device)[None, :] < ln[:, None]).float() * mk
         tot_loss += float((loss * mask).sum())
         tot_tok += int(mask.sum())
     return math.exp(tot_loss / max(1, tot_tok))
@@ -114,12 +144,11 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.smoke:
         vocab = 64
-        tr = [{"tokens": [random.randrange(vocab) for _ in range(192)]} for _ in range(32)]
-        va = [{"tokens": [random.randrange(vocab) for _ in range(192)]} for _ in range(8)]
+        tr = [{"tokens": [random.randrange(vocab) for _ in range(192)], "stems": list(STEMS)} for _ in range(32)]
+        va = [{"tokens": [random.randrange(vocab) for _ in range(192)], "stems": list(STEMS)} for _ in range(8)]
         model = BarGPT(vocab=vocab, d=64, layers=2, heads=2, ctx=192).to(device)
-        tr_w, va_w = tr, tr  # windows() needs dicts; reuse raw below
-        tr_w = [(s["tokens"], 192) for s in tr]
-        va_w = [(s["tokens"], 192) for s in va]
+        tr_w = windows(tr, ctx=192, stride=48)
+        va_w = windows(va, ctx=192, stride=48)
     else:
         ds = json.loads(Path(args.data).read_bytes())
         vocab = int(ds["vocab"])
@@ -137,14 +166,14 @@ def main() -> None:
     for ep in range(args.epochs if not args.smoke else 2):
         model.train()
         tot, ntok = 0.0, 0
-        for x, y, ln in batch_iter(tr_w, args.batch if not args.smoke else 8):
-            x, y, ln = x.to(device), y.to(device), ln.to(device)
+        for x, y, ln, mk in batch_iter(tr_w, args.batch if not args.smoke else 8):
+            x, y, ln, mk = x.to(device), y.to(device), ln.to(device), mk.to(device)
             opt.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=(device == "cuda")):
                 logits = model(x)
                 loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1), reduction="none")
                 loss = loss.reshape_as(y)
-                mask = (torch.arange(y.size(1), device=device)[None, :] < ln[:, None]).float()
+                mask = (torch.arange(y.size(1), device=device)[None, :] < ln[:, None]).float() * mk
                 loss = (loss * mask).sum() / mask.sum().clamp_min(1)
             scaler.scale(loss).backward()
             scaler.unscale_(opt)
