@@ -135,6 +135,8 @@ def main() -> None:
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--ckpt", default="data/arranger_gpt.pt", help="where to save best weights")
+    ap.add_argument("--log", default="data/arranger_train_log.json", help="where to save training history")
     ap.add_argument("--smoke", action="store_true", help="tiny synthetic run for CI")
     args = ap.parse_args()
     random.seed(args.seed)
@@ -190,13 +192,14 @@ def main() -> None:
         print(f"epoch {ep}: train_ppl={tppl:.2f} val_ppl={vppl:.2f}", flush=True)
         if vppl < best:
             best = vppl
+            ckpt_path = args.ckpt if not args.smoke else "/tmp/arranger_gpt_smoke.pt"
             torch.save({"model": model.state_dict(),
                         "cfg": {"vocab": model.tok.num_embeddings, "d": model.tok.embedding_dim,
                                 "layers": len(model.tr.layers), "heads": model.tr.layers[0].self_attn.num_heads,
-                                "ctx": model.ctx}}, "data/arranger_gpt.pt" if not args.smoke else "/tmp/arranger_gpt_smoke.pt")
+                                "ctx": model.ctx}}, ckpt_path)
     if not args.smoke:
-        Path("data/arranger_train_log.json").write_text(json.dumps({"best_val_ppl": round(best, 3), "history": hist}))
-        print(f"best val_ppl={best:.2f} -> data/arranger_gpt.pt", flush=True)
+        Path(args.log).write_text(json.dumps({"best_val_ppl": round(best, 3), "history": hist}))
+        print(f"best val_ppl={best:.2f} -> {args.ckpt}", flush=True)
 
 
 if __name__ == "__main__":

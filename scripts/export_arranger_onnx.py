@@ -18,6 +18,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default="data/arranger_gpt.pt")
     ap.add_argument("--out", default="frontend/public/data/arranger_gpt.onnx")
+    ap.add_argument("--meta-out", default="frontend/public/data/arranger_gpt.json")
+    ap.add_argument("--tokens-per-bar", type=int, default=6)
     ap.add_argument("--opset", type=int, default=17)
     ap.add_argument("--no-int8", action="store_true")
     args = ap.parse_args()
@@ -61,11 +63,10 @@ def main() -> None:
         quantize_dynamic(str(out_path), str(q_path), weight_type=QuantType.QInt8)
         print(f"int8: {q_path.stat().st_size/1024:.0f}KB (fp32 {out_path.stat().st_size/1024:.0f}KB)", flush=True)
 
-    Path("frontend/public/data/arranger_gpt.json").write_text(json.dumps({
+    Path(args.meta_out).write_text(json.dumps({
         "version": 1, "vocab": cfg["vocab"], "ctx": cfg["ctx"],
-        "tokens_per_bar": 6, "model": Path(args.out).name,
+        "tokens_per_bar": args.tokens_per_bar, "model": Path(args.out).name,
         "model_int8": Path(args.out).stem + "_int8.onnx",
-        "val_ppl": ckpt.get("val_ppl"),
     }, separators=(",", ":")))
     print("export ok:", out_path, flush=True)
 

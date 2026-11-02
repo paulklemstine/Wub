@@ -2812,10 +2812,12 @@ export class ClientGrooveboxConductor {
         await this.loadGlobalVocabulary(basePath);
         void this.loadGlobalPatterns(basePath);
         // Bar-arranger GPT (ONNX worker): whole-bar plans from arrangement history.
+        // Tatum filler (second ONNX worker): 16-step VQ fills per planned bar.
         try {
           this.ensureArrangerModel(basePath);
+          this.ensureTatumModel(basePath);
         } catch {
-          // Worker unsupported; Markov planner covers generation.
+          // Workers unsupported; Markov planner covers generation.
         }
         // 1. Await priority 4-part cohesive song chains FIRST before queuing hundreds of slice/loop HTTP fetches!
         // This guarantees complete 4-part (16-bar) songs are in memory immediately when Play is clicked.
@@ -3112,14 +3114,15 @@ export class ClientGrooveboxConductor {
     try {
       const w = new Worker(new URL("./arranger_worker.ts", import.meta.url), { type: "module" });
       w.onmessage = (ev: MessageEvent) => {
-        const msg = ev.data as { type?: string; bars?: number[][]; message?: string };
+        const msg = ev.data as { type?: string; steps?: number[]; message?: string };
         if (msg.type === "ready") {
           this.arrangerReady = true;
           console.info("[Client ML] Bar-arranger GPT ready (ONNX worker).");
-        } else if (msg.type === "plan" && Array.isArray(msg.bars) && msg.bars.length > 0) {
+        } else if (msg.type === "plan" && Array.isArray(msg.steps) && msg.steps.length >= 6) {
           this.planInFlight = false;
-          this.modelPlan = this.decodePlannedBar(msg.bars[0]);
+          this.modelPlan = this.decodePlannedBar(msg.steps.slice(0, 6));
           if (!this.modelPlan) this.requestBarPlan(); // undecodable: retry with fresh draw
+          else this.requestTatumFill(); // chain: fill the planned bar's 16 steps
         } else if (msg.type === "error") {
           console.warn("[Client ML] Arranger worker error, Markov fallback:", msg.message);
           this.planInFlight = false;
@@ -3130,7 +3133,7 @@ export class ClientGrooveboxConductor {
         this.arrangerReady = false;
         this.planInFlight = false;
       };
-      w.postMessage({ type: "init", basePath });
+      w.postMessage({ type: "init", basePath, config: "arranger_gpt.json" });
       this.arrangerWorker = w;
     } catch {
       this.arrangerReady = false;
@@ -3159,7 +3162,33 @@ export class ClientGrooveboxConductor {
     if (flat.length < 6) return; // need at least one committed bar to continue from
     this.planInFlight = true;
     const seed = this.abSeeded ? Math.floor(this.abSeeded() * 1e9) : Math.floor(Math.random() * 1e9);
-    this.arrangerWorker.postMessage({ type: "plan", history: flat, nBars: 1, temp: 1.0, topK: 20, seed });
+    this.arrangerWorker.postMessage({ type: "plan", history: flat, nSteps: 6, temp: 1.0, topK: 20, seed });
+  }
+
+  // Decoded tatum fill, converted once per bar into per-stem slice ids.
+  private tatumTokens: Record<StemName, Array<string | null>> | null = null;
+
+  /** Convert the pending tatum fill into this stem's 16-step slice ids.
+   * Code -> medoid slice; HOLD extends the previous onset (null step, the
+   * downstream span builder stretches it); SIL is rest. */
+  private consumeTatumFill(stem: StemName): Array<string | null> | null {
+    if (!this.tatumFill) return this.tatumTokens?.[stem] ?? null;
+    const sil = ClientGrooveboxConductor.TATUM_SIL;
+    const order: StemName[] = ["drums", "bass", "other", "vocals"];
+    const out: Record<StemName, Array<string | null>> = {
+      drums: [], bass: [], other: [], vocals: [],
+    };
+    for (let i = 0; i < 16; i++) {
+      const step = this.tatumFill.steps[i] || [0, 0, 0, 0];
+      order.forEach((s, k) => {
+        const code = step[k];
+        const med = this.codeMedoid[s]?.[code];
+        out[s].push(med && code < sil[s] ? med : null);
+      });
+    }
+    this.tatumTokens = out;
+    this.tatumFill = null;
+    return out[stem];
   }
 
   /** Prototype rank -> 16-step tokens; null when the rank is out of range. */
@@ -3177,6 +3206,93 @@ export class ClientGrooveboxConductor {
       if (protos[i].signature === sig) return i;
     }
     return -1;
+  }
+
+  // Tatum filler (second ONNX worker): fills a planned bar's 16 steps x 4
+  // stems with VQ codes. Chained after the bar plan arrives; the bar anchor
+  // consumes the fill when present, else falls back to Markov prototypes.
+  private tatumWorker: Worker | null = null;
+  private tatumReady = false;
+  private tatumInFlight = false;
+  private tatumFill: { sec: string; steps: number[][] } | null = null;
+  private codeMedoid: Record<string, Record<number, string>> = {};
+  // Tatum VQ code layout (must match scripts/build_tatum_dataset.py):
+  // per-stem code ids 0..K-1, SIL = OFF+K, HOLD = OFF+K+1.
+  private static readonly TATUM_SIL: Record<StemName, number> = { drums: 384, bass: 642, other: 1028, vocals: 1286 };
+
+  /** Boot the tatum filler worker (lazy; Markov fallback on any failure). */
+  public ensureTatumModel(basePath: string = "data"): void {
+    if (this.tatumWorker || typeof Worker === "undefined") return;
+    try {
+      const w = new Worker(new URL("./arranger_worker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (ev: MessageEvent) => {
+        const msg = ev.data as { type?: string; steps?: number[]; message?: string };
+        if (msg.type === "ready") {
+          this.tatumReady = true;
+          console.info("[Client ML] Tatum filler ready (ONNX worker).");
+        } else if (msg.type === "plan" && Array.isArray(msg.steps) && msg.steps.length >= 64) {
+          this.tatumInFlight = false;
+          this.tatumFill = this.decodeTatumFill(msg.steps.slice(0, 64));
+          if (!this.tatumFill) this.requestTatumFill();
+        } else if (msg.type === "error") {
+          this.tatumInFlight = false;
+          this.tatumReady = false;
+        }
+      };
+      w.onerror = () => {
+        this.tatumReady = false;
+        this.tatumInFlight = false;
+      };
+      w.postMessage({ type: "init", basePath, config: "tatum_gpt.json" });
+      this.tatumWorker = w;
+    } catch {
+      this.tatumReady = false;
+    }
+    void basePath;
+    void this.loadTatumCodebook(basePath);
+  }
+
+  /** Map VQ code -> medoid global slice id per stem (for rendering). */
+  private async loadTatumCodebook(basePath: string): Promise<void> {
+    try {
+      const res = await fetch(`${basePath}/tatum_vq.json`);
+      if (!res.ok) return;
+      const vq = (await res.json()) as { stems: Record<string, { medoid_slice: string[] }> };
+      for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+        const med = vq.stems?.[stem]?.medoid_slice;
+        if (!med) continue;
+        this.codeMedoid[stem] = {};
+        med.forEach((id, code) => {
+          this.codeMedoid[stem][code] = id;
+        });
+      }
+    } catch {
+      // renderer falls back to prototype tokens
+    }
+  }
+
+  /** Decode 64 flat tatum tokens into 16 steps x [D,B,O,V]; null if unusable. */
+  private decodeTatumFill(tokens: number[]): { sec: string; steps: number[][] } | null {
+    if (!tokens || tokens.length < 64) return null;
+    const steps: number[][] = [];
+    for (let i = 0; i < 16; i++) steps.push(tokens.slice(i * 4, i * 4 + 4));
+    return { sec: this.arranger.getSection(), steps };
+  }
+
+  /** Ask the tatum worker to fill the currently planned bar (single inflight). */
+  private requestTatumFill(): void {
+    if (!this.tatumReady || !this.tatumWorker || this.tatumInFlight || this.tatumFill || !this.modelPlan) return;
+    const off = { drums: 1306, bass: 1606, other: 1906, vocals: 2206 };
+    const secIdx = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"].indexOf(this.modelPlan.sec);
+    const header = [
+      1204 + (secIdx >= 0 ? secIdx : 1),
+      1209 + ((this.modelPlan.chord % 12) + 12) % 12,
+      ...(["drums", "bass", "other", "vocals"] as StemName[]).map((s) => off[s] + this.modelPlan!.ranks[s]),
+    ];
+    if (header.some((t) => !Number.isFinite(t) || t < 0)) return;
+    this.tatumInFlight = true;
+    const seed = this.abSeeded ? Math.floor(this.abSeeded() * 1e9) : Math.floor(Math.random() * 1e9);
+    this.tatumWorker.postMessage({ type: "plan", history: header, nSteps: 64, temp: 1.0, topK: 20, seed });
   }
 
   /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
@@ -6064,6 +6180,7 @@ export class ClientGrooveboxConductor {
       for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) this.globalBarHeld[s] = 4;
     }
     for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) this.usedRankByStem[s] = -1;
+    this.tatumTokens = null; // rebuilt from the pending fill on first consuming stem
     // Journey follow: mined full-song arcs override Markov section hops so the
     // song travels INTRO->...->DROP like real arrangements instead of wandering.
     // Seeded lazily (arranger's own pick stands as journey head); overrides
@@ -6169,15 +6286,22 @@ export class ClientGrooveboxConductor {
         && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
       if (gpUsable && this.globalBarHeld[stem] >= 4) {
         // Model-planned bar (GPT): whole-arrangement prediction from history.
-        // Falls back to joint-biased Markov draws when the rank is unusable.
+        // Tatum fill (second GPT) renders the 16 steps; rank prototypes are
+        // the fallback when the fill isn't ready. Markov draws are last resort.
         let tokens: Array<string | null> = [];
         let usedRank = -1;
         if (takeModelBar && this.modelPlan) {
-          const rank = this.modelPlan.ranks[stem];
-          const ranked = this.tokensForRank(stem, rank);
-          if (ranked && ranked.length === 16 && ranked.some((t) => t)) {
-            tokens = ranked;
-            usedRank = rank;
+          const filled = this.consumeTatumFill(stem);
+          if (filled && filled.length === 16 && filled.some((t) => t)) {
+            tokens = filled;
+            usedRank = this.modelPlan.ranks[stem];
+          } else {
+            const rank = this.modelPlan.ranks[stem];
+            const ranked = this.tokensForRank(stem, rank);
+            if (ranked && ranked.length === 16 && ranked.some((t) => t)) {
+              tokens = ranked;
+              usedRank = rank;
+            }
           }
         }
         if (tokens.length === 0) {
