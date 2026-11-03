@@ -737,6 +737,9 @@ class WubApp {
       seed: this.abSeed,
       section: this.abSection,
       mapping: this.abMapping,
+      // Played bars per variant (6-token bar-GPT ids) so votes become
+      // (context, winner, loser) triples for preference fine-tuning.
+      bars: this.clientConductor?.getABTrialBars(8) ?? null,
       created_at: Date.now() / 1000,
     };
     try {

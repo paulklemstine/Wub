@@ -3106,6 +3106,16 @@ export class ClientGrooveboxConductor {
   private planInFlight = false;
   private modelPlan: { sec: string; chord: number; ranks: Record<StemName, number> } | null = null;
   private barHistory: number[][] = []; // committed model-planned bars, 6 tokens each
+  // Played-bar audit per A/B variant (capped rolling windows, for training).
+  private abPlayedBars: Record<"new" | "old", number[][]> = { new: [], old: [] };
+
+  /** Last N committed bars per variant, for A/B vote records (reward training). */
+  public getABTrialBars(n = 8): Record<"new" | "old", number[][]> {
+    return {
+      new: this.abPlayedBars.new.slice(-n).map((b) => [...b]),
+      old: this.abPlayedBars.old.slice(-n).map((b) => [...b]),
+    };
+  }
   private static readonly ARR_SECTIONS = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
 
   /** Boot the ONNX planner worker (lazy; Markov fallback on any failure). */
@@ -6675,6 +6685,13 @@ export class ClientGrooveboxConductor {
       }
       this.barHistory.push(bar);
       if (this.barHistory.length > 32) this.barHistory.splice(0, this.barHistory.length - 32);
+      // A/B training data: mirror committed bars per variant so votes become
+      // (context, winner, loser) triples for preference fine-tuning.
+      const variant = this.abVariant || "new";
+      this.abPlayedBars[variant].push(bar);
+      if (this.abPlayedBars[variant].length > 64) {
+        this.abPlayedBars[variant].splice(0, this.abPlayedBars[variant].length - 64);
+      }
       if (!this.modelPlan) this.requestBarPlan(); // Markov-seeded: ask worker to take over
     }
     if (takeModelBar) {

@@ -109,12 +109,30 @@ def mashup(body: dict) -> FileResponse:
 
 @app.post("/api/ab")
 def submit_ab(body: dict) -> dict:
-    """Blind A/B vote: {pair_id, winner X/Y, skipped, seed, section, mapping?, comment?}."""
+    """Blind A/B vote: {pair_id, winner X/Y, skipped, seed, section, mapping?, comment?, bars?}.
+
+    bars (optional): {"new": [[6 ids]...], "old": [[6 ids]...]} — the played
+    bar-token sequences per variant, making each vote a trainable
+    (context, winner, loser) preference triple (see scripts/finetune_from_ab.py).
+    """
     pair_id = str(body.get("pair_id") or "")
     winner = str(body.get("winner") or "")
     skipped = bool(body.get("skipped", False))
     if not pair_id or (not skipped and winner not in ("X", "Y")):
         raise HTTPException(status_code=400, detail="pair_id and winner X/Y (or skipped) required")
+    bars = None
+    if isinstance(body.get("bars"), dict):
+        try:
+            bars = {}
+            for k in ("new", "old"):
+                seqs = body["bars"].get(k) or []
+                clean = []
+                for b in list(seqs)[-16:]:
+                    if isinstance(b, list) and len(b) == 6 and all(isinstance(t, int) for t in b):
+                        clean.append([int(t) for t in b])
+                bars[k] = clean
+        except (TypeError, ValueError, AttributeError):
+            bars = None
     rec = {
         "pair_id": pair_id,
         "winner": winner if not skipped else None,
@@ -123,6 +141,7 @@ def submit_ab(body: dict) -> dict:
         "section": str(body.get("section") or ""),
         "mapping": body.get("mapping") if isinstance(body.get("mapping"), dict) else None,
         "comment": str(body.get("comment") or "")[:500],
+        "bars": bars,
     }
     try:
         data = json.loads(AB_RESULTS_FILE.read_text()) if AB_RESULTS_FILE.exists() else {}

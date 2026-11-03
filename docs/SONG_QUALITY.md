@@ -44,3 +44,15 @@ per build into `data/song_quality_eval.json`.
    do NOT wire the metric into generation (rerank, hill-climb) until then.
 4. Re-run calibration after any change to the scheduler, the vocab, or
    the weights: the metric must track ears, not replace them.
+
+## From votes to training
+
+Since votes now carry the played 6-token bars per variant
+(`bars: {new: [...], old: [...]}` in `data/ab_results.json`),
+`scripts/finetune_from_ab.py` performs winner-weighted supervised
+fine-tuning (filtered behavior cloning: train on winners, ignore losers,
+early-stop on winner-val perplexity). This is deliberately NOT full
+RLHF/DPO: live play has no shared prompt prefix to pair over, so the
+honest objective is likelihood of human-approved continuations.
+Run it only after a voting round with >=4 usable winner sequences;
+it refuses to train on fewer (avoids overfitting to a single session).
