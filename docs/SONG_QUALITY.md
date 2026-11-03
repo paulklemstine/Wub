@@ -18,8 +18,10 @@
 - **Repetition**: exact bar repeats at lag 4/8 inside `[0.15, 0.6]`
   (below = random mush, above = stuck loop).
 - **Mix**: per-stem onset-velocity balance vs drums 1.0 / bass .85 /
-  other .75 / vocals .70 targets (70%); transient pileup
-  (≥3 stems at vel≥0.9 on one step) penalty (30%).
+  other .75 / vocals .70 targets (55%); transient pileup
+  (≥3 stems at vel≥0.9 on one step) penalty (20%); spectral smoothness —
+  mean sounding-centroid inside 600Hz–4.5kHz, falling off toward dull
+  (<200Hz) or harsh (>9kHz) (25%).
 
 `score_bar()` (groove+harmony+mix only) is the live-rerank entry point.
 `scripts/eval_song_quality.py` samples seeded songs and prints one number
@@ -27,12 +29,17 @@ per build into `data/song_quality_eval.json`.
 
 ## Known limitations (v1)
 
-- Chord roots in eval are derived from the bass line itself, so harmony
-  scores skew high for everything; relative deltas still carry signal.
+- Chord roots come from a real mined minor progression cycled every 4
+  bars (like the frontend), with the song's tonic detected from its
+  pitch histogram — fair across keys, no bass-line cheating.
+- The eval mirrors the shipped scheduler: section density bands and
+  kick-floor downbeats in the draw, section-based velocities.
+  Anything the scheduler does that the eval doesn't mirror is a
+  blind spot; keep the two in sync.
 - Prototypes carry no exemplar velocities, so eval uses section-based
   velocities mirroring the frontend scheduler (`sec DROP→0.95` etc.).
-- No audio is rendered: timbre, reverb tails, and mastering glue are
-  invisible to this metric. Human ears remain the ground truth.
+- No audio is rendered: timbre subtleties, reverb tails, and mastering
+  glue are invisible to this metric. Human ears remain the ground truth.
 
 ## Calibration protocol (required before using the score for generation)
 

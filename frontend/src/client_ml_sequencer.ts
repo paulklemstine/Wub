@@ -3021,16 +3021,48 @@ export class ClientGrooveboxConductor {
 
   /** Joint-tuple PMI lookup: how strongly these 4 stem bars co-occurred in training.
    * sig order: drums|bass|other|vocals (per-stem bar signatures joined). Unseen => 0. */
+  private jointPmiRange: { min: number; max: number } | null = null;
+
   private jointPmiFor(barSigs: Record<StemName, string>): number {
     const gp = this.globalPatterns;
     const tuples = gp?.joint_tuples;
     if (!tuples || tuples.length === 0) return 0;
+    // Raw PMI (~9-19) would drown every other signal, so normalize to 0..1
+    // against the table's own range (cached on first use). Unseen = 0.
+    if (!this.jointPmiRange) {
+      let lo = Infinity, hi = -Infinity;
+      for (const t of tuples as Array<{ pmi?: number }>) {
+        const v = typeof t.pmi === "number" ? t.pmi : 0;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+      this.jointPmiRange = { min: lo === Infinity ? 0 : lo, max: hi === -Infinity ? 1 : hi };
+    }
     const key = (["drums", "bass", "other", "vocals"] as StemName[]).map((s) => barSigs[s] || ".").join("|");
     // Linear scan is fine: top-2000 list, checked once per bar, not per tatum.
-    for (const t of tuples) {
-      if (t.sig === key) return t.pmi;
+    for (const t of tuples as Array<{ sig?: string; pmi?: number }>) {
+      if (t.sig === key) {
+        const range = this.jointPmiRange || { min: 0, max: 1 };
+        if (range.max <= range.min) return typeof t.pmi === "number" && t.pmi > 0 ? 1 : 0;
+        return Math.max(0, Math.min(1, ((t.pmi as number) - range.min) / (range.max - range.min)));
+      }
     }
     return 0;
+  }
+
+  /** Section-appropriate density (0..1): keeps INTRO sparse and DROPs driving. */
+  private static readonly SECTION_DENSITY: Record<string, Record<StemName, number>> = {
+    INTRO: { drums: 0.15, bass: 0.1, other: 0.25, vocals: 0.1 },
+    GROOVE_A: { drums: 0.45, bass: 0.3, other: 0.35, vocals: 0.2 },
+    BUILDUP: { drums: 0.5, bass: 0.3, other: 0.4, vocals: 0.3 },
+    DROP: { drums: 0.55, bass: 0.35, other: 0.5, vocals: 0.3 },
+    BREAKDOWN: { drums: 0.05, bass: 0.05, other: 0.3, vocals: 0.3 },
+  };
+
+  private sectionDensityFit(stem: StemName, candSig: string, sec: string): number {
+    const onsets = candSig.split("-").filter((t) => t !== ".").length;
+    const target = (ClientGrooveboxConductor.SECTION_DENSITY[sec] || ClientGrooveboxConductor.SECTION_DENSITY.GROOVE_A)[stem];
+    return Math.max(0, 1 - Math.abs(onsets / 16 - target) / 0.35);
   }
 
   /** Pick a full-song section journey weighted by mined counts, preferring arcs
@@ -5496,6 +5528,22 @@ export class ClientGrooveboxConductor {
         if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
           this.applySidechainDucking(when);
         }
+        // Kick reinforcement: in driving sections, a missing downbeat kills
+        // the pocket, so layer a kit kick under empty downbeats. The pattern
+        // keeps its own groove; the kick just guarantees the floor.
+        if ((sec === "DROP" || sec === "GROOVE_A") && [0, 4, 8, 12].includes(step % 16)
+            && !dPat.onset_grid.includes(step % 16)) {
+          const floorKick = this.activeSongKit?.kick || this.getBestSlice("drums:kick", undefined, 0, dTerr);
+          if (floorKick) {
+            this.engine.scheduleSlice("drums", floorKick.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: 0.85,
+              voiceKey: "drums:kick",
+              whenOffsetMs: this.pocketNudge("drums", step % 16),
+            });
+          }
+        }
       } else {
       const isBuildup = (sec === "BUILDUP");
       const isBreakdown = (sec === "BREAKDOWN");
@@ -6418,12 +6466,18 @@ export class ClientGrooveboxConductor {
             };
             const pmi = this.jointPmiFor(combo);
             const cross = this.callResponseBonus(stem, candSig);
-            const score = pmi + cross * 2;
+            const dens = this.sectionDensityFit(stem, candSig, sec);
+            let down = 0;
+            if (stem === "drums" && (sec === "DROP" || sec === "GROOVE_A")) {
+              const hits = [0, 4, 8, 12].filter((s) => candSig.split("-")[s] !== ".").length;
+              down = hits / 4;
+            }
+            const score = pmi * 2 + cross * 1 + dens * 1.5 + down * 2;
             if (tokens.length === 0 || score > bestScore) {
               tokens = cand;
               bestScore = score;
             }
-            if (pmi > 0 && cross > 0) break; // heard together AND answers the last bar
+            if (pmi > 0.3 && cross > 0) break; // heard together AND answers the last bar
           }
         }
         // Record the rank driving this bar for arrangement-history + A/B.

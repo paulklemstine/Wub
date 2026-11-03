@@ -121,13 +121,19 @@ def _sounding_pcs(bar: Mapping[str, Any], step: int, span_cap: int = 8) -> List[
 
 
 def _bar_energy(bar: Mapping[str, Any]) -> float:
-    """Mean onset velocity across stems, 0..1."""
+    """Event-rate x intensity: mean onset velocity scaled by total density.
+
+    A sparse INTRO of loud hits still reads quiet; a dense DROP reads hot.
+    Calibrated so typical sections land near SECTION_ENERGY targets."""
     grids = _grids(bar)
     vals: List[float] = []
     for s in STEMS:
         for st in grids[s]:
             vals.append(_vel(bar, s, st))
-    return float(np.mean(vals)) if vals else 0.0
+    if not vals:
+        return 0.0
+    total_onsets = len(vals)
+    return float(np.mean(vals)) * (0.3 + 0.7 * min(1.0, total_onsets / 24.0))
 
 
 def score_groove(bars: Sequence[Mapping[str, Any]]) -> Tuple[float, Dict[str, float]]:
@@ -293,10 +299,10 @@ def score_repetition(bars: Sequence[Mapping[str, Any]]) -> Tuple[float, Dict[str
 
 
 def score_mix(bars: Sequence[Mapping[str, Any]]) -> Tuple[float, Dict[str, float]]:
-    """Per-stem level balance + transient pileup avoidance."""
+    """Per-stem level balance + transient pileup avoidance + harshness control."""
     bars = list(bars)
     if not bars:
-        return 0.0, {"balance": 0.0, "no_pileup": 0.0}
+        return 0.0, {"balance": 0.0, "no_pileup": 0.0, "smoothness": 0.0}
     levels: Dict[str, List[float]] = {s: [] for s in STEMS}
     for bar in bars:
         grids = _grids(bar)
@@ -314,17 +320,39 @@ def score_mix(bars: Sequence[Mapping[str, Any]]) -> Tuple[float, Dict[str, float
     balance = float(np.mean(parts)) if parts else 1.0
     # pileup: steps with >=3 simultaneous onsets at vel>=0.9
     pile, active = 0, 0
+    centroids: List[float] = []
     for bar in bars:
         grids = _grids(bar)
+        cents = bar.get("step_centroids") or {}
         for step in range(16):
             firing = [s for s in STEMS if step in grids[s] and _vel(bar, s, step) >= 0.9]
             if firing:
                 active += 1
                 if len(firing) >= 3:
                     pile += 1
+            for s in STEMS:
+                if step in grids[s]:
+                    try:
+                        centroids.append(float(cents.get(s, {}).get(step, float("nan"))))
+                    except (TypeError, ValueError, AttributeError):
+                        pass
     no_pileup = 1.0 - min(1.0, (pile / max(1, active)) * 2.0)
-    score = 0.7 * balance + 0.3 * no_pileup
-    return score, {"balance": balance, "no_pileup": no_pileup}
+    import math as _math
+    finite = [c for c in centroids if _math.isfinite(c)]
+    if finite:
+        mean_c = float(np.mean(finite))
+        # Warm but present: full marks 600Hz..4.5kHz, linear falloff to
+        # dull (<200Hz) or harsh (>9kHz).
+        if mean_c < 600:
+            smoothness = max(0.0, (mean_c - 200) / 400.0)
+        elif mean_c <= 4500:
+            smoothness = 1.0
+        else:
+            smoothness = max(0.0, (9000 - mean_c) / 4500.0)
+    else:
+        smoothness = 1.0  # no centroid info: neutral, not punished
+    score = 0.55 * balance + 0.20 * no_pileup + 0.25 * smoothness
+    return score, {"balance": balance, "no_pileup": no_pileup, "smoothness": smoothness}
 
 
 def score_song(
