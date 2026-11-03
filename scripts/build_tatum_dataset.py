@@ -57,6 +57,10 @@ def main() -> None:
     ap.add_argument("--vq", default="data/tatum_vq")
     ap.add_argument("--max-bars-per-track", type=int, default=64)
     ap.add_argument("--max-tracks", type=int, default=None)
+    ap.add_argument("--stems-list", default=None,
+                    help="file of track ids known to have all 4 stems on disk "
+                         "(e.g. a listing of a remote stems dir); these override "
+                         "the stems_available field in the analysis json")
     ap.add_argument("--val-pct", type=int, default=8)
     args = ap.parse_args()
 
@@ -106,6 +110,10 @@ def main() -> None:
     files = sorted(p for p in Path(args.processed).glob("*.json") if not p.name.startswith(("_", "meta_")))
     if args.max_tracks:
         files = files[: args.max_tracks]
+    stems_have = None
+    if args.stems_list:
+        stems_have = {ln.strip() for ln in Path(args.stems_list).read_text().splitlines() if ln.strip()}
+        print(f"  stems list: {len(stems_have)} complete track ids", flush=True)
 
     try:
         from wub_core.section_arcs import bar_features as _bar_features
@@ -122,7 +130,9 @@ def main() -> None:
         except Exception:
             continue
         if set(raw.get("stems_available") or []) < set(STEMS):
-            continue
+            tid = str(raw.get("track_id") or jf.stem)
+            if not (stems_have and tid in stems_have):
+                continue
         segs = raw.get("segments") or []
         tatums = (raw.get("tatums") or [])[: args.max_bars_per_track * 16]
         if not tatums:

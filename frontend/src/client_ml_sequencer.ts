@@ -3239,6 +3239,12 @@ export class ClientGrooveboxConductor {
 
   // Decoded tatum fill, converted once per bar into per-stem slice ids.
   private tatumTokens: Record<StemName, Array<string | null>> | null = null;
+  // Committed tatum tokens (70 per bar: 6 header + 64 steps) for the tatum
+  // GPT's 4-bar context. The model was trained on 280-token windows, so a
+  // 6-token header alone is out of distribution; feeding the last 3 bars
+  // plus the current header matches training exactly.
+  private tatumHist: number[] = [];
+  private tatumHeader: number[] = [];
 
   /** Convert the pending tatum fill into this stem's 16-step slice ids.
    * Code -> medoid slice; HOLD extends the previous onset (null step, the
@@ -3311,8 +3317,15 @@ export class ClientGrooveboxConductor {
           console.info("[Client ML] Tatum filler ready (ONNX worker).");
         } else if (msg.type === "plan" && Array.isArray(msg.steps) && msg.steps.length >= 64) {
           this.tatumInFlight = false;
-          this.tatumFill = this.decodeTatumFill(msg.steps.slice(0, 64));
-          if (!this.tatumFill) this.requestTatumFill();
+          const steps = msg.steps.slice(0, 64);
+          this.tatumFill = this.decodeTatumFill(steps);
+          if (this.tatumFill) {
+            // Extend the model's 4-bar context with the bar we just generated.
+            this.tatumHist.push(...this.tatumHeader, ...steps);
+            if (this.tatumHist.length > 210) this.tatumHist.splice(0, this.tatumHist.length - 210);
+          } else {
+            this.requestTatumFill();
+          }
         } else if (msg.type === "error") {
           this.tatumInFlight = false;
           if ((msg as { fatal?: boolean }).fatal !== false) this.tatumReady = false;
@@ -3372,7 +3385,10 @@ export class ClientGrooveboxConductor {
     if (header.some((t) => !Number.isFinite(t) || t < 0)) return;
     this.tatumInFlight = true;
     const seed = Math.floor(Math.random() * 1e9);
-    this.tatumWorker.postMessage({ type: "plan", history: header, nSteps: 64, temp: 1.0, topK: 20, seed });
+    // 3 previous bars (210 tokens) + this header = 216 <= ctx 280; the model
+    // then generates 64 steps to complete the 4-bar window it was trained on.
+    this.tatumHeader = header;
+    this.tatumWorker.postMessage({ type: "plan", history: [...this.tatumHist.slice(-210), ...header], nSteps: 64, temp: 1.0, topK: 20, seed });
   }
 
   /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
@@ -6455,6 +6471,9 @@ export class ClientGrooveboxConductor {
           }
         }
         if (tokens.length === 0) {
+          // This bar is not model-filled, so the tatum GPT's context is
+          // broken here; a stale 4-bar window would mislead it later.
+          this.tatumHist = [];
           // Phrase-level beam plan: score 4-bar arcs, commit the first bar.
           // Planning the arc up front is what makes phrases hang together.
           const phrase = this.planPhraseBars(stem, this.globalBarSig[stem], sec);
