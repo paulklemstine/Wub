@@ -294,12 +294,17 @@ class WubApp {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
       // Play-path diagnostics: __wubStats() in the console shows which brain
       // drove each bar (global planner vs legacy patterns vs studio loops).
+      // __wubDebugBar() shows per-stem audio resolution for the current bar.
       try {
         (window as any).__wubStats = () => {
           const c = this.clientConductor as any;
           return c?.playStats
             ? { ...c.playStats, section: c.arranger?.getSection?.() }
             : { error: "engine not ready" };
+        };
+        (window as any).__wubDebugBar = () => {
+          const c = this.clientConductor as any;
+          return typeof c?.debugBar === "function" ? c.debugBar() : { error: "engine not ready" };
         };
       } catch {
         // Non-browser context; skip

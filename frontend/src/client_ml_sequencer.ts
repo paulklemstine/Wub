@@ -3151,6 +3151,34 @@ export class ClientGrooveboxConductor {
       old: this.abPlayedBars.old.slice(-n).map((b) => [...b]),
     };
   }
+
+  /** One-shot playback diagnostic: which audio each stem will actually use.
+   * Paste the output while music plays. slices "R/T" = resolved/total slice
+   * IDs; low R with high T = fallback synths/kits (the "sounds bad" smell). */
+  public debugBar(): Record<string, unknown> {
+    const out: Record<string, unknown> = {
+      section: this.arranger.getSection(),
+      catalog: this.catalogSongActive,
+      track: this.activeTrackId,
+      mode: this.playbackMode,
+      stems: {},
+    };
+    const stems = out.stems as Record<string, unknown>;
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const pat = this.activePatterns[stem];
+      const ids = (pat?.step_slice_ids || []) as Array<string | null>;
+      const total = ids.filter(Boolean).length;
+      const resolved = ids.filter((id) => id && this.sliceById.has(id as string)).length;
+      stems[stem] = {
+        pattern: pat?.id ?? null,
+        onsets: pat?.onset_grid?.length ?? 0,
+        slices: `${resolved}/${total}`,
+        global: (pat?.id ?? "").startsWith("global_"),
+        kit: this.activeSongKit ? true : false,
+      };
+    }
+    return out;
+  }
   private static readonly ARR_SECTIONS = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
 
   /** Boot the ONNX planner worker (lazy; Markov fallback on any failure). */
