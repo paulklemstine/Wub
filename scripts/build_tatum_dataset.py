@@ -129,10 +129,8 @@ def main() -> None:
             raw = json.loads(jf.read_bytes())
         except Exception:
             continue
-        if set(raw.get("stems_available") or []) < set(STEMS):
-            tid = str(raw.get("track_id") or jf.stem)
-            if not (stems_have and tid in stems_have):
-                continue
+        if not _track_has_stems(raw, jf.stem, stems_have):
+            continue
         segs = raw.get("segments") or []
         tatums = (raw.get("tatums") or [])[: args.max_bars_per_track * 16]
         if not tatums:
@@ -210,6 +208,20 @@ def main() -> None:
     }, separators=(",", ":")))
     print(f"dataset: {n_tracks} tracks, {n_bars} bars ({n_empty} empty dropped)", flush=True)
     print(f"  train seqs: {len(train)}, val seqs: {len(val)}, fuzzy-mapped: {n_fuzzy}", flush=True)
+
+
+def _track_has_stems(raw: dict, fallback_tid: str, stems_have: set[str] | None) -> bool:
+    """True when the analysis carries all four stems.
+
+    ``--stems-list`` covers the case where the stems live on another machine
+    and the analysis's own ``stems_available`` field is stale: a track id in
+    that list is trusted to have all four stems on disk.
+    """
+    if set(raw.get("stems_available") or []) >= set(STEMS):
+        return True
+    if not stems_have:
+        return False
+    return str(raw.get("track_id") or fallback_tid) in stems_have
 
 
 def _vocab_obj(gvoc_raw):

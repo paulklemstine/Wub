@@ -149,12 +149,17 @@ def analyze_track_fast(stem_dir: Path, out_json: Path, track_id: str) -> TrackAn
         beats, bpm = extract_beats(stem_audio["other"], SR)
     raw_tatums = beats_to_tatums(beats, duration)
 
-    chroma_acc = []
-    for stem in ("bass", "other", "vocals"):
-        if stem in stem_audio:
-            y = stem_audio[stem]
-            c = librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=4096)
-            chroma_acc.append(c.mean(axis=1))
+    # One CQT per stem, reused for the key estimate and the slice features.
+    # (The stock analyzer pays for a second CQT pass at hop 4096 just for the
+    # key; averaging the hop-1024 chroma over the stem is equivalent to well
+    # within the tuning estimate's resolution.)
+    per_stem = {}
+    for stem, y in stem_audio.items():
+        chroma_full = librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=1024)
+        mfcc_full = librosa.feature.mfcc(y=y, sr=SR, n_mfcc=13, hop_length=512)
+        centroid_full = librosa.feature.spectral_centroid(y=y, sr=SR)[0]
+        per_stem[stem] = (chroma_full, mfcc_full, centroid_full)
+    chroma_acc = [per_stem[s][0].mean(axis=1) for s in ("bass", "other", "vocals") if s in per_stem]
     key = estimate_key(np.mean(chroma_acc, axis=0)) if chroma_acc else "C major"
 
     all_segments: list[Segment] = []
@@ -182,10 +187,8 @@ def analyze_track_fast(stem_dir: Path, out_json: Path, track_id: str) -> TrackAn
         segs = list(zip(merged[:-1], merged[1:]))
         if not segs:
             continue
-        chroma = librosa.feature.chroma_cqt(y=y_stem, sr=SR, hop_length=1024)
-        mfcc_full = librosa.feature.mfcc(y=y_stem, sr=SR, n_mfcc=13, hop_length=512)
+        chroma, mfcc_full, centroid = per_stem[stem]
         mfcc = mfcc_full[1:13] if mfcc_full.shape[0] >= 13 else mfcc_full
-        centroid = librosa.feature.spectral_centroid(y=y_stem, sr=SR)[0]
         n = len(y_stem)
         segs_out = _slice_features_fast(
             y_stem, SR, stem, track_id, duration, segs,
