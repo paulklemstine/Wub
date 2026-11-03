@@ -2771,7 +2771,7 @@ export class ClientGrooveboxConductor {
   public async loadStaticBundle(basePath: string = "data"): Promise<boolean> {
     try {
       // 1. Fetch Composing ML Weights
-      const wRes = await fetch(`${basePath}/composing_ml_weights.json`);
+      const wRes = await this.fetchWithRetry(`${basePath}/composing_ml_weights.json`);
       if (wRes.ok) {
         const weights = (await wRes.json()) as ComposingMLWeights;
         this.phraseModel.updateWeights(weights);
@@ -2784,7 +2784,7 @@ export class ClientGrooveboxConductor {
       }
 
       // 2. Fetch Standalone Patterns & Slices Manifest
-      const pRes = await fetch(`${basePath}/standalone_patterns.json`);
+      const pRes = await this.fetchWithRetry(`${basePath}/standalone_patterns.json`);
       if (pRes.ok) {
         this.manifest = (await pRes.json()) as StandaloneManifest;
         if (this.manifest.stem_cohesion_weights && !this.stemCohesionWeights) {
@@ -2854,7 +2854,7 @@ export class ClientGrooveboxConductor {
 
   private async loadFullCatalog(basePath: string): Promise<void> {
     try {
-      const res = await fetch(`${basePath}/full_catalog_manifest.json`);
+      const res = await this.fetchWithRetry(`${basePath}/full_catalog_manifest.json`);
       if (!res.ok) return;
       const cat = (await res.json()) as FullCatalogManifest;
       if (!cat || !Array.isArray(cat.songs)) return;
@@ -2880,7 +2880,7 @@ export class ClientGrooveboxConductor {
    * and registers global IDs in sliceById metadata for hierarchical (bar + tatum) generation. */
   public async loadGlobalVocabulary(basePath: string = "data"): Promise<boolean> {
     try {
-      const res = await fetch(`${basePath}/global_vocabulary.json`);
+      const res = await this.fetchWithRetry(`${basePath}/global_vocabulary.json`);
       if (!res.ok) return false;
       const gv = (await res.json()) as GlobalVocabularyManifest;
       if (!gv || !gv.vocab_by_stem) return false;
@@ -2962,7 +2962,7 @@ export class ClientGrooveboxConductor {
   /** Loads hierarchical global patterns (data/global_patterns.json): bar planner + tatum bigrams. */
   public async loadGlobalPatterns(basePath: string = "data"): Promise<boolean> {
     try {
-      const res = await fetch(`${basePath}/global_patterns.json`);
+      const res = await this.fetchWithRetry(`${basePath}/global_patterns.json`);
       if (!res.ok) return false;
       const gp = (await res.json()) as GlobalPatternsManifest;
       if (!gp || !gp.bar_transitions) return false;
@@ -3096,6 +3096,41 @@ export class ClientGrooveboxConductor {
 
   private rnd(): number {
     return this.abSeeded ? this.abSeeded() : Math.random();
+  }
+
+  // Resilient fetching: shared 8-wide semaphore so hundreds of slice/loop
+  // preloads can't exhaust the browser connection pool (which surfaces as
+  // TypeError: Failed to fetch), plus retry with backoff for the big
+  // manifest JSONs (a transient reset mid-download shouldn't kill the boot).
+  private fetchInFlight = 0;
+  private fetchQueue: Array<() => void> = [];
+  private static readonly FETCH_CONCURRENCY = 8;
+
+  private async fetchSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.fetchInFlight >= ClientGrooveboxConductor.FETCH_CONCURRENCY) {
+      await new Promise<void>((res) => this.fetchQueue.push(res));
+    }
+    this.fetchInFlight++;
+    try {
+      return await fn();
+    } finally {
+      this.fetchInFlight--;
+      const next = this.fetchQueue.shift();
+      if (next) next();
+    }
+  }
+
+  private async fetchWithRetry(url: string, tries = 3): Promise<Response> {
+    let lastErr: unknown = null;
+    for (let i = 0; i < tries; i++) {
+      try {
+        return await this.fetchSlot(() => fetch(url));
+      } catch (e) {
+        lastErr = e;
+        await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(`fetch failed: ${url}`);
   }
 
   // Bar-arranger GPT (ONNX worker): plans whole 4-stem bars from arrangement
@@ -3285,7 +3320,7 @@ export class ClientGrooveboxConductor {
   /** Map VQ code -> medoid global slice id per stem (for rendering). */
   private async loadTatumCodebook(basePath: string): Promise<void> {
     try {
-      const res = await fetch(`${basePath}/tatum_vq.json`);
+      const res = await this.fetchWithRetry(`${basePath}/tatum_vq.json`);
       if (!res.ok) return;
       const vq = (await res.json()) as { stems: Record<string, { medoid_slice: string[] }> };
       for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
@@ -3386,7 +3421,7 @@ export class ClientGrooveboxConductor {
     const p = (async (): Promise<boolean> => {
       try {
         const name = `shard_${String(shard).padStart(2, "0")}.json`;
-        const res = await fetch(`${this.catalogBasePath}/catalog/${name}`);
+        const res = await this.fetchWithRetry(`${this.catalogBasePath}/catalog/${name}`);
         if (!res.ok) return false;
         const payload = (await res.json()) as { songs?: Record<string, any> };
         if (!payload?.songs || !this.manifest) return false;
@@ -3437,7 +3472,7 @@ export class ClientGrooveboxConductor {
         if (!dec) {
           dec = (async () => {
             try {
-              const res = await fetch(url);
+              const res = await this.fetchSlot(() => fetch(url));
               if (!res.ok) return null;
               return await this.engine.decodeAudio(await res.arrayBuffer());
             } catch {
@@ -3564,7 +3599,7 @@ export class ClientGrooveboxConductor {
             let bytes: ArrayBuffer | null = null;
             try {
               const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
-              const res = await fetch(url);
+              const res = await this.fetchSlot(() => fetch(url));
               if (res.ok) {
                 bytes = await res.arrayBuffer();
               }
@@ -3656,7 +3691,7 @@ export class ClientGrooveboxConductor {
       for (const item of vocalCorpus) {
         try {
           const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
-          const res = await fetch(url);
+          const res = await this.fetchSlot(() => fetch(url));
           if (res.ok) {
             const bytes = await res.arrayBuffer();
             const decoded = await this.engine.decodeAudio(bytes);
@@ -3712,7 +3747,7 @@ export class ClientGrooveboxConductor {
       for (const item of list) {
         try {
           const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
-          const res = await fetch(url);
+          const res = await this.fetchSlot(() => fetch(url));
           if (res.ok) {
             const bytes = await res.arrayBuffer();
             const decoded = await this.engine.decodeAudio(bytes);
@@ -3753,7 +3788,7 @@ export class ClientGrooveboxConductor {
           if (!urlStr) return;
           try {
             const url = urlStr.startsWith("http") ? urlStr : `${basePath}/${urlStr.replace(/^data\//, "")}`;
-            const res = await fetch(url);
+            const res = await this.fetchSlot(() => fetch(url));
             if (res.ok) {
               const bytes = await res.arrayBuffer();
               const decoded = await this.engine.decodeAudio(bytes);
