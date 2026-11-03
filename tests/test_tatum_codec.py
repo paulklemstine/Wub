@@ -20,6 +20,27 @@ def test_rank_index_exact():
     assert idx["drums"].get("nope") is None
 
 
+def test_fixed_tatum_layout_no_overlap():
+    from scripts.build_tatum_dataset import _code_layout
+    K, OFF, R_OFF, BASE = _code_layout({"stems": {s: {"k": k} for s, k in
+                                                 (("drums", 768), ("bass", 512), ("other", 768), ("vocals", 512))}})
+    assert BASE["vocab"] == 5322
+    assert (BASE["sec"], BASE["chord"]) == (4104, 4109)
+    # every assigned id unique and below VOCAB
+    seen = set()
+    for s, o in OFF.items():
+        for i in list(range(K[s])) + [1024, 1025]:
+            assert o + i not in seen
+            seen.add(o + i)
+    for v in list(BASE.values())[:2]:
+        assert v not in seen
+    for s, o in R_OFF.items():
+        for i in range(300):
+            assert o + i not in seen
+            seen.add(o + i)
+    assert max(seen) < BASE["vocab"]
+
+
 def test_nearest_rank_fuzzy_matches_grid():
     protos = _protos()
     grids = {("drums", r): tuple(i for i, t in enumerate(p["tokens"]) if t) for r, p in enumerate(protos["drums"])}

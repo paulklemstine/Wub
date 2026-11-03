@@ -17,6 +17,7 @@ import argparse
 import json
 import shutil
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -25,23 +26,86 @@ from wub_core.global_vocabulary import DEFAULT_GLOBAL_BUDGET, GlobalVocabularyBu
 from wub_core.patterns import STEMS
 
 
+def _mp3_index(processed_dir: Path) -> Dict[str, str]:
+    """track_id -> source mp3 path, from ingest manifest + library scan."""
+    out: Dict[str, str] = {}
+    mp = Path(processed_dir) / "_manifest.json"
+    if mp.exists():
+        try:
+            man = json.loads(mp.read_bytes())
+            for entry in (man.values() if isinstance(man, dict) else man):
+                if isinstance(entry, dict) and entry.get("track_id") and entry.get("path"):
+                    p = str(entry["path"])
+                    if p and Path(p).suffix.lower() in (".mp3", ".wav", ".flac", ".m4a", ".ogg"):
+                        out.setdefault(str(entry["track_id"]), p)
+        except Exception:
+            pass
+    by_name: Dict[str, str] = {}
+    for lib in (Path("pandora/good"), Path("pandora")):
+        if lib.is_dir():
+            try:
+                for p in lib.rglob("*"):
+                    if p.is_file() and p.suffix.lower() in (".mp3", ".wav", ".flac", ".m4a", ".ogg"):
+                        by_name.setdefault(p.name, str(p))
+            except Exception:
+                pass
+    if by_name:
+        for jf in sorted(Path(processed_dir).glob("*.json")):
+            if jf.name.startswith(("_", "meta_")) or jf.stem in out:
+                continue
+            try:
+                fn = str(json.loads(jf.read_bytes()).get("filename", ""))
+            except Exception:
+                continue
+            if fn and fn in by_name:
+                out[jf.stem] = by_name[fn]
+    return out
+
+
+def _decode_mp3_chunk(mp3_path: str, start: float, dur: float, sr: int = 44100) -> Optional[np.ndarray]:
+    try:
+        from scripts.audio_encode import ffmpeg_exe
+        import subprocess
+        cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y",
+               "-ss", f"{max(0.0, start):.3f}", "-t", f"{max(0.05, dur):.3f}",
+               "-i", mp3_path, "-ar", str(sr), "-ac", "1", "-f", "f32le", "-"]
+        pr = subprocess.run(cmd, capture_output=True, timeout=60)
+        if pr.returncode != 0 or not pr.stdout:
+            return None
+        mono = np.frombuffer(pr.stdout, dtype=np.float32)
+        want = int(dur * sr)
+        if len(mono) < 120:
+            return None
+        return mono[:want] if len(mono) >= want else np.pad(mono, (0, want - len(mono)))
+    except Exception:
+        return None
+
+
 def _render_one(args) -> tuple:
-    vid, tid, stem, start, dur, stems_dir, out_dir, bitrate = args
+    vid, tid, stem, start, dur, stems_dir, out_dir, bitrate, mp3_path = args
     try:
         import soundfile as sf
         from scripts.audio_encode import write_opus
         from wub_core.acoustic_vocabulary_optimizer import AcousticVocabularyOptimizer
 
         wav_path = Path(stems_dir) / tid / f"{stem}.wav"
-        if not wav_path.exists():
+        sr = 44100
+        mono = None
+        if wav_path.exists():
+            info = sf.info(str(wav_path))
+            sr = info.samplerate
+            start_frame = max(0, int(start * info.samplerate))
+            frame_len = min(info.frames - start_frame, int(dur * info.samplerate))
+            if frame_len < 120:
+                return (vid, "", False)
+            raw, sr = sf.read(str(wav_path), start=start_frame, frames=frame_len, always_2d=True, dtype="float32")
+            mono = raw.mean(axis=1)
+        elif mp3_path:
+            mono = _decode_mp3_chunk(mp3_path, start, dur, sr)
+            if mono is None:
+                return (vid, "", False)
+        else:
             return (vid, "", False)
-        info = sf.info(str(wav_path))
-        start_frame = max(0, int(start * info.samplerate))
-        frame_len = min(info.frames - start_frame, int(dur * info.samplerate))
-        if frame_len < 120:
-            return (vid, "", False)
-        raw, sr = sf.read(str(wav_path), start=start_frame, frames=frame_len, always_2d=True, dtype="float32")
-        mono = raw.mean(axis=1)
         cleaned = AcousticVocabularyOptimizer.clean_slice_audio(mono, sr)
         out_path = Path(out_dir) / f"{vid}.opus"
         write_opus(out_path, cleaned, sr, bitrate=bitrate)
@@ -50,10 +114,12 @@ def _render_one(args) -> tuple:
         return (vid, "", False)
 
 
-def render_slices(vocab, stems_dir: Path, out_dir: Path, bitrate: str = "96k", workers: int = 12) -> int:
+def render_slices(vocab, stems_dir: Path, out_dir: Path, bitrate: str = "96k", workers: int = 12,
+                  mp3_index: Optional[Dict[str, str]] = None) -> int:
     from concurrent.futures import ProcessPoolExecutor
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    mp3_index = mp3_index or {}
     jobs = []
     for stem in STEMS:
         for vs in vocab.vocab_by_stem.get(stem, []):
@@ -61,7 +127,8 @@ def render_slices(vocab, stems_dir: Path, out_dir: Path, bitrate: str = "96k", w
             if out_path.exists() and out_path.stat().st_size > 500:
                 vs.url = f"data/slices/{out_path.name}"
                 continue
-            jobs.append((vs.id, vs.track_id, stem, vs.start, vs.duration, str(stems_dir), str(out_dir), bitrate))
+            mp3 = "" if (Path(stems_dir) / vs.track_id / f"{stem}.wav").exists() else mp3_index.get(vs.track_id, "")
+            jobs.append((vs.id, vs.track_id, stem, vs.start, vs.duration, str(stems_dir), str(out_dir), bitrate, mp3))
     n_ok = 0
     if not jobs:
         for stem in STEMS:
@@ -106,8 +173,8 @@ def main() -> None:
     builder = GlobalVocabularyBuilder(target_counts=target, k_per_song=args.k_per_song)
 
     print(f"Collecting per-song medoids (k={args.k_per_song}) ...", flush=True)
-    stems_filter = None if args.include_mix else Path(args.stems)
-    cands = builder.collect_candidates(Path(args.processed), max_tracks=args.max_tracks, stems_dir=stems_filter)
+    cands = builder.collect_candidates(Path(args.processed), max_tracks=args.max_tracks,
+                                       stems_dir=Path(args.stems), virtual_stems=args.include_mix)
     print(f"  candidates: {sum(len(v) for v in cands.values())}", flush=True)
 
     print(f"Clustering globally to {target} ...", flush=True)
@@ -204,7 +271,8 @@ def main() -> None:
         if slices_dir.exists():
             shutil.rmtree(slices_dir)
         slices_dir.mkdir(parents=True, exist_ok=True)
-        n = render_slices(vocab, Path(args.stems), slices_dir, bitrate=args.bitrate, workers=args.workers)
+        n = render_slices(vocab, Path(args.stems), slices_dir, bitrate=args.bitrate, workers=args.workers,
+                          mp3_index=_mp3_index(Path(args.processed)) if args.include_mix else None)
         print(f"Rendered {n} Opus slices @ {args.bitrate} into {slices_dir}", flush=True)
         # Re-save manifests now that urls are bound
         vocab.save(Path("data/global_vocabulary.json"), include_vectors=True)

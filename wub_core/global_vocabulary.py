@@ -287,21 +287,27 @@ class GlobalVocabularyBuilder:
         self.random_state = int(random_state)
 
     # ---- stage 1: per-song medoids ----
-    def collect_candidates(self, processed_dir: Path, max_tracks: Optional[int] = None, stems_dir: Optional[Path] = None):
+    def collect_candidates(self, processed_dir: Path, max_tracks: Optional[int] = None, stems_dir: Optional[Path] = None,
+                           virtual_stems: bool = False):
         """Pool per-song medoid candidates with features + clarity.
 
         Returns: {stem: [(feat, clarity, meta dict)]}
-        If stems_dir is given, only include tracks with separated stems so every
-        global slice has renderable audio (required for static Opus export).
+        If stems_dir is given WITHOUT virtual_stems, only include tracks with
+        separated stems so every global slice has renderable stem audio.
+        If virtual_stems is True, include ALL tracks: mix-only tracks get
+        their "other" segments routed into virtual drums/bass/vocals pools by
+        centroid/duration heuristics (rendered from the source mp3 on export).
         """
         from sklearn.cluster import KMeans
 
         files = sorted(
             p for p in Path(processed_dir).glob("*.json") if not p.name.startswith(("_", "meta_"))
         )
+        stem_tids: set = set()
         if stems_dir is not None:
             stem_tids = {d.name for d in Path(stems_dir).iterdir() if d.is_dir()}
-            files = [p for p in files if p.stem in stem_tids]
+            if not virtual_stems:
+                files = [p for p in files if p.stem in stem_tids]
         if max_tracks:
             files = files[:max_tracks]
         pool: Dict[str, List[Tuple[np.ndarray, float, dict]]] = {s: [] for s in STEMS}
@@ -312,6 +318,7 @@ class GlobalVocabularyBuilder:
                 continue
             tid = str(raw.get("track_id") or jf.stem)
             stems_avail = raw.get("stems_available") or ["other"]
+            has_stems = (not stem_tids) or (tid in stem_tids)
             for seg in raw.get("segments") or []:
                 if not isinstance(seg, dict):
                     continue
@@ -326,20 +333,37 @@ class GlobalVocabularyBuilder:
                 feat = _raw_feature(seg)
                 if feat is None:
                     continue
-                clarity = _clarity(seg, stem)
-                if clarity <= 0.0:
-                    continue
-                meta = {
-                    "track_id": tid,
-                    "segment_id": str(seg.get("id", "")),
-                    "start": float(seg.get("start", 0.0)),
-                    "duration": float(seg.get("duration", 0.25) or 0.25),
-                    "centroid": float(seg.get("spectral_centroid", 1000.0) or 1000.0),
-                    "loud_max": loud,
-                    "pitch": _pitch_of(feat),
-                    "filename": str(raw.get("filename", "")),
-                }
-                pool[stem].append((feat, clarity, meta))
+                dur = float(seg.get("duration", 0.25) or 0.25)
+                cent = float(seg.get("spectral_centroid", 1200.0) or 1200.0)
+                # Virtual stems: route mix-only "other" slices into drum/bass/
+                # vocal pools by acoustic role so the full 1700-track corpus
+                # contributes to every stem's vocabulary.
+                if virtual_stems and not has_stems and stem == "other":
+                    targets = ["other"]
+                    if dur <= 0.30 or cent < 750.0 or cent > 2200.0:
+                        targets.append("drums")
+                    if cent < 1050.0:
+                        targets.append("bass")
+                    if 850.0 <= cent <= 3600.0 and loud > -32.0:
+                        targets.append("vocals")
+                else:
+                    targets = [stem]
+                for tgt in targets:
+                    clarity = _clarity(seg, tgt)
+                    if clarity <= 0.0:
+                        continue
+                    meta = {
+                        "track_id": tid,
+                        "segment_id": str(seg.get("id", "")),
+                        "start": float(seg.get("start", 0.0)),
+                        "duration": dur,
+                        "centroid": cent,
+                        "loud_max": loud,
+                        "pitch": _pitch_of(feat),
+                        "filename": str(raw.get("filename", "")),
+                        "virtual": bool(tgt != stem),
+                    }
+                    pool[tgt].append((feat, clarity, meta))
         # Condense per-song? For scale, do global per-stem cap: if pool huge,
         # first KMeans per stem to min(40000, len) to keep stage-2 tractable,
         # weighted toward clarity. This preserves the "per-song medoid" spirit

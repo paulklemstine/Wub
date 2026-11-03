@@ -1,1 +1,1 @@
-{"version":1,"vocab":2506,"ctx":280,"tokens_per_bar":70,"model":"tatum_gpt.onnx","model_int8":"tatum_gpt_int8.onnx"}
+{"version":1,"vocab":5322,"ctx":280,"tokens_per_bar":70,"model":"tatum_gpt.onnx","model_int8":"tatum_gpt_int8.onnx"}

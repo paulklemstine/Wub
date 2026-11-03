@@ -20,10 +20,9 @@ import torch
 from scripts.train_bar_arranger import BarGPT
 
 STEMS = ("drums", "bass", "other", "vocals")
-OFF = {"drums": 0, "bass": 386, "other": 644, "vocals": 1030}
-K = {"drums": 384, "bass": 256, "other": 384, "vocals": 256}
-SIL = {s: OFF[s] + K[s] for s in STEMS}
-HOLD = {s: OFF[s] + K[s] + 1 for s in STEMS}
+OFF = {"drums": 0, "bass": 1026, "other": 2052, "vocals": 3078}
+SIL = {"drums": 1024, "bass": 2050, "other": 3076, "vocals": 4102}
+HOLD = {"drums": 1025, "bass": 2051, "other": 3077, "vocals": 4103}
 
 
 @torch.no_grad()

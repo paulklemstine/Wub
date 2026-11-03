@@ -28,13 +28,25 @@ import numpy as np
 
 from wub_core.tatum_codec import STEMS, nearest_rank, onset_spans, rank_index
 
-K = {"drums": 384, "bass": 256, "other": 384, "vocals": 256}
-OFF = {"drums": 0, "bass": 386, "other": 644, "vocals": 1030}
-SEC_OFF, CHORD_OFF = 1288, 1293
-R_OFF = {"drums": 1306, "bass": 1606, "other": 1906, "vocals": 2206}
 N_RANK = 300
-VOCAB = 2506
 SECTIONS = ("INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN")
+
+
+def _code_layout(vq_manifest):
+    """FIXED layout independent of K (max 1024 codes/stem), so codebooks can
+    grow without rebuilding every consumer:
+    D codes 0..1023, SIL 1024, HOLD 1025;
+    B codes 1026..2049, SIL 2050, HOLD 2051;
+    O codes 2052..3075, SIL 3076, HOLD 3077;
+    V codes 3078..4101, SIL 4102, HOLD 4103;
+    SEC 4104..4108, CHORD 4109..4121 (0..11, 12=unknown);
+    R_D 4122..4421, R_B 4422..4721, R_O 4722..5021, R_V 5022..5321.
+    VOCAB = 5322. Unused code ids (>K) never appear in training; the
+    renderer treats unknown codes as rest."""
+    K = {s: int(vq_manifest["stems"][s]["k"]) for s in STEMS}
+    OFF = {"drums": 0, "bass": 1026, "other": 2052, "vocals": 3078}
+    R_OFF = {"drums": 4122, "bass": 4422, "other": 4722, "vocals": 5022}
+    return K, OFF, R_OFF, {"sec": 4104, "chord": 4109, "vocab": 5322}
 
 
 def main() -> None:
@@ -88,6 +100,9 @@ def main() -> None:
 
     builder = GlobalVocabularyBuilder()
     gvoc_obj = _vocab_obj(gvoc)
+    K, OFF, R_OFF, BASE = _code_layout(json.loads(Path("frontend/public/data/tatum_vq.json").read_bytes()))
+    SEC_OFF, CHORD_OFF, VOCAB = BASE["sec"], BASE["chord"], BASE["vocab"]
+    print(f"  code layout: K={K} vocab={VOCAB}", flush=True)
     files = sorted(p for p in Path(args.processed).glob("*.json") if not p.name.startswith(("_", "meta_")))
     if args.max_tracks:
         files = files[: args.max_tracks]
@@ -169,7 +184,7 @@ def main() -> None:
                     else:
                         # sustaining slice from an earlier onset in this bar?
                         held = any(o < step < o + spans[s].get(o, 1) for o in spans[s])
-                        toks.append(OFF[s] + (K[s] + 1) if held else OFF[s] + K[s])
+                        toks.append(OFF[s] + 1025 if held else OFF[s] + 1024)
             seq.extend(toks)
         if len(seq) // 70 < 4:
             continue

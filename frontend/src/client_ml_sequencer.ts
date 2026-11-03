@@ -3216,9 +3216,9 @@ export class ClientGrooveboxConductor {
   private tatumInFlight = false;
   private tatumFill: { sec: string; steps: number[][] } | null = null;
   private codeMedoid: Record<string, Record<number, string>> = {};
-  // Tatum VQ code layout (must match scripts/build_tatum_dataset.py):
-  // per-stem code ids 0..K-1, SIL = OFF+K, HOLD = OFF+K+1.
-  private static readonly TATUM_SIL: Record<StemName, number> = { drums: 384, bass: 642, other: 1028, vocals: 1286 };
+  // Tatum VQ code layout (fixed; must match scripts/build_tatum_dataset.py):
+  // per-stem codes 0..1023, SIL next, HOLD last of each 1026-slot block.
+  private static readonly TATUM_SIL: Record<StemName, number> = { drums: 1024, bass: 2050, other: 3076, vocals: 4102 };
 
   /** Boot the tatum filler worker (lazy; Markov fallback on any failure). */
   public ensureTatumModel(basePath: string = "data"): void {
@@ -3279,14 +3279,16 @@ export class ClientGrooveboxConductor {
     return { sec: this.arranger.getSection(), steps };
   }
 
-  /** Ask the tatum worker to fill the currently planned bar (single inflight). */
+  /** Ask the tatum worker to fill the currently planned bar (single inflight).
+   * Header ids follow the FIXED tatum layout (SEC 4104+, CHORD 4109+, ranks
+   * 4122/4422/4722/5022); the bar-GPT 1222-layout ids are NOT interchangeable. */
   private requestTatumFill(): void {
     if (!this.tatumReady || !this.tatumWorker || this.tatumInFlight || this.tatumFill || !this.modelPlan) return;
-    const off = { drums: 1306, bass: 1606, other: 1906, vocals: 2206 };
+    const off = { drums: 4122, bass: 4422, other: 4722, vocals: 5022 };
     const secIdx = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"].indexOf(this.modelPlan.sec);
     const header = [
-      1204 + (secIdx >= 0 ? secIdx : 1),
-      1209 + ((this.modelPlan.chord % 12) + 12) % 12,
+      4104 + (secIdx >= 0 ? secIdx : 1),
+      4109 + ((this.modelPlan.chord % 12) + 12) % 12,
       ...(["drums", "bass", "other", "vocals"] as StemName[]).map((s) => off[s] + this.modelPlan!.ranks[s]),
     ];
     if (header.some((t) => !Number.isFinite(t) || t < 0)) return;

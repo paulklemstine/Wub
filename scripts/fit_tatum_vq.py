@@ -35,6 +35,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--vocab", default="data/global_vocabulary.json")
     ap.add_argument("--out", default="data/tatum_vq")
+    ap.add_argument("--drums", type=int, default=K_PER_STEM["drums"])
+    ap.add_argument("--bass", type=int, default=K_PER_STEM["bass"])
+    ap.add_argument("--other", type=int, default=K_PER_STEM["other"])
+    ap.add_argument("--vocals", type=int, default=K_PER_STEM["vocals"])
     args = ap.parse_args()
 
     import sys
@@ -50,7 +54,7 @@ def main() -> None:
         # sanity: reconstructed raw features match stored vectors
         X0 = np.stack([slice_feature_raw(s) for s in fake])
         assert X0.shape[1] == 26
-        vq = StemVQ(stem, k=K_PER_STEM[stem]).fit(fake)
+        vq = StemVQ(stem, k=getattr(args, stem)).fit(fake)
         outdir = Path(args.out) / stem
         vq.save(outdir)
         # medoid slice per code (nearest member in standardized space)
