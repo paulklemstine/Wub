@@ -177,7 +177,7 @@ def main() -> None:
     ap.add_argument("--skip-per-song-feedback", action="store_true", default=False,
                     help="skip the per-song PatternAudioFeedback step (separate+analyze only); "
                          "feedback still runs in bulk at every --train-interval")
-    ap.add_argument("--auto-push", action="store_true", default=True, help="auto commit and push checkpoints live to GitHub Pages")
+    ap.add_argument("--auto-push", dest="auto_push", action=argparse.BooleanOptionalAction, default=True, help="auto commit and push checkpoints live to GitHub Pages (--no-auto-push to disable)")
     args = ap.parse_args()
 
     stems_dir = Path("data/stems")

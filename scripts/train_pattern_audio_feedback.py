@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--processed", default="data/processed", help="Path to processed JSON analyses")
     parser.add_argument("--stems", default="data/stems", help="Path to stems directory")
     parser.add_argument("--optimize", type=int, default=12, help="Number of generic patterns to optimize")
-    parser.add_argument("--max-tracks", type=int, default=40, help="Max tracks to load into pattern bank")
+    parser.add_argument("--max-tracks", type=int, default=0, help="Max tracks to load into pattern bank (0 = all tracks)")
     parser.add_argument("--iterations", type=int, default=3, help="Training iterations")
     args = parser.parse_args()
 
@@ -41,7 +41,7 @@ def main() -> None:
 
     print(f"Loaded {len(tracks)} track analyses from corpus. Initializing PatternBank (max {args.max_tracks} tracks)...", flush=True)
     bank = PatternBank()
-    bank.load_from_tracks(tracks[:args.max_tracks])
+    bank.load_from_tracks(tracks if args.max_tracks <= 0 else tracks[:args.max_tracks])
     print(f"PatternBank populated with {sum(len(p) for p in bank.patterns_by_stem.values())} patterns across stems.", flush=True)
 
     engine = PatternAudioFeedbackEngine()
