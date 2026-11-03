@@ -111,9 +111,13 @@ self.onmessage = async (ev: MessageEvent) => {
       (self as unknown as { postMessage: (m: unknown) => void }).postMessage({ type: "plan", steps, seed: msg.seed });
     }
   } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
     (self as unknown as { postMessage: (m: unknown) => void }).postMessage({
       type: "error",
-      message: e instanceof Error ? e.message : String(e),
+      message,
+      // Init failures are fatal (no model); plan failures are transient.
+      // One bad draw must never brick the worker.
+      fatal: message.includes("config fetch failed") || message.includes("ORT session"),
     });
   }
 };

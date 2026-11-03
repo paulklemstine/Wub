@@ -3135,7 +3135,7 @@ export class ClientGrooveboxConductor {
         } else if (msg.type === "error") {
           console.warn("[Client ML] Arranger worker error, Markov fallback:", msg.message);
           this.planInFlight = false;
-          this.arrangerReady = false;
+          if ((msg as { fatal?: boolean }).fatal !== false) this.arrangerReady = false;
         }
       };
       w.onerror = () => {
@@ -3149,16 +3149,21 @@ export class ClientGrooveboxConductor {
     }
   }
 
-  /** Decode one worker-planned 6-token bar; null when unusable (caller falls back). */
+  /** Decode one worker-planned 6-token bar; null when unusable (caller falls back).
+   * The bar GPT emits model-space token ids (drums 0..299, bass 301..600,
+   * other 602..901, vocals 903..1202); ranks are normalized to 0..299 here,
+   * with -1 for out-of-range/UNK slots (per-stem Markov fallback covers them). */
   private decodePlannedBar(tokens: number[]): { sec: string; chord: number; ranks: Record<StemName, number> } | null {
     if (!tokens || tokens.length < 6) return null;
     const secIdx = tokens[0] - 1204;
     const sec = secIdx >= 0 && secIdx < 5 ? (["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"] as const)[secIdx] : null;
     if (!sec) return null;
     const chord = tokens[1] >= 1209 && tokens[1] <= 1220 ? tokens[1] - 1209 : 0;
+    const base = { drums: 0, bass: 301, other: 602, vocals: 903 } as Record<StemName, number>;
     const ranks = {} as Record<StemName, number>;
     (["drums", "bass", "other", "vocals"] as StemName[]).forEach((stem, i) => {
-      ranks[stem] = tokens[2 + i];
+      const r = tokens[2 + i] - base[stem];
+      ranks[stem] = r >= 0 && r < 300 ? r : -1;
     });
     return { sec, chord, ranks };
   }
@@ -3252,7 +3257,7 @@ export class ClientGrooveboxConductor {
           if (!this.tatumFill) this.requestTatumFill();
         } else if (msg.type === "error") {
           this.tatumInFlight = false;
-          this.tatumReady = false;
+          if ((msg as { fatal?: boolean }).fatal !== false) this.tatumReady = false;
         }
       };
       w.onerror = () => {
@@ -6188,11 +6193,13 @@ export class ClientGrooveboxConductor {
 
   private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
     // Model anchor: whole-bar GPT plans land only on phrase anchors (0/4) so
-    // all stems resample in lockstep; the 4-bar hold carries the bar between
-    // anchors. Markov + holds cover everything else (incl. section changes).
+    // all stems resample in lockstep. The anchor needs a COMPLETE plan (all 4
+    // ranks valid); a partial plan falls back to per-stem Markov choice.
     const modelGates = this.globalPatterns && !this.catalogSongActive && !this.activePhraseBlock
       && (this.playbackMode === "jukebox" || this.playbackMode === "slices") && this.abVariant !== "old";
-    const takeModelBar = Boolean(modelGates && this.modelPlan && (phraseBar === 0 || phraseBar === 4));
+    const mp = this.modelPlan;
+    const takeModelBar = Boolean(modelGates && mp && (phraseBar === 0 || phraseBar === 4)
+      && mp.ranks.drums >= 0 && mp.ranks.bass >= 0 && mp.ranks.other >= 0 && mp.ranks.vocals >= 0);
     if (takeModelBar) {
       for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) this.globalBarHeld[s] = 4;
     }
