@@ -2978,7 +2978,6 @@ export class ClientGrooveboxConductor {
   /** Groove pocket: per-step microtiming nudge in ms (ported from wub_core/fill_pocket_spec.py).
    * Kick pushes (-2), snare sits back (+4), hats swing late on off-16ths (+8), bass lays back (+6). Bounded ±15ms. */
   public pocketNudge(stem: StemName | string, step: number): number {
-    if (this.abVariant === "old") return 0; // A/B control: no microtiming
     const s = ((step % 16) + 16) % 16;
     const key = String(stem).toLowerCase();
     const clamp = (v: number): number => Math.max(-15, Math.min(15, v));
@@ -3012,10 +3011,9 @@ export class ClientGrooveboxConductor {
   }
 
   /** Combined musical gain: humanized velocity × loudness normalization,
-   * clamped to the engine's 0..1.5 range. A/B control ("old") = raw velocity. */
+   * clamped to the engine's 0..1.5 range. */
   public finalGain(velocity: number, bar: number, step: number, loudDb?: number): number {
     const v = Math.max(0, Math.min(1.5, velocity));
-    if (this.abVariant === "old") return v;
     return Math.max(0, Math.min(1.5, this.humanizeVelocity(v, bar, step) * this.loudnessNormalizeGain(loudDb)));
   }
 
@@ -3091,43 +3089,8 @@ export class ClientGrooveboxConductor {
     this.journeyIdx = 0;
   }
 
-  // Blind A/B rig: variant forces old renderer (null = normal live behavior).
-  // "new" = global planner + joint + pocket + loudness norm; "old" = legacy
-  // per-song/loop path with raw velocities and no microtiming.
-  private abVariant: "new" | "old" | null = null;
-  private abSeeded: (() => number) | null = null;
-
-  public setABVariant(v: "new" | "old" | null): void {
-    this.abVariant = v;
-  }
-
-  public getABVariant(): "new" | "old" | null {
-    return this.abVariant;
-  }
-
-  /** Blind A/B helper: force the arranger onto a trial section. */
-  public abForceSection(sec: string): void {
-    this.arranger.setSection(sec);
-  }
-
-  /** Seeded RNG for A/B trials (mulberry32); null = live Math.random. */
-  public setABSeed(seed: number | null): void {
-    if (seed === null) {
-      this.abSeeded = null;
-      return;
-    }
-    let a = seed | 0;
-    this.abSeeded = () => {
-      a |= 0;
-      a = (a + 0x6d2b79f5) | 0;
-      let t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
   private rnd(): number {
-    return this.abSeeded ? this.abSeeded() : Math.random();
+    return Math.random();
   }
 
   // Resilient fetching: shared 8-wide semaphore so hundreds of slice/loop
@@ -3173,16 +3136,6 @@ export class ClientGrooveboxConductor {
   private planInFlight = false;
   private modelPlan: { sec: string; chord: number; ranks: Record<StemName, number> } | null = null;
   private barHistory: number[][] = []; // committed model-planned bars, 6 tokens each
-  // Played-bar audit per A/B variant (capped rolling windows, for training).
-  private abPlayedBars: Record<"new" | "old", number[][]> = { new: [], old: [] };
-
-  /** Last N committed bars per variant, for A/B vote records (reward training). */
-  public getABTrialBars(n = 8): Record<"new" | "old", number[][]> {
-    return {
-      new: this.abPlayedBars.new.slice(-n).map((b) => [...b]),
-      old: this.abPlayedBars.old.slice(-n).map((b) => [...b]),
-    };
-  }
 
   /** One-shot playback diagnostic: which audio each stem will actually use.
    * Paste the output while music plays. slices "R/T" = resolved/total slice
@@ -3280,7 +3233,7 @@ export class ClientGrooveboxConductor {
     for (const b of this.barHistory.slice(-32)) flat.push(...b);
     if (flat.length < 6) return; // need at least one committed bar to continue from
     this.planInFlight = true;
-    const seed = this.abSeeded ? Math.floor(this.abSeeded() * 1e9) : Math.floor(Math.random() * 1e9);
+    const seed = Math.floor(Math.random() * 1e9);
     this.arrangerWorker.postMessage({ type: "plan", history: flat, nSteps: 6, temp: 1.0, topK: 20, seed });
   }
 
@@ -3418,7 +3371,7 @@ export class ClientGrooveboxConductor {
     ];
     if (header.some((t) => !Number.isFinite(t) || t < 0)) return;
     this.tatumInFlight = true;
-    const seed = this.abSeeded ? Math.floor(this.abSeeded() * 1e9) : Math.floor(Math.random() * 1e9);
+    const seed = Math.floor(Math.random() * 1e9);
     this.tatumWorker.postMessage({ type: "plan", history: header, nSteps: 64, temp: 1.0, topK: 20, seed });
   }
 
@@ -3427,6 +3380,58 @@ export class ClientGrooveboxConductor {
   // Last committed bar sigs per stem (previous bar) for call-response bias.
   private prevBarGlobalSig: Record<StemName, string | null> = { drums: null, bass: null, other: null, vocals: null };
   // Ranks driving the current bar per stem (model plan or Markov lookup).
+  /**
+   * Phrase-level beam plan: look ahead a 4-bar phrase, scoring each step by
+   * joint PMI + call-response + section density (+ downbeats for drums), and
+   * return the best-scoring phrase. The caller commits the first bar now;
+   * planning the arc up front is what makes phrases hang together instead
+   * of wandering bar to bar.
+   */
+  private planPhraseBars(
+    stem: StemName,
+    startSig: string | null,
+    sec: string,
+    depth = 4,
+    width = 3,
+  ): Array<{ sig: string; tokens: Array<string | null>; score: number }> | null {
+    type Beam = { sigs: string[]; toks: Array<Array<string | null>>; score: number; prev: string | null };
+    let beams: Beam[] = [{ sigs: [], toks: [], score: 0, prev: startSig }];
+    for (let d = 0; d < depth; d++) {
+      const next: Beam[] = [];
+      for (const b of beams) {
+        for (let attempt = 0; attempt < width; attempt++) {
+          const cand = this.sampleGlobalBar(stem, b.prev);
+          if (!cand || cand.length !== 16) continue;
+          const candSig = cand.map((t) => t || ".").join("-");
+          const combo: Record<StemName, string> = {
+            drums: stem === "drums" ? candSig : (this.globalBarSig.drums || "."),
+            bass: stem === "bass" ? candSig : (this.globalBarSig.bass || "."),
+            other: stem === "other" ? candSig : (this.globalBarSig.other || "."),
+            vocals: stem === "vocals" ? candSig : (this.globalBarSig.vocals || "."),
+          };
+          const pmi = this.jointPmiFor(combo);
+          const cross = this.callResponseBonus(stem, candSig);
+          const dens = this.sectionDensityFit(stem, candSig, sec);
+          let down = 0;
+          if (stem === "drums" && (sec === "DROP" || sec === "GROOVE_A")) {
+            const hits = [0, 4, 8, 12].filter((x) => candSig.split("-")[x] !== ".").length;
+            down = hits / 4;
+          }
+          const score = pmi * 2 + cross * 1 + dens * 1.5 + down * 2;
+          next.push({ sigs: [...b.sigs, candSig], toks: [...b.toks, cand], score: b.score + score, prev: candSig });
+        }
+      }
+      if (next.length === 0) break;
+      next.sort((a, c) => c.score - a.score);
+      beams = next.slice(0, width);
+    }
+    const best = beams
+      .filter((b) => b.sigs.length > 0)
+      .sort((a, b2) => b2.score / Math.max(1, b2.sigs.length) - a.score / Math.max(1, a.sigs.length))[0];
+    if (!best) return null;
+    return best.sigs.map((sig, i) => ({ sig, tokens: best.toks[i], score: best.score / best.sigs.length }));
+  }
+
   private usedRankByStem: Record<StemName, number> = { drums: -1, bass: -1, other: -1, vocals: -1 };
 
   /** Cross-stem call-response bonus: how likely is `candSig` on `stem` as an
@@ -6317,7 +6322,7 @@ export class ClientGrooveboxConductor {
     // all stems resample in lockstep. The anchor needs a COMPLETE plan (all 4
     // ranks valid); a partial plan falls back to per-stem Markov choice.
     const modelGates = this.globalPatterns && !this.catalogSongActive && !this.activePhraseBlock
-      && (this.playbackMode === "jukebox" || this.playbackMode === "slices") && this.abVariant !== "old";
+      && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
     const mp = this.modelPlan;
     const takeModelBar = Boolean(modelGates && mp && (phraseBar === 0 || phraseBar === 4)
       && mp.ranks.drums >= 0 && mp.ranks.bass >= 0 && mp.ranks.other >= 0 && mp.ranks.vocals >= 0);
@@ -6427,7 +6432,7 @@ export class ClientGrooveboxConductor {
       // !hasBarSequence here previously starved the planner (song models
       // almost always carry sequences), so none of the joint/call-response
       // machinery ever executed.
-      const gpUsable = gp && this.abVariant !== "old" && !this.catalogSongActive && !this.activePhraseBlock
+      const gpUsable = gp && !this.catalogSongActive && !this.activePhraseBlock
         && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
       if (gpUsable && this.globalBarHeld[stem] >= 4) {
         // Model-planned bar (GPT): whole-arrangement prediction from history.
@@ -6450,34 +6455,11 @@ export class ClientGrooveboxConductor {
           }
         }
         if (tokens.length === 0) {
-          // Joint-biased draw: sample up to 3 candidates, keep the one whose
-          // 4-stem combination actually co-occurred in training (PMI wins) with
-          // call-response answers preferred as tiebreak. Fixes "stems fight".
-          let bestScore = -Infinity;
-          for (let attempt = 0; attempt < 3; attempt++) {
-            const cand = this.sampleGlobalBar(stem, this.globalBarSig[stem]);
-            if (cand.length !== 16) continue;
-            const candSig = cand.map((t) => t || ".").join("-");
-            const combo: Record<StemName, string> = {
-              drums: stem === "drums" ? candSig : (this.globalBarSig.drums || "."),
-              bass: stem === "bass" ? candSig : (this.globalBarSig.bass || "."),
-              other: stem === "other" ? candSig : (this.globalBarSig.other || "."),
-              vocals: stem === "vocals" ? candSig : (this.globalBarSig.vocals || "."),
-            };
-            const pmi = this.jointPmiFor(combo);
-            const cross = this.callResponseBonus(stem, candSig);
-            const dens = this.sectionDensityFit(stem, candSig, sec);
-            let down = 0;
-            if (stem === "drums" && (sec === "DROP" || sec === "GROOVE_A")) {
-              const hits = [0, 4, 8, 12].filter((s) => candSig.split("-")[s] !== ".").length;
-              down = hits / 4;
-            }
-            const score = pmi * 2 + cross * 1 + dens * 1.5 + down * 2;
-            if (tokens.length === 0 || score > bestScore) {
-              tokens = cand;
-              bestScore = score;
-            }
-            if (pmi > 0.3 && cross > 0) break; // heard together AND answers the last bar
+          // Phrase-level beam plan: score 4-bar arcs, commit the first bar.
+          // Planning the arc up front is what makes phrases hang together.
+          const phrase = this.planPhraseBars(stem, this.globalBarSig[stem], sec);
+          if (phrase && phrase.length > 0 && phrase[0].tokens.length === 16) {
+            tokens = phrase[0].tokens;
           }
         }
         // Record the rank driving this bar for arrangement-history + A/B.
@@ -6802,13 +6784,6 @@ export class ClientGrooveboxConductor {
       }
       this.barHistory.push(bar);
       if (this.barHistory.length > 32) this.barHistory.splice(0, this.barHistory.length - 32);
-      // A/B training data: mirror committed bars per variant so votes become
-      // (context, winner, loser) triples for preference fine-tuning.
-      const variant = this.abVariant || "new";
-      this.abPlayedBars[variant].push(bar);
-      if (this.abPlayedBars[variant].length > 64) {
-        this.abPlayedBars[variant].splice(0, this.abPlayedBars[variant].length - 64);
-      }
       if (!this.modelPlan) this.requestBarPlan(); // Markov-seeded: ask worker to take over
     }
     if (takeModelBar) {

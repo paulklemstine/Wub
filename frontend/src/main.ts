@@ -287,7 +287,6 @@ class WubApp {
     this.bindFeedbackControls();
     this.bindGrooveboxCycleControls();
     this.bindPlaybackModeControls();
-    this.bindBlindABControls();
 
     // Initialize Autonomous In-Browser ML Sequencer
     try {
@@ -671,107 +670,6 @@ class WubApp {
     } else {
       this.setStatus(`👎 ${stemName} downvoted! Rerolling stem immediately to a fresh compatible pattern...`);
     }
-  }
-
-  // Blind A/B rig (docs/BLIND_AB_SPEC.md): same section + seeded global draws,
-  // X/Y mapping hidden and reshuffled per pair. Votes POST to /api/ab.
-  private abPairCount = 0;
-  private abMapping: { X: "new" | "old"; Y: "new" | "old" } = { X: "new", Y: "old" };
-  private abSection: string = "DROP";
-  private abSeed: number = 0;
-  private abPairId: string = "";
-  private readonly AB_SECTIONS = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
-
-  private bindBlindABControls(): void {
-    const on = (id: string, fn: () => void): void => {
-      document.getElementById(id)?.addEventListener("click", fn);
-    };
-    on("btn-ab-new", () => this.abNewTrial());
-    on("btn-ab-x", () => this.abListen("X"));
-    on("btn-ab-y", () => this.abListen("Y"));
-    on("btn-ab-vote-x", () => void this.abVote("X", false));
-    on("btn-ab-vote-y", () => void this.abVote("Y", false));
-    on("btn-ab-skip", () => void this.abVote("X", true));
-  }
-
-  private abNewTrial(): void {
-    if (!this.clientConductor) {
-      this.setStatus("Blind A/B: engine not ready yet.");
-      return;
-    }
-    this.abPairCount++;
-    this.abSection = this.AB_SECTIONS[(this.abPairCount - 1) % this.AB_SECTIONS.length];
-    this.abSeed = (Math.random() * 1e9) | 0;
-    this.abPairId = `ab-${Date.now().toString(36)}-${this.abPairCount}`;
-    // Reshuffle hidden mapping every pair; labels never reveal old/new.
-    if (Math.random() < 0.5) {
-      this.abMapping = { X: "new", Y: "old" };
-    } else {
-      this.abMapping = { X: "old", Y: "new" };
-    }
-    this.clientConductor.setABSeed(this.abSeed);
-    this.abListen(Math.random() < 0.5 ? "X" : "Y");
-    this.setStatus(`Blind A/B pair ${this.abPairCount} (${this.abSection}): X/Y live — vote when ready.`);
-  }
-
-  private abListen(which: "X" | "Y"): void {
-    if (!this.clientConductor || !this.abPairId) {
-      this.setStatus("Blind A/B: press A/B to start a trial first.");
-      return;
-    }
-    const variant = this.abMapping[which];
-    this.clientConductor.setABSeed(this.abSeed);
-    this.clientConductor.setABVariant(variant);
-    this.clientConductor.abForceSection(this.abSection);
-    const label = document.getElementById("ab-pair-label");
-    if (label) label.textContent = `#${this.abPairCount} ${this.abSection} · ${which}`;
-    document.querySelectorAll("#ab-panel .gb-cycle-btn").forEach((b) => b.classList.remove("active"));
-    document.getElementById(which === "X" ? "btn-ab-x" : "btn-ab-y")?.classList.add("active");
-    this.setStatus(`Blind A/B: now playing ${which} (pair ${this.abPairCount}, ${this.abSection}).`);
-  }
-
-  private async abVote(winner: "X" | "Y", skipped: boolean): Promise<void> {
-    if (!this.abPairId) {
-      this.setStatus("Blind A/B: press A/B to start a trial first.");
-      return;
-    }
-    const rec = {
-      pair_id: this.abPairId,
-      winner,
-      skipped,
-      seed: this.abSeed,
-      section: this.abSection,
-      mapping: this.abMapping,
-      // Played bars per variant (6-token bar-GPT ids) so votes become
-      // (context, winner, loser) triples for preference fine-tuning.
-      bars: this.clientConductor?.getABTrialBars(8) ?? null,
-      created_at: Date.now() / 1000,
-    };
-    try {
-      const raw = localStorage.getItem("wub_ab_votes");
-      const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
-      arr.push(rec);
-      localStorage.setItem("wub_ab_votes", JSON.stringify(arr));
-    } catch {
-      // storage optional; server record is primary
-    }
-    try {
-      await fetch("./api/ab", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(rec),
-      });
-    } catch {
-      // offline static hosting: localStorage copy suffices
-    }
-    this.setStatus(
-      skipped
-        ? `Blind A/B pair ${this.abPairCount} skipped.`
-        : `Blind A/B pair ${this.abPairCount}: voted ${winner}. Thank you — training weights updated.`
-    );
-    this.abPairId = "";
-    const label = document.getElementById("ab-pair-label");
-    if (label) label.textContent = "—";
   }
 
   private bindGrooveboxCycleControls(): void {

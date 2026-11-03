@@ -43,23 +43,20 @@ per build into `data/song_quality_eval.json`.
 
 ## Calibration protocol (required before using the score for generation)
 
-1. Generate blind A/B pairs (transport rig), collect ≥20 non-skipped votes.
+1. Curate a blind listening set: render pairs of continuations from the
+   same seed (old renderer vs candidate), loudness-matched, order shuffled.
 2. For each pair, score both variants with `score_song` on the exact
-   played bars (log `step_slice_ids` + sections per pair for this).
+   played bars.
 3. Agreement = fraction where the metric prefers the human winner.
    Target: **≥70%**. Below that, adjust `WEIGHTS`/sub-metrics and repeat —
    do NOT wire the metric into generation (rerank, hill-climb) until then.
 4. Re-run calibration after any change to the scheduler, the vocab, or
    the weights: the metric must track ears, not replace them.
 
-## From votes to training
+## Cross-song swap test (the acid test for the vocabulary)
 
-Since votes now carry the played 6-token bars per variant
-(`bars: {new: [...], old: [...]}` in `data/ab_results.json`),
-`scripts/finetune_from_ab.py` performs winner-weighted supervised
-fine-tuning (filtered behavior cloning: train on winners, ignore losers,
-early-stop on winner-val perplexity). This is deliberately NOT full
-RLHF/DPO: live play has no shared prompt prefix to pair over, so the
-honest objective is likelihood of human-approved continuations.
-Run it only after a voting round with >=4 usable winner sequences;
-it refuses to train on fewer (avoids overfitting to a single session).
+`scripts/eval_cross_song.py` rebuilds each stemmed track using ONLY slices
+from *other* tracks (leave-one-song-out remap) and reports per-stem
+fidelity vs the self-vocab rebuild. A vocabulary that can re-voice songs
+it never contributed slices to is reusable by construction; one that can
+only rebuild its donors is a filing cabinet. Track this gap per commit.

@@ -92,26 +92,6 @@ def test_api_endpoints(store, monkeypatch):
         assert cm.status_code == 200 and cm.json()["cycle_mode"] == "4x16"
 
 
-def test_ab_votes(store, tmp_path, monkeypatch):
-    httpx = pytest.importorskip("httpx")
-    from fastapi.testclient import TestClient
-
-    import server.main as main
-
-    monkeypatch.setattr(main, "STORE", store)
-    monkeypatch.setattr(main, "CACHE", main.SliceCache(cap=16))
-    monkeypatch.setattr(main, "AB_RESULTS_FILE", tmp_path / "ab_results.json")
-    with TestClient(main.app) as client:
-        bad = client.post("/api/ab", json={"winner": "X"})
-        assert bad.status_code == 400
-        r = client.post("/api/ab", json={"pair_id": "ab-1", "winner": "Y",
-                                         "skipped": False, "seed": 42, "section": "DROP"})
-        assert r.status_code == 200 and r.json()["n"] == 1
-        r2 = client.post("/api/ab", json={"pair_id": "ab-2", "winner": "X",
-                                          "skipped": True, "seed": 7, "section": "INTRO"})
-        assert r2.status_code == 200 and r2.json()["n"] == 2
-
-
 def test_synth_blend_math():
     from wub_core.synth_decoder import StemLatentSynth
 
