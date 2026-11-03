@@ -3111,6 +3111,15 @@ export class ClientGrooveboxConductor {
   /** Boot the ONNX planner worker (lazy; Markov fallback on any failure). */
   public ensureArrangerModel(basePath: string = "data"): void {
     if (this.arrangerWorker || typeof Worker === "undefined") return;
+    // Absolute base URL: relative fetch() inside a worker resolves against
+    // the *worker script* URL (dist/assets/), not the document, so a bare
+    // "data/..." path 404s there. Anchor it to the document instead.
+    let absBase = basePath;
+    try {
+      absBase = new URL(`${basePath}/`, document.baseURI).href.replace(/\/$/, "");
+    } catch {
+      // keep relative path as fallback
+    }
     try {
       const w = new Worker(new URL("./arranger_worker.ts", import.meta.url), { type: "module" });
       w.onmessage = (ev: MessageEvent) => {
@@ -3133,7 +3142,7 @@ export class ClientGrooveboxConductor {
         this.arrangerReady = false;
         this.planInFlight = false;
       };
-      w.postMessage({ type: "init", basePath, config: "arranger_gpt.json" });
+      w.postMessage({ type: "init", basePath: absBase, config: "arranger_gpt.json" });
       this.arrangerWorker = w;
     } catch {
       this.arrangerReady = false;
@@ -3223,6 +3232,13 @@ export class ClientGrooveboxConductor {
   /** Boot the tatum filler worker (lazy; Markov fallback on any failure). */
   public ensureTatumModel(basePath: string = "data"): void {
     if (this.tatumWorker || typeof Worker === "undefined") return;
+    // Absolute base URL: see ensureArrangerModel (worker-relative fetch 404s).
+    let absBase = basePath;
+    try {
+      absBase = new URL(`${basePath}/`, document.baseURI).href.replace(/\/$/, "");
+    } catch {
+      // keep relative path as fallback
+    }
     try {
       const w = new Worker(new URL("./arranger_worker.ts", import.meta.url), { type: "module" });
       w.onmessage = (ev: MessageEvent) => {
@@ -3243,12 +3259,11 @@ export class ClientGrooveboxConductor {
         this.tatumReady = false;
         this.tatumInFlight = false;
       };
-      w.postMessage({ type: "init", basePath, config: "tatum_gpt.json" });
+      w.postMessage({ type: "init", basePath: absBase, config: "tatum_gpt.json" });
       this.tatumWorker = w;
     } catch {
       this.tatumReady = false;
     }
-    void basePath;
     void this.loadTatumCodebook(basePath);
   }
 
