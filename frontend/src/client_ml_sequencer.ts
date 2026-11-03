@@ -3245,6 +3245,7 @@ export class ClientGrooveboxConductor {
   // plus the current header matches training exactly.
   private tatumHist: number[] = [];
   private tatumHeader: number[] = [];
+  private tatumCtx = 280; // ONNX config ctx, read on worker "ready"
 
   /** Convert the pending tatum fill into this stem's 16-step slice ids.
    * Code -> medoid slice; HOLD extends the previous onset (null step, the
@@ -3314,6 +3315,7 @@ export class ClientGrooveboxConductor {
         const msg = ev.data as { type?: string; steps?: number[]; message?: string };
         if (msg.type === "ready") {
           this.tatumReady = true;
+          this.tatumCtx = (msg as { ctx?: number }).ctx || 280;
           console.info("[Client ML] Tatum filler ready (ONNX worker).");
         } else if (msg.type === "plan" && Array.isArray(msg.steps) && msg.steps.length >= 64) {
           this.tatumInFlight = false;
@@ -3322,7 +3324,7 @@ export class ClientGrooveboxConductor {
           if (this.tatumFill) {
             // Extend the model's 4-bar context with the bar we just generated.
             this.tatumHist.push(...this.tatumHeader, ...steps);
-            if (this.tatumHist.length > 210) this.tatumHist.splice(0, this.tatumHist.length - 210);
+            this.trimTatumHist();
           } else {
             this.requestTatumFill();
           }
@@ -3370,6 +3372,12 @@ export class ClientGrooveboxConductor {
     return { sec: this.arranger.getSection(), steps };
   }
 
+  /** Keep exactly one model window of committed history (ctx - header). */
+  private trimTatumHist(): void {
+    const keep = Math.max(0, this.tatumCtx - 6);
+    if (this.tatumHist.length > keep) this.tatumHist.splice(0, this.tatumHist.length - keep);
+  }
+
   /** Ask the tatum worker to fill the currently planned bar (single inflight).
    * Header ids follow the FIXED tatum layout (SEC 4104+, CHORD 4109+, ranks
    * 4122/4422/4722/5022); the bar-GPT 1222-layout ids are NOT interchangeable. */
@@ -3385,10 +3393,13 @@ export class ClientGrooveboxConductor {
     if (header.some((t) => !Number.isFinite(t) || t < 0)) return;
     this.tatumInFlight = true;
     const seed = Math.floor(Math.random() * 1e9);
-    // 3 previous bars (210 tokens) + this header = 216 <= ctx 280; the model
-    // then generates 64 steps to complete the 4-bar window it was trained on.
+    // Feed exactly the ctx the model was trained on: 274 past tokens plus the
+    // 6-token header of the bar we are about to fill (274 + 6 = 280). Feeding
+    // only the header (what this used to do) left 274 left-pad zeros in the
+    // window, so the model was scoring bars it had never seen the context of.
     this.tatumHeader = header;
-    this.tatumWorker.postMessage({ type: "plan", history: [...this.tatumHist.slice(-210), ...header], nSteps: 64, temp: 1.0, topK: 20, seed });
+    const histLen = Math.max(0, this.tatumCtx - header.length);
+    this.tatumWorker.postMessage({ type: "plan", history: [...this.tatumHist.slice(-histLen), ...header], nSteps: 64, temp: 1.0, topK: 20, seed });
   }
 
   /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
