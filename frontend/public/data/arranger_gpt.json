@@ -1,1 +1,1 @@
-{"version":1,"vocab":1222,"ctx":192,"tokens_per_bar":6,"model":"arranger_gpt.onnx","model_int8":"arranger_gpt_int8.onnx","val_ppl":3.94}
+{"version":1,"vocab":1222,"ctx":192,"tokens_per_bar":6,"model":"arranger_gpt.onnx","model_int8":"arranger_gpt_int8.onnx","val_ppl":6.99}

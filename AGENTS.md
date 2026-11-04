@@ -102,6 +102,7 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | File | Responsibility |
 | :--- | :--- |
 | [`continuous_trainer.py`](file:///home/raver1975/Wub/scripts/continuous_trainer.py) | Long-running GPU daemon separating stems with Demucs and periodically retraining WubGPT. |
+| [`analyze_stem_corpus_vec.py`](file:///home/raver1975/Wub/scripts/analyze_stem_corpus_vec.py) | Vectorised per-slice analysis over a stem corpus (whole-stem CQT/MFCC averaged per slice; ~6x faster than the stock path). Run it where the stems live (`/mnt/e/Wub/data/stems` on the laptop) to build `data/processed/*.json` for full 4-stem training. |
 | [`export_standalone_client_bundle.py`](file:///home/raver1975/Wub/scripts/export_standalone_client_bundle.py) | Extracts top-scoring acoustic slice WAVs, chord progressions, and patterns into `frontend/public/data/`. |
 | [`pre_commit_version_bump.py`](file:///home/raver1975/Wub/scripts/pre_commit_version_bump.py) | Git pre-commit hook that increments the build number across all version files. |
 
