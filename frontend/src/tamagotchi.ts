@@ -915,7 +915,7 @@ export class TamagotchiAvatar {
     // 4. RAVE HEART (the audio-reactive centrepiece)
     // -------------------------------------------------------------------------
     ctx.save();
-    const bellyY = cy + 42 * scaleY - 15;
+    const bellyY = cy + 42 * scaleY - 10;
     const bassPump = Math.min(1.8, bassLevel * 2.6);
     const beatPhase = this.heartBeatPhase;
     const beatPulse = 1.0 + 0.15 * bassPump + 0.05 * Math.sin(beatPhase * Math.PI * 2);
