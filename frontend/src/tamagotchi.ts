@@ -821,9 +821,12 @@ export class TamagotchiAvatar {
       else ctx.lineTo(ax, ay);
     }
     ctx.closePath();
-    ctx.strokeStyle = glowColor;
+    // Warm gold hairline aura around the whole creature.
+    ctx.strokeStyle = "#ffd76a";
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = "#ffb300";
     ctx.lineWidth = 1.8;
-    ctx.globalAlpha = 0.35 + 0.35 * Math.min(1.0, rmsLevel);
+    ctx.globalAlpha = 0.35 + 0.40 * Math.min(1.0, rmsLevel);
     ctx.stroke();
 
     // 2C. Main Radiant Gummi Bear Perimeter (Neon Bloom Pass)
@@ -834,17 +837,18 @@ export class TamagotchiAvatar {
       else ctx.lineTo(p.x, p.y);
     }
     ctx.closePath();
-    ctx.shadowBlur = 18 + 24 * rmsLevel;
-    ctx.shadowColor = glowColor;
-    ctx.strokeStyle = glowColor;
+    // Golden neon bloom (the beloved yellow outline).
+    ctx.shadowBlur = 20 + 26 * rmsLevel;
+    ctx.shadowColor = "#ffae00";
+    ctx.strokeStyle = "#ffcf2e";
     ctx.lineWidth = 4.6;
-    ctx.globalAlpha = 0.48;
+    ctx.globalAlpha = 0.52;
     ctx.stroke();
 
     // 2D. Inner Crisp Laser Vector Pass (White/Neon core)
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = "#ffffff";
-    ctx.strokeStyle = mainColor;
+    ctx.shadowBlur = 9;
+    ctx.shadowColor = "#fff3b0";
+    ctx.strokeStyle = "#ffe45c";
     ctx.lineWidth = 2.4;
     ctx.globalAlpha = 1.0;
     ctx.stroke();
@@ -959,7 +963,14 @@ export class TamagotchiAvatar {
     const bassPump = Math.min(1.6, bassLevel * 2.4);
     const hoopRx = (47 + 7 * bassPump) * scaleX;
     const hoopRy = (16 + 2.6 * bassPump) * scaleY;
-    const tilt = 0.16 + 0.11 * Math.sin(t * 0.9) + 0.06 * Math.sin(t * 2.3 + 0.8);
+    // Slow plane drift plus kick/bass-reactive wobble so the hoop visibly
+    // precesses and kicks with the groove.
+    const tilt =
+      0.12 +
+      0.14 * Math.sin(t * 0.37) +                     // very slow drift
+      0.05 * Math.sin(t * 1.9 + 0.8) +                // gentle secondary wobble
+      0.10 * Math.min(1.2, bassLevel * 1.8) * Math.sin(t * 2.6) +
+      0.07 * Math.min(1.2, drumLevel * 1.6) * Math.sin(t * 4.3 + 0.3);
     const spin = t * (2.6 + 5.5 * drumLevel) + 1.1;
     const hoopAlpha = 0.55 + 0.45 * Math.min(1, rmsLevel);
 
