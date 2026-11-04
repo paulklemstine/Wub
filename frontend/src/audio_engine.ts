@@ -118,11 +118,42 @@ export class AudioEngine {
     master.attack.value = 0.003;
     master.release.value = 0.2;
 
+    // Gain staging: four stems summing at unity hit +4 dBFS on drum
+    // transients (measured peak 1.68 in the built app). Trim before the
+    // compressor, then a limiter and a soft clipper so the destination never
+    // sees more than ~0.98. Clipping was audible on every hit.
+    const masterTrim = ctx.createGain();
+    masterTrim.gain.value = 0.62;
+
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.08;
+
+    // Transparent below 0.8, tanh-limited above; asymptote 1.0 so a hot
+    // transient can never square off at the DAC.
+    const shaper = ctx.createWaveShaper();
+    const curve = new Float32Array(4096);
+    const knee = 0.8;
+    for (let i = 0; i < curve.length; i++) {
+      const x = (i / (curve.length - 1)) * 2 - 1;
+      const a = Math.abs(x);
+      const y = a <= knee ? a : knee + (1 - knee) * Math.tanh((a - knee) / (1 - knee));
+      curve[i] = Math.sign(x) * Math.min(1, y);
+    }
+    shaper.curve = curve;
+    shaper.oversample = "4x";
+
     const masterAnalyser = ctx.createAnalyser();
     masterAnalyser.fftSize = 2048;
     masterAnalyser.smoothingTimeConstant = 0.8;
 
-    master.connect(masterAnalyser);
+    master.connect(masterTrim);
+    masterTrim.connect(limiter);
+    limiter.connect(shaper);
+    shaper.connect(masterAnalyser);
     masterAnalyser.connect(ctx.destination);
 
     const buses = {} as Record<StemName, StemBus>;
@@ -325,6 +356,20 @@ export class AudioEngine {
     return await ctx.decodeAudioData(copy);
   }
 
+  /** Stable stereo position for a voice (mono slices need explicit width). */
+  private static panFor(stem: StemName, key: string): number {
+    if (stem === "bass") return 0;
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+    const side = (h & 1) === 0 ? -1 : 1;
+    if (stem === "drums") {
+      if (/kick|snare/i.test(key)) return 0;
+      return side * 0.18;
+    }
+    if (stem === "vocals") return side * 0.22;
+    return side * 0.38;
+  }
+
   /**
    * Schedule one slice at absolute context time `when`. Late timestamps are
    * clamped to just after now so late-arriving slices still sound. Returns
@@ -393,8 +438,16 @@ export class AudioEngine {
     const vGain = typeof opts.gain === "number" && Number.isFinite(opts.gain) ? Math.max(0, Math.min(1.5, opts.gain)) : 1.0;
     const sliceGain = ctx.createGain();
     sliceGain.gain.value = 0.0;
+    // Every shipped slice is mono, so the old chain produced a perfectly
+    // correlated (dead centre) mix -- measured L/R correlation 1.000. Place
+    // each voice in the field instead of hard-panning the file: kick/snare
+    // and bass stay centred, hats/pads/vocals get a stable offset keyed by
+    // the slice id so a given voice never jumps around.
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = AudioEngine.panFor(stem, vKey);
     source.connect(sliceGain);
-    sliceGain.connect(buses[stem].input);
+    sliceGain.connect(panner);
+    panner.connect(buses[stem].input);
 
     const endAt = startAt + durSec;
     if (requestedFadeMs > 0 && durSec > 0.01) {
@@ -423,6 +476,7 @@ export class AudioEngine {
       try {
         source.disconnect();
         sliceGain.disconnect();
+        panner.disconnect();
       } catch {
         // Already disconnected; safe to ignore.
       }
