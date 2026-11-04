@@ -685,6 +685,12 @@ export class NebulaRenderer {
   private dragStem: StemName | null = null;
   private dragOffset: { x: number; y: number } = { x: 0, y: 0 };
   private activeSliceMarkers: Partial<Record<StemName, { x: number; y: number; timeSec: number }>> = {};
+  // Pattern/slice usage trail: which points the current arrangement is playing.
+  private patternHistory: Array<{ x: number; y: number; t: number; stem: StemName }> = [];
+  // Smoothly animated reticle targets (bar-by-bar placement from the player).
+  private reticleAnims: Partial<Record<StemName, { fromX: number; fromY: number; toX: number; toY: number; start: number; dur: number }>> = {};
+  // Seeded starfield for the nebula backdrop.
+  private stars: Array<{ x: number; y: number; r: number; phase: number }> = [];
   // Reticle motion trails (recorded while dragging, fade after release)
   private trails: Record<StemName, Array<{ x: number; y: number; t: number }>> = {
     drums: [], bass: [], vocals: [], other: [],
@@ -696,6 +702,16 @@ export class NebulaRenderer {
 
   setActiveSlice(stem: StemName, x: number, y: number, timeSec: number): void {
     this.activeSliceMarkers[stem] = { x: clamp01(x), y: clamp01(y), timeSec };
+    const px = clamp01(x);
+    const py = clamp01(y);
+    const last = this.patternHistory[this.patternHistory.length - 1];
+    if (!last || Math.hypot(last.x - px, last.y - py) > 0.004 || timeSec - last.t > 1.5) {
+      this.patternHistory.push({ x: px, y: py, t: timeSec, stem });
+      if (this.patternHistory.length > 28) this.patternHistory.shift();
+    } else {
+      last.t = timeSec;
+      last.stem = stem;
+    }
   }
 
   private handlePointerDown: (e: PointerEvent) => void;
@@ -752,6 +768,19 @@ export class NebulaRenderer {
     canvas.addEventListener("pointerup", this.handlePointerUp);
     canvas.addEventListener("pointercancel", this.handlePointerUp);
     this.resize();
+
+    // Deterministic deep-space starfield (no Math.random so it is stable).
+    let seed = 0x9e3779b9;
+    const rnd = (): number => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    this.stars = Array.from({ length: 120 }, () => ({
+      x: rnd(),
+      y: rnd(),
+      r: 0.35 + rnd() * 1.25,
+      phase: rnd() * Math.PI * 2,
+    }));
   }
 
   /** Sync backing store to CSS size x devicePixelRatio. Call on layout. */
@@ -800,6 +829,19 @@ export class NebulaRenderer {
     };
   }
 
+  /** Glide a reticle to a target over `durSec` without firing the steering callback. */
+  setReticleTarget(stem: StemName, x: number, y: number, durSec: number = 0.32): void {
+    const cur = this.reticleMap[stem];
+    this.reticleAnims[stem] = {
+      fromX: cur.x,
+      fromY: cur.y,
+      toX: clamp01(x),
+      toY: clamp01(y),
+      start: performance.now() / 1000,
+      dur: Math.max(0.05, durSec),
+    };
+  }
+
   /** Programmatic move (no callback, so server echoes cannot loop). */
   setReticle(stem: StemName, x: number, y: number): void {
     const p = { x: clamp01(x), y: clamp01(y) };
@@ -833,11 +875,67 @@ export class NebulaRenderer {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
+    const tBg = frame.timeSec;
+    // Slow drifting aurora clouds.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const cloudCols = ["rgba(255, 0, 160, 0.085)", "rgba(0, 220, 255, 0.070)", "rgba(120, 70, 255, 0.080)"];
+    for (let k = 0; k < 3; k++) {
+      const cxp = w * (0.5 + 0.34 * Math.sin(tBg * 0.028 + k * 2.1));
+      const cyp = h * (0.5 + 0.30 * Math.cos(tBg * 0.023 + k * 1.7));
+      const rad = Math.max(w, h) * (0.34 + 0.08 * Math.sin(tBg * 0.045 + k));
+      const g = ctx.createRadialGradient(cxp, cyp, 0, cxp, cyp, rad);
+      g.addColorStop(0, cloudCols[k]);
+      g.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cxp, cyp, rad, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Starfield with twinkle.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < this.stars.length; i++) {
+      const st = this.stars[i];
+      const tw = 0.35 + 0.65 * Math.abs(Math.sin(tBg * 0.45 + st.phase));
+      ctx.globalAlpha = 0.18 + 0.55 * tw;
+      ctx.fillStyle = i % 7 === 0 ? "#9fe8ff" : (i % 5 === 0 ? "#ffd0f0" : "#ffffff");
+      ctx.beginPath();
+      ctx.arc(st.x * w, st.y * h, st.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+
+    // Concentric orbital rings around the nebula core.
+    ctx.save();
+    for (let i = 1; i <= 5; i++) {
+      ctx.beginPath();
+      ctx.ellipse(w / 2, h / 2, Math.min(w, h) * (0.10 + i * 0.085), Math.min(w, h) * (0.07 + i * 0.06), -0.18, 0, Math.PI * 2);
+      ctx.strokeStyle = i === 3 ? "rgba(255, 210, 80, 0.055)" : "rgba(160, 220, 255, 0.030)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.restore();
+
     // Apply subtle visual breathing when stems are not manually dragged.
     // IMPORTANT: Never call `onReticleMove` during passive visual drift, so autonomous
     // song/phrase progression is never hijacked or forced to switch songs every 4 bars!
     const t = frame.timeSec;
     for (const stem of RETICLE_STEMS) {
+      const anim = this.reticleAnims[stem];
+      if (anim && this.dragStem !== stem) {
+        const u = Math.min(1, (t - anim.start) / anim.dur);
+        const e = u * u * (3 - 2 * u);
+        const nx = anim.fromX + (anim.toX - anim.fromX) * e;
+        const ny = anim.fromY + (anim.toY - anim.fromY) * e;
+        this.reticleMap[stem] = { x: nx, y: ny };
+        this.basePositions[stem] = { x: nx, y: ny };
+        if (u >= 1) delete this.reticleAnims[stem];
+        continue;
+      }
       if (this.dragStem !== stem) {
         const prof = NebulaRenderer.DRIFT_PROFILES[stem];
         const base = this.basePositions[stem];
@@ -879,6 +977,42 @@ export class NebulaRenderer {
     }
     ctx.restore();
     ctx.globalAlpha = 1;
+
+    // Pattern usage: path of the slices the current arrangement has played,
+    // with brighter rings on the most recent points.
+    const pulseLater = 0.5 + 0.5 * Math.sin(frame.timeSec * 6.0);
+    const hist = this.patternHistory.filter((p) => frame.timeSec - p.t < 150);
+    if (hist.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineCap = "round";
+      for (let i = 1; i < hist.length; i++) {
+        const a = 0.05 + 0.32 * (i / hist.length);
+        ctx.globalAlpha = a;
+        ctx.strokeStyle = STEM_COLORS[hist[i].stem];
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.moveTo(hist[i - 1].x * w, hist[i - 1].y * h);
+        ctx.lineTo(hist[i].x * w, hist[i].y * h);
+        ctx.stroke();
+      }
+      for (let i = 0; i < hist.length; i++) {
+        const p = hist[i];
+        const fresh = Math.max(0, 1 - (frame.timeSec - p.t) / 8);
+        const isNow = i === hist.length - 1;
+        const rad = (isNow ? 5 : 3) + 4 * fresh + (isNow ? 2 * pulseLater : 0);
+        ctx.globalAlpha = 0.20 + 0.70 * fresh;
+        ctx.strokeStyle = isNow ? "#ffffff" : STEM_COLORS[p.stem];
+        ctx.lineWidth = isNow ? 1.8 : 1.1;
+        ctx.shadowBlur = isNow ? 14 : 6;
+        ctx.shadowColor = isNow ? "#ffffff" : STEM_COLORS[p.stem];
+        ctx.beginPath();
+        ctx.arc(p.x * w, p.y * h, rad, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
 
     // Gravity reticles with beat-synced bouncing pulse (draggable to steer sound)
     const bpm = Number.isFinite(frame.bpm) && frame.bpm > 0 ? frame.bpm : 120;

@@ -221,6 +221,9 @@ class WubApp {
   private trackStemPositions = new Map<string, { x: number; y: number }>();
   private umapLoadStarted = false;
   private lastNebulaKitId: string | null = null;
+  private kitBarIndex = -1;
+  private kitPoint: { x: number; y: number } | null = null;
+  private kitBlockAt = 0;
   private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private masterTimeScratch: Uint8Array<ArrayBuffer> | null = null;
@@ -377,6 +380,8 @@ class WubApp {
       });
       this.clientConductor.onKitPhrase = (p) => {
         const t = visualNow();
+        this.kitPoint = { x: p.x, y: p.y };
+        this.kitBlockAt = p.at;
         if (this.nebula !== null) {
           for (const stem of STEMS) {
             this.nebula.setActiveSlice(stem, p.x, p.y, t);
@@ -1271,6 +1276,33 @@ class WubApp {
       }
     } else {
       this.lastNebulaKitId = null;
+    }
+
+    // Every bar, glide the four reticles to the position representing that bar:
+    // the current phrase point plus a small per-stem orbit so each bar reads as
+    // a distinct spot in the kit constellation.
+    if (
+      this.clientConductor !== null &&
+      this.clientConductor.getPlaybackMode() === "kit" &&
+      this.kitPoint !== null &&
+      this.nebula !== null
+    ) {
+      const barSec = (60 / Math.max(40, this.bpm)) * 4;
+      const barIdx = Math.floor(audioNow / barSec);
+      if (barIdx !== this.kitBarIndex) {
+        this.kitBarIndex = barIdx;
+        const barInBlock = Math.max(0, Math.min(3, Math.floor((audioNow - this.kitBlockAt) / barSec)));
+        const baseAngle = (barInBlock * Math.PI) / 2;
+        STEMS.forEach((stem, i) => {
+          const a = baseAngle + (i * Math.PI) / 2;
+          this.nebula!.setReticleTarget(
+            stem,
+            this.kitPoint!.x + 0.034 * Math.cos(a),
+            this.kitPoint!.y + 0.034 * Math.sin(a),
+            0.34
+          );
+        });
+      }
     }
 
     // Consume queued UI events strictly when their scheduled audio playback time arrives
