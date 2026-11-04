@@ -3694,7 +3694,10 @@ export class ClientGrooveboxConductor {
     // 5 categories x 128 drum slices before touching bass, so pressing Play
     // early produced drums plus algorithmic bass/vocals and *silence* for the
     // chord/pad stem. Index-major gives every stem ~16 slices immediately.
-    const maxSlices = 128;
+    // 256 per category: the shipped bank now carries a full-corpus vocabulary
+    // (27.9k medoid slices across 1,699 tracks), so a wider prime costs a few
+    // seconds and removes the "same 128 sounds" repetition.
+    const maxSlices = 256;
     for (let i = 0; i < maxSlices; i++) {
       await Promise.all(groups.map(async (g) => {
         if (i >= g.list.length) return;
