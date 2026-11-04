@@ -1,10 +1,10 @@
 // M1 Kit Player: plays locked, real 4-bar stem phrases straight from the
 // export kit -- no resampling, no slice resynthesis, no pitch shifting.
 //
-// Each kit contains 8 phrases x 4 stems. A phrase is scheduled as four
-// independent AudioBufferSources at rate 1.0, so Opus's native 48 kHz decode
-// rate is never reinterpreted as 44.1 kHz. Block timing comes from the kit BPM
-// (`64 * 60 / (bpm * 4)` seconds per 4 bars), not from sample counts.
+// Each kit contains up to 8 phrases x 4 stems. A phrase is scheduled as four
+// independent AudioBufferSources at rate 1.0, so Opus's native decode rate is
+// never reinterpreted. Block timing comes from the fitted kit tempo
+// (`960 / median phrase duration`), not from sample counts.
 import type { StemName } from "./types";
 import type { AudioEngine } from "./audio_engine";
 
@@ -45,12 +45,50 @@ export interface KitManifest {
   kits: Kit[];
 }
 
+/** One scheduled 4-bar block, including rotation/bridge metadata. */
+export interface KitBlockResult {
+  kit: Kit;
+  phrase: KitPhrase;
+  stems: StemName[];
+  bridge: boolean;
+  setChanged: boolean;
+  blocksPlayedInSet: number;
+  blockDurationSec: number;
+  fitBpm: number | null;
+}
+
 interface LoadedKitPhrase {
   meta: KitPhrase;
   buffers: Partial<Record<StemName, AudioBuffer>>;
 }
 
+interface LoadedKitData {
+  kit: Kit;
+  phrases: LoadedKitPhrase[];
+  medianDurationSec: number;
+  fitBpm: number | null;
+}
+
+interface CamelotPosition {
+  number: number;
+  letter: "A" | "B";
+}
+
+/** Number of 4-bar blocks in one DJ set before the bridge/rotation. */
+export const KIT_SET_BLOCKS = 12;
+
 const STEM_ORDER: readonly StemName[] = ["drums", "bass", "other", "vocals"];
+const BRIDGE_STEMS: readonly StemName[] = ["other", "vocals"];
+const ALL_STEMS: readonly StemName[] = STEM_ORDER;
+
+// Per-stem crossfade profile: drums snap, bass settles quickly, while pads and
+// vocals overlap for a musical hand-off.
+const KIT_FADE_MS: Record<StemName, number> = {
+  drums: 18,
+  bass: 60,
+  other: 250,
+  vocals: 250,
+};
 
 // Section energy targets mirror ClientSongArranger so phrase choice follows the
 // same arrangement arc the sequencer is currently in.
@@ -62,9 +100,7 @@ const SECTION_ENERGY: Record<string, number> = {
   BREAKDOWN: 0.20,
 };
 
-// Adjacent sections come from ClientSongArranger's transition weights: if the
-// current section has no phrase in a kit, these are the musically safe
-// neighbours to borrow a phrase from.
+// Adjacent sections come from ClientSongArranger's transition weights.
 const ADJACENT_SECTIONS: Record<string, readonly string[]> = {
   INTRO: ["GROOVE_A", "BUILDUP"],
   GROOVE_A: ["BUILDUP", "BREAKDOWN", "DROP"],
@@ -72,6 +108,15 @@ const ADJACENT_SECTIONS: Record<string, readonly string[]> = {
   DROP: ["BREAKDOWN", "GROOVE_A", "BUILDUP"],
   BREAKDOWN: ["BUILDUP", "GROOVE_A"],
 };
+
+const PITCH_CLASS: Record<string, number> = {
+  C: 0, "C#": 1, DB: 1, D: 2, "D#": 3, EB: 3, E: 4, F: 5,
+  "F#": 6, GB: 6, G: 7, "G#": 8, AB: 8, A: 9, "A#": 10, BB: 10, B: 11,
+};
+
+// Camelot numbers indexed by pitch class (C..B). A minor = 8A, C major = 8B.
+const CAMELOT_MAJOR = [8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6, 1];
+const CAMELOT_MINOR = [5, 12, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10];
 
 function normaliseSection(section: string): string {
   return section.trim().toUpperCase();
@@ -81,8 +126,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function parseKey(keyName: string): { root: number; minor: boolean } | null {
+  const match = /^([A-Ga-g])([#b♯♭]?)\s*(major|minor|maj|min)$/.exec(keyName.trim());
+  if (!match) return null;
+  const accidental = match[2] === "♯" ? "#" : match[2] === "♭" ? "B" : match[2].toUpperCase();
+  const root = PITCH_CLASS[`${match[1].toUpperCase()}${accidental}`];
+  if (root === undefined) return null;
+  return { root, minor: match[3].toLowerCase().startsWith("min") };
+}
+
+function camelotForKey(keyName: string): CamelotPosition | null {
+  const parsed = parseKey(keyName);
+  if (parsed === null) return null;
+  const table = parsed.minor ? CAMELOT_MINOR : CAMELOT_MAJOR;
+  const number = table[parsed.root];
+  return { number, letter: parsed.minor ? "A" : "B" };
+}
+
+function camelotDistance(a: CamelotPosition, b: CamelotPosition): number {
+  if (a.number === b.number) return a.letter === b.letter ? 0 : 1;
+  if (a.letter !== b.letter) return 99;
+  const diff = Math.abs(a.number - b.number);
+  return Math.min(diff, 12 - diff);
+}
+
+function cosineSimilarity(a: readonly number[], b: readonly number[]): number {
+  const length = Math.min(a.length, b.length);
+  if (length === 0) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < length; i++) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    dot += av * bv;
+    normA += av * av;
+    normB += bv * bv;
+  }
+  if (normA <= 0 || normB <= 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
 // Deterministic FNV-1a hash -> mulberry32 roll. Selection is reproducible for
-// the same (section, energy target, recent ids) without touching Math.random.
+// the same inputs without touching Math.random.
 function deterministicRoll(input: string): number {
   let hash = 2166136261;
   for (let i = 0; i < input.length; i++) {
@@ -100,6 +186,15 @@ function joinUrl(base: string, file: string): string {
 }
 
 export class KitPlayer {
+  public static readonly KIT_SET_BLOCKS = KIT_SET_BLOCKS;
+
+  /** Blocks scheduled in the current kit set (0-based while under way). */
+  public blocksInSet: number = 0;
+  /** The next kit selected for the upcoming set change (exposed for UI). */
+  public nextKit: Kit | null = null;
+  /** Number of successful set changes in this session. */
+  public setChanges: number = 0;
+
   private readonly engine: AudioEngine;
   private baseUrl: string = "";
   private manifest: KitManifest | null = null;
@@ -111,6 +206,14 @@ export class KitPlayer {
   private medianDurationSec: number = 0;
   private fittedBpm: number | null = null;
   private lastPhrase: KitPhrase | null = null;
+  private lastSection: string | null = null;
+  private kitHistory: string[] = [];
+  private compatibility: Kit[] = [];
+  private pendingLoadedKit: LoadedKitData | null = null;
+  private pendingLoadPromise: Promise<boolean> | null = null;
+  private bridgeBlocksForNext: number = 1;
+  private forcedBridgeRemaining: number = 0;
+  private waitingForNextLogged: boolean = false;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -121,6 +224,11 @@ export class KitPlayer {
   }
 
   get currentKit(): Kit | null {
+    return this.kit;
+  }
+
+  /** Alias used by the UI/set-rotation state. */
+  get activeKit(): Kit | null {
     return this.kit;
   }
 
@@ -151,6 +259,18 @@ export class KitPlayer {
     return this.kit?.key ?? null;
   }
 
+  get kitSetBlocksLeft(): number {
+    return Math.max(0, KIT_SET_BLOCKS - this.blocksInSet);
+  }
+
+  get nextKitTrack(): string | null {
+    return this.nextKit?.track_id ?? null;
+  }
+
+  get compatibleKits(): Kit[] {
+    return [...this.compatibility];
+  }
+
   /** Fetch and validate the kit manifest. `basePath` is the manifest directory. */
   async loadManifest(basePath: string): Promise<KitManifest> {
     const base = basePath.replace(/\/+$/, "");
@@ -177,12 +297,10 @@ export class KitPlayer {
     return manifest;
   }
 
-  /** Decode all 8 phrases x 4 stems for one kit (32 AudioBuffers). */
-  async loadKit(kit: Kit): Promise<void> {
+  private async loadKitData(kit: Kit): Promise<LoadedKitData> {
     if (this.manifest === null) {
-      throw new Error("KitPlayer.loadKit called before loadManifest");
+      throw new Error("KitPlayer.loadKitData called before loadManifest");
     }
-    if (this.readyFlag && this.kit?.track_id === kit.track_id) return;
     if (!Array.isArray(kit.phrases) || kit.phrases.length === 0) {
       throw new Error(`Kit ${kit.track_id} has no phrases`);
     }
@@ -213,12 +331,6 @@ export class KitPlayer {
       })
     );
 
-    this.kit = kit;
-    this.phrases = phrases;
-
-    // The exported cut lengths, not the manifest BPM, are the real 4-bar
-    // length. Fit the session tempo to the median phrase so block joins close
-    // without resampling: 4 bars of 16ths = 64 * 60 / (bpm * 4) = 960 / bpm.
     const durations = phrases
       .map((phrase) => phrase.meta.duration_sec)
       .filter((duration) => Number.isFinite(duration) && duration > 0)
@@ -229,110 +341,418 @@ export class KitPlayer {
       : (durations.length % 2 === 0
         ? (durations[midpoint - 1] + durations[midpoint]) / 2
         : durations[midpoint]);
-    this.medianDurationSec = median;
-    this.fittedBpm = median > 0 ? 960 / median : null;
-    if (this.fittedBpm !== null) {
-      console.info(
-        `[KitPlayer] Tempo fit: manifest ${kit.bpm.toFixed(2)} → ${this.fittedBpm.toFixed(2)} BPM (median phrase ${median.toFixed(2)}s)`
-      );
-    }
 
-    this.recentPhraseIds = [];
-    this.readyFlag = true;
+    return {
+      kit,
+      phrases,
+      medianDurationSec: median,
+      fitBpm: median > 0 ? 960 / median : null,
+    };
+  }
+
+  /** Decode all phrases x 4 stems for one kit and make it active. */
+  async loadKit(kit: Kit): Promise<void> {
+    if (this.manifest === null) {
+      throw new Error("KitPlayer.loadKit called before loadManifest");
+    }
+    if (this.readyFlag && this.kit?.track_id === kit.track_id) return;
+
+    const data = await this.loadKitData(kit);
+    this.setActiveLoaded(data);
     console.info(
-      `[KitPlayer] Kit ready: ${kit.track_id} • ${kit.bpm.toFixed(2)} BPM • ${kit.key} • ${phrases.length} phrases`
+      `[KitPlayer] Kit ready: ${kit.track_id} • ${kit.bpm.toFixed(2)} BPM • ${kit.key} • ${data.phrases.length} phrases`
+    );
+    console.info(
+      `[KitPlayer] Compatibility list: ${this.compatibility.length} kits (${kit.style}, ${kit.key}, ${kit.bpm.toFixed(2)} BPM)`
     );
   }
 
   /**
-   * Rule-based phrase pick: current section first, then adjacent sections,
-   * then any section. Within that pool the energy nearest the target wins;
-   * deterministic RNG only breaks exact energy ties. The last two scheduled ids
-   * are excluded so a phrase never repeats back-to-back.
+   * Swap in a loaded kit and reset the set counter. The caller is responsible
+   * for the session tempo/key lock (the conductor does that on set change).
    */
-  selectPhrase(section: string, energy: number, recentIds: readonly string[]): KitPhrase | null {
-    if (this.phrases.length === 0) return null;
-    const target = Number.isFinite(energy) ? energy : 0.65;
-    const blocked = new Set(recentIds.slice(-2));
-    const all = this.phrases.map((phrase) => phrase.meta);
-
-    let pool = all.filter((phrase) => !blocked.has(phrase.id));
-    if (pool.length === 0) pool = all;
-
-    const wanted = normaliseSection(section);
-    let sectionPool = pool.filter((phrase) => normaliseSection(phrase.section) === wanted);
-    if (sectionPool.length === 0) {
-      const adjacent = new Set(ADJACENT_SECTIONS[wanted] ?? []);
-      sectionPool = pool.filter((phrase) => adjacent.has(normaliseSection(phrase.section)));
-    }
-    if (sectionPool.length === 0) sectionPool = pool;
-
-    // Keep the 4-bar joins tight: prefer phrases whose cut length is within
-    // ±15 ms of the median, then choose the energy closest to the target.
-    if (this.medianDurationSec > 0) {
-      const nearMedian = sectionPool.filter(
-        (phrase) => Math.abs(phrase.duration_sec - this.medianDurationSec) <= 0.015
+  private setActiveLoaded(data: LoadedKitData): void {
+    this.kit = data.kit;
+    this.phrases = data.phrases;
+    this.medianDurationSec = data.medianDurationSec;
+    this.fittedBpm = data.fitBpm;
+    this.readyFlag = true;
+    this.blocksInSet = 0;
+    this.bridgeBlocksForNext = 1;
+    this.forcedBridgeRemaining = 0;
+    this.lastPhrase = null;
+    this.lastSection = null;
+    this.recentPhraseIds = [];
+    this.pendingLoadedKit = null;
+    this.pendingLoadPromise = null;
+    this.nextKit = null;
+    this.waitingForNextLogged = false;
+    this.recordKitHistory(data.kit.track_id);
+    this.compatibility = this.computeCompatibility(data.kit);
+    if (this.fittedBpm !== null) {
+      console.info(
+        `[KitPlayer] Tempo fit: manifest ${data.kit.bpm.toFixed(2)} → ${this.fittedBpm.toFixed(2)} BPM (median phrase ${data.medianDurationSec.toFixed(2)}s)`
       );
-      if (nearMedian.length > 0) sectionPool = nearMedian;
     }
+  }
 
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (const phrase of sectionPool) {
-      const distance = Math.abs(phrase.energy - target);
-      if (distance < bestDistance) bestDistance = distance;
-    }
-    const tied = sectionPool.filter((phrase) => Math.abs(Math.abs(phrase.energy - target) - bestDistance) < 1e-9);
-    const roll = deterministicRoll(`${wanted}|${target.toFixed(4)}|${recentIds.slice(-2).join(",")}|${tied.length}`);
-    const index = Math.min(tied.length - 1, Math.floor(roll * tied.length));
-    return tied[index] ?? null;
+  private recordKitHistory(trackId: string): void {
+    this.kitHistory = [trackId, ...this.kitHistory.filter((id) => id !== trackId)].slice(0, 5);
   }
 
   /**
-   * Schedule the four stems of one 4-bar phrase at `when`. Every call creates a
-   * fresh AudioBufferSource starting at offset 0 (a rewind), so the phrase can
-   * never drift or resume mid-buffer. Playback rate is always 1.0 and detune is
-   * left at 0: the kit is already at the locked session tempo.
+   * Compatibility pool for the next set: same style, Camelot distance <= 1,
+   * BPM within 4 then 10 then closest available, excluding the last 5 kits.
    */
-  schedule(engine: AudioEngine, when: number, section: string, log: boolean = true): boolean {
-    if (!this.readyFlag || this.kit === null || this.phrases.length === 0) return false;
+  private computeCompatibility(current: Kit): Kit[] {
+    const kits = this.manifest?.kits ?? [];
+    const history = new Set(this.kitHistory);
+    const base = kits.filter(
+      (kit) => kit.track_id !== current.track_id && !history.has(kit.track_id) && kit.style === current.style
+    );
+    const currentCamelot = camelotForKey(current.key);
+    const camelotOk = currentCamelot === null
+      ? base
+      : base.filter((kit) => {
+        const candidate = camelotForKey(kit.key);
+        return candidate !== null && camelotDistance(currentCamelot, candidate) <= 1;
+      });
 
-    const targetEnergy = SECTION_ENERGY[normaliseSection(section)] ?? 0.65;
-    const chosen = this.selectPhrase(section, targetEnergy, this.recentPhraseIds);
-    if (chosen === null) return false;
-    const loaded = this.phrases.find((phrase) => phrase.meta.id === chosen.id);
-    if (!loaded) return false;
+    const preferBpm = (list: Kit[]): Kit[] => {
+      const close4 = list.filter((kit) => Math.abs(kit.bpm - current.bpm) <= 4);
+      if (close4.length > 0) return close4;
+      const close10 = list.filter((kit) => Math.abs(kit.bpm - current.bpm) <= 10);
+      if (close10.length > 0) return close10;
+      // No same-style kit near the tempo: keep the closest available so the set
+      // can still rotate (the bridge extends to two blocks in this case).
+      return [...list]
+        .sort((a, b) => Math.abs(a.bpm - current.bpm) - Math.abs(b.bpm - current.bpm))
+        .slice(0, 8);
+    };
 
-    // Use the exact median cut length as the block duration; scheduleSlice
-    // clamps and fades the tiny tail difference instead of resampling.
+    let pool = preferBpm(camelotOk);
+    if (pool.length === 0) pool = preferBpm(base);
+    if (pool.length === 0) {
+      const anyStyle = kits.filter(
+        (kit) => kit.track_id !== current.track_id && !history.has(kit.track_id)
+      );
+      pool = preferBpm(anyStyle);
+    }
+    return pool;
+  }
+
+  private chooseNextKit(): Kit | null {
+    const current = this.kit;
+    if (current === null) return null;
+    const pool = this.compatibility.filter((kit) => !this.kitHistory.includes(kit.track_id));
+    if (pool.length === 0) return null;
+
+    const sorted = [...pool].sort(
+      (a, b) => Math.abs(a.bpm - current.bpm) - Math.abs(b.bpm - current.bpm)
+    );
+    const closestDelta = Math.abs((sorted[0]?.bpm ?? current.bpm) - current.bpm);
+    const top = sorted.filter((kit) => Math.abs(kit.bpm - current.bpm) <= closestDelta + 1.5);
+    const roll = deterministicRoll(
+      `${current.track_id}|${this.kitHistory.join(",")}|${top.map((kit) => kit.track_id).join(",")}`
+    );
+    return top[Math.min(top.length - 1, Math.floor(roll * top.length))] ?? sorted[0] ?? null;
+  }
+
+  /**
+   * Select and start decoding the next kit. Safe to call repeatedly; the
+   * in-flight promise is shared and the audio thread is never blocked.
+   */
+  public prepareNextKit(): Promise<boolean> {
+    if (this.pendingLoadedKit !== null) return Promise.resolve(true);
+    if (this.pendingLoadPromise !== null) return this.pendingLoadPromise;
+    const current = this.kit;
+    if (current === null) return Promise.resolve(false);
+
+    if (this.nextKit === null) {
+      this.nextKit = this.chooseNextKit();
+      if (this.nextKit === null) {
+        console.warn("[KitPlayer] No compatible next kit found");
+        return Promise.resolve(false);
+      }
+      const bpmDelta = Math.abs(this.nextKit.bpm - current.bpm);
+      this.bridgeBlocksForNext = bpmDelta > 10 ? 2 : 1;
+      if (this.bridgeBlocksForNext === 2) {
+        console.info(
+          `[KitPlayer] Next kit BPM differs by ${bpmDelta.toFixed(2)} — extended 2-block bridge`
+        );
+      }
+    }
+
+    const target = this.nextKit;
+    this.pendingLoadPromise = (async () => {
+      try {
+        const loaded = await this.loadKitData(target);
+        if (this.nextKit?.track_id !== target.track_id) return false;
+        this.pendingLoadedKit = loaded;
+        console.info(
+          `[KitPlayer] Next kit preloaded: ${target.track_id} (${target.style}, ${(loaded.fitBpm ?? target.bpm).toFixed(2)} BPM fit, median ${loaded.medianDurationSec.toFixed(2)}s)`
+        );
+        return true;
+      } catch (err) {
+        console.warn("[KitPlayer] Next kit preload failed; keeping current kit.", err);
+        this.nextKit = null;
+        this.pendingLoadedKit = null;
+        return false;
+      } finally {
+        this.pendingLoadPromise = null;
+      }
+    })();
+    return this.pendingLoadPromise;
+  }
+
+  /** Force a bridge on the next boundary, then switch kits. */
+  public forceNextKit(): void {
+    if (!this.readyFlag) return;
+    this.blocksInSet = KIT_SET_BLOCKS;
+    const preparation = this.prepareNextKit();
+    this.forcedBridgeRemaining = Math.max(1, this.nextKit ? this.bridgeBlocksForNext : 1);
+    console.info(
+      `[KitPlayer] NEXT KIT queued — bridge on next boundary (${this.forcedBridgeRemaining} block(s))`
+    );
+    void preparation;
+  }
+
+  /**
+   * Schedule one block, handling set rotation and the drumless bridge.
+   * The caller logs the result when it becomes due.
+   */
+  public scheduleBlock(engine: AudioEngine, when: number, section: string): KitBlockResult | null {
+    if (!this.readyFlag || this.kit === null || this.phrases.length === 0) return null;
+    const wanted = normaliseSection(section);
+    const sectionChanged = this.lastSection !== null && this.lastSection !== wanted;
+    this.lastSection = wanted;
+
+    // 10th block of the set: start preloading the next kit in the background.
+    if (
+      this.blocksInSet === KIT_SET_BLOCKS - 3 &&
+      this.nextKit === null &&
+      this.pendingLoadedKit === null
+    ) {
+      void this.prepareNextKit();
+    }
+
+    // Forced bridge from NEXT KIT (blocksInSet stays at KIT_SET_BLOCKS).
+    if (this.forcedBridgeRemaining > 0) {
+      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true);
+      if (result !== null) this.forcedBridgeRemaining--;
+      return result;
+    }
+
+    // End of set: switch when the next kit is ready, else extend the bridge.
+    if (this.blocksInSet >= KIT_SET_BLOCKS) {
+      if (this.pendingLoadedKit !== null) {
+        const blocksPlayed = this.blocksInSet;
+        const pending = this.pendingLoadedKit;
+        this.setActiveLoaded(pending);
+        const result = this.scheduleBlockInternal(engine, when, wanted, false, ALL_STEMS, false);
+        if (result !== null) {
+          this.blocksInSet = 1;
+          result.setChanged = true;
+          result.blocksPlayedInSet = blocksPlayed;
+          this.setChanges++;
+        }
+        return result;
+      }
+      if (!this.waitingForNextLogged) {
+        this.waitingForNextLogged = true;
+        console.info("[KitPlayer] Next kit not ready — extending bridge");
+      }
+      void this.prepareNextKit();
+      return this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true);
+    }
+
+    // Normal drumless bridge window at the end of the set.
+    const bridgeThreshold = KIT_SET_BLOCKS - this.bridgeBlocksForNext;
+    if (this.blocksInSet >= bridgeThreshold) {
+      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true);
+      if (result !== null) this.blocksInSet++;
+      return result;
+    }
+
+    const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, ALL_STEMS, false);
+    if (result !== null) this.blocksInSet++;
+    return result;
+  }
+
+  private scheduleBlockInternal(
+    engine: AudioEngine,
+    when: number,
+    section: string,
+    sectionChanged: boolean,
+    stems: readonly StemName[],
+    bridge: boolean
+  ): KitBlockResult | null {
+    const kit = this.kit;
+    if (kit === null) return null;
+
+    const current = this.lastPhrase;
+    const targetEnergy = SECTION_ENERGY[normaliseSection(section)] ?? current?.energy ?? 0.65;
+    const phrase = this.selectPhrase(
+      section,
+      targetEnergy,
+      this.recentPhraseIds.slice(-3),
+      current,
+      sectionChanged
+    );
+    if (phrase === null) return null;
+
+    const loaded = this.phrases.find((entry) => entry.meta.id === phrase.id);
+    if (!loaded) return null;
+
     const blockDuration = this.medianDurationSec > 0
       ? this.medianDurationSec
-      : (64 * 60) / (this.kit.bpm * 4);
-    for (const stem of STEM_ORDER) {
+      : (64 * 60) / (kit.bpm * 4);
+    for (const stem of stems) {
       const buffer = loaded.buffers[stem];
       if (!buffer) continue;
       const source = engine.scheduleSlice(stem, buffer, when, {
         rate: 1.0,
         duration: blockDuration,
-        fadeMs: 12,
+        fadeMs: KIT_FADE_MS[stem],
         gain: 1.0,
         voiceKey: `kit_${stem}`,
       });
       this.sources.push(source);
     }
 
-    this.recentPhraseIds.push(loaded.meta.id);
-    if (this.recentPhraseIds.length > 8) {
-      this.recentPhraseIds = this.recentPhraseIds.slice(-8);
+    this.recentPhraseIds.push(phrase.id);
+    if (this.recentPhraseIds.length > 3) {
+      this.recentPhraseIds = this.recentPhraseIds.slice(-3);
     }
-    this.lastPhrase = loaded.meta;
-    if (log) this.logBlock(when, loaded.meta);
+    this.lastPhrase = phrase;
+
+    return {
+      kit,
+      phrase,
+      stems: [...stems],
+      bridge,
+      setChanged: false,
+      blocksPlayedInSet: this.blocksInSet,
+      blockDurationSec: blockDuration,
+      fitBpm: this.fittedBpm,
+    };
+  }
+
+  /**
+   * Continuity-first phrase pick:
+   * - hard energy band vs the current phrase (0.15, then 0.3)
+   * - stay in the current section unless the arranger section changed
+   * - 80% chance to use the real `start_bar + 4` next window when available
+   * - section/energy/embedding score with a last-3 recency penalty
+   */
+  selectPhrase(
+    section: string,
+    energy: number,
+    recentIds: readonly string[],
+    currentPhrase?: KitPhrase | null,
+    sectionChanged: boolean = false
+  ): KitPhrase | null {
+    if (this.phrases.length === 0) return null;
+    const current = currentPhrase ?? this.lastPhrase;
+    const target = Number.isFinite(energy) ? energy : (current?.energy ?? 0.65);
+    const recent = (recentIds.length > 0 ? recentIds : this.recentPhraseIds).slice(-3);
+    const all = this.phrases.map((phrase) => phrase.meta);
+
+    // Holes: never pick a phrase materially shorter than the fitted block.
+    const minDuration = this.medianDurationSec > 0 ? this.medianDurationSec * 0.9 : 0;
+    let pool = minDuration > 0
+      ? all.filter((phrase) => phrase.duration_sec >= minDuration)
+      : all;
+    if (pool.length === 0) pool = all;
+
+    const wanted = normaliseSection(section);
+    const preferred = current ? normaliseSection(current.section) : wanted;
+    if (!sectionChanged) {
+      const sameSection = pool.filter((phrase) => normaliseSection(phrase.section) === preferred);
+      if (sameSection.length > 0) pool = sameSection;
+    } else {
+      let nextSection = pool.filter((phrase) => normaliseSection(phrase.section) === wanted);
+      if (nextSection.length === 0) {
+        const adjacent = new Set(ADJACENT_SECTIONS[wanted] ?? []);
+        nextSection = pool.filter((phrase) => adjacent.has(normaliseSection(phrase.section)));
+      }
+      if (nextSection.length > 0) pool = nextSection;
+    }
+
+    // Hard continuity band: 0.15 normally, 0.3 only when 0.15 has no match.
+    if (current) {
+      const within015 = pool.filter(
+        (phrase) => Math.abs(phrase.energy - current.energy) <= 0.15
+      );
+      if (within015.length > 0) {
+        pool = within015;
+      } else {
+        const within03 = pool.filter(
+          (phrase) => Math.abs(phrase.energy - current.energy) <= 0.3
+        );
+        if (within03.length > 0) pool = within03;
+      }
+    }
+
+    // Real song order: if the actual next 4-bar window exists, use it often.
+    if (current) {
+      const realNext = pool.find(
+        (phrase) => phrase.start_bar === current.start_bar + 4 && !recent.includes(phrase.id)
+      );
+      if (realNext) {
+        const roll = deterministicRoll(`next|${current.id}|${recent.join(",")}|${wanted}`);
+        if (roll < 0.8) return realNext;
+      }
+    }
+
+    let best: KitPhrase | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const candidate of pool) {
+      const sectionScore = normaliseSection(candidate.section) === wanted ? 2.0 : 0.0;
+      const energyDelta = current ? Math.abs(candidate.energy - current.energy) : 0;
+      const energyScore = current ? 1.5 * Math.max(0, 1 - energyDelta / 0.3) : 0.0;
+      const embeddingScore = current ? cosineSimilarity(candidate.embedding, current.embedding) : 0.0;
+      const recencyPenalty = recent.includes(candidate.id) ? -1.0 : 0.0;
+      const tieBreak = deterministicRoll(
+        `score|${wanted}|${current?.id ?? ""}|${recent.join(",")}|${candidate.id}|${target.toFixed(4)}`
+      ) * 0.05;
+      const score = sectionScore + energyScore + embeddingScore + recencyPenalty + tieBreak;
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Schedule a single phrase using the continuity selector. Kept for callers
+   * that do not need the set-rotation result object.
+   */
+  public schedule(engine: AudioEngine, when: number, section: string, log: boolean = true): boolean {
+    const result = this.scheduleBlock(engine, when, section);
+    if (result === null) return false;
+    if (log) this.logBlock(when, result.phrase, result.stems, result.bridge);
     return true;
   }
 
   /** Emit the standard one-line block log (the conductor calls this when due). */
-  public logBlock(when: number, phrase: KitPhrase): void {
+  public logBlock(
+    when: number,
+    phrase: KitPhrase,
+    stems: readonly StemName[] = STEM_ORDER,
+    bridge: boolean = false
+  ): void {
+    const suffix = bridge ? ` [bridge: ${stems.join("+")}]` : "";
     console.info(
-      `[KitPlayer] 4-bar block @ ${when.toFixed(2)}s → ${phrase.id} (${phrase.section}, energy ${phrase.energy.toFixed(2)})`
+      `[KitPlayer] 4-bar block @ ${when.toFixed(2)}s → ${phrase.id} (${phrase.section}, energy ${phrase.energy.toFixed(2)})${suffix}`
+    );
+  }
+
+  /** Emit one set-change line per kit rotation. */
+  public logSetChange(kit: Kit, blocksPlayed: number): void {
+    console.info(
+      `[KitPlayer] Set change → ${kit.title || kit.track_id} (${kit.style}, ${kit.bpm.toFixed(2)} BPM) after ${blocksPlayed} blocks`
     );
   }
 
@@ -346,5 +766,11 @@ export class KitPlayer {
       }
     }
     this.sources = [];
+    this.blocksInSet = 0;
+    this.lastPhrase = null;
+    this.lastSection = null;
+    this.recentPhraseIds = [];
+    this.forcedBridgeRemaining = 0;
+    this.waitingForNextLogged = false;
   }
 }

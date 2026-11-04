@@ -293,6 +293,7 @@ class WubApp {
     this.bindFeedbackControls();
     this.bindGrooveboxCycleControls();
     this.bindPlaybackModeControls();
+    this.bindKitControls();
 
     // Initialize Autonomous In-Browser ML Sequencer
     try {
@@ -304,7 +305,15 @@ class WubApp {
         (window as any).__wubStats = () => {
           const c = this.clientConductor as any;
           return c?.playStats
-            ? { ...c.playStats, section: c.arranger?.getSection?.() }
+            ? {
+              ...c.playStats,
+              section: c.arranger?.getSection?.(),
+              activeKit: c.activeKit?.track_id ?? null,
+              blocksInSet: c.blocksInSet ?? null,
+              kitSetBlocksLeft: c.kitSetBlocksLeft ?? null,
+              nextKitTrack: c.nextKitTrack ?? null,
+              kitSetChanges: c.kitSetChanges ?? null,
+            }
             : { error: "engine not ready" };
         };
         (window as any).__wubDebugBar = () => {
@@ -313,6 +322,9 @@ class WubApp {
         };
         (window as unknown as { __wubConductor: ClientGrooveboxConductor }).__wubConductor =
           this.clientConductor;
+        (window as unknown as { __wubNextKit: () => void }).__wubNextKit = () => {
+          this.clientConductor?.forceNextKit();
+        };
       } catch {
         // Non-browser context; skip
       }
@@ -347,6 +359,13 @@ class WubApp {
           step,
           totalSteps: totalSteps || 16,
         });
+      });
+      this.clientConductor.setKitSetChangeCallback((info) => {
+        const track = info.kit.title || info.kit.track_id;
+        const next = info.nextKit?.track_id ?? "pending";
+        this.setStatus(
+          `KIT SET → ${track} (${info.kit.style}, ${info.kit.bpm.toFixed(2)} BPM) • ${info.blocksLeft} blocks left • next: ${next}`
+        );
       });
     } catch (e) {
       console.warn("Client ML sequencer init failed:", e);
@@ -723,6 +742,16 @@ class WubApp {
         this.setStatus(`Engine Mode: ${label}`);
       });
     });
+  }
+
+  private bindKitControls(): void {
+    const nextKitBtn = document.getElementById("btn-next-kit");
+    if (nextKitBtn !== null) {
+      nextKitBtn.addEventListener("click", () => {
+        this.clientConductor?.forceNextKit();
+        this.setStatus("NEXT KIT queued — bridge starts on the next 4-bar boundary.");
+      });
+    }
   }
 
   private bindStem(stem: StemName): void {

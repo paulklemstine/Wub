@@ -11,7 +11,7 @@
 import type { StemName } from "./types";
 import { AudioEngine } from "./audio_engine";
 import { KitPlayer } from "./kit_player";
-import type { KitPhrase } from "./kit_player";
+import type { Kit, KitBlockResult, KitPhrase } from "./kit_player";
 
 export interface SerializedPattern {
   id: string;
@@ -2629,7 +2629,13 @@ export class ClientGrooveboxConductor {
   private timer: number | null = null;
   private nextStepTime: number = 0;
   private nextKitBlockTime: number = 0;
-  private kitBlockLogQueue: Array<{ at: number; phrase: KitPhrase }> = [];
+  private kitBlockLogQueue: Array<{ at: number; result: KitBlockResult }> = [];
+  private onKitSetChange?: (info: {
+    kit: Kit;
+    blocksPlayed: number;
+    nextKit: Kit | null;
+    blocksLeft: number;
+  }) => void;
   private currentBpm: number = 126;
   private onMetaCallback?: (meta: any, atAudioSec: number, step: number, totalSteps: number) => void;
   private activeSongKit: CuratedSongKit | null = null;
@@ -4996,6 +5002,44 @@ export class ClientGrooveboxConductor {
     return this.playbackMode;
   }
 
+  /** Kit set state exposed on __wubConductor for the UI/verification. */
+  public get activeKit(): Kit | null {
+    return this.kitPlayer?.activeKit ?? null;
+  }
+
+  public get blocksInSet(): number {
+    return this.kitPlayer?.blocksInSet ?? 0;
+  }
+
+  public get nextKit(): Kit | null {
+    return this.kitPlayer?.nextKit ?? null;
+  }
+
+  public get kitSetBlocksLeft(): number {
+    return this.kitPlayer?.kitSetBlocksLeft ?? 0;
+  }
+
+  public get nextKitTrack(): string | null {
+    return this.kitPlayer?.nextKitTrack ?? null;
+  }
+
+  public get kitSetChanges(): number {
+    return this.kitPlayer?.setChanges ?? 0;
+  }
+
+  public forceNextKit(): void {
+    this.kitPlayer?.forceNextKit();
+  }
+
+  public setKitSetChangeCallback(cb: (info: {
+    kit: Kit;
+    blocksPlayed: number;
+    nextKit: Kit | null;
+    blocksLeft: number;
+  }) => void): void {
+    this.onKitSetChange = cb;
+  }
+
   public getMovementPhase(): "FOUNDATION" | "DEVELOPMENT" | "CLIMAX" | "PRE_TRANSITION" {
     const bar = this.arranger.getBarInSection();
     const total = this.arranger.getSectionDuration();
@@ -5316,7 +5360,7 @@ export class ClientGrooveboxConductor {
   private scheduleKitBlocks(now: number): void {
     const player = this.kitPlayer;
     if (!player || !player.ready) return;
-    const blockSec = player.medianPhraseDuration > 0
+    let blockSec = player.medianPhraseDuration > 0
       ? player.medianPhraseDuration
       : (64 * 60) / (this.currentBpm * 4);
     if (!(blockSec > 0.1)) return;
@@ -5338,15 +5382,29 @@ export class ClientGrooveboxConductor {
     // one line per block rather than clustering the prefetched ones.
     while (this.nextKitBlockTime < now + blockSec + 0.15) {
       const at = this.nextKitBlockTime;
-      if (player.schedule(this.engine, at, this.arranger.getSection(), false)) {
-        const phrase = player.lastScheduledPhrase;
-        if (phrase) this.kitBlockLogQueue.push({ at, phrase });
-      }
+      const result = player.scheduleBlock(this.engine, at, this.arranger.getSection());
+      if (result === null) break;
+      this.kitBlockLogQueue.push({ at, result });
+      blockSec = result.blockDurationSec > 0 ? result.blockDurationSec : blockSec;
       this.nextKitBlockTime += blockSec;
     }
+
     while (this.kitBlockLogQueue.length > 0 && this.kitBlockLogQueue[0].at < now + 0.15) {
       const entry = this.kitBlockLogQueue.shift();
-      if (entry) player.logBlock(entry.at, entry.phrase);
+      if (!entry) continue;
+      if (entry.result.setChanged) {
+        // Apply the new kit's fitted tempo/key at the new block downbeat, not
+        // while the bridge is still playing.
+        this.applyKitLock();
+        player.logSetChange(entry.result.kit, entry.result.blocksPlayedInSet);
+        this.onKitSetChange?.({
+          kit: entry.result.kit,
+          blocksPlayed: entry.result.blocksPlayedInSet,
+          nextKit: player.nextKit,
+          blocksLeft: player.kitSetBlocksLeft,
+        });
+      }
+      player.logBlock(entry.at, entry.result.phrase, entry.result.stems, entry.result.bridge);
     }
   }
 
