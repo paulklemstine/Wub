@@ -142,6 +142,7 @@ export class TamagotchiAvatar {
   private isHeadBobbed: boolean = false;
   private noteFloating: { char: string; x: number; y: number; life: number }[] = [];
   private speechBubble: string = "";
+  private heartBeatPhase: number = 0;
   private speechTimer: number = 0;
   private lastStepIndex: number = -1;
   private lastBarNum: number = -1;
@@ -707,6 +708,7 @@ export class TamagotchiAvatar {
     const isSinging = Boolean(meta?.vocalSyllable) || (vocalsLevel >= 0.008);
     const bob = this.isHeadBobbed;
     const t = performance.now() / 1000;
+    this.heartBeatPhase = (this.heartBeatPhase + dt * (0.55 + Math.min(2.2, drumLevel * 3.0) + Math.min(0.8, bassLevel * 1.5))) % 1;
 
     // Center coordinates with beat bobbing
     const cx = w * 0.5;
@@ -745,6 +747,21 @@ export class TamagotchiAvatar {
     const baseScale = 0.86 + 0.02 * this.stage;
     const scaleX = baseScale * squishX;
     const scaleY = baseScale * squishY;
+
+    // Rave halo behind the creature: stage-coloured bloom that breathes with RMS.
+    ctx.save();
+    const haloR = 104 * (1 + 0.12 * Math.min(1.5, bassLevel * 2.0));
+    const halo = ctx.createRadialGradient(cx, cy + 4 * scaleY, 8, cx, cy + 4 * scaleY, haloR);
+    halo.addColorStop(0.0, glowColor);
+    halo.addColorStop(0.55, glowColor);
+    halo.addColorStop(1.0, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = halo;
+    ctx.globalAlpha = 0.07 + 0.20 * Math.min(1, rmsLevel);
+    ctx.beginPath();
+    ctx.arc(cx, cy + 4 * scaleY, haloR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
 
     // -------------------------------------------------------------------------
     // 2. THE AUDIO REACTIVE RING LOOP (CREATURE ROUND ORB OUTLINE & WHOLE GUMMI BEAR BODY)
@@ -858,8 +875,9 @@ export class TamagotchiAvatar {
     // 3. CUTE INNER EAR CUSHIONS (AUDIO REACTIVE WIGGLE)
     // -------------------------------------------------------------------------
     ctx.save();
-    const earPadW = 6.8 * baseScale;
-    const earPadH = 8.0 * baseScale;
+    const vocalPulse = 1 + 0.20 * Math.min(1.4, vocalsLevel * 2.4);
+    const earPadW = 6.8 * baseScale * vocalPulse;
+    const earPadH = 8.0 * baseScale * vocalPulse;
     const earWiggle = Math.sin(t * 14.0) * (vocalsLevel * 2.8);
 
     // Left Inner Ear Pad
@@ -894,46 +912,109 @@ export class TamagotchiAvatar {
     ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 4. HEART-SHAPED KAWAII TUMMY (SUB-BASS HEARTBEAT)
+    // 4. RAVE HEART (the audio-reactive centrepiece)
     // -------------------------------------------------------------------------
     ctx.save();
     const bellyY = cy + 42 * scaleY;
-    const bellyPulse = 1.0 + 0.12 * Math.min(1.5, bassLevel * 2.2);
-    const heartW = 21 * scaleX * bellyPulse;
-    const heartH = 19 * scaleY * bellyPulse;
-    const heartTop = bellyY - heartH * 0.55;
-    const heartBottom = bellyY + heartH * 0.62;
-    const heartNotch = bellyY - heartH * 0.08;
+    const bassPump = Math.min(1.8, bassLevel * 2.6);
+    const beatPhase = this.heartBeatPhase;
+    const beatPulse = 1.0 + 0.15 * bassPump + 0.05 * Math.sin(beatPhase * Math.PI * 2);
+    const heartW = 21 * scaleX * beatPulse;
+    const heartH = 19 * scaleY * beatPulse;
+    const heartWave = otherWaveform ?? waveform ?? null;
 
-    // Two lobes meeting in a soft notch, bottom point on the waist line.
-    const heartPath = (): void => {
+    const heartPathAt = (cw: number, ch: number): void => {
+      const top = bellyY - ch * 0.55;
+      const bottom = bellyY + ch * 0.62;
+      const notch = bellyY - ch * 0.08;
       ctx.beginPath();
-      ctx.moveTo(cx, heartBottom);
-      ctx.bezierCurveTo(
-        cx - heartW * 1.14, bellyY + heartH * 0.10,
-        cx - heartW * 0.72, heartTop - heartH * 0.22,
-        cx, heartNotch
-      );
-      ctx.bezierCurveTo(
-        cx + heartW * 0.72, heartTop - heartH * 0.22,
-        cx + heartW * 1.14, bellyY + heartH * 0.10,
-        cx, heartBottom
-      );
+      ctx.moveTo(cx, bottom);
+      ctx.bezierCurveTo(cx - cw * 1.14, bellyY + ch * 0.10, cx - cw * 0.72, top - ch * 0.22, cx, notch);
+      ctx.bezierCurveTo(cx + cw * 0.72, top - ch * 0.22, cx + cw * 1.14, bellyY + ch * 0.10, cx, bottom);
       ctx.closePath();
     };
 
-    heartPath();
+    // Expanding heartbeat ripples on every kick, in the stage palette.
+    for (let i = 2; i >= 0; i--) {
+      const ph = (beatPhase + i / 3) % 1;
+      const rippleScale = 1 + ph * 0.72;
+      ctx.save();
+      heartPathAt(heartW * rippleScale, heartH * rippleScale);
+      ctx.strokeStyle = i === 0 ? accentColor : glowColor;
+      ctx.globalAlpha = (1 - ph) * (0.16 + 0.62 * Math.min(1, drumLevel * 1.7));
+      ctx.lineWidth = 1.1 + (1 - ph) * 1.8;
+      ctx.shadowBlur = 10 + 16 * (1 - ph);
+      ctx.shadowColor = accentColor;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Jelly heart body.
+    heartPathAt(heartW, heartH);
     const bellyGrad = ctx.createRadialGradient(
       cx, bellyY - heartH * 0.10, 2,
       cx, bellyY, heartW * 1.05
     );
-    bellyGrad.addColorStop(0.0, "rgba(255, 250, 254, 0.58)");
-    bellyGrad.addColorStop(0.55, "rgba(255, 200, 233, 0.40)");
-    bellyGrad.addColorStop(1.0, "rgba(255, 160, 215, 0.10)");
+    if (this.stage === 4) {
+      bellyGrad.addColorStop(0.0, "rgba(255, 252, 220, 0.62)");
+      bellyGrad.addColorStop(0.55, "rgba(255, 210, 80, 0.42)");
+      bellyGrad.addColorStop(1.0, "rgba(255, 120, 60, 0.20)");
+    } else if (this.stage === 3) {
+      bellyGrad.addColorStop(0.0, "rgba(235, 255, 255, 0.60)");
+      bellyGrad.addColorStop(0.55, "rgba(120, 245, 255, 0.40)");
+      bellyGrad.addColorStop(1.0, "rgba(60, 130, 255, 0.20)");
+    } else if (this.stage === 2) {
+      bellyGrad.addColorStop(0.0, "rgba(255, 245, 255, 0.60)");
+      bellyGrad.addColorStop(0.55, "rgba(235, 130, 255, 0.40)");
+      bellyGrad.addColorStop(1.0, "rgba(150, 40, 255, 0.20)");
+    } else {
+      bellyGrad.addColorStop(0.0, "rgba(255, 250, 254, 0.60)");
+      bellyGrad.addColorStop(0.55, "rgba(255, 200, 233, 0.40)");
+      bellyGrad.addColorStop(1.0, "rgba(255, 150, 215, 0.20)");
+    }
     ctx.fillStyle = bellyGrad;
-    ctx.shadowBlur = 12 + 14 * bassLevel;
+    ctx.shadowBlur = 12 + 18 * bassPump;
     ctx.shadowColor = mainColor;
     ctx.fill();
+
+    // Inside the heart: live waveform + twinkling rave dust, clipped to the shape.
+    ctx.save();
+    heartPathAt(heartW, heartH);
+    ctx.clip();
+    if (heartWave && heartWave.length > 0) {
+      ctx.beginPath();
+      const steps = 56;
+      for (let j = 0; j <= steps; j++) {
+        const u = j / steps;
+        const x = cx + (u - 0.5) * heartW * 2.0;
+        const idx = Math.floor(u * (heartWave.length - 1));
+        const amp = (heartWave[idx] - 128) / 128;
+        const y = bellyY + 1.2 + amp * heartH * 0.62;
+        if (j === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = accentColor;
+      ctx.globalAlpha = 0.65 + 0.35 * Math.min(1, rmsLevel);
+      ctx.lineWidth = 1.3;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = accentColor;
+      ctx.stroke();
+    }
+    for (let k = 0; k < 9; k++) {
+      const a = t * (0.6 + k * 0.11) + k * 2.1;
+      const rr = 0.20 + 0.55 * (0.5 + 0.5 * Math.sin(t * 0.8 + k * 1.3));
+      const sx = cx + Math.cos(a) * heartW * rr;
+      const sy = bellyY + Math.sin(a * 1.3 + k) * heartH * rr;
+      const tw = 0.3 + 0.7 * Math.pow(Math.abs(Math.sin(t * 2.7 + k * 1.9)), 2);
+      ctx.beginPath();
+      ctx.arc(sx, sy, (0.8 + 1.5 * tw) * (0.8 + 0.35 * rmsLevel), 0, Math.PI * 2);
+      ctx.fillStyle = k % 3 === 0 ? "#ffffff" : (k % 3 === 1 ? accentColor : glowColor);
+      ctx.globalAlpha = tw * (0.45 + 0.55 * rmsLevel);
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = accentColor;
+      ctx.fill();
+    }
+    ctx.restore();
 
     // Glossy candy highlight on the upper-left lobe.
     ctx.save();
@@ -941,87 +1022,26 @@ export class TamagotchiAvatar {
     ctx.rotate(-0.5);
     ctx.beginPath();
     ctx.ellipse(0, 0, heartW * 0.20, heartH * 0.10, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.62)";
     ctx.shadowBlur = 6;
     ctx.shadowColor = "#ffffff";
     ctx.fill();
     ctx.restore();
 
-    heartPath();
-    ctx.strokeStyle = "rgba(255, 235, 250, 0.62)";
-    ctx.lineWidth = 1.6;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = mainColor;
-    ctx.stroke();
-    ctx.restore();
-
-    // -------------------------------------------------------------------------
-    // 4B. REACTIVE HULA HOOP (orbits the waist, driven by drums/bass)
-    // -------------------------------------------------------------------------
-    ctx.save();
-    const hoopY = cy + 46 * scaleY + Math.sin(t * 3.2) * (1.2 + 2.2 * drumLevel);
-    const bassPump = Math.min(1.6, bassLevel * 2.4);
-    const hoopRx = (47 + 7 * bassPump) * scaleX;
-    const hoopRy = (16 + 2.6 * bassPump) * scaleY;
-    // Slow plane drift plus kick/bass-reactive wobble so the hoop visibly
-    // precesses and kicks with the groove.
-    // The hoop plane slowly precesses through a wide arc (~40 s cycle) and
-    // leans further with bass / kick hits, like a real hula hoop.
-    const tilt =
-      0.16 +
-      0.34 * Math.sin(t * 0.16) +
-      0.06 * Math.sin(t * 1.7 + 0.8) +
-      0.12 * Math.min(1.2, bassLevel * 1.8) * Math.sin(t * 2.6) +
-      0.08 * Math.min(1.2, drumLevel * 1.6) * Math.sin(t * 4.3 + 0.3);
-    const spin = t * (2.6 + 5.5 * drumLevel) + 1.1;
-    const hoopAlpha = 0.55 + 0.45 * Math.min(1, rmsLevel);
-
-    // Back half of the ring: dimmer, reads as the far side of the hoop.
-    ctx.beginPath();
-    ctx.ellipse(cx, hoopY, hoopRx, hoopRy, tilt, Math.PI, Math.PI * 2);
-    ctx.strokeStyle = accentColor;
-    ctx.globalAlpha = 0.18 + 0.18 * rmsLevel;
-    ctx.lineWidth = 2.0;
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = accentColor;
-    ctx.stroke();
-
-    // Front half: bright neon tube.
-    ctx.beginPath();
-    ctx.ellipse(cx, hoopY, hoopRx, hoopRy, tilt, 0, Math.PI);
-    ctx.globalAlpha = hoopAlpha;
-    ctx.lineWidth = 3.8;
-    ctx.shadowBlur = 16 + 18 * drumLevel;
-    ctx.shadowColor = glowColor;
+    // Double neon outline: soft halo + crisp core.
+    heartPathAt(heartW, heartH);
     ctx.strokeStyle = glowColor;
+    ctx.lineWidth = 3.2;
+    ctx.globalAlpha = 0.55 + 0.25 * Math.min(1, rmsLevel);
+    ctx.shadowBlur = 16 + 14 * drumLevel;
+    ctx.shadowColor = glowColor;
     ctx.stroke();
-    ctx.globalAlpha = 0.85;
-    ctx.lineWidth = 1.1;
+    heartPathAt(heartW, heartH);
     ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.1;
+    ctx.globalAlpha = 0.85;
+    ctx.shadowBlur = 4;
     ctx.stroke();
-
-    // Two comets chasing each other around the hoop (the circling motion).
-    const TRAIL = 30;
-    const drawComet = (head: number, scale: number): void => {
-      for (let k = 0; k < TRAIL; k++) {
-        const a = head - k * 0.065;
-        const ca = Math.cos(a);
-        const sa = Math.sin(a);
-        const ex = cx + hoopRx * ca * Math.cos(tilt) - hoopRy * sa * Math.sin(tilt);
-        const ey = hoopY + hoopRx * ca * Math.sin(tilt) + hoopRy * sa * Math.cos(tilt);
-        const isFront = sa >= 0;
-        const rad = (k === 0 ? 4.4 : Math.max(0.5, 2.7 - k * 0.075)) * scale;
-        ctx.beginPath();
-        ctx.arc(ex, ey, rad * (0.9 + 0.3 * rmsLevel), 0, Math.PI * 2);
-        ctx.fillStyle = k === 0 ? "#ffffff" : (k % 2 === 0 ? glowColor : accentColor);
-        ctx.globalAlpha = (isFront ? 0.95 : 0.28) * (1 - k / (TRAIL + 2)) * (scale < 1 ? 0.6 : 1);
-        ctx.shadowBlur = k === 0 ? 16 : 8;
-        ctx.shadowColor = k === 0 ? "#ffffff" : glowColor;
-        ctx.fill();
-      }
-    };
-    drawComet(spin, 1.0);
-    drawComet(spin + Math.PI, 0.62);
     ctx.restore();
 
     // -------------------------------------------------------------------------
@@ -1037,7 +1057,7 @@ export class TamagotchiAvatar {
       ctx.shadowColor = "#ff77e9";
 
       // Main palm/foot pad
-      const padR = (isHand ? 3.5 : 4.2) * baseScale;
+      const padR = (isHand ? 3.5 : 4.2) * baseScale * (1 + 0.18 * Math.min(1.4, bassLevel * 2.2));
       ctx.beginPath();
       ctx.arc(0, 0, padR, 0, Math.PI * 2);
       ctx.fill();
@@ -1063,6 +1083,25 @@ export class TamagotchiAvatar {
     // Left & Right Foot Paws
     drawPaw(cx - 18 * scaleX, cy + 70 * scaleY, 0.15, false);
     drawPaw(cx + 18 * scaleX, cy + 70 * scaleY, -0.15, false);
+    ctx.restore();
+
+    // 5B. Floating rave motes orbiting the creature (outside the silhouette).
+    ctx.save();
+    for (let k = 0; k < 7; k++) {
+      const a = t * (0.32 + k * 0.035) + k * (Math.PI * 2 / 7);
+      const rr = 0.92 + 0.10 * Math.sin(t * 0.7 + k * 1.3);
+      const mx = cx + Math.cos(a) * 64 * scaleX * rr;
+      const my = cy + Math.sin(a) * 78 * scaleY * rr;
+      const tw = 0.35 + 0.65 * Math.pow(Math.abs(Math.sin(t * 2.4 + k * 1.7)), 2);
+      const rad = (0.9 + 1.6 * tw) * (0.8 + 0.5 * Math.min(1, rmsLevel));
+      ctx.beginPath();
+      ctx.arc(mx, my, rad, 0, Math.PI * 2);
+      ctx.fillStyle = k % 3 === 0 ? "#ffffff" : (k % 3 === 1 ? accentColor : glowColor);
+      ctx.globalAlpha = tw * (0.35 + 0.55 * Math.min(1, rmsLevel));
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = accentColor;
+      ctx.fill();
+    }
     ctx.restore();
 
     // -------------------------------------------------------------------------
