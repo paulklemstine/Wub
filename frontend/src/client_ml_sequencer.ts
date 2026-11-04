@@ -3374,7 +3374,11 @@ export class ClientGrooveboxConductor {
 
   /** Keep exactly one model window of committed history (ctx - header). */
   private trimTatumHist(): void {
-    const keep = Math.max(0, this.tatumCtx - 6);
+    // Exactly three bars of committed history. With the current header that
+    // is 216 tokens: a valid training window (bar headers sit at 0/70/140,
+    // and this header lands at 210). Using ctx-6 (274) would put the header
+    // at position 274, which the model never saw in training.
+    const keep = Math.max(70, Math.min(210, this.tatumCtx - 70));
     if (this.tatumHist.length > keep) this.tatumHist.splice(0, this.tatumHist.length - keep);
   }
 
@@ -3393,13 +3397,12 @@ export class ClientGrooveboxConductor {
     if (header.some((t) => !Number.isFinite(t) || t < 0)) return;
     this.tatumInFlight = true;
     const seed = Math.floor(Math.random() * 1e9);
-    // Feed exactly the ctx the model was trained on: 274 past tokens plus the
-    // 6-token header of the bar we are about to fill (274 + 6 = 280). Feeding
-    // only the header (what this used to do) left 274 left-pad zeros in the
-    // window, so the model was scoring bars it had never seen the context of.
+    // Header at position 210 after three full bars of history: in-distribution
+    // (training windows start at a bar header, so headers live at 0/70/140/210)
+    // and the model gets three bars of musical context. Short prompts are sent
+    // at their true length now; the worker no longer left-pads to ctx.
     this.tatumHeader = header;
-    const histLen = Math.max(0, this.tatumCtx - header.length);
-    this.tatumWorker.postMessage({ type: "plan", history: [...this.tatumHist.slice(-histLen), ...header], nSteps: 64, temp: 1.0, topK: 20, seed });
+    this.tatumWorker.postMessage({ type: "plan", history: [...this.tatumHist, ...header], nSteps: 64, temp: 1.0, topK: 20, seed });
   }
 
   /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.

@@ -57,6 +57,7 @@ def main() -> None:
     print(f"parity max|diff|={diff:.2e}", flush=True)
     assert diff < 1e-4, f"ONNX parity failed: {diff}"
 
+
     if not args.no_int8:
         from onnxruntime.quantization import QuantType, quantize_dynamic
         q_path = out_path.with_name(out_path.stem + "_int8.onnx")

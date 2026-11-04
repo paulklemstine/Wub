@@ -62,16 +62,21 @@ async function plan(history: number[], nSteps: number, temp: number, topK: numbe
   let toks = history.slice(-ctx);
   for (let s = 0; s < nSteps; s++) {
     const win = toks.slice(-ctx);
-    const pad = new Array(Math.max(0, ctx - win.length)).fill(0);
-    const ids = pad.concat(win);
+    if (win.length === 0) win.push(0);
+    // Right-pad to the graph's fixed ctx. Causal attention means the pad
+    // positions cannot influence earlier ones, so logits at win.length-1 are
+    // exactly the logits a win-length graph would produce. Left-padding (what
+    // this used to do) shifts every absolute position and turns a 3-bar
+    // prompt into noise: measured onset rates collapsed 0.33 -> 0.06.
+    const ids = win.concat(new Array(Math.max(0, ctx - win.length)).fill(0));
     const feeds: Record<string, ort.Tensor> = {
-      tokens: new ort.Tensor("int64", BigInt64Array.from(ids.map((v) => BigInt(v))), [1, ctx]),
+      tokens: new ort.Tensor("int64", BigInt64Array.from(ids.map((v) => BigInt(v))), [1, ids.length]),
     };
     const res = await session.run(feeds);
     const logits = res["logits"] as ort.Tensor;
-    // last position logits
+    // logits at the last real token, not the last padded position
     const data = logits.data as Float32Array;
-    const off = (ctx - 1) * vocab;
+    const off = (win.length - 1) * vocab;
     const row = data.slice(off, off + vocab);
     const t = Math.max(1e-6, temp);
     // temperature + top-k
