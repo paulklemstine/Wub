@@ -783,24 +783,24 @@ export class TamagotchiAvatar {
     );
     if (this.stage === 1) {
       // Pink Strawberry Gummi
-      jellyGrad.addColorStop(0.0, "rgba(255, 120, 195, 0.42)");
-      jellyGrad.addColorStop(0.55, "rgba(255, 60, 160, 0.28)");
-      jellyGrad.addColorStop(1.0, "rgba(255, 20, 140, 0.12)");
+      jellyGrad.addColorStop(0.0, "rgba(255, 120, 195, 0.58)");
+      jellyGrad.addColorStop(0.55, "rgba(255, 60, 160, 0.40)");
+      jellyGrad.addColorStop(1.0, "rgba(255, 20, 140, 0.20)");
     } else if (this.stage === 2) {
       // Neon Wildberry Gummi
-      jellyGrad.addColorStop(0.0, "rgba(235, 70, 255, 0.44)");
-      jellyGrad.addColorStop(0.55, "rgba(180, 40, 255, 0.28)");
-      jellyGrad.addColorStop(1.0, "rgba(100, 20, 230, 0.14)");
+      jellyGrad.addColorStop(0.0, "rgba(235, 70, 255, 0.60)");
+      jellyGrad.addColorStop(0.55, "rgba(180, 40, 255, 0.42)");
+      jellyGrad.addColorStop(1.0, "rgba(100, 20, 230, 0.22)");
     } else if (this.stage === 3) {
       // Cyber Mint / Raspberry Gummi
-      jellyGrad.addColorStop(0.0, "rgba(0, 255, 245, 0.45)");
-      jellyGrad.addColorStop(0.55, "rgba(0, 180, 255, 0.30)");
-      jellyGrad.addColorStop(1.0, "rgba(0, 80, 220, 0.14)");
+      jellyGrad.addColorStop(0.0, "rgba(0, 255, 245, 0.60)");
+      jellyGrad.addColorStop(0.55, "rgba(0, 180, 255, 0.44)");
+      jellyGrad.addColorStop(1.0, "rgba(0, 80, 220, 0.22)");
     } else {
       // Cosmic Golden Honey Gummi
-      jellyGrad.addColorStop(0.0, "rgba(255, 235, 80, 0.48)");
-      jellyGrad.addColorStop(0.55, "rgba(255, 160, 20, 0.32)");
-      jellyGrad.addColorStop(1.0, "rgba(255, 80, 120, 0.15)");
+      jellyGrad.addColorStop(0.0, "rgba(255, 235, 80, 0.62)");
+      jellyGrad.addColorStop(0.55, "rgba(255, 160, 20, 0.46)");
+      jellyGrad.addColorStop(1.0, "rgba(255, 80, 120, 0.24)");
     }
     ctx.fillStyle = jellyGrad;
     ctx.fill();
@@ -890,26 +890,125 @@ export class TamagotchiAvatar {
     ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 4. CHUBBY PEAR-SHAPED KAWAII TUMMY (SUB-BASS BOUNCE)
+    // 4. HEART-SHAPED KAWAII TUMMY (SUB-BASS HEARTBEAT)
     // -------------------------------------------------------------------------
     ctx.save();
-    const bellyY = cy + 48 * scaleY;
+    const bellyY = cy + 42 * scaleY;
     const bellyPulse = 1.0 + 0.12 * Math.min(1.5, bassLevel * 2.2);
-    const bellyRx = 22 * scaleX * bellyPulse;
-    const bellyRy = 19 * scaleY * bellyPulse;
-    ctx.beginPath();
-    ctx.ellipse(cx, bellyY, bellyRx, bellyRy, 0, 0, Math.PI * 2);
-    const bellyGrad = ctx.createRadialGradient(cx, bellyY, 4, cx, bellyY, bellyRx);
-    bellyGrad.addColorStop(0.0, "rgba(255, 245, 252, 0.35)");
-    bellyGrad.addColorStop(0.7, "rgba(255, 210, 235, 0.22)");
-    bellyGrad.addColorStop(1.0, "rgba(255, 180, 220, 0.05)");
+    const heartW = 21 * scaleX * bellyPulse;
+    const heartH = 19 * scaleY * bellyPulse;
+    const heartTop = bellyY - heartH * 0.55;
+    const heartBottom = bellyY + heartH * 0.62;
+    const heartNotch = bellyY - heartH * 0.08;
+
+    // Two lobes meeting in a soft notch, bottom point on the waist line.
+    const heartPath = (): void => {
+      ctx.beginPath();
+      ctx.moveTo(cx, heartBottom);
+      ctx.bezierCurveTo(
+        cx - heartW * 1.14, bellyY + heartH * 0.10,
+        cx - heartW * 0.72, heartTop - heartH * 0.22,
+        cx, heartNotch
+      );
+      ctx.bezierCurveTo(
+        cx + heartW * 0.72, heartTop - heartH * 0.22,
+        cx + heartW * 1.14, bellyY + heartH * 0.10,
+        cx, heartBottom
+      );
+      ctx.closePath();
+    };
+
+    heartPath();
+    const bellyGrad = ctx.createRadialGradient(
+      cx, bellyY - heartH * 0.10, 2,
+      cx, bellyY, heartW * 1.05
+    );
+    bellyGrad.addColorStop(0.0, "rgba(255, 250, 254, 0.58)");
+    bellyGrad.addColorStop(0.55, "rgba(255, 200, 233, 0.40)");
+    bellyGrad.addColorStop(1.0, "rgba(255, 160, 215, 0.10)");
     ctx.fillStyle = bellyGrad;
-    ctx.shadowBlur = 10 + 12 * bassLevel;
+    ctx.shadowBlur = 12 + 14 * bassLevel;
     ctx.shadowColor = mainColor;
     ctx.fill();
-    ctx.strokeStyle = "rgba(255, 235, 250, 0.50)";
-    ctx.lineWidth = 1.5;
+
+    // Glossy candy highlight on the upper-left lobe.
+    ctx.save();
+    ctx.translate(cx - heartW * 0.34, bellyY - heartH * 0.24);
+    ctx.rotate(-0.5);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, heartW * 0.20, heartH * 0.10, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = "#ffffff";
+    ctx.fill();
+    ctx.restore();
+
+    heartPath();
+    ctx.strokeStyle = "rgba(255, 235, 250, 0.62)";
+    ctx.lineWidth = 1.6;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = mainColor;
     ctx.stroke();
+    ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 4B. REACTIVE HULA HOOP (orbits the waist, driven by drums/bass)
+    // -------------------------------------------------------------------------
+    ctx.save();
+    const hoopY = cy + 46 * scaleY + Math.sin(t * 3.2) * (1.2 + 2.2 * drumLevel);
+    const bassPump = Math.min(1.6, bassLevel * 2.4);
+    const hoopRx = (47 + 7 * bassPump) * scaleX;
+    const hoopRy = (16 + 2.6 * bassPump) * scaleY;
+    const tilt = 0.16 + 0.11 * Math.sin(t * 0.9) + 0.06 * Math.sin(t * 2.3 + 0.8);
+    const spin = t * (2.6 + 5.5 * drumLevel) + 1.1;
+    const hoopAlpha = 0.55 + 0.45 * Math.min(1, rmsLevel);
+
+    // Back half of the ring: dimmer, reads as the far side of the hoop.
+    ctx.beginPath();
+    ctx.ellipse(cx, hoopY, hoopRx, hoopRy, tilt, Math.PI, Math.PI * 2);
+    ctx.strokeStyle = accentColor;
+    ctx.globalAlpha = 0.18 + 0.18 * rmsLevel;
+    ctx.lineWidth = 2.0;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = accentColor;
+    ctx.stroke();
+
+    // Front half: bright neon tube.
+    ctx.beginPath();
+    ctx.ellipse(cx, hoopY, hoopRx, hoopRy, tilt, 0, Math.PI);
+    ctx.globalAlpha = hoopAlpha;
+    ctx.lineWidth = 3.8;
+    ctx.shadowBlur = 16 + 18 * drumLevel;
+    ctx.shadowColor = glowColor;
+    ctx.strokeStyle = glowColor;
+    ctx.stroke();
+    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = "#ffffff";
+    ctx.stroke();
+
+    // Two comets chasing each other around the hoop (the circling motion).
+    const TRAIL = 30;
+    const drawComet = (head: number, scale: number): void => {
+      for (let k = 0; k < TRAIL; k++) {
+        const a = head - k * 0.065;
+        const ca = Math.cos(a);
+        const sa = Math.sin(a);
+        const ex = cx + hoopRx * ca * Math.cos(tilt) - hoopRy * sa * Math.sin(tilt);
+        const ey = hoopY + hoopRx * ca * Math.sin(tilt) + hoopRy * sa * Math.cos(tilt);
+        const isFront = sa >= 0;
+        const rad = (k === 0 ? 4.4 : Math.max(0.5, 2.7 - k * 0.075)) * scale;
+        ctx.beginPath();
+        ctx.arc(ex, ey, rad * (0.9 + 0.3 * rmsLevel), 0, Math.PI * 2);
+        ctx.fillStyle = k === 0 ? "#ffffff" : (k % 2 === 0 ? glowColor : accentColor);
+        ctx.globalAlpha = (isFront ? 0.95 : 0.28) * (1 - k / (TRAIL + 2)) * (scale < 1 ? 0.6 : 1);
+        ctx.shadowBlur = k === 0 ? 16 : 8;
+        ctx.shadowColor = k === 0 ? "#ffffff" : glowColor;
+        ctx.fill();
+      }
+    };
+    drawComet(spin, 1.0);
+    drawComet(spin + Math.PI, 0.62);
     ctx.restore();
 
     // -------------------------------------------------------------------------
