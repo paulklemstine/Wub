@@ -965,12 +965,14 @@ export class TamagotchiAvatar {
     const hoopRy = (16 + 2.6 * bassPump) * scaleY;
     // Slow plane drift plus kick/bass-reactive wobble so the hoop visibly
     // precesses and kicks with the groove.
+    // The hoop plane slowly precesses through a wide arc (~40 s cycle) and
+    // leans further with bass / kick hits, like a real hula hoop.
     const tilt =
-      0.12 +
-      0.14 * Math.sin(t * 0.37) +                     // very slow drift
-      0.05 * Math.sin(t * 1.9 + 0.8) +                // gentle secondary wobble
-      0.10 * Math.min(1.2, bassLevel * 1.8) * Math.sin(t * 2.6) +
-      0.07 * Math.min(1.2, drumLevel * 1.6) * Math.sin(t * 4.3 + 0.3);
+      0.16 +
+      0.34 * Math.sin(t * 0.16) +
+      0.06 * Math.sin(t * 1.7 + 0.8) +
+      0.12 * Math.min(1.2, bassLevel * 1.8) * Math.sin(t * 2.6) +
+      0.08 * Math.min(1.2, drumLevel * 1.6) * Math.sin(t * 4.3 + 0.3);
     const spin = t * (2.6 + 5.5 * drumLevel) + 1.1;
     const hoopAlpha = 0.55 + 0.45 * Math.min(1, rmsLevel);
 
@@ -1094,47 +1096,6 @@ export class TamagotchiAvatar {
     ctx.arc(cx - 10 * scaleX, cy + 40 * scaleY, 11 * scaleX, 1.25 * Math.PI, 1.70 * Math.PI);
     ctx.stroke();
     ctx.restore();
-
-    // -------------------------------------------------------------------------
-    // 7. CELESTIAL EQUATORIAL PLANETARY RING (Inclined Orbiting Synth Ring)
-    // -------------------------------------------------------------------------
-    if (otherLevel > 0.015 || (otherWaveform && otherWaveform.length > 0) || this.stage >= 2) {
-      ctx.save();
-      const ringRx = 56 * baseScale * (1.0 + 0.15 * Math.min(1.5, rmsLevel));
-      const ringRy = 18 * baseScale * (1.0 + 0.15 * Math.min(1.5, rmsLevel));
-      const ringTilt = -0.18;
-      ctx.translate(cx, cy + 28 * scaleY);
-      ctx.rotate(ringTilt);
-
-      ctx.beginPath();
-      const ringSteps = 64;
-      const oLen = otherWaveform ? otherWaveform.length : 0;
-      for (let j = 0; j <= ringSteps; j++) {
-        const phi = (j / ringSteps) * Math.PI * 2;
-        let oNorm = 0;
-        if (oLen > 0 && otherWaveform) {
-          const idx = Math.floor((j / ringSteps) * (oLen - 1));
-          oNorm = (otherWaveform[idx] - 128) / 128.0;
-        } else {
-          oNorm = Math.sin(phi * 4.0 + t * 5.0) * 0.2;
-        }
-        const rDev = oNorm * (4.5 * Math.min(1.5, otherLevel * 2.5 + 0.4));
-        const rx = ringRx + rDev;
-        const ry = ringRy + rDev * 0.4;
-        const x = rx * Math.cos(phi);
-        const y = ry * Math.sin(phi);
-        if (j === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.closePath();
-      ctx.strokeStyle = "#ff00a0";
-      ctx.shadowBlur = 10 + 14 * otherLevel;
-      ctx.shadowColor = "#00ffff";
-      ctx.lineWidth = 1.6;
-      ctx.globalAlpha = 0.50 + 0.40 * Math.min(1.0, otherLevel * 2.0);
-      ctx.stroke();
-      ctx.restore();
-    }
 
     // -------------------------------------------------------------------------
     // 8. ROSY CHEEKS & KAWAII BLUSH SLASHES (///)
