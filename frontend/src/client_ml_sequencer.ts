@@ -5440,7 +5440,15 @@ export class ClientGrooveboxConductor {
           blocksLeft: player.kitSetBlocksLeft,
         });
       }
-      player.logBlock(entry.at, entry.result.phrase, entry.result.stems, entry.result.bridge);
+      player.logBlock(
+        entry.at,
+        entry.result.phrase,
+        entry.result.stems,
+        entry.result.bridge,
+        entry.result.targetSection,
+        entry.result.energyDelta,
+        entry.result.selectionBand
+      );
     }
   }
 

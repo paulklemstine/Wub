@@ -82,6 +82,9 @@ export interface KitBlockResult {
   blocksPlayedInSet: number;
   blockDurationSec: number;
   fitBpm: number | null;
+  targetSection: string;
+  energyDelta: number;
+  selectionBand: string;
 }
 
 interface LoadedKitPhrase {
@@ -146,14 +149,9 @@ const SECTION_ENERGY: Record<string, number> = {
   BREAKDOWN: 0.20,
 };
 
-// Adjacent sections come from ClientSongArranger's transition weights.
-const ADJACENT_SECTIONS: Record<string, readonly string[]> = {
-  INTRO: ["GROOVE_A", "BUILDUP"],
-  GROOVE_A: ["BUILDUP", "BREAKDOWN", "DROP"],
-  BUILDUP: ["DROP"],
-  DROP: ["BREAKDOWN", "GROOVE_A", "BUILDUP"],
-  BREAKDOWN: ["BUILDUP", "GROOVE_A"],
-};
+// Arrangement order used for adjacent-section fallback. DROP/GROOVE_A blocks
+// must not borrow INTRO/BREAKDOWN phrases unless the arranger itself is there.
+const SECTION_CHAIN: readonly string[] = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
 
 const PITCH_CLASS: Record<string, number> = {
   C: 0, "C#": 1, DB: 1, D: 2, "D#": 3, EB: 3, E: 4, F: 5,
@@ -267,6 +265,9 @@ export class KitPlayer {
   private tasteRngState: number = 0x9e3779b9;
   private lastTransition: TasteTransitionTop[] = [];
   private lastKitScoreValue: number | null = null;
+  private lastSelectionTarget: string = "";
+  private lastSelectionBand: string = "none";
+  private lastSelectionDelta: number = 0;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -787,6 +788,10 @@ export class KitPlayer {
     const loaded = this.phrases.find((entry) => entry.meta.id === phrase.id);
     if (!loaded) return null;
 
+    const targetSection = this.lastSelectionTarget || normaliseSection(section);
+    const energyDelta = current ? Math.abs(phrase.energy - current.energy) : 0;
+    const selectionBand = this.lastSelectionBand;
+
     // The phrase's own cut defines this block's slot. The next block starts
     // exactly where this one ends (no median-length guessing, no resampling).
     const blockDuration = phrase.duration_sec > 0
@@ -841,15 +846,21 @@ export class KitPlayer {
       blocksPlayedInSet: this.blocksInSet,
       blockDurationSec: blockDuration,
       fitBpm: this.fittedBpm,
+      targetSection,
+      energyDelta,
+      selectionBand,
     };
   }
 
   /**
-   * Continuity-first phrase pick:
-   * - hard energy band vs the current phrase (0.15, then 0.3)
-   * - stay in the current section unless the arranger section changed
-   * - 80% chance to use the real `start_bar + 4` next window when available
-   * - section/energy/embedding score with a last-3 recency penalty
+   * Arranger-anchored phrase pick:
+   * - target section is the section passed in (the arranger's live section);
+   * - if the kit has no target-section phrases, use the nearest-energy phrase
+   *   from the nearest allowed adjacent section in SECTION_CHAIN;
+   * - staged energy band against the previous phrase: 0.15, 0.25, then (on a
+   *   section change) 0.35/0.40; unchanged sections repeat rather than jump;
+   * - taste matrix weights + quality + stem-presence penalty + proportional
+   *   sampling when scores exist, otherwise the rule scorer.
    */
   selectPhrase(
     section: string,
@@ -860,31 +871,39 @@ export class KitPlayer {
   ): KitPhrase | null {
     if (this.phrases.length === 0) return null;
     const current = currentPhrase ?? this.lastPhrase;
+    const targetSection = normaliseSection(section);
     const target = Number.isFinite(energy) ? energy : (current?.energy ?? 0.65);
     const recent = (recentIds.length > 0 ? recentIds : this.recentPhraseIds).slice(-3);
     const all = this.phrases.map((phrase) => phrase.meta);
+    const durationPool = all.filter((phrase) => phrase.duration_sec >= MIN_PHRASE_DURATION_SEC);
+    const basePool = durationPool.length > 0 ? durationPool : all;
 
-    // Only reject truly tiny phrases; normal duration variation is handled by
-    // per-phrase block slots rather than the old 90%-of-median rule.
-    const minDuration = MIN_PHRASE_DURATION_SEC;
+    const sectionPool = this.sectionPoolForSelection(basePool, targetSection, current);
+    const banded = this.energyBandPool(sectionPool, current, sectionChanged, recent);
+    let candidatePool = banded.pool;
+    let bandLabel = banded.band >= 0 ? banded.band.toFixed(2) : (current ? "repeat" : "none");
+
+    if (candidatePool.length === 0) {
+      if (current) {
+        this.logPick("Rule", targetSection, current, current, "repeat", ` • ${current.id} (repeat)`);
+        return current;
+      }
+      candidatePool = sectionPool.length > 0 ? sectionPool : basePool;
+      bandLabel = "none";
+    }
+
+    // Trained taste weights, restricted to the section + energy band.
     const activeKitId = this.kit?.track_id;
     const taste = activeKitId ? this.tasteScores?.kits[activeKitId] : undefined;
     if (taste && current) {
       const currentIndex = taste.phrase_order.indexOf(current.id);
       if (currentIndex >= 0) {
-        const lastTwo = recent.slice(-2);
-        const durationPool = all.filter(
-          (phrase) =>
-            (minDuration <= 0 || phrase.duration_sec >= minDuration) &&
-            !lastTwo.includes(phrase.id)
-        );
         const row = taste.transition[currentIndex] ?? [];
-        const buildWeights = (applyEnergyGuard: boolean, applyPresence: boolean) => {
+        const buildWeights = (applyPresence: boolean) => {
           const weighted: Array<{ phrase: KitPhrase; weight: number }> = [];
           let total = 0;
           let unpenalised = 0;
-          for (const phrase of durationPool) {
-            if (applyEnergyGuard && Math.abs(phrase.energy - current.energy) > 0.35) continue;
+          for (const phrase of candidatePool) {
             const index = taste.phrase_order.indexOf(phrase.id);
             if (index < 0) continue;
             const transition = row[index] ?? 0;
@@ -899,18 +918,11 @@ export class KitPlayer {
           return { weighted, total, unpenalised, presenceApplied: applyPresence };
         };
 
-        let filtered = buildWeights(true, true);
+        let filtered = buildWeights(true);
         // If every positive-weight candidate is stem-penalised, use the
         // unpenalised weights so the mix can still choose something.
         if (filtered.unpenalised === 0) {
-          filtered = buildWeights(true, false);
-        }
-        if (filtered.total <= 0) {
-          // Wrong-style / sparse-row guard: relax the 0.35 energy guard once.
-          filtered = buildWeights(false, true);
-          if (filtered.unpenalised === 0) {
-            filtered = buildWeights(false, false);
-          }
+          filtered = buildWeights(false);
         }
         if (filtered.total > 0) {
           this.lastTransition = taste.phrase_order
@@ -935,69 +947,50 @@ export class KitPlayer {
           const presenceText = filtered.presenceApplied && presence < 1
             ? ` [stems x${presence}]`
             : "";
-          console.info(
-            `[KitPlayer] Taste pick: ${chosen.phrase.id} weight ${chosen.weight.toFixed(4)} • row top3: ${top3}${presenceText}`
+          this.logPick(
+            "Taste",
+            targetSection,
+            chosen.phrase,
+            current,
+            bandLabel,
+            ` • ${chosen.phrase.id} weight ${chosen.weight.toFixed(4)} • row top3: ${top3}${presenceText}`
           );
           return chosen.phrase;
         }
       }
     }
 
-    let pool = minDuration > 0
-      ? all.filter((phrase) => phrase.duration_sec >= minDuration)
-      : all;
-    if (pool.length === 0) pool = all;
-
-    const wanted = normaliseSection(section);
-    const preferred = current ? normaliseSection(current.section) : wanted;
-    if (!sectionChanged) {
-      const sameSection = pool.filter((phrase) => normaliseSection(phrase.section) === preferred);
-      if (sameSection.length > 0) pool = sameSection;
-    } else {
-      let nextSection = pool.filter((phrase) => normaliseSection(phrase.section) === wanted);
-      if (nextSection.length === 0) {
-        const adjacent = new Set(ADJACENT_SECTIONS[wanted] ?? []);
-        nextSection = pool.filter((phrase) => adjacent.has(normaliseSection(phrase.section)));
-      }
-      if (nextSection.length > 0) pool = nextSection;
-    }
-
-    // Hard continuity band: 0.15 normally, 0.3 only when 0.15 has no match.
+    // Rule fallback on the same section + energy-band pool.
     if (current) {
-      const within015 = pool.filter(
-        (phrase) => Math.abs(phrase.energy - current.energy) <= 0.15
-      );
-      if (within015.length > 0) {
-        pool = within015;
-      } else {
-        const within03 = pool.filter(
-          (phrase) => Math.abs(phrase.energy - current.energy) <= 0.3
-        );
-        if (within03.length > 0) pool = within03;
-      }
-    }
-
-    // Real song order: if the actual next 4-bar window exists, use it often.
-    if (current) {
-      const realNext = pool.find(
+      const realNext = candidatePool.find(
         (phrase) => phrase.start_bar === current.start_bar + 4 && !recent.includes(phrase.id)
       );
       if (realNext) {
-        const roll = deterministicRoll(`next|${current.id}|${recent.join(",")}|${wanted}`);
-        if (roll < 0.8) return realNext;
+        const roll = deterministicRoll(`next|${current.id}|${recent.join(",")}|${targetSection}`);
+        if (roll < 0.8) {
+          this.logPick(
+            "Rule",
+            targetSection,
+            realNext,
+            current,
+            bandLabel,
+            ` • ${realNext.id} (real next window)`
+          );
+          return realNext;
+        }
       }
     }
 
     let best: KitPhrase | null = null;
     let bestScore = Number.NEGATIVE_INFINITY;
-    for (const candidate of pool) {
-      const sectionScore = normaliseSection(candidate.section) === wanted ? 2.0 : 0.0;
+    for (const candidate of candidatePool) {
+      const sectionScore = normaliseSection(candidate.section) === targetSection ? 2.0 : 0.0;
       const energyDelta = current ? Math.abs(candidate.energy - current.energy) : 0;
       const energyScore = current ? 1.5 * Math.max(0, 1 - energyDelta / 0.3) : 0.0;
       const embeddingScore = current ? cosineSimilarity(candidate.embedding, current.embedding) : 0.0;
       const recencyPenalty = recent.includes(candidate.id) ? -1.0 : 0.0;
       const tieBreak = deterministicRoll(
-        `score|${wanted}|${current?.id ?? ""}|${recent.join(",")}|${candidate.id}|${target.toFixed(4)}`
+        `score|${targetSection}|${current?.id ?? ""}|${recent.join(",")}|${candidate.id}|${target.toFixed(4)}`
       ) * 0.05;
       const score = sectionScore + energyScore + embeddingScore + recencyPenalty + tieBreak;
       if (score > bestScore) {
@@ -1005,7 +998,152 @@ export class KitPlayer {
         best = candidate;
       }
     }
-    return best;
+
+    if (best !== null) {
+      this.logPick("Rule", targetSection, best, current, bandLabel, ` • ${best.id}`);
+      return best;
+    }
+    if (current) {
+      this.logPick("Rule", targetSection, current, current, "repeat", ` • ${current.id} (repeat)`);
+      return current;
+    }
+    return candidatePool[0] ?? null;
+  }
+
+  /** Prefer the target section; otherwise borrow a stable adjacent section. */
+  private sectionPoolForSelection(
+    pool: KitPhrase[],
+    targetSection: string,
+    current: KitPhrase | null
+  ): KitPhrase[] {
+    const targetPool = pool.filter(
+      (phrase) => normaliseSection(phrase.section) === targetSection
+    );
+    if (targetPool.length > 0) return targetPool;
+
+    const forbidden = new Set<string>();
+    if (targetSection === "DROP" || targetSection === "GROOVE_A") {
+      forbidden.add("INTRO");
+      forbidden.add("BREAKDOWN");
+    }
+
+    const targetIndex = SECTION_CHAIN.indexOf(targetSection);
+    const ordered: string[] = [];
+    if (targetIndex >= 0) {
+      for (let distance = 1; distance < SECTION_CHAIN.length; distance++) {
+        for (const index of [targetIndex - distance, targetIndex + distance]) {
+          const section = SECTION_CHAIN[index];
+          if (section !== undefined && !ordered.includes(section)) ordered.push(section);
+        }
+      }
+    }
+    for (const section of SECTION_CHAIN) {
+      if (section !== targetSection && !ordered.includes(section)) ordered.push(section);
+    }
+    const allowed = ordered.filter((section) => !forbidden.has(section));
+
+    // Keep the currently selected adjacent section stable while the arranger
+    // target itself has no phrases.
+    const previousSection = current ? normaliseSection(current.section) : null;
+    if (previousSection !== null && allowed.includes(previousSection)) {
+      const previousPool = pool.filter(
+        (phrase) => normaliseSection(phrase.section) === previousSection
+      );
+      if (previousPool.length > 0) return previousPool;
+    }
+
+    // Nearest-energy phrase from the nearest allowed section tier.
+    if (targetIndex >= 0) {
+      for (let distance = 1; distance < SECTION_CHAIN.length; distance++) {
+        const sections: string[] = [];
+        for (const index of [targetIndex - distance, targetIndex + distance]) {
+          const section = SECTION_CHAIN[index];
+          if (section !== undefined && !forbidden.has(section)) sections.push(section);
+        }
+        const tier = pool.filter((phrase) => sections.includes(normaliseSection(phrase.section)));
+        if (tier.length > 0) {
+          if (current) {
+            let nearest = tier[0];
+            for (const candidate of tier) {
+              if (
+                Math.abs(candidate.energy - current.energy) <
+                Math.abs(nearest.energy - current.energy)
+              ) {
+                nearest = candidate;
+              }
+            }
+            return pool.filter(
+              (phrase) => normaliseSection(phrase.section) === normaliseSection(nearest.section)
+            );
+          }
+          return tier;
+        }
+      }
+    }
+
+    for (const section of allowed) {
+      const sectionPool = pool.filter(
+        (phrase) => normaliseSection(phrase.section) === section
+      );
+      if (sectionPool.length > 0) return sectionPool;
+    }
+
+    const fallback = pool.filter(
+      (phrase) => !forbidden.has(normaliseSection(phrase.section))
+    );
+    return fallback.length > 0 ? fallback : pool;
+  }
+
+  /**
+   * Staged energy bands vs the previous phrase. Unchanged sections stop at
+   * 0.25 so they never produce an audible energy flap; a section change gets
+   * one wider 0.35/0.40 allowance.
+   */
+  private energyBandPool(
+    pool: KitPhrase[],
+    current: KitPhrase | null,
+    sectionChanged: boolean,
+    recent: readonly string[]
+  ): { pool: KitPhrase[]; band: number } {
+    if (current === null || pool.length === 0) return { pool, band: -1 };
+    const bands = sectionChanged ? [0.15, 0.25, 0.35, 0.4] : [0.15, 0.25];
+    const lastTwo = recent.slice(-2);
+    let fallbackWithin: KitPhrase[] = [];
+    let fallbackBand = -1;
+    for (const band of bands) {
+      const within = pool.filter(
+        (phrase) => Math.abs(phrase.energy - current.energy) <= band + 1e-9
+      );
+      if (within.length === 0) continue;
+      const nonRecent = within.filter((phrase) => !lastTwo.includes(phrase.id));
+      if (nonRecent.length > 0) {
+        return { pool: nonRecent, band };
+      }
+      if (fallbackWithin.length === 0) {
+        fallbackWithin = within;
+        fallbackBand = band;
+      }
+    }
+    // No non-recent candidate in any band: repeat a recent phrase rather than
+    // jump outside the target section.
+    return { pool: fallbackWithin, band: fallbackBand };
+  }
+
+  private logPick(
+    kind: "Taste" | "Rule",
+    targetSection: string,
+    phrase: KitPhrase,
+    current: KitPhrase | null,
+    band: string,
+    extra: string = ""
+  ): void {
+    const delta = current ? Math.abs(phrase.energy - current.energy) : 0;
+    this.lastSelectionTarget = targetSection;
+    this.lastSelectionBand = band;
+    this.lastSelectionDelta = delta;
+    console.info(
+      `[KitPlayer] [${kind} pick] target=${targetSection} got=${normaliseSection(phrase.section)} ΔE=${delta.toFixed(2)} band=${band}${extra}`
+    );
   }
 
   /**
@@ -1015,7 +1153,17 @@ export class KitPlayer {
   public schedule(engine: AudioEngine, when: number, section: string, log: boolean = true): boolean {
     const result = this.scheduleBlock(engine, when, section);
     if (result === null) return false;
-    if (log) this.logBlock(when, result.phrase, result.stems, result.bridge);
+    if (log) {
+      this.logBlock(
+        when,
+        result.phrase,
+        result.stems,
+        result.bridge,
+        result.targetSection,
+        result.energyDelta,
+        result.selectionBand
+      );
+    }
     return true;
   }
 
@@ -1024,11 +1172,17 @@ export class KitPlayer {
     when: number,
     phrase: KitPhrase,
     stems: readonly StemName[] = STEM_ORDER,
-    bridge: boolean = false
+    bridge: boolean = false,
+    targetSection: string = "",
+    energyDelta: number = 0,
+    selectionBand: string = ""
   ): void {
+    const selection = targetSection.length > 0
+      ? ` target=${targetSection} ΔE=${energyDelta.toFixed(2)} band=${selectionBand}`
+      : "";
     const suffix = bridge ? ` [bridge: ${stems.join("+")}]` : "";
     console.info(
-      `[KitPlayer] 4-bar block @ ${when.toFixed(2)}s → ${phrase.id} (${phrase.section}, energy ${phrase.energy.toFixed(2)})${suffix}`
+      `[KitPlayer] 4-bar block @ ${when.toFixed(2)}s → ${phrase.id} (${phrase.section}, energy ${phrase.energy.toFixed(2)})${selection}${suffix}`
     );
   }
 
