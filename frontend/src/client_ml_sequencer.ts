@@ -3681,15 +3681,27 @@ export class ClientGrooveboxConductor {
 
   private async preloadAudioSlices(basePath: string): Promise<void> {
     if (!this.manifest || !this.manifest.slices) return;
+    type SliceGroup = { stem: StemName; cat: string; list: any[]; assets: SliceAsset[] };
+    const groups: SliceGroup[] = [];
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       const stemSlices = this.manifest.slices[stem];
       if (!stemSlices) continue;
       for (const [cat, list] of Object.entries(stemSlices)) {
-        const assets: SliceAsset[] = [];
-        // Big Codebook: Load up to 128 slices per stem category from the authentic training corpus
-        const maxSlices = 128;
-        for (let i = 0; i < Math.min(maxSlices, list.length); i++) {
-          const item = list[i];
+        groups.push({ stem, cat, list, assets: [] });
+      }
+    }
+    // Round-robin by slice index instead of stem-major: the old order loaded
+    // 5 categories x 128 drum slices before touching bass, so pressing Play
+    // early produced drums plus algorithmic bass/vocals and *silence* for the
+    // chord/pad stem. Index-major gives every stem ~16 slices immediately.
+    const maxSlices = 128;
+    for (let i = 0; i < maxSlices; i++) {
+      await Promise.all(groups.map(async (g) => {
+        if (i >= g.list.length) return;
+        const assets = g.assets;
+        const cat = g.cat;
+        const stem = g.stem;
+        const item = g.list[i];
           try {
             let bytes: ArrayBuffer | null = null;
             try {
@@ -3769,11 +3781,14 @@ export class ClientGrooveboxConductor {
             // Silently fall back to algorithmic synth
           }
         }
-        if (assets.length > 0) {
-          this.sliceRegistry.set(`${stem}:${cat}`, assets);
+      ));
+      // Publish after every index pass so partial banks are usable immediately.
+      for (const g of groups) {
+        if (g.assets.length > 0) {
+          this.sliceRegistry.set(`${g.stem}:${g.cat}`, g.assets);
           // Also alias underscore style keys (e.g. 'bass:sub_wave' <-> 'bass:sub:wave')
-          if (cat.includes("_")) {
-            this.sliceRegistry.set(`${stem}:${cat.replace("_", ":")}`, assets);
+          if (g.cat.includes("_")) {
+            this.sliceRegistry.set(`${g.stem}:${g.cat.replace("_", ":")}`, g.assets);
           }
         }
       }
