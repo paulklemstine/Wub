@@ -691,8 +691,6 @@ export class NebulaRenderer {
   private reticleAnims: Partial<Record<StemName, { fromX: number; fromY: number; toX: number; toY: number; start: number; dur: number }>> = {};
   // Stems the user has dragged: auto-follow must not yank them back.
   private manualReticles: Partial<Record<StemName, boolean>> = {};
-  // Seeded starfield for the nebula backdrop.
-  private stars: Array<{ x: number; y: number; r: number; phase: number }> = [];
   // Reticle motion trails (recorded while dragging, fade after release)
   private trails: Record<StemName, Array<{ x: number; y: number; t: number }>> = {
     drums: [], bass: [], vocals: [], other: [],
@@ -778,18 +776,6 @@ export class NebulaRenderer {
     });
     this.resize();
 
-    // Deterministic deep-space starfield (no Math.random so it is stable).
-    let seed = 0x9e3779b9;
-    const rnd = (): number => {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed / 4294967296;
-    };
-    this.stars = Array.from({ length: 120 }, () => ({
-      x: rnd(),
-      y: rnd(),
-      r: 0.35 + rnd() * 1.25,
-      phase: rnd() * Math.PI * 2,
-    }));
   }
 
   /** Sync backing store to CSS size x devicePixelRatio. Call on layout. */
@@ -903,21 +889,6 @@ export class NebulaRenderer {
       ctx.fill();
     }
     ctx.restore();
-
-    // Starfield with twinkle.
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    for (let i = 0; i < this.stars.length; i++) {
-      const st = this.stars[i];
-      const tw = 0.35 + 0.65 * Math.abs(Math.sin(tBg * 0.45 + st.phase));
-      ctx.globalAlpha = 0.18 + 0.55 * tw;
-      ctx.fillStyle = i % 7 === 0 ? "#9fe8ff" : (i % 5 === 0 ? "#ffd0f0" : "#ffffff");
-      ctx.beginPath();
-      ctx.arc(st.x * w, st.y * h, st.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-    ctx.globalAlpha = 1;
 
     // Concentric orbital rings around the nebula core.
     ctx.save();
