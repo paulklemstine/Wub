@@ -60,6 +60,7 @@ from train_taste_model import (  # noqa: E402
 )
 
 CLASSIFIER_TEMPERATURE = 0.7
+CLASSIFIER_CTX = 6
 TARGET_ROW_MAX = 0.52
 MAX_JSON_BYTES = 5 * 1024 * 1024
 
@@ -160,12 +161,16 @@ def _context(feats: np.ndarray, end_idx: int,
     return ctx, mask
 
 
-def _context6(data: RankerData, row: int) -> np.ndarray:
-    """Unpadded 6-window context for old-classifier baselines."""
+def _context_for_classifier(data: RankerData, row: int,
+                            max_ctx: int = 6) -> np.ndarray:
+    """Last up to 6 real context windows for the old 8-token classifier."""
     length = int(data.mask[row].sum())
-    actual = data.ctx[row, CTX_LEN - length:]
-    if length < CTX_LEN:
-        pad = np.repeat(actual[:1], CTX_LEN - length, axis=0)
+    actual = data.ctx[row, data.ctx.shape[1] - length:]
+    if length > max_ctx:
+        actual = actual[-max_ctx:]
+        length = max_ctx
+    if length < max_ctx:
+        pad = np.repeat(actual[:1], max_ctx - length, axis=0)
         actual = np.concatenate([pad, actual], axis=0)
     return actual
 
@@ -214,13 +219,14 @@ def ranker_transition_scores(model: PairwiseRanker, kits: list[dict],
                              device: torch.device) -> list[np.ndarray]:
     """Cosine score matrix for every kit: context ending at i vs phrase j."""
     out: list[np.ndarray] = []
+    max_len = int(model.cfg.get("max_len", CTX_LEN))
     for kit in kits:
         feats = kit["feats"]
         n = len(feats)
-        ctx = np.empty((n, CTX_LEN, feats.shape[1]), dtype=np.float32)
-        mask = np.empty((n, CTX_LEN), dtype=bool)
+        ctx = np.empty((n, max_len, feats.shape[1]), dtype=np.float32)
+        mask = np.empty((n, max_len), dtype=bool)
         for i in range(n):
-            ctx[i], mask[i] = _context(feats, i)
+            ctx[i], mask[i] = _context(feats, i, max_len)
         h = encode_ranker_contexts(model, ctx, mask, device, max(n, 32))
         c = encode_ranker_candidates(model, feats, device, max(n, 32))
         scores = h @ c.T
@@ -365,24 +371,25 @@ def ranker_quality(model: PairwiseRanker, kits: list[dict],
     valid_idx: list[int] = []
     fallback = 0
     phrase_at = 0
+    max_len = int(model.cfg.get("max_len", CTX_LEN))
     for kit in kits:
         feats = kit["feats"]
         track = tracks_by_id.get(kit["track_id"])
         for i, bar in enumerate(kit["bars"]):
-            ctx = np.zeros((CTX_LEN, feats.shape[1]), dtype=np.float32)
-            mask = np.zeros(CTX_LEN, dtype=bool)
+            ctx = np.zeros((max_len, feats.shape[1]), dtype=np.float32)
+            mask = np.zeros(max_len, dtype=bool)
             if track is not None and len(track.feats):
                 k = int(np.searchsorted(track.bars, int(bar), side="left")) - 1
                 if k >= 0:
                     idxs = [k]
-                    while (len(idxs) < CTX_LEN and idxs[-1] - 1 >= 0
+                    while (len(idxs) < max_len and idxs[-1] - 1 >= 0
                            and int(track.bars[idxs[-1]]
                                    - track.bars[idxs[-1] - 1]) == 4):
                         idxs.append(idxs[-1] - 1)
                     idxs = idxs[::-1]
                     length = len(idxs)
-                    ctx[CTX_LEN - length:] = track.feats[idxs]
-                    mask[CTX_LEN - length:] = True
+                    ctx[max_len - length:] = track.feats[idxs]
+                    mask[max_len - length:] = True
             if mask.any():
                 ctxs.append(ctx)
                 masks.append(mask)
@@ -445,11 +452,12 @@ def next_kit_scores_ranked(model: PairwiseRanker, kits: list[dict],
                            device: torch.device) -> tuple[list[list[dict]], dict]:
     """Top-10 same-style successors, BPM <=10 then <=20 if needed."""
     n = len(kits)
-    ctx = np.zeros((n, CTX_LEN, kits[0]["feats"].shape[1]), dtype=np.float32)
-    mask = np.zeros((n, CTX_LEN), dtype=bool)
+    max_len = int(model.cfg.get("max_len", CTX_LEN))
+    ctx = np.zeros((n, max_len, kits[0]["feats"].shape[1]), dtype=np.float32)
+    mask = np.zeros((n, max_len), dtype=bool)
     first = np.stack([k["feats"][0] for k in kits])
     for i, kit in enumerate(kits):
-        ctx[i], mask[i] = _context(kit["feats"], len(kit["feats"]) - 1)
+        ctx[i], mask[i] = _context(kit["feats"], len(kit["feats"]) - 1, max_len)
     h = encode_ranker_contexts(model, ctx, mask, device, 1024)
     c = encode_ranker_candidates(model, first, device, 2048)
     scores = h @ c.T
@@ -595,12 +603,12 @@ def full_track_retrieval(ranker: PairwiseRanker,
         r_top1 += int((order[:, 0] == tgt).sum())
         r_top5 += int((order[:, :5] == tgt[:, None]).any(axis=1).sum())
         # classifier
-        ctx6 = np.stack([_context6(data, int(r)) for r in rows])
+        ctx6 = np.stack([_context_for_classifier(data, int(r)) for r in rows])
         seqs = np.empty((len(rows), n, SEQ_LEN, ctx6.shape[-1]),
                         dtype=np.float32)
-        seqs[:, :, :CTX_LEN] = ctx6[:, None, :, :]
-        seqs[:, :, CTX_LEN] = track.feats[None, :, :]
-        seqs[:, :, CTX_LEN + 1] = track.feats[None, :, :]
+        seqs[:, :, :CLASSIFIER_CTX] = ctx6[:, None, :, :]
+        seqs[:, :, CLASSIFIER_CTX] = track.feats[None, :, :]
+        seqs[:, :, CLASSIFIER_CTX + 1] = track.feats[None, :, :]
         cs = score_sequences(classifier, seqs.reshape(-1, SEQ_LEN,
                                                        ctx6.shape[-1]),
                              device, batch_size).reshape(len(rows), n)
@@ -658,11 +666,11 @@ def controlled_retrieval(ranker: PairwiseRanker,
     r_top1 = int((r_order[:, 0] == 0).sum())
     r_top5 = int((r_order[:, :5] == 0).sum())
 
-    ctx6 = np.stack([_context6(data, r) for r in range(n_ctx)])
+    ctx6 = np.stack([_context_for_classifier(data, r) for r in range(n_ctx)])
     seqs = np.empty((n_ctx, 8, SEQ_LEN, ctx6.shape[-1]), dtype=np.float32)
-    seqs[:, :, :CTX_LEN] = ctx6[:, None, :, :]
-    seqs[:, :, CTX_LEN] = cand_feats
-    seqs[:, :, CTX_LEN + 1] = cand_feats
+    seqs[:, :, :CLASSIFIER_CTX] = ctx6[:, None, :, :]
+    seqs[:, :, CLASSIFIER_CTX] = cand_feats
+    seqs[:, :, CLASSIFIER_CTX + 1] = cand_feats
     cs = score_sequences(classifier, seqs.reshape(-1, SEQ_LEN, ctx6.shape[-1]),
                          device, batch_size * 2).reshape(n_ctx, 8)
     c_order = np.argsort(-cs, axis=1)
@@ -750,7 +758,9 @@ def score_all(args: argparse.Namespace) -> dict:
     val_ids = set(map(str, ckpt.get("val_track_ids") or []))
     if not val_ids:
         val_ids = _val_track_ids(dataset, ckpt, args.seed, tracks)
-    val_data = build_ranker_data(tracks, val_ids, seed=args.seed)
+    val_data = build_ranker_data(tracks, val_ids, seed=args.seed,
+                                 context_len=int(rckpt["cfg"].get("max_len",
+                                                                 CTX_LEN)))
     retrieval_full = full_track_retrieval(
         ranker, classifier, val_data, tracks, device, args.batch_size)
     retrieval_controlled = controlled_retrieval(
@@ -879,7 +889,8 @@ def score_all(args: argparse.Namespace) -> dict:
             "ranker": {"path": str(args.ranker),
                        "params": int(rckpt.get("params", 0)),
                        "val_top1": rckpt.get("val_top1"),
-                       "val_top5": rckpt.get("val_top5")},
+                       "val_top5": rckpt.get("val_top5"),
+                       "context_len": int(rckpt["cfg"].get("max_len", 0))},
             "feature_dim": feature_dim,
         },
         "temperature": round(temperature, 6),

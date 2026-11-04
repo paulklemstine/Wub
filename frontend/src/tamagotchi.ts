@@ -922,6 +922,9 @@ export class TamagotchiAvatar {
     const heartW = 21 * scaleX * beatPulse;
     const heartH = 19 * scaleY * beatPulse;
     const heartWave = otherWaveform ?? waveform ?? null;
+    const heartGlow = "#ffae00";
+    const heartLine = "#ffcf2e";
+    const heartCore = "#ffe45c";
 
     const heartPathAt = (cw: number, ch: number): void => {
       const top = bellyY - ch * 0.55;
@@ -940,11 +943,11 @@ export class TamagotchiAvatar {
       const rippleScale = 1 + ph * 0.72;
       ctx.save();
       heartPathAt(heartW * rippleScale, heartH * rippleScale);
-      ctx.strokeStyle = i === 0 ? accentColor : glowColor;
+      ctx.strokeStyle = i === 0 ? heartCore : heartLine;
       ctx.globalAlpha = (1 - ph) * (0.16 + 0.62 * Math.min(1, drumLevel * 1.7));
       ctx.lineWidth = 1.1 + (1 - ph) * 1.8;
       ctx.shadowBlur = 10 + 16 * (1 - ph);
-      ctx.shadowColor = accentColor;
+      ctx.shadowColor = heartGlow;
       ctx.stroke();
       ctx.restore();
     }
@@ -973,8 +976,8 @@ export class TamagotchiAvatar {
       bellyGrad.addColorStop(1.0, "rgba(255, 150, 215, 0.20)");
     }
     ctx.fillStyle = bellyGrad;
-    ctx.shadowBlur = 12 + 18 * bassPump;
-    ctx.shadowColor = mainColor;
+    ctx.shadowBlur = 14 + 20 * bassPump;
+    ctx.shadowColor = heartGlow;
     ctx.fill();
 
     // Inside the heart: live waveform + twinkling rave dust, clipped to the shape.
@@ -993,11 +996,11 @@ export class TamagotchiAvatar {
         if (j === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = accentColor;
+      ctx.strokeStyle = heartCore;
       ctx.globalAlpha = 0.65 + 0.35 * Math.min(1, rmsLevel);
       ctx.lineWidth = 1.3;
       ctx.shadowBlur = 10;
-      ctx.shadowColor = accentColor;
+      ctx.shadowColor = heartGlow;
       ctx.stroke();
     }
     for (let k = 0; k < 9; k++) {
@@ -1008,10 +1011,10 @@ export class TamagotchiAvatar {
       const tw = 0.3 + 0.7 * Math.pow(Math.abs(Math.sin(t * 2.7 + k * 1.9)), 2);
       ctx.beginPath();
       ctx.arc(sx, sy, (0.8 + 1.5 * tw) * (0.8 + 0.35 * rmsLevel), 0, Math.PI * 2);
-      ctx.fillStyle = k % 3 === 0 ? "#ffffff" : (k % 3 === 1 ? accentColor : glowColor);
+      ctx.fillStyle = k % 3 === 0 ? "#ffffff" : (k % 3 === 1 ? heartCore : heartLine);
       ctx.globalAlpha = tw * (0.45 + 0.55 * rmsLevel);
       ctx.shadowBlur = 8;
-      ctx.shadowColor = accentColor;
+      ctx.shadowColor = heartGlow;
       ctx.fill();
     }
     ctx.restore();
@@ -1030,17 +1033,18 @@ export class TamagotchiAvatar {
 
     // Double neon outline: soft halo + crisp core.
     heartPathAt(heartW, heartH);
-    ctx.strokeStyle = glowColor;
-    ctx.lineWidth = 3.2;
-    ctx.globalAlpha = 0.55 + 0.25 * Math.min(1, rmsLevel);
-    ctx.shadowBlur = 16 + 14 * drumLevel;
-    ctx.shadowColor = glowColor;
+    ctx.strokeStyle = heartLine;
+    ctx.lineWidth = 3.4;
+    ctx.globalAlpha = 0.55 + 0.30 * Math.min(1, rmsLevel);
+    ctx.shadowBlur = 20 + 20 * Math.min(1, rmsLevel) + 10 * drumLevel;
+    ctx.shadowColor = heartGlow;
     ctx.stroke();
     heartPathAt(heartW, heartH);
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 1.1;
-    ctx.globalAlpha = 0.85;
-    ctx.shadowBlur = 4;
+    ctx.strokeStyle = heartCore;
+    ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.92;
+    ctx.shadowBlur = 7;
+    ctx.shadowColor = "#fff3b0";
     ctx.stroke();
     ctx.restore();
 

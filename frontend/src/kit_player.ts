@@ -7,6 +7,7 @@
 // (`960 / median phrase duration`), not from sample counts.
 import type { StemName } from "./types";
 import type { AudioEngine } from "./audio_engine";
+import type { NebulaPoint } from "./visualizer";
 
 export interface KitStemAsset {
   file: string;
@@ -25,7 +26,11 @@ export interface KitPhrase {
   energy_db: number;
   embedding: number[];
   stems: Record<StemName, KitStemAsset>;
+  x?: number;
+  y?: number;
 }
+
+export type KitSteering = Record<StemName, { x: number; y: number }>;
 
 export interface Kit {
   track_id: string;
@@ -323,6 +328,57 @@ export class KitPlayer {
 
   get compatibleKits(): Kit[] {
     return [...this.compatibility];
+  }
+
+  /** Fired when a phrase is scheduled, with its nebula coordinate. */
+  public onPhraseScheduled?: (p: {
+    x: number;
+    y: number;
+    at: number;
+    stem: StemName;
+    phraseId: string;
+  }) => void;
+
+  /** One nebula point per phrase in the active kit, coloured by loudest stem. */
+  public nebulaPoints(): NebulaPoint[] {
+    const kit = this.kit;
+    if (kit === null) return [];
+    return this.phrases.map((entry) => ({
+      x: entry.meta.x ?? 0.5,
+      y: entry.meta.y ?? 0.5,
+      stem: this.loudestStem(entry.meta),
+      trackId: kit.track_id,
+    }));
+  }
+
+  private loudestStem(phrase: KitPhrase): StemName {
+    let loudest: StemName = "drums";
+    let bestDb = Number.NEGATIVE_INFINITY;
+    for (const stem of STEM_ORDER) {
+      const db = phrase.stems?.[stem]?.rms_db;
+      if (typeof db === "number" && Number.isFinite(db) && db > bestDb) {
+        bestDb = db;
+        loudest = stem;
+      }
+    }
+    return loudest;
+  }
+
+  /** Reticle bias: 0.35 when far from all four reticles, 1.75 at the centre. */
+  private steeringMultiplier(phrase: KitPhrase, steering?: KitSteering): number {
+    if (!steering) return 1;
+    const px = phrase.x ?? 0.5;
+    const py = phrase.y ?? 0.5;
+    let total = 0;
+    for (const stem of STEM_ORDER) {
+      const point = steering[stem];
+      if (!point) continue;
+      const dx = px - point.x;
+      const dy = py - point.y;
+      total += Math.exp(-(dx * dx + dy * dy) / (2 * 0.22 * 0.22));
+    }
+    const mean = total / STEM_ORDER.length;
+    return 0.35 + 1.4 * mean;
   }
 
   get tasteModelName(): string | null {
@@ -705,7 +761,12 @@ export class KitPlayer {
    * Schedule one block, handling set rotation and the drumless bridge.
    * The caller logs the result when it becomes due.
    */
-  public scheduleBlock(engine: AudioEngine, when: number, section: string): KitBlockResult | null {
+  public scheduleBlock(
+    engine: AudioEngine,
+    when: number,
+    section: string,
+    steering?: KitSteering
+  ): KitBlockResult | null {
     if (!this.readyFlag || this.kit === null || this.phrases.length === 0) return null;
     const wanted = normaliseSection(section);
     const sectionChanged = this.lastSection !== null && this.lastSection !== wanted;
@@ -722,7 +783,7 @@ export class KitPlayer {
 
     // Forced bridge from NEXT KIT (blocksInSet stays at KIT_SET_BLOCKS).
     if (this.forcedBridgeRemaining > 0) {
-      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true);
+      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering);
       if (result !== null) this.forcedBridgeRemaining--;
       return result;
     }
@@ -733,7 +794,7 @@ export class KitPlayer {
         const blocksPlayed = this.blocksInSet;
         const pending = this.pendingLoadedKit;
         this.setActiveLoaded(pending);
-        const result = this.scheduleBlockInternal(engine, when, wanted, false, ALL_STEMS, false);
+        const result = this.scheduleBlockInternal(engine, when, wanted, false, ALL_STEMS, false, steering);
         if (result !== null) {
           this.blocksInSet = 1;
           result.setChanged = true;
@@ -747,18 +808,18 @@ export class KitPlayer {
         console.info("[KitPlayer] Next kit not ready — extending bridge");
       }
       void this.prepareNextKit();
-      return this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true);
+      return this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering);
     }
 
     // Normal drumless bridge window at the end of the set.
     const bridgeThreshold = KIT_SET_BLOCKS - this.bridgeBlocksForNext;
     if (this.blocksInSet >= bridgeThreshold) {
-      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true);
+      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering);
       if (result !== null) this.blocksInSet++;
       return result;
     }
 
-    const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, ALL_STEMS, false);
+    const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, ALL_STEMS, false, steering);
     if (result !== null) this.blocksInSet++;
     return result;
   }
@@ -769,7 +830,8 @@ export class KitPlayer {
     section: string,
     sectionChanged: boolean,
     stems: readonly StemName[],
-    bridge: boolean
+    bridge: boolean,
+    steering?: KitSteering
   ): KitBlockResult | null {
     const kit = this.kit;
     if (kit === null) return null;
@@ -781,7 +843,8 @@ export class KitPlayer {
       targetEnergy,
       this.recentPhraseIds.slice(-3),
       current,
-      sectionChanged
+      sectionChanged,
+      steering
     );
     if (phrase === null) return null;
 
@@ -836,6 +899,13 @@ export class KitPlayer {
       this.recentPhraseIds = this.recentPhraseIds.slice(-3);
     }
     this.lastPhrase = phrase;
+    this.onPhraseScheduled?.({
+      x: phrase.x ?? 0.5,
+      y: phrase.y ?? 0.5,
+      at: when,
+      stem: this.loudestStem(phrase),
+      phraseId: phrase.id,
+    });
 
     return {
       kit,
@@ -867,7 +937,8 @@ export class KitPlayer {
     energy: number,
     recentIds: readonly string[],
     currentPhrase?: KitPhrase | null,
-    sectionChanged: boolean = false
+    sectionChanged: boolean = false,
+    steering?: KitSteering
   ): KitPhrase | null {
     if (this.phrases.length === 0) return null;
     const current = currentPhrase ?? this.lastPhrase;
@@ -909,7 +980,8 @@ export class KitPlayer {
             const transition = row[index] ?? 0;
             const quality = taste.quality[index] ?? 0;
             const presence = applyPresence ? this.stemPresenceMultiplier(phrase) : 1;
-            const weight = transition * (0.5 + quality) * presence;
+            const steeringBias = this.steeringMultiplier(phrase, steering);
+            const weight = transition * (0.5 + quality) * presence * steeringBias;
             if (!Number.isFinite(weight) || weight <= 0) continue;
             weighted.push({ phrase, weight });
             total += weight;
@@ -989,10 +1061,11 @@ export class KitPlayer {
       const energyScore = current ? 1.5 * Math.max(0, 1 - energyDelta / 0.3) : 0.0;
       const embeddingScore = current ? cosineSimilarity(candidate.embedding, current.embedding) : 0.0;
       const recencyPenalty = recent.includes(candidate.id) ? -1.0 : 0.0;
+      const steeringBias = (this.steeringMultiplier(candidate, steering) - 1) * 0.5;
       const tieBreak = deterministicRoll(
         `score|${targetSection}|${current?.id ?? ""}|${recent.join(",")}|${candidate.id}|${target.toFixed(4)}`
       ) * 0.05;
-      const score = sectionScore + energyScore + embeddingScore + recencyPenalty + tieBreak;
+      const score = sectionScore + energyScore + embeddingScore + recencyPenalty + steeringBias + tieBreak;
       if (score > bestScore) {
         bestScore = score;
         best = candidate;

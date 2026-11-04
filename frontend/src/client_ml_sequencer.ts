@@ -11,7 +11,8 @@
 import type { StemName } from "./types";
 import { AudioEngine } from "./audio_engine";
 import { KitPlayer } from "./kit_player";
-import type { Kit, KitBlockResult, KitPhrase } from "./kit_player";
+import type { Kit, KitBlockResult, KitPhrase, KitSteering } from "./kit_player";
+import type { NebulaPoint } from "./visualizer";
 
 export interface SerializedPattern {
   id: string;
@@ -2631,6 +2632,9 @@ export class ClientGrooveboxConductor {
   private nextKitBlockTime: number = 0;
   private lastKitBlockDurationSec: number = 0;
   private kitBlockLogQueue: Array<{ at: number; result: KitBlockResult }> = [];
+  /** Fired when a kit block becomes due, with the phrase's nebula coordinate. */
+  public onKitPhrase?: (p: { x: number; y: number; at: number }) => void;
+  private kitSteeringDirty: boolean = false;
   private onKitSetChange?: (info: {
     kit: Kit;
     blocksPlayed: number;
@@ -2836,8 +2840,14 @@ export class ClientGrooveboxConductor {
     // Pure acoustic slices: keep filters transparently wide open at 20 kHz for maximum punch, clarity and grit
     this.engine.setStemFilter(stem, 20000, 0.7);
 
-    // Dynamic Reticule Slice Steering: update slices when user drags the reticle (or on passive startup before playback)
-    this.updateStemSlicesForReticle(stem, { x: cx, y: cy }, isUserDrag);
+    if (this.playbackMode === "kit") {
+      // Kit mode uses reticles as a phrase-selection bias; the legacy slice
+      // registry and pattern update are intentionally skipped.
+      if (isUserDrag) this.kitSteeringDirty = true;
+    } else {
+      // Dynamic Reticule Slice Steering: update slices when user drags the reticle (or on passive startup before playback)
+      this.updateStemSlicesForReticle(stem, { x: cx, y: cy }, isUserDrag);
+    }
   }
 
   public setTrackStemPositions(positions: Map<string, { x: number; y: number }>): void {
@@ -5010,6 +5020,10 @@ export class ClientGrooveboxConductor {
     return this.kitPlayer?.activeKit ?? null;
   }
 
+  public getKitNebulaPoints(): NebulaPoint[] {
+    return this.kitPlayer?.nebulaPoints() ?? [];
+  }
+
   public get blocksInSet(): number {
     return this.kitPlayer?.blocksInSet ?? 0;
   }
@@ -5370,6 +5384,7 @@ export class ClientGrooveboxConductor {
       ? this.engine.now() + 0.05
       : 0;
     this.lastKitBlockDurationSec = 0;
+    this.kitSteeringDirty = false;
     this.kitBlockLogQueue = [];
   }
 
@@ -5413,7 +5428,16 @@ export class ClientGrooveboxConductor {
     // one line per block rather than clustering the prefetched ones.
     while (this.nextKitBlockTime < now + blockSec + 0.15) {
       const at = this.nextKitBlockTime;
-      const result = player.scheduleBlock(this.engine, at, this.arranger.getSection());
+      if (this.kitSteeringDirty) {
+        this.kitSteeringDirty = false;
+        console.info("[KitPlayer] Reticle steering applied to next kit block");
+      }
+      const result = player.scheduleBlock(
+        this.engine,
+        at,
+        this.arranger.getSection(),
+        this.steering
+      );
       if (result === null) break;
       this.kitBlockLogQueue.push({ at, result });
       blockSec = result.blockDurationSec > 0 ? result.blockDurationSec : blockSec;
@@ -5449,6 +5473,11 @@ export class ClientGrooveboxConductor {
         entry.result.energyDelta,
         entry.result.selectionBand
       );
+      this.onKitPhrase?.({
+        x: entry.result.phrase.x ?? 0.5,
+        y: entry.result.phrase.y ?? 0.5,
+        at: entry.at,
+      });
     }
   }
 

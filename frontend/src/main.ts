@@ -220,6 +220,7 @@ class WubApp {
   private segmentPositions = new Map<string, { x: number; y: number }>();
   private trackStemPositions = new Map<string, { x: number; y: number }>();
   private umapLoadStarted = false;
+  private lastNebulaKitId: string | null = null;
   private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private masterTimeScratch: Uint8Array<ArrayBuffer> | null = null;
@@ -329,6 +330,7 @@ class WubApp {
         (window as unknown as { __wubNextKit: () => void }).__wubNextKit = () => {
           this.clientConductor?.forceNextKit();
         };
+        (window as unknown as { __wubNebula: NebulaRenderer | null }).__wubNebula = this.nebula;
       } catch {
         // Non-browser context; skip
       }
@@ -373,6 +375,14 @@ class WubApp {
           `KIT SET → ${track} (${info.kit.style}, ${info.kit.bpm.toFixed(2)} BPM) • ${info.blocksLeft} blocks left • next: ${next}${scoreText}`
         );
       });
+      this.clientConductor.onKitPhrase = (p) => {
+        const t = visualNow();
+        if (this.nebula !== null) {
+          for (const stem of STEMS) {
+            this.nebula.setActiveSlice(stem, p.x, p.y, t);
+          }
+        }
+      };
     } catch (e) {
       console.warn("Client ML sequencer init failed:", e);
     }
@@ -1249,6 +1259,20 @@ class WubApp {
       }
     }
 
+    // Kit mode: the 2D nebula is the active kit map, not the demo corpus.
+    if (this.clientConductor && this.clientConductor.getPlaybackMode() === "kit") {
+      const kitId = this.clientConductor.activeKit?.track_id ?? null;
+      if (kitId !== this.lastNebulaKitId) {
+        this.lastNebulaKitId = kitId;
+        const points = this.clientConductor.getKitNebulaPoints();
+        if (points.length > 0 && this.nebula !== null) {
+          this.nebula.setPoints(points);
+        }
+      }
+    } else {
+      this.lastNebulaKitId = null;
+    }
+
     // Consume queued UI events strictly when their scheduled audio playback time arrives
     let latestUIEvent: UIEvent | null = null;
     while (this.uiEventQueue.length > 0 && this.uiEventQueue[0].atAudioSec <= audioNow) {
@@ -1270,7 +1294,7 @@ class WubApp {
             trackId,
             atSec: t,
           });
-          if (this.nebula !== null) {
+          if (this.nebula !== null && this.clientConductor?.getPlaybackMode() !== "kit") {
             const pos = latestUIEvent.meta.activeSliceCoords?.[stem] ?? this.getSliceCoordinates(stem, trackId, "");
             this.nebula.setActiveSlice(stem, pos.x, pos.y, t);
           }

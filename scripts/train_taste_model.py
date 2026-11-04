@@ -812,8 +812,8 @@ class RankerData:
 
 def build_ranker_data(tracks: list[TrackData], allowed_ids: set[str] | None = None,
                       max_contexts: int | None = None,
-                      seed: int = SEED) -> RankerData:
-    """Every real next-window pair with 1..6 preceding aligned windows."""
+                      seed: int = SEED, context_len: int = CTX_LEN) -> RankerData:
+    """Every real next-window pair with 1..``context_len`` preceding windows."""
     ctxs: list[np.ndarray] = []
     masks: list[np.ndarray] = []
     targets: list[np.ndarray] = []
@@ -841,11 +841,11 @@ def build_ranker_data(tracks: list[TrackData], allowed_ids: set[str] | None = No
         runs.append((start, n))
         for a, b in runs:
             for ti in range(a + 1, b):
-                length = min(CTX_LEN, ti - a)
-                ctx = np.zeros((CTX_LEN, t.feats.shape[1]), dtype=np.float32)
-                ctx[CTX_LEN - length:] = t.feats[ti - length:ti]
-                mask = np.zeros(CTX_LEN, dtype=bool)
-                mask[CTX_LEN - length:] = True
+                length = min(context_len, ti - a)
+                ctx = np.zeros((context_len, t.feats.shape[1]), dtype=np.float32)
+                ctx[context_len - length:] = t.feats[ti - length:ti]
+                mask = np.zeros(context_len, dtype=bool)
+                mask[context_len - length:] = True
                 ctxs.append(ctx)
                 masks.append(mask)
                 targets.append(t.feats[ti])
@@ -884,6 +884,7 @@ def build_ranker_data(tracks: list[TrackData], allowed_ids: set[str] | None = No
     data.counts = {
         "tracks": n_tracks,
         "contexts": int(len(data.ctx)),
+        "context_len": int(context_len),
         "context_lengths": {str(k): int(v) for k, v in sorted(lengths.items())},
         "context_tracks": int(len(set(data.track_ids.tolist()))),
     }
@@ -892,8 +893,8 @@ def build_ranker_data(tracks: list[TrackData], allowed_ids: set[str] | None = No
 
 def _sample_negatives(data: RankerData, idx: np.ndarray, tracks: list[TrackData],
                       style_pool: dict[str, list[int]],
-                      rng: random.Random) -> np.ndarray:
-    """7 negatives/context: 50/50 same-track (not +/-1) and same-style track."""
+                      rng: random.Random, margin: int = 1) -> np.ndarray:
+    """7 negatives/context: 50/50 same-track (not within +/-margin) and same-style."""
     b = len(idx)
     out = np.empty((b, RANKER_NEGATIVES, data.target.shape[1]), dtype=np.float32)
     for row, k in enumerate(idx):
@@ -908,10 +909,10 @@ def _sample_negatives(data: RankerData, idx: np.ndarray, tracks: list[TrackData]
                 c = t
                 for _ in range(12):
                     c = rng.randrange(n)
-                    if abs(c - t) > 1:
+                    if abs(c - t) > margin:
                         break
-                if abs(c - t) <= 1:  # degenerate tiny track
-                    c = (t + 2) % n
+                if abs(c - t) <= margin:  # degenerate tiny track
+                    c = (t + margin + 1) % n
                 out[row, j] = feats[c]
             else:
                 pool = style_pool[style]
@@ -1028,14 +1029,18 @@ def train_ranker_model(dataset: dict, args: argparse.Namespace,
     if not val_ids:
         raise ValueError(f"{classifier_ckpt}: missing val_track_ids")
     train_ids = {t.track_id for t in tracks} - val_ids
+    context_len = int(getattr(args, "ranker_context_len", CTX_LEN))
+    margin = int(getattr(args, "ranker_hard_margin", 1))
 
     train_data = build_ranker_data(tracks, train_ids,
                                    max_contexts=args.max_contexts,
-                                   seed=args.seed)
-    val_data = build_ranker_data(tracks, val_ids, seed=args.seed)
+                                   seed=args.seed, context_len=context_len)
+    val_data = build_ranker_data(tracks, val_ids, seed=args.seed,
+                                 context_len=context_len)
     print(f"[ranker] contexts train={len(train_data.ctx)} "
           f"val={len(val_data.ctx)} tracks={train_data.counts['tracks']}/"
-          f"{val_data.counts['tracks']}", flush=True)
+          f"{val_data.counts['tracks']} len={context_len} margin={margin}",
+          flush=True)
     print(f"[ranker] context lengths train="
           f"{train_data.counts['context_lengths']}", flush=True)
 
@@ -1050,7 +1055,7 @@ def train_ranker_model(dataset: dict, args: argparse.Namespace,
     model = PairwiseRanker(
         feature_dim=feature_dim, d_model=args.ranker_d_model,
         n_layers=args.ranker_layers, n_heads=args.ranker_heads,
-        max_len=CTX_LEN, dropout=args.dropout, init_scale=10.0,
+        max_len=context_len, dropout=args.dropout, init_scale=10.0,
         mean=mean, std=std).to(device)
     print(f"[ranker] params={model.n_params():,} device={device} "
           f"feature_dim={feature_dim}", flush=True)
@@ -1063,7 +1068,7 @@ def train_ranker_model(dataset: dict, args: argparse.Namespace,
     val_rng = random.Random(args.seed + 7)
     val_negatives = _sample_negatives(
         val_data, np.arange(len(val_data.ctx)), tracks, style_pool_val,
-        val_rng)
+        val_rng, margin=margin)
 
     history: list[dict] = []
     for epoch in range(1, args.ranker_epochs + 1):
@@ -1076,7 +1081,8 @@ def train_ranker_model(dataset: dict, args: argparse.Namespace,
             negatives = _sample_negatives(train_data, idx, tracks,
                                           style_pool_train,
                                           random.Random(args.seed + epoch * 100003
-                                                        + start))
+                                                        + start),
+                                          margin=margin)
             ctx = torch.from_numpy(train_data.ctx[idx]).to(device)
             mask = torch.from_numpy(train_data.mask[idx]).to(device)
             pos = torch.from_numpy(train_data.target[idx]).to(device)
@@ -1140,8 +1146,10 @@ def train_ranker_model(dataset: dict, args: argparse.Namespace,
             "train": train_data.counts,
             "val": val_data.counts,
             "negatives_per_context": RANKER_NEGATIVES,
-            "negative_mix": "50/50 same-track (not +/-1) / same-style track",
-            "context_len": CTX_LEN,
+            "negative_mix": "50/50 same-track (not within +/-%d) / same-style track"
+                            % margin,
+            "negative_margin": int(margin),
+            "context_len": int(context_len),
         },
         "model_cfg": cfg_out,
         "params": int(model.n_params()),
@@ -1336,6 +1344,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--ranker-d-model", type=int, default=128)
     ap.add_argument("--ranker-layers", type=int, default=3)
     ap.add_argument("--ranker-heads", type=int, default=4)
+    ap.add_argument("--ranker-context-len", type=int, default=CTX_LEN)
+    ap.add_argument("--ranker-hard-margin", type=int, default=1,
+                    help="same-track negatives must be farther than this")
     ap.add_argument("--max-contexts", type=int, default=None,
                     help="debug: cap the number of ranker contexts")
     ap.add_argument("--self-test", action="store_true")
