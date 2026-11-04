@@ -324,6 +324,7 @@ class WubApp {
             }
             : { error: "engine not ready" };
         };
+        (window as any).__wubReticles = () => this.nebula?.reticles ?? null;
         (window as any).__wubDebugBar = () => {
           const c = this.clientConductor as any;
           return typeof c?.debugBar === "function" ? c.debugBar() : { error: "engine not ready" };

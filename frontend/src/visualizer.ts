@@ -689,6 +689,8 @@ export class NebulaRenderer {
   private patternHistory: Array<{ x: number; y: number; t: number; stem: StemName }> = [];
   // Smoothly animated reticle targets (bar-by-bar placement from the player).
   private reticleAnims: Partial<Record<StemName, { fromX: number; fromY: number; toX: number; toY: number; start: number; dur: number }>> = {};
+  // Stems the user has dragged: auto-follow must not yank them back.
+  private manualReticles: Partial<Record<StemName, boolean>> = {};
   // Seeded starfield for the nebula backdrop.
   private stars: Array<{ x: number; y: number; r: number; phase: number }> = [];
   // Reticle motion trails (recorded while dragging, fade after release)
@@ -727,7 +729,7 @@ export class NebulaRenderer {
     canvas.style.touchAction = "none";
 
     this.handlePointerDown = (e: PointerEvent) => {
-      const hit = this.hitTest(e);
+      const hit = this.hitTest(e as unknown as PointerEvent);
       if (hit !== null) {
         this.dragStem = hit;
         try {
@@ -767,6 +769,13 @@ export class NebulaRenderer {
     canvas.addEventListener("pointermove", this.handlePointerMove);
     canvas.addEventListener("pointerup", this.handlePointerUp);
     canvas.addEventListener("pointercancel", this.handlePointerUp);
+    canvas.addEventListener("dblclick", (e: MouseEvent) => {
+      const hit = this.hitTest(e as unknown as PointerEvent);
+      if (hit !== null) {
+        delete this.manualReticles[hit];
+        delete this.reticleAnims[hit];
+      }
+    });
     this.resize();
 
     // Deterministic deep-space starfield (no Math.random so it is stable).
@@ -831,6 +840,7 @@ export class NebulaRenderer {
 
   /** Glide a reticle to a target over `durSec` without firing the steering callback. */
   setReticleTarget(stem: StemName, x: number, y: number, durSec: number = 0.32): void {
+    if (this.manualReticles[stem]) return; // user owns this reticle
     const cur = this.reticleMap[stem];
     this.reticleAnims[stem] = {
       fromX: cur.x,
@@ -1259,6 +1269,7 @@ export class NebulaRenderer {
     targetY = clamp01(targetY);
 
     this.reticleMap[stem] = { x: targetX, y: targetY };
+    this.manualReticles[stem] = true;
 
     // Record the drag trail and flag magnetic snap engagement
     const nowSec = performance.now() / 1000;
