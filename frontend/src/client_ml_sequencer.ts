@@ -2833,6 +2833,11 @@ export class ClientGrooveboxConductor {
    * Guides and steers the timbre, texture, and pattern sliding of a stem
    * based on reticule coordinates (0..1).
    */
+  /** Release a reticle: stop treating it as a user steering input. */
+  public clearReticleSteering(stem: StemName): void {
+    this.userSteeredStems.delete(stem);
+  }
+
   public setReticleSteering(stem: StemName, x: number, y: number, isUserDrag: boolean = false): void {
     const cx = Math.max(0, Math.min(1, x));
     const cy = Math.max(0, Math.min(1, y));
@@ -5031,6 +5036,10 @@ export class ClientGrooveboxConductor {
 
   public getAllKitPhrasePoints(): NebulaPoint[] {
     return this.kitPlayer?.allPhrasePoints() ?? [];
+  }
+
+  public get steeringStems(): string[] {
+    return [...this.userSteeredStems];
   }
 
   public get kitSteerTarget(): { x: number; y: number } | null {

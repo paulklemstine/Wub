@@ -269,6 +269,9 @@ class WubApp {
       onReticleMove: (stem, x, y) => {
         this.clientConductor?.setReticleSteering(stem, x, y, true);
       },
+      onReticleRelease: (stem) => {
+        this.clientConductor?.clearReticleSteering(stem);
+      },
     });
     this.nebula.setPoints(demoPoints());
     // Kit mode must not pull the legacy /data bank; keep the seeded demo
@@ -324,6 +327,7 @@ class WubApp {
               lastKitScore: c.lastKitScore ?? null,
               kitSteerTarget: c.kitSteerTarget ?? null,
               kitSteerDistance: c.kitSteerDistance ?? null,
+              steeringStems: c.steeringStems,
             }
             : { error: "engine not ready" };
         };

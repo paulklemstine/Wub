@@ -393,12 +393,14 @@ export class KitPlayer {
     return loudest;
   }
 
-  /** Stems that own the steering target: user-dragged ones, else all four. */
+  /** Stems that own the steering target: only stems the user actually dragged.
+   *  With no drag, steering is fully disabled so the taste matrix alone decides
+   *  (the visual auto-follow must never bias the music). */
   private steeringStems(userSteered?: KitSteeringMask): readonly StemName[] {
     if (userSteered !== undefined && userSteered.size > 0) {
       return STEM_ORDER.filter((stem) => userSteered.has(stem));
     }
-    return STEM_ORDER;
+    return [];
   }
 
   /** Mean reticle position used for kit-distance and stats. */

@@ -639,6 +639,8 @@ export type ReticleMoveHandler = (stem: StemName, x: number, y: number) => void;
 
 export interface NebulaRendererOptions {
   onReticleMove?: ReticleMoveHandler;
+  /** Called when a reticle is double-clicked to hand control back to auto-follow. */
+  onReticleRelease?: (stem: StemName) => void;
 }
 
 const RETICLE_STEMS: readonly StemName[] = ["drums", "bass", "vocals", "other"];
@@ -683,6 +685,7 @@ export class NebulaRenderer {
   };
 
   private onReticleMove?: ReticleMoveHandler;
+  private onReticleRelease?: (stem: StemName) => void;
   private dragStem: StemName | null = null;
   private dragOffset: { x: number; y: number } = { x: 0, y: 0 };
   private activeSliceMarkers: Partial<Record<StemName, { x: number; y: number; timeSec: number }>> = {};
@@ -692,6 +695,8 @@ export class NebulaRenderer {
   private reticleAnims: Partial<Record<StemName, { fromX: number; fromY: number; toX: number; toY: number; start: number; dur: number }>> = {};
   // Stems the user has dragged: auto-follow must not yank them back.
   private manualReticles: Partial<Record<StemName, boolean>> = {};
+  // Hovered reticle: freeze its auto-follow so it is easy to grab.
+  private hoverStem: StemName | null = null;
   // Reticle motion trails (recorded while dragging, fade after release)
   private trails: Record<StemName, Array<{ x: number; y: number; t: number }>> = {
     drums: [], bass: [], vocals: [], other: [],
@@ -725,6 +730,7 @@ export class NebulaRenderer {
     if (ctx === null) throw new Error("2D canvas context unavailable");
     this.ctx = ctx;
     this.onReticleMove = opts.onReticleMove;
+    this.onReticleRelease = opts.onReticleRelease;
     canvas.style.touchAction = "none";
 
     this.handlePointerDown = (e: PointerEvent) => {
@@ -752,6 +758,8 @@ export class NebulaRenderer {
       if (this.dragStem !== null) {
         this.moveReticleFromEvent(this.dragStem, e);
         e.preventDefault();
+      } else {
+        this.hoverStem = this.hitTest(e);
       }
     };
     this.handlePointerUp = (e: PointerEvent) => {
@@ -770,11 +778,15 @@ export class NebulaRenderer {
     canvas.addEventListener("pointermove", this.handlePointerMove);
     canvas.addEventListener("pointerup", this.handlePointerUp);
     canvas.addEventListener("pointercancel", this.handlePointerUp);
+    canvas.addEventListener("pointerleave", () => {
+      if (this.dragStem === null) this.hoverStem = null;
+    });
     canvas.addEventListener("dblclick", (e: MouseEvent) => {
       const hit = this.hitTest(e as unknown as PointerEvent);
       if (hit !== null) {
         delete this.manualReticles[hit];
         delete this.reticleAnims[hit];
+        this.onReticleRelease?.(hit);
       }
     });
     this.resize();
@@ -919,6 +931,7 @@ export class NebulaRenderer {
     // song/phrase progression is never hijacked or forced to switch songs every 4 bars!
     const t = frame.timeSec;
     for (const stem of RETICLE_STEMS) {
+      if (this.dragStem === stem || this.hoverStem === stem) continue;
       const anim = this.reticleAnims[stem];
       if (anim && this.dragStem !== stem) {
         const u = Math.min(1, (t - anim.start) / anim.dur);
