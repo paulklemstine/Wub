@@ -1239,6 +1239,16 @@ class WubApp {
     const t = visualNow();
     const audioNow = this.engine.now();
 
+    // Kit blocks have per-phrase slots; surface the resulting session BPM.
+    if (this.playing && this.clientConductor) {
+      const liveBpm = this.clientConductor.getBpm();
+      if (Number.isFinite(liveBpm) && Math.abs(liveBpm - this.bpm) > 0.05) {
+        this.bpm = liveBpm;
+        const label = document.getElementById("bpm-value");
+        if (label !== null) label.textContent = `${Math.round(liveBpm)} BPM`;
+      }
+    }
+
     // Consume queued UI events strictly when their scheduled audio playback time arrives
     let latestUIEvent: UIEvent | null = null;
     while (this.uiEventQueue.length > 0 && this.uiEventQueue[0].atAudioSec <= audioNow) {

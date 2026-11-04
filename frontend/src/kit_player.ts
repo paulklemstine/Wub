@@ -104,6 +104,9 @@ interface CamelotPosition {
 /** Number of 4-bar blocks in one DJ set before the bridge/rotation. */
 export const KIT_SET_BLOCKS = 12;
 
+/** Reject only truly tiny phrases; per-phrase slots handle normal variation. */
+const MIN_PHRASE_DURATION_SEC = 3.0;
+
 const STEM_ORDER: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const BRIDGE_STEMS: readonly StemName[] = ["other", "vocals"];
 const ALL_STEMS: readonly StemName[] = STEM_ORDER;
@@ -115,6 +118,22 @@ const KIT_FADE_MS: Record<StemName, number> = {
   bass: 60,
   other: 250,
   vocals: 250,
+};
+
+// The 18/60/250 ms values above govern the choke crossfade. At an exact
+// per-phrase boundary there is no overlap to crossfade, so keep the source's
+// own seam fades short enough not to notch the 20 ms RMS envelope.
+const KIT_SEAM_FADE_IN_MS: Record<StemName, number> = {
+  drums: 6,
+  bass: 12,
+  other: 20,
+  vocals: 20,
+};
+const KIT_SEAM_FADE_OUT_MS: Record<StemName, number> = {
+  drums: 8,
+  bass: 16,
+  other: 20,
+  vocals: 20,
 };
 
 // Section energy targets mirror ClientSongArranger so phrase choice follows the
@@ -229,6 +248,8 @@ export class KitPlayer {
   private phrases: LoadedKitPhrase[] = [];
   private recentPhraseIds: string[] = [];
   private sources: AudioBufferSourceNode[] = [];
+  private lastBlockStems: Set<StemName> = new Set();
+  private lastStemEndAt: Partial<Record<StemName, number>> = {};
   private readyFlag: boolean = false;
   private medianDurationSec: number = 0;
   private fittedBpm: number | null = null;
@@ -471,6 +492,8 @@ export class KitPlayer {
     this.lastPhrase = null;
     this.lastSection = null;
     this.recentPhraseIds = [];
+    this.lastBlockStems.clear();
+    this.lastStemEndAt = {};
     this.pendingLoadedKit = null;
     this.pendingLoadPromise = null;
     this.nextKit = null;
@@ -504,6 +527,24 @@ export class KitPlayer {
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  /**
+   * 1.0 when all four stems are present, 0.25 when any is effectively empty,
+   * 0 when all four are empty. Mix fullness without hard-excluding quiet
+   * breakdown phrases.
+   */
+  private stemPresenceMultiplier(phrase: KitPhrase): number {
+    let missing = 0;
+    for (const stem of STEM_ORDER) {
+      const peak = phrase.stems?.[stem]?.peak;
+      if (typeof peak !== "number" || !Number.isFinite(peak) || peak < 0.05) {
+        missing++;
+      }
+    }
+    if (missing === 0) return 1;
+    if (missing === STEM_ORDER.length) return 0;
+    return 0.25;
   }
 
   /**
@@ -746,20 +787,43 @@ export class KitPlayer {
     const loaded = this.phrases.find((entry) => entry.meta.id === phrase.id);
     if (!loaded) return null;
 
-    const blockDuration = this.medianDurationSec > 0
-      ? this.medianDurationSec
+    // The phrase's own cut defines this block's slot. The next block starts
+    // exactly where this one ends (no median-length guessing, no resampling).
+    const blockDuration = phrase.duration_sec > 0
+      ? phrase.duration_sec
       : (64 * 60) / (kit.bpm * 4);
+    const joinGaps: string[] = [];
     for (const stem of stems) {
+      const voiceKey = `kit_${stem}`;
+      if (this.lastBlockStems.has(stem)) {
+        const prevEnd = engine.getVoiceEndAt(voiceKey) ?? this.lastStemEndAt[stem] ?? null;
+        if (prevEnd !== null) {
+          const delta = prevEnd - when;
+          if (delta < -0.005) {
+            joinGaps.push(`${stem} ${(delta * 1000).toFixed(1)}ms`);
+          }
+        }
+      }
+
       const buffer = loaded.buffers[stem];
       if (!buffer) continue;
       const source = engine.scheduleSlice(stem, buffer, when, {
         rate: 1.0,
         duration: blockDuration,
         fadeMs: KIT_FADE_MS[stem],
+        fadeInMs: KIT_SEAM_FADE_IN_MS[stem],
+        fadeOutMs: KIT_SEAM_FADE_OUT_MS[stem],
         gain: 1.0,
-        voiceKey: `kit_${stem}`,
+        voiceKey,
       });
       this.sources.push(source);
+      this.lastStemEndAt[stem] = engine.getVoiceEndAt(voiceKey) ?? when + blockDuration;
+    }
+    this.lastBlockStems = new Set(stems);
+    if (joinGaps.length > 0) {
+      console.warn(
+        `[KitPlayer] Join gap: ${joinGaps.join(", ")} (prevEnd - nextStart, negative = dead air)`
+      );
     }
 
     this.recentPhraseIds.push(phrase.id);
@@ -800,8 +864,9 @@ export class KitPlayer {
     const recent = (recentIds.length > 0 ? recentIds : this.recentPhraseIds).slice(-3);
     const all = this.phrases.map((phrase) => phrase.meta);
 
-    // Holes: never pick a phrase materially shorter than the fitted block.
-    const minDuration = this.medianDurationSec > 0 ? this.medianDurationSec * 0.9 : 0;
+    // Only reject truly tiny phrases; normal duration variation is handled by
+    // per-phrase block slots rather than the old 90%-of-median rule.
+    const minDuration = MIN_PHRASE_DURATION_SEC;
     const activeKitId = this.kit?.track_id;
     const taste = activeKitId ? this.tasteScores?.kits[activeKitId] : undefined;
     if (taste && current) {
@@ -814,27 +879,38 @@ export class KitPlayer {
             !lastTwo.includes(phrase.id)
         );
         const row = taste.transition[currentIndex] ?? [];
-        const buildWeights = (applyEnergyGuard: boolean) => {
+        const buildWeights = (applyEnergyGuard: boolean, applyPresence: boolean) => {
           const weighted: Array<{ phrase: KitPhrase; weight: number }> = [];
           let total = 0;
+          let unpenalised = 0;
           for (const phrase of durationPool) {
             if (applyEnergyGuard && Math.abs(phrase.energy - current.energy) > 0.35) continue;
             const index = taste.phrase_order.indexOf(phrase.id);
             if (index < 0) continue;
             const transition = row[index] ?? 0;
             const quality = taste.quality[index] ?? 0;
-            const weight = transition * (0.5 + quality);
+            const presence = applyPresence ? this.stemPresenceMultiplier(phrase) : 1;
+            const weight = transition * (0.5 + quality) * presence;
             if (!Number.isFinite(weight) || weight <= 0) continue;
             weighted.push({ phrase, weight });
             total += weight;
+            if (presence >= 1) unpenalised++;
           }
-          return { weighted, total };
+          return { weighted, total, unpenalised, presenceApplied: applyPresence };
         };
 
-        let filtered = buildWeights(true);
+        let filtered = buildWeights(true, true);
+        // If every positive-weight candidate is stem-penalised, use the
+        // unpenalised weights so the mix can still choose something.
+        if (filtered.unpenalised === 0) {
+          filtered = buildWeights(true, false);
+        }
         if (filtered.total <= 0) {
           // Wrong-style / sparse-row guard: relax the 0.35 energy guard once.
-          filtered = buildWeights(false);
+          filtered = buildWeights(false, true);
+          if (filtered.unpenalised === 0) {
+            filtered = buildWeights(false, false);
+          }
         }
         if (filtered.total > 0) {
           this.lastTransition = taste.phrase_order
@@ -855,8 +931,12 @@ export class KitPlayer {
           const top3 = this.lastTransition
             .map((entry) => `${entry.id}=${entry.weight.toFixed(4)}`)
             .join(", ");
+          const presence = this.stemPresenceMultiplier(chosen.phrase);
+          const presenceText = filtered.presenceApplied && presence < 1
+            ? ` [stems x${presence}]`
+            : "";
           console.info(
-            `[KitPlayer] Taste pick: ${chosen.phrase.id} weight ${chosen.weight.toFixed(4)} • row top3: ${top3}`
+            `[KitPlayer] Taste pick: ${chosen.phrase.id} weight ${chosen.weight.toFixed(4)} • row top3: ${top3}${presenceText}`
           );
           return chosen.phrase;
         }
@@ -973,6 +1053,8 @@ export class KitPlayer {
     this.lastPhrase = null;
     this.lastSection = null;
     this.recentPhraseIds = [];
+    this.lastBlockStems.clear();
+    this.lastStemEndAt = {};
     this.forcedBridgeRemaining = 0;
     this.waitingForNextLogged = false;
   }

@@ -27,6 +27,10 @@ export interface SliceScheduleOptions {
   detuneCents?: number;
   /** Equal-power fade length in ms (default 3). */
   fadeMs?: number;
+  /** Optional shorter source fade-in for block seams (ms). */
+  fadeInMs?: number;
+  /** Optional shorter source fade-out for block seams (ms). */
+  fadeOutMs?: number;
   /** Optional playback duration clamp in seconds (fades out at end of duration). */
   duration?: number;
   /** Gain / velocity scaling (0.0..1.5). */
@@ -346,6 +350,12 @@ export class AudioEngine {
     return this.ctx_ !== null ? this.ctx_.currentTime : 0;
   }
 
+  /** End time of the currently tracked voice, if one is still active. */
+  getVoiceEndAt(voiceKey: string): number | null {
+    const voice = this.activeVoices_[voiceKey];
+    return voice ? voice.endAt : null;
+  }
+
   /** Decode fetched audio bytes (WAV legacy or Ogg Opus) into an AudioBuffer.
    * decodeAudioData sniffs the container; anything it rejects falls back to
    * the shared-slice synth path at the call site. */
@@ -392,6 +402,14 @@ export class AudioEngine {
         : 0;
     const requestedFadeMs =
       typeof opts.fadeMs === "number" && Number.isFinite(opts.fadeMs) ? Math.max(0, opts.fadeMs) : DEFAULT_FADE_MS;
+    const requestedFadeInMs =
+      typeof opts.fadeInMs === "number" && Number.isFinite(opts.fadeInMs)
+        ? Math.max(0, opts.fadeInMs)
+        : requestedFadeMs;
+    const requestedFadeOutMs =
+      typeof opts.fadeOutMs === "number" && Number.isFinite(opts.fadeOutMs)
+        ? Math.max(0, opts.fadeOutMs)
+        : requestedFadeMs;
 
     const startAt = Math.max(when + (typeof opts.whenOffsetMs === "number" && Number.isFinite(opts.whenOffsetMs) ? Math.max(-15, Math.min(15, opts.whenOffsetMs)) / 1000 : 0), ctx.currentTime + 0.005);
     const naturalDurSec = buffer.duration / rate;
@@ -451,12 +469,13 @@ export class AudioEngine {
 
     const endAt = startAt + durSec;
     if (requestedFadeMs > 0 && durSec > 0.01) {
-      // De-clicking micro fade-in prevents DC offset pop on slice attack
-      const fadeInSec = Math.max(0.002, Math.min(requestedFadeMs / 1000, durSec / 4));
-      // Musical fade-out guarantees click-free release decay
+      // De-clicking micro fade-in prevents DC offset pop on slice attack.
+      // A separate shorter seam fade keeps block joins from notching.
+      const fadeInSec = Math.max(0.002, Math.min(requestedFadeInMs / 1000, durSec / 4));
+      // Musical fade-out guarantees click-free release decay.
       const fadeOutSec = stem === "drums"
-        ? Math.max(0.005, Math.min(0.020, durSec / 3))
-        : Math.max(0.015, Math.min(0.045, durSec / 3));
+        ? Math.max(0.005, Math.min(requestedFadeOutMs / 1000, 0.020, durSec / 3))
+        : Math.max(0.015, Math.min(requestedFadeOutMs / 1000, 0.045, durSec / 3));
 
       sliceGain.gain.setValueAtTime(0.0001, startAt);
       sliceGain.gain.linearRampToValueAtTime(vGain, startAt + fadeInSec);

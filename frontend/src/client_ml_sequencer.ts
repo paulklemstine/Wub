@@ -2629,6 +2629,7 @@ export class ClientGrooveboxConductor {
   private timer: number | null = null;
   private nextStepTime: number = 0;
   private nextKitBlockTime: number = 0;
+  private lastKitBlockDurationSec: number = 0;
   private kitBlockLogQueue: Array<{ at: number; result: KitBlockResult }> = [];
   private onKitSetChange?: (info: {
     kit: Kit;
@@ -4984,6 +4985,7 @@ export class ClientGrooveboxConductor {
       }
     } else {
       this.nextKitBlockTime = 0;
+      this.lastKitBlockDurationSec = 0;
       this.kitBlockLogQueue = [];
       if (previous === "kit") {
         this.kitPlayer?.stop();
@@ -5329,6 +5331,7 @@ export class ClientGrooveboxConductor {
     this.activeLoops = {};
     this.kitPlayer?.stop();
     this.nextKitBlockTime = 0;
+    this.lastKitBlockDurationSec = 0;
     this.kitBlockLogQueue = [];
     this.lockedCategorySlices.clear();
     this.jointHistory = [];
@@ -5366,7 +5369,16 @@ export class ClientGrooveboxConductor {
     this.nextKitBlockTime = this.playbackMode === "kit" && this.kitAudioActive
       ? this.engine.now() + 0.05
       : 0;
+    this.lastKitBlockDurationSec = 0;
     this.kitBlockLogQueue = [];
+  }
+
+  /** Session BPM shown to the UI for the current per-phrase block slot. */
+  private applySlotBpm(slotDurationSec: number): void {
+    if (!(slotDurationSec > 0)) return;
+    const bpm = Math.max(60, Math.min(200, 960 / slotDurationSec));
+    this.currentBpm = bpm;
+    this.engine.setTargetBpm(bpm);
   }
 
   /**
@@ -5377,9 +5389,11 @@ export class ClientGrooveboxConductor {
   private scheduleKitBlocks(now: number): void {
     const player = this.kitPlayer;
     if (!player || !player.ready) return;
-    let blockSec = player.medianPhraseDuration > 0
-      ? player.medianPhraseDuration
-      : (64 * 60) / (this.currentBpm * 4);
+    let blockSec = this.lastKitBlockDurationSec > 0
+      ? this.lastKitBlockDurationSec
+      : (player.medianPhraseDuration > 0
+        ? player.medianPhraseDuration
+        : (64 * 60) / (this.currentBpm * 4));
     if (!(blockSec > 0.1)) return;
 
     if (this.nextKitBlockTime <= 0) {
@@ -5403,6 +5417,7 @@ export class ClientGrooveboxConductor {
       if (result === null) break;
       this.kitBlockLogQueue.push({ at, result });
       blockSec = result.blockDurationSec > 0 ? result.blockDurationSec : blockSec;
+      this.lastKitBlockDurationSec = blockSec;
       this.nextKitBlockTime += blockSec;
     }
 
@@ -5410,9 +5425,13 @@ export class ClientGrooveboxConductor {
       const entry = this.kitBlockLogQueue.shift();
       if (!entry) continue;
       if (entry.result.setChanged) {
-        // Apply the new kit's fitted tempo/key at the new block downbeat, not
+        // Apply the new kit's fit tempo/key at the new block downbeat, not
         // while the bridge is still playing.
         this.applyKitLock();
+      }
+      // Session BPM reflects this phrase's actual slot: 960 / slot seconds.
+      this.applySlotBpm(entry.result.blockDurationSec);
+      if (entry.result.setChanged) {
         player.logSetChange(entry.result.kit, entry.result.blocksPlayedInSet);
         this.onKitSetChange?.({
           kit: entry.result.kit,
