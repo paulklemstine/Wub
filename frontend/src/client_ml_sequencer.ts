@@ -10,6 +10,8 @@
 
 import type { StemName } from "./types";
 import { AudioEngine } from "./audio_engine";
+import { KitPlayer } from "./kit_player";
+import type { KitPhrase } from "./kit_player";
 
 export interface SerializedPattern {
   id: string;
@@ -2488,6 +2490,10 @@ export class ClientAdversarialRejectionClassifier {
 // -----------------------------------------------------------------------------
 
 export class ClientGrooveboxConductor {
+  // Single switch for the M1 kit asset base. Test build points at kits_test;
+  // change to "data/kits" once the production kit export is in place.
+  private static readonly KIT_BASE_PATH = "data/kits";
+
   private engine: AudioEngine;
   private synth: WebAudioSliceSynthesizer;
   private phraseModel: ClientMarkovPhraseModel;
@@ -2545,7 +2551,14 @@ export class ClientGrooveboxConductor {
     other: 0,
   };
 
-  public playbackMode: "jukebox" | "slices" | "phrase_blocks" = "jukebox";
+  public playbackMode: "jukebox" | "slices" | "phrase_blocks" | "kit" = "kit";
+  private kitPlayer: KitPlayer | null = null;
+  private kitLoadStarted: boolean = false;
+  private kitAudioActive: boolean = false;
+  private kitFailureLogged: boolean = false;
+  private staticBundleSkippedForKit: boolean = false;
+  private staticBundleLoaded: boolean = false;
+  private staticBundleBasePath: string = "data";
   private stemMixLevels: Record<StemName, number> = { drums: 1.0, bass: 1.0, other: 1.0, vocals: 1.0 };
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
   private sliceById: Map<string, SliceAsset> = new Map();
@@ -2615,6 +2628,8 @@ export class ClientGrooveboxConductor {
   private isRunning: boolean = false;
   private timer: number | null = null;
   private nextStepTime: number = 0;
+  private nextKitBlockTime: number = 0;
+  private kitBlockLogQueue: Array<{ at: number; phrase: KitPhrase }> = [];
   private currentBpm: number = 126;
   private onMetaCallback?: (meta: any, atAudioSec: number, step: number, totalSteps: number) => void;
   private activeSongKit: CuratedSongKit | null = null;
@@ -2640,6 +2655,114 @@ export class ClientGrooveboxConductor {
     this.loadRecentTracksFromStorage();
     this.initSidechain(ctx);
     this.initDefaultPatterns();
+    this.ensureKitPlayer();
+  }
+
+  // ---------------------------------------------------------------------------
+  // M1 Kit Player: locked 4-bar real stem phrases, no resampling.
+  // ---------------------------------------------------------------------------
+
+  /** True while the legacy jukebox/phrase path owns audio, including kit boot fall-through. */
+  private get legacyAudioMode(): boolean {
+    return this.playbackMode === "jukebox"
+      || this.playbackMode === "phrase_blocks"
+      || (this.playbackMode === "kit" && !this.kitAudioActive);
+  }
+
+  /** Lazily load the kit manifest + first kit once the audio engine exists. */
+  private ensureKitPlayer(): void {
+    if (this.kitPlayer !== null || this.kitLoadStarted || !this.engine.ready) return;
+    this.kitLoadStarted = true;
+    const player = new KitPlayer(this.engine);
+    this.kitPlayer = player;
+    void (async () => {
+      try {
+        const manifest = await player.loadManifest(ClientGrooveboxConductor.KIT_BASE_PATH);
+        if (manifest.kits.length === 0) throw new Error("Kit manifest contains no kits");
+        // Pick a full-length kit at random so each session starts on a different
+        // record instead of always manifest order (which is track-id sorted).
+        const pool = manifest.kits.filter((k) => k.phrases.length >= 6);
+        const choices = pool.length > 0 ? pool : manifest.kits;
+        const firstKit = choices[Math.floor(Math.random() * choices.length)];
+        await player.loadKit(firstKit);
+        this.kitAudioActive = true;
+        if (this.playbackMode === "kit") {
+          this.applyKitLock();
+          this.resetKitBlockClock();
+          if (this.isRunning) {
+            this.scheduleKitBlocks(this.engine.now());
+          }
+          console.info("[KitPlayer] Kit mode active — 4-bar real stem phrases at rate 1.0 (no resampling)");
+        }
+      } catch (err) {
+        this.handleKitFailure(err);
+      }
+    })();
+  }
+
+  private handleKitFailure(err: unknown): void {
+    this.kitPlayer = null;
+    this.kitAudioActive = false;
+    if (this.kitFailureLogged) return;
+    this.kitFailureLogged = true;
+    console.warn("[KitPlayer] Load/decode failed — falling back to jukebox mode.", err);
+    if (this.playbackMode === "kit") {
+      this.setPlaybackMode("jukebox");
+      this.syncPlaybackModeButtons("jukebox");
+    }
+  }
+
+  /** Keep the ENGINE selector honest if the kit falls back programmatically. */
+  private syncPlaybackModeButtons(mode: string): void {
+    if (typeof document === "undefined") return;
+    try {
+      document.querySelectorAll<HTMLButtonElement>("[data-playback]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.playback === mode);
+      });
+    } catch {
+      // Non-browser context; the engine mode is still correct internally.
+    }
+  }
+
+  /** Lock session tempo and harmonic centre to the loaded kit. */
+  private applyKitLock(): void {
+    const player = this.kitPlayer;
+    const kit = player?.currentKit;
+    if (!kit) return;
+    // Use the tempo fitted to the actual phrase cut lengths, not the manifest
+    // metadata BPM, so the 4-bar grid matches the audio.
+    const sessionBpm = player?.fitBpm ?? kit.bpm;
+    this.currentBpm = Math.max(60, Math.min(200, sessionBpm));
+    this.engine.setTargetBpm(this.currentBpm);
+    const camelot = this.camelotCodeForKey(kit.key);
+    if (camelot) {
+      this.currentCamelotCode = camelot;
+      this.currentTemplateIndex = 0;
+      this.barsInCurrentKey = 0;
+      this.activeProgression = buildProgressionFromKey(CAMELOT_KEYS[camelot], 0);
+    }
+    this.activeTrackId = kit.track_id;
+    console.info(
+      `[KitPlayer] Session lock: ${this.currentBpm.toFixed(2)} BPM • ${kit.key}${camelot ? ` (${camelot})` : ""} • kit ${kit.track_id}`
+    );
+  }
+
+  private camelotCodeForKey(keyName: string): string | null {
+    const match = /^([A-Ga-g])([#b♯♭]?)\s*(major|minor|maj|min)$/.exec(keyName.trim());
+    if (!match) return null;
+    const accidental = match[2] === "♯" ? "#" : match[2] === "♭" ? "b" : match[2];
+    const rootName = `${match[1].toUpperCase()}${accidental}`;
+    const rootPitches: Record<string, number> = {
+      C: 0, "C#": 1, Db: 1, D: 2, "D#": 3, Eb: 3, E: 4, F: 5,
+      "F#": 6, Gb: 6, G: 7, "G#": 8, Ab: 8, A: 9, "A#": 10, Bb: 10, B: 11,
+    };
+    const rootPitch = rootPitches[rootName];
+    if (rootPitch === undefined) return null;
+    const isMinor = match[3].toLowerCase().startsWith("min");
+    for (const info of Object.values(CAMELOT_KEYS)) {
+      if (info.rootPitch === rootPitch && info.isMinor === isMinor) return info.code;
+    }
+    return null;
   }
 
   private loadRecentTracksFromStorage(): void {
@@ -2769,6 +2892,18 @@ export class ClientGrooveboxConductor {
   }
 
   public async loadStaticBundle(basePath: string = "data"): Promise<boolean> {
+    this.staticBundleBasePath = basePath;
+    // Kit mode needs only kit_manifest.json + its 32 stem files. Skip the
+    // legacy weights/manifest, global vocabulary/patterns, slice + loop
+    // preloads, and the full catalog. If the user later switches away from
+    // kit, setPlaybackMode() calls this method again with the same base path.
+    if (this.playbackMode === "kit") {
+      if (!this.staticBundleSkippedForKit) {
+        console.info("[KitPlayer] Legacy bundle loads skipped (kit mode)");
+      }
+      this.staticBundleSkippedForKit = true;
+      return true;
+    }
     try {
       // 1. Fetch Composing ML Weights
       const wRes = await this.fetchWithRetry(`${basePath}/composing_ml_weights.json`);
@@ -2833,6 +2968,8 @@ export class ClientGrooveboxConductor {
         this.catalogBasePath = basePath;
         void this.loadFullCatalog(basePath).then(() => this.prefetchNextCatalogSong());
       }
+      this.staticBundleLoaded = true;
+      this.staticBundleSkippedForKit = false;
       return true;
     } catch (err) {
       console.warn("[Client ML] Bundle load failed, using algorithmic synthesizer fallback:", err);
@@ -4824,14 +4961,38 @@ export class ClientGrooveboxConductor {
     return { buffer: asset.buffer, rate, asset };
   }
 
-  public setPlaybackMode(mode: "jukebox" | "slices" | "phrase_blocks"): void {
+  public setPlaybackMode(mode: "jukebox" | "slices" | "phrase_blocks" | "kit"): void {
+    const previous = this.playbackMode;
     this.playbackMode = mode;
     this.activePhraseBlock = null;
     this.activeLoops = {};
+    if (mode === "kit") {
+      this.ensureKitPlayer();
+      this.applyKitLock();
+      if (previous !== "kit") {
+        this.resetKitBlockClock();
+        if (this.isRunning && this.kitAudioActive) {
+          this.scheduleKitBlocks(this.engine.now());
+        }
+      }
+    } else {
+      this.nextKitBlockTime = 0;
+      this.kitBlockLogQueue = [];
+      if (previous === "kit") {
+        this.kitPlayer?.stop();
+      }
+      // Kit boot deliberately skipped the legacy bank. If the user switches
+      // away from kit, lazily bring the legacy bank in for that mode.
+      if (this.staticBundleSkippedForKit && !this.staticBundleLoaded) {
+        this.staticBundleSkippedForKit = false;
+        console.info(`[KitPlayer] Legacy bundle loads deferred from kit mode; loading for ${mode}...`);
+        void this.loadStaticBundle(this.staticBundleBasePath);
+      }
+    }
     console.info(`[Client ML] Jukebox playback mode set to: ${mode}`);
   }
 
-  public getPlaybackMode(): "jukebox" | "slices" | "phrase_blocks" {
+  public getPlaybackMode(): "jukebox" | "slices" | "phrase_blocks" | "kit" {
     return this.playbackMode;
   }
 
@@ -5073,6 +5234,18 @@ export class ClientGrooveboxConductor {
       this.engine.setStemFilter(stem, 20000, 0.7);
     }
 
+    // Kit mode: lock tempo and key to the kit before the first 4-bar block.
+    this.ensureKitPlayer();
+    if (this.playbackMode === "kit") {
+      this.applyKitLock();
+    }
+    this.resetKitBlockClock();
+    if (this.playbackMode === "kit" && this.kitAudioActive) {
+      // Schedule the first block before the first (potentially slow) paint so
+      // it is already in the Web Audio graph when the main thread stalls.
+      this.scheduleKitBlocks(this.engine.now());
+    }
+
     if (this.catalogSongActive) {
       this.compressedBarCursor = -1;
     }
@@ -5093,6 +5266,9 @@ export class ClientGrooveboxConductor {
     this.activeTrackId = undefined;
     this.activePhraseBlock = null;
     this.activeLoops = {};
+    this.kitPlayer?.stop();
+    this.nextKitBlockTime = 0;
+    this.kitBlockLogQueue = [];
     this.lockedCategorySlices.clear();
     this.jointHistory = [];
     this.lastComposedSection = "INTRO";
@@ -5106,6 +5282,12 @@ export class ClientGrooveboxConductor {
     const now = this.engine.now();
     const tatumSec = 60 / this.currentBpm / 4;
 
+    // Kit audio runs on its own 4-bar clock so UI/rendering stalls cannot
+    // stretch the block spacing.
+    if (this.playbackMode === "kit" && this.kitAudioActive) {
+      this.scheduleKitBlocks(now);
+    }
+
     // Clamp if nextStepTime fell behind current audio clock (e.g. background tab)
     if (this.nextStepTime < now) {
       this.nextStepTime = now + 0.02;
@@ -5115,6 +5297,56 @@ export class ClientGrooveboxConductor {
     while (this.nextStepTime < now + 0.15) {
       this.processStep(this.nextStepTime);
       this.nextStepTime += tatumSec;
+    }
+  }
+
+  /** Restart the kit's dedicated 4-bar block clock (independent of UI stalls). */
+  private resetKitBlockClock(): void {
+    this.nextKitBlockTime = this.playbackMode === "kit" && this.kitAudioActive
+      ? this.engine.now() + 0.05
+      : 0;
+    this.kitBlockLogQueue = [];
+  }
+
+  /**
+   * Kit phrases must keep their 4-bar cadence even when the main thread stalls
+   * (WebGL/visualizers in headless Chrome). This clock only schedules the next
+   * future block; missed blocks are fast-forwarded instead of stacked.
+   */
+  private scheduleKitBlocks(now: number): void {
+    const player = this.kitPlayer;
+    if (!player || !player.ready) return;
+    const blockSec = player.medianPhraseDuration > 0
+      ? player.medianPhraseDuration
+      : (64 * 60) / (this.currentBpm * 4);
+    if (!(blockSec > 0.1)) return;
+
+    if (this.nextKitBlockTime <= 0) {
+      this.nextKitBlockTime = now + 0.05;
+    }
+    // Allow a small late window so a normal scheduler delay plays the current
+    // block; if more than half a block has been missed, jump to the next grid
+    // slot rather than dumping several phrases on top of each other.
+    if (this.nextKitBlockTime < now - 0.5) {
+      const missed = Math.floor((now - this.nextKitBlockTime) / blockSec);
+      this.nextKitBlockTime += Math.max(1, missed) * blockSec;
+      if (this.nextKitBlockTime < now - 0.5) this.nextKitBlockTime += blockSec;
+    }
+
+    // Prefetch one full block ahead so a long main-thread stall cannot leave a
+    // hole. Logs are queued and emitted when each block becomes due, keeping
+    // one line per block rather than clustering the prefetched ones.
+    while (this.nextKitBlockTime < now + blockSec + 0.15) {
+      const at = this.nextKitBlockTime;
+      if (player.schedule(this.engine, at, this.arranger.getSection(), false)) {
+        const phrase = player.lastScheduledPhrase;
+        if (phrase) this.kitBlockLogQueue.push({ at, phrase });
+      }
+      this.nextKitBlockTime += blockSec;
+    }
+    while (this.kitBlockLogQueue.length > 0 && this.kitBlockLogQueue[0].at < now + 0.15) {
+      const entry = this.kitBlockLogQueue.shift();
+      if (entry) player.logBlock(entry.at, entry.phrase);
     }
   }
 
@@ -5172,8 +5404,8 @@ export class ClientGrooveboxConductor {
     // Invariant: NEVER modulate key on BUILDUP -> DROP transition!
     // A drop must always land with crushing resolve in the same key as the buildup.
     // Modulate key only after a full 32+ bar song arc completes!
-    const isHarmonicResetPoint = (section === "BREAKDOWN" || section === "INTRO") && isSectionChange && this.trackBarsPlayed >= 32;
-    const isSongCycleComplete = this.barsInCurrentKey >= 48 && this.trackBarsPlayed >= 32 && section !== "BUILDUP" && section !== "DROP";
+    const isHarmonicResetPoint = this.playbackMode !== "kit" && (section === "BREAKDOWN" || section === "INTRO") && isSectionChange && this.trackBarsPlayed >= 32;
+    const isSongCycleComplete = this.playbackMode !== "kit" && this.barsInCurrentKey >= 48 && this.trackBarsPlayed >= 32 && section !== "BUILDUP" && section !== "DROP";
 
     if (isHarmonicResetPoint || isSongCycleComplete) {
       if (!this.catalogSongActive) {
@@ -5427,6 +5659,13 @@ export class ClientGrooveboxConductor {
     // Automate volume levels of the four instruments for transcendent flow
     this.updateStemMixAutomation(when, sec, barInSec, totalSecBars, step % 16);
 
+    // M1 Kit: one locked, real 4-bar phrase per block. Blocks are scheduled by
+    // the dedicated kit clock in clockTick(); while the kit is loading this
+    // falls through to the existing jukebox/phrase path below.
+    if (this.playbackMode === "kit" && this.kitAudioActive) {
+      return;
+    }
+
     const dInput = this.engine.getStemInput("drums");
     const bDest = this.bassSidechainGain || this.engine.getStemInput("bass");
     const oDest = this.synthSidechainGain || this.engine.getStemInput("other");
@@ -5438,7 +5677,7 @@ export class ClientGrooveboxConductor {
     const vTerr = this.getStemTerritory("vocals");
 
     // 0. Downbeat handling: phrase blocks mode vs jukebox studio loops mode vs live slice mode
-    if (this.playbackMode === "phrase_blocks" || this.playbackMode === "jukebox") {
+    if (this.legacyAudioMode) {
       if (step % 16 === 0 && this.catalogSongActive) {
         // Full-corpus catalog song: play its own compressed bar sequence through the slice engine
         this.trackBarsPlayed++;
@@ -5516,7 +5755,7 @@ export class ClientGrooveboxConductor {
     const movement = this.getMovementPhase();
     const barsLeft = this.arranger.getSectionBarsLeft();
     const isTransitionBar = (barsLeft <= 1);
-    const isLoopDrumActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activePhraseBlock?.buffers?.drums || this.activeLoops.drums));
+    const isLoopDrumActive = Boolean(this.legacyAudioMode && (this.activePhraseBlock?.buffers?.drums || this.activeLoops.drums));
 
     // Only trigger synthetic crash/sub-drop/swell or filter sweeps in pure slices mode so authentic studio phrase blocks never get interrupted!
     if (!isLoopDrumActive) {
@@ -5812,7 +6051,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const bPat = this.activePatterns.bass;
     const bSteer = this.steering.bass;
-    const isLoopBassActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.bass || this.activePhraseBlock?.buffers?.bass));
+    const isLoopBassActive = Boolean(this.legacyAudioMode && (this.activeLoops.bass || this.activePhraseBlock?.buffers?.bass));
     if (bPat && !isLoopBassActive && !(sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15)) {
       const bassCat = bSteer.x < 0.38 ? "bass:sub" : (bSteer.x < 0.72 ? "bass:rolling" : "bass:stab");
       const isSparseBass = (bSteer.y < 0.35 && bTerr !== "cyber");
@@ -5878,7 +6117,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const oPat = this.activePatterns.other;
     const oSteer = this.steering.other;
-    const isLoopOtherActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.other || this.activePhraseBlock?.buffers?.other));
+    const isLoopOtherActive = Boolean(this.legacyAudioMode && (this.activeLoops.other || this.activePhraseBlock?.buffers?.other));
     if (oPat && !isLoopOtherActive) {
       const otherCat = oSteer.x < 0.25 ? "other:pad" : (oSteer.x < 0.80 ? "other:chord" : "other:arp");
       const isArpMode = (otherCat === "other:arp" || oSteer.y > 0.80);
@@ -5957,7 +6196,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const vPat = this.activePatterns.vocals;
     const vSteer = this.steering.vocals;
-    const isLoopVocalActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.vocals || this.activePhraseBlock?.buffers?.vocals));
+    const isLoopVocalActive = Boolean(this.legacyAudioMode && (this.activeLoops.vocals || this.activePhraseBlock?.buffers?.vocals));
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
     const totalBars = this.arranger.getTotalBars();
@@ -6366,6 +6605,13 @@ export class ClientGrooveboxConductor {
   }
 
   private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
+    // Kit mode owns the audio: real 4-bar stem phrases are already composed,
+    // so skip Markov/GPT bar composition and let the arranger only advance
+    // sections for phrase selection.
+    if (this.playbackMode === "kit" && this.kitAudioActive) {
+      return;
+    }
+
     // Model anchor: whole-bar GPT plans land only on phrase anchors (0/4) so
     // all stems resample in lockstep. The anchor needs a COMPLETE plan (all 4
     // ranks valid); a partial plan falls back to per-stem Markov choice.
@@ -6412,7 +6658,7 @@ export class ClientGrooveboxConductor {
     // When a studio 4-bar phrase block is active in jukebox/phrase_blocks mode,
     // keep activePatterns synchronized with the phrase block's per-bar onset grids (Part X.1..4)
     // and never overwrite them with unrelated 1-bar loops!
-    if ((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && this.activePhraseBlock) {
+    if (this.legacyAudioMode && this.activePhraseBlock) {
       this.updatePhraseBlockBarPatterns(this.activePhraseBlock, this.totalBarsPlayed % 4);
       return;
     }
@@ -6437,7 +6683,7 @@ export class ClientGrooveboxConductor {
     // loop playback, which already carry authentic joint audio.
     let jointTargets: Record<StemName, string> | null = null;
     const jointEligible = this.jointEnabled && !this.activePhraseBlock && !this.catalogSongActive &&
-      !hasBarSequence && (this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks" || this.playbackMode === "slices");
+      !hasBarSequence && (this.legacyAudioMode || this.playbackMode === "slices");
     if (jointEligible) {
       jointTargets = this.jointGrooveTargets(sec);
     }
@@ -6562,7 +6808,7 @@ export class ClientGrooveboxConductor {
         continue; // hold long phrase
       }
 
-      if ((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && !this.catalogSongActive) {
+      if (this.legacyAudioMode && !this.catalogSongActive) {
         // 1. Try to select matching 1-bar studio loop from the authentic training corpus
         const loopMatch = this.getBestLoop(stem, sec, phraseBar, stem === "drums" ? undefined : chord.rootPitch);
         if (loopMatch) {

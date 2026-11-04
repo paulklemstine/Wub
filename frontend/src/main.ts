@@ -219,6 +219,7 @@ class WubApp {
 
   private segmentPositions = new Map<string, { x: number; y: number }>();
   private trackStemPositions = new Map<string, { x: number; y: number }>();
+  private umapLoadStarted = false;
   private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private masterTimeScratch: Uint8Array<ArrayBuffer> | null = null;
@@ -265,7 +266,12 @@ class WubApp {
       },
     });
     this.nebula.setPoints(demoPoints());
-    void this.loadUmapPoints();
+    // Kit mode must not pull the legacy /data bank; keep the seeded demo
+    // constellation until the user switches to another engine mode.
+    const initialEngineMode = document.querySelector<HTMLButtonElement>("[data-playback].active")?.dataset.playback;
+    if (initialEngineMode !== "kit") {
+      void this.loadUmapPoints();
+    }
 
     try {
       this.psychedelicBg = new PsychedelicBackground("psychedelic-bg");
@@ -305,6 +311,8 @@ class WubApp {
           const c = this.clientConductor as any;
           return typeof c?.debugBar === "function" ? c.debugBar() : { error: "engine not ready" };
         };
+        (window as unknown as { __wubConductor: ClientGrooveboxConductor }).__wubConductor =
+          this.clientConductor;
       } catch {
         // Non-browser context; skip
       }
@@ -372,6 +380,8 @@ class WubApp {
   }
 
   private async loadUmapPoints(): Promise<void> {
+    if (this.umapLoadStarted) return;
+    this.umapLoadStarted = true;
     try {
       const fallbackPts: unknown[] = [];
       for (const s of STEMS) {
@@ -692,18 +702,23 @@ class WubApp {
     const modeBtns = document.querySelectorAll<HTMLButtonElement>("[data-playback]");
     modeBtns.forEach((btn) => {
       btn.addEventListener("click", () => {
-        const mode = btn.dataset.playback as "jukebox" | "slices" | "phrase_blocks" | undefined;
+        const mode = btn.dataset.playback as "jukebox" | "slices" | "phrase_blocks" | "kit" | undefined;
         if (!mode) return;
         if (this.clientConductor) {
           this.clientConductor.setPlaybackMode(mode);
         }
         modeBtns.forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
+        if (mode !== "kit") {
+          void this.loadUmapPoints();
+        }
         const label =
           mode === "jukebox"
             ? "Jukebox Groove (Studio Loops + Groovy Slices & Vocal Chops)"
             : mode === "phrase_blocks"
             ? "Master Phrases (4-Bar Cohesive Studio Blocks)"
+            : mode === "kit"
+            ? "Kit Player (Locked Studio Kit • Real 4-Bar Stem Phrases)"
             : "Live Slices (16th-Step Micro-Slice Re-sequencer)";
         this.setStatus(`Engine Mode: ${label}`);
       });
@@ -791,9 +806,10 @@ class WubApp {
     const curStep = gb.stepInPattern ?? gb.stepInBar ?? 1;
     const totalSteps = gb.stepsPerPattern ?? 16;
 
-    // 0. Active Cycle Mode Button
+    // 0. Active Cycle Mode Button (only CYCLE buttons carry data-mode; engine
+    // buttons use data-playback and must keep their own active state)
     if (gb.cycleMode) {
-      const cycleBtns = document.querySelectorAll<HTMLButtonElement>(".gb-cycle-btn");
+      const cycleBtns = document.querySelectorAll<HTMLButtonElement>(".gb-cycle-btn[data-mode]");
       cycleBtns.forEach((btn) => {
         if (btn.dataset.mode === gb.cycleMode) btn.classList.add("active");
         else btn.classList.remove("active");
