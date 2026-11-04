@@ -660,6 +660,7 @@ export class NebulaRenderer {
   private ctx: CanvasRenderingContext2D;
   private points: NebulaPoint[] = [];
   private alphas: number[] = [];
+  private highlightPoints: NebulaPoint[] = [];
   private reticleMap: Record<StemName, { x: number; y: number }> = {
     drums: { ...DEFAULT_RETICLES.drums },
     bass: { ...DEFAULT_RETICLES.bass },
@@ -730,6 +731,8 @@ export class NebulaRenderer {
       const hit = this.hitTest(e as unknown as PointerEvent);
       if (hit !== null) {
         this.dragStem = hit;
+        this.manualReticles[hit] = true;
+        delete this.reticleAnims[hit];
         try {
           canvas.setPointerCapture(e.pointerId);
         } catch {
@@ -808,6 +811,16 @@ export class NebulaRenderer {
       if (counts[i] > max) max = counts[i];
     }
     this.alphas = this.points.map((p) => 0.25 + 0.65 * (counts[cellOf(p.x, p.y)] / max));
+  }
+
+  /** Bright active-kit subset rendered over the dim full phrase cloud. */
+  setHighlight(points: NebulaPoint[]): void {
+    this.highlightPoints = points.map((p) => ({
+      stem: p.stem,
+      trackId: p.trackId,
+      x: clamp01(p.x),
+      y: clamp01(p.y),
+    }));
   }
 
   getReticle(stem: StemName): { x: number; y: number } {
@@ -943,21 +956,48 @@ export class NebulaRenderer {
     }
 
     // Scatter points as additive glowing stardust with a gentle twinkle.
-    // Dense cluster cores render brighter and slightly larger.
+    // The full 2,466-phrase cloud is deliberately small/dim; the active kit is
+    // drawn as a bright highlight subset below.
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     for (let i = 0; i < this.points.length; i++) {
       const p = this.points[i];
       const density = this.alphas[i] ?? 0.5;
       const twinkle = 0.72 + 0.28 * Math.sin(t * 1.7 + i * 2.39996);
-      ctx.globalAlpha = density * twinkle;
+      ctx.globalAlpha = (0.18 + 0.17 * density) * twinkle;
       ctx.fillStyle = STEM_COLORS[p.stem];
       ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, 1.1 + density * 1.4, 0, 2 * Math.PI);
+      ctx.arc(p.x * w, p.y * h, 0.6 + density * 0.7, 0, 2 * Math.PI);
       ctx.fill();
     }
     ctx.restore();
     ctx.globalAlpha = 1;
+
+    // Active-kit highlight: larger, full-alpha points with bright rings.
+    if (this.highlightPoints.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const p of this.highlightPoints) {
+        const x = p.x * w;
+        const y = p.y * h;
+        const color = STEM_COLORS[p.stem];
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = color;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y, 3.4, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255,255,255,0.92)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(x, y, 5.2, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
 
     // Pattern usage: path of the slices the current arrangement has played,
     // with brighter rings on the most recent points.
@@ -1106,29 +1146,45 @@ export class NebulaRenderer {
       ctx.stroke();
       ctx.globalAlpha = 1;
 
-      // Stem label and real-time parameter feedback
+      // Stem label and real-time parameter feedback. Each stem gets its own
+      // direction so clustered reticles do not stack four labels on top of
+      // each other.
+      const placements: Record<StemName, { align: CanvasTextAlign; dx: number; dy: number }> = {
+        drums: { align: "center", dx: 0, dy: radius + 16 },
+        bass: { align: "right", dx: -(radius + 8), dy: 4 },
+        vocals: { align: "center", dx: 0, dy: -(radius + 10) },
+        other: { align: "left", dx: radius + 8, dy: 4 },
+      };
+      const placement = placements[stem];
+      const labelX = px + placement.dx;
+      const labelY = py + placement.dy;
+      ctx.save();
+      ctx.textAlign = placement.align;
       ctx.fillStyle = color;
       ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.textAlign = "center";
       const stemLabels: Record<string, string> = {
         drums: "Drum",
         bass: "Bass",
         other: "Other",
         vocals: "Vocal",
       };
-      ctx.fillText(stemLabels[stem] || stem, px, py - radius - 8);
+      ctx.fillText(stemLabels[stem] || stem, labelX, labelY);
 
-      // Timbre & Groove parameter readout
+      // Timbre & Groove parameter readout follows the same direction.
       ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
       ctx.font = "9px monospace";
-      ctx.fillText(`X:${Math.round(r.x * 100)}% Y:${Math.round(r.y * 100)}%`, px, py + radius + 13);
+      const coordY = stem === "drums"
+        ? labelY + 12
+        : (stem === "vocals" ? labelY - 12 : labelY + 12);
+      ctx.fillText(`X:${Math.round(r.x * 100)}% Y:${Math.round(r.y * 100)}%`, labelX, coordY);
 
-      // Now-playing song title under the drums reticle
+      // Now-playing song title under the drums reticle.
       if (stem === "drums" && frame.activeTitle) {
         ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
         ctx.font = "bold 10px system-ui, sans-serif";
-        ctx.fillText(this.truncateTitle(frame.activeTitle, 34), px, py + radius + 27);
+        ctx.fillText(this.truncateTitle(frame.activeTitle, 34), labelX, coordY + 14);
       }
+      ctx.restore();
     }
 
     // Active playing slice highlights with white pixel and expanding ping ring
@@ -1241,6 +1297,7 @@ export class NebulaRenderer {
 
     this.reticleMap[stem] = { x: targetX, y: targetY };
     this.manualReticles[stem] = true;
+    delete this.reticleAnims[stem];
 
     // Record the drag trail and flag magnetic snap engagement
     const nowSec = performance.now() / 1000;

@@ -221,6 +221,7 @@ class WubApp {
   private trackStemPositions = new Map<string, { x: number; y: number }>();
   private umapLoadStarted = false;
   private lastNebulaKitId: string | null = null;
+  private nebulaKitBaseSet = false;
   private kitBarIndex = -1;
   private kitPoint: { x: number; y: number } | null = null;
   private kitBlockAt = 0;
@@ -321,6 +322,8 @@ class WubApp {
               tasteModelName: c.tasteModelName ?? null,
               lastTransitionTop3: c.lastTransitionTop3 ?? [],
               lastKitScore: c.lastKitScore ?? null,
+              kitSteerTarget: c.kitSteerTarget ?? null,
+              kitSteerDistance: c.kitSteerDistance ?? null,
             }
             : { error: "engine not ready" };
         };
@@ -1265,18 +1268,28 @@ class WubApp {
       }
     }
 
-    // Kit mode: the 2D nebula is the active kit map, not the demo corpus.
+    // Kit mode: the base nebula is the full 2,466-phrase space; the active kit
+    // is a bright highlight set, updated only when the kit rotates.
     if (this.clientConductor && this.clientConductor.getPlaybackMode() === "kit") {
+      if (!this.nebulaKitBaseSet && this.nebula !== null) {
+        const basePoints = this.clientConductor.getAllKitPhrasePoints();
+        if (basePoints.length > 0) {
+          this.nebula.setPoints(basePoints);
+          this.nebulaKitBaseSet = true;
+        }
+      }
       const kitId = this.clientConductor.activeKit?.track_id ?? null;
       if (kitId !== this.lastNebulaKitId) {
         this.lastNebulaKitId = kitId;
-        const points = this.clientConductor.getKitNebulaPoints();
-        if (points.length > 0 && this.nebula !== null) {
-          this.nebula.setPoints(points);
+        const highlight = this.clientConductor.getKitNebulaPoints();
+        if (highlight.length > 0 && this.nebula !== null) {
+          this.nebula.setHighlight(highlight);
         }
       }
-    } else {
+    } else if (this.lastNebulaKitId !== null || this.nebulaKitBaseSet) {
       this.lastNebulaKitId = null;
+      this.nebulaKitBaseSet = false;
+      this.nebula?.setHighlight([]);
     }
 
     // Every bar, glide the four reticles to the position representing that bar:

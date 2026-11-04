@@ -31,6 +31,7 @@ export interface KitPhrase {
 }
 
 export type KitSteering = Record<StemName, { x: number; y: number }>;
+export type KitSteeringMask = ReadonlySet<StemName>;
 
 export interface Kit {
   track_id: string;
@@ -273,6 +274,8 @@ export class KitPlayer {
   private lastSelectionTarget: string = "";
   private lastSelectionBand: string = "none";
   private lastSelectionDelta: number = 0;
+  private lastSteerTargetPoint: { x: number; y: number } | null = null;
+  private lastSteerDistanceValue: number | null = null;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -326,6 +329,14 @@ export class KitPlayer {
     return this.nextKit?.track_id ?? null;
   }
 
+  get kitSteerTarget(): { x: number; y: number } | null {
+    return this.lastSteerTargetPoint === null ? null : { ...this.lastSteerTargetPoint };
+  }
+
+  get kitSteerDistance(): number | null {
+    return this.lastSteerDistanceValue;
+  }
+
   get compatibleKits(): Kit[] {
     return [...this.compatibility];
   }
@@ -351,6 +362,24 @@ export class KitPlayer {
     }));
   }
 
+  /** The full 355-kit / 2,466-phrase space, independent of the active kit. */
+  public allPhrasePoints(): NebulaPoint[] {
+    const manifest = this.manifest;
+    if (manifest === null) return [];
+    const points: NebulaPoint[] = [];
+    for (const kit of manifest.kits) {
+      for (const phrase of kit.phrases) {
+        points.push({
+          x: phrase.x ?? 0.5,
+          y: phrase.y ?? 0.5,
+          stem: this.loudestStem(phrase),
+          trackId: kit.track_id,
+        });
+      }
+    }
+    return points;
+  }
+
   private loudestStem(phrase: KitPhrase): StemName {
     let loudest: StemName = "drums";
     let bestDb = Number.NEGATIVE_INFINITY;
@@ -364,21 +393,68 @@ export class KitPlayer {
     return loudest;
   }
 
-  /** Reticle bias: 0.35 when far from all four reticles, 1.75 at the centre. */
-  private steeringMultiplier(phrase: KitPhrase, steering?: KitSteering): number {
+  /** Stems that own the steering target: user-dragged ones, else all four. */
+  private steeringStems(userSteered?: KitSteeringMask): readonly StemName[] {
+    if (userSteered !== undefined && userSteered.size > 0) {
+      return STEM_ORDER.filter((stem) => userSteered.has(stem));
+    }
+    return STEM_ORDER;
+  }
+
+  /** Mean reticle position used for kit-distance and stats. */
+  private steeringTarget(
+    steering?: KitSteering,
+    userSteered?: KitSteeringMask
+  ): { x: number; y: number } | null {
+    if (!steering) return null;
+    let sx = 0;
+    let sy = 0;
+    let count = 0;
+    for (const stem of this.steeringStems(userSteered)) {
+      const point = steering[stem];
+      if (!point) continue;
+      sx += point.x;
+      sy += point.y;
+      count++;
+    }
+    return count > 0 ? { x: sx / count, y: sy / count } : null;
+  }
+
+  /** Distance from a steering target to the nearest phrase in the active kit. */
+  private closestPhraseDistance(target: { x: number; y: number }): number | null {
+    if (this.phrases.length === 0) return null;
+    let nearest = Number.POSITIVE_INFINITY;
+    for (const entry of this.phrases) {
+      const dx = (entry.meta.x ?? 0.5) - target.x;
+      const dy = (entry.meta.y ?? 0.5) - target.y;
+      nearest = Math.min(nearest, Math.hypot(dx, dy));
+    }
+    return Number.isFinite(nearest) ? nearest : null;
+  }
+
+  /** Reticle bias: 0.15 when far from the user-steered stems, 2.55 at centre. */
+  private steeringMultiplier(
+    phrase: KitPhrase,
+    steering?: KitSteering,
+    userSteered?: KitSteeringMask
+  ): number {
     if (!steering) return 1;
+    const stems = this.steeringStems(userSteered);
     const px = phrase.x ?? 0.5;
     const py = phrase.y ?? 0.5;
     let total = 0;
-    for (const stem of STEM_ORDER) {
+    let count = 0;
+    for (const stem of stems) {
       const point = steering[stem];
       if (!point) continue;
       const dx = px - point.x;
       const dy = py - point.y;
-      total += Math.exp(-(dx * dx + dy * dy) / (2 * 0.22 * 0.22));
+      total += Math.exp(-(dx * dx + dy * dy) / (2 * 0.16 * 0.16));
+      count++;
     }
-    const mean = total / STEM_ORDER.length;
-    return 0.35 + 1.4 * mean;
+    if (count === 0) return 1;
+    const mean = total / count;
+    return 0.15 + 2.4 * mean;
   }
 
   get tasteModelName(): string | null {
@@ -758,6 +834,62 @@ export class KitPlayer {
   }
 
   /**
+   * If a user-steered reticle target is >0.30 from every phrase in the active
+   * kit, switch to the closest same-style / ±10 BPM kit using the existing
+   * drumless bridge. Called at the next block schedule after a drag.
+   */
+  public requestSteeringKitChange(
+    steering?: KitSteering,
+    userSteered?: KitSteeringMask
+  ): boolean {
+    if (!this.readyFlag || this.kit === null) return false;
+    if (this.nextKit !== null || this.forcedBridgeRemaining > 0) return false;
+
+    const target = this.steeringTarget(steering, userSteered);
+    if (target === null) return false;
+    const currentDistance = this.closestPhraseDistance(target);
+    if (currentDistance === null || currentDistance <= 0.3) return false;
+
+    this.lastSteerTargetPoint = target;
+    this.lastSteerDistanceValue = currentDistance;
+
+    const current = this.kit;
+    const kits = this.manifest?.kits ?? [];
+    let bestKit: Kit | null = null;
+    let bestDistance = currentDistance;
+    for (const kit of kits) {
+      if (kit.track_id === current.track_id) continue;
+      if (this.kitHistory.includes(kit.track_id)) continue;
+      if (kit.style !== current.style) continue;
+      if (Math.abs(kit.bpm - current.bpm) > 10) continue;
+      let distance = Number.POSITIVE_INFINITY;
+      for (const phrase of kit.phrases) {
+        const dx = (phrase.x ?? 0.5) - target.x;
+        const dy = (phrase.y ?? 0.5) - target.y;
+        distance = Math.min(distance, Math.hypot(dx, dy));
+      }
+      if (distance < bestDistance - 1e-9) {
+        bestDistance = distance;
+        bestKit = kit;
+      }
+    }
+    if (bestKit === null) return false;
+
+    this.nextKit = bestKit;
+    this.bridgeBlocksForNext = 1; // same style and |Δbpm| <= 10
+    this.blocksInSet = KIT_SET_BLOCKS;
+    this.forcedBridgeRemaining = 1;
+    this.pendingLoadedKit = null;
+    this.pendingLoadPromise = null;
+    this.lastKitScoreValue = null;
+    console.info(
+      `[KitPlayer] Steering kit change → ${bestKit.track_id} (${bestKit.style}, ${bestKit.bpm.toFixed(2)} BPM) target distance ${currentDistance.toFixed(3)} → ${bestDistance.toFixed(3)}`
+    );
+    void this.prepareNextKit();
+    return true;
+  }
+
+  /**
    * Schedule one block, handling set rotation and the drumless bridge.
    * The caller logs the result when it becomes due.
    */
@@ -765,7 +897,8 @@ export class KitPlayer {
     engine: AudioEngine,
     when: number,
     section: string,
-    steering?: KitSteering
+    steering?: KitSteering,
+    userSteered?: KitSteeringMask
   ): KitBlockResult | null {
     if (!this.readyFlag || this.kit === null || this.phrases.length === 0) return null;
     const wanted = normaliseSection(section);
@@ -783,7 +916,7 @@ export class KitPlayer {
 
     // Forced bridge from NEXT KIT (blocksInSet stays at KIT_SET_BLOCKS).
     if (this.forcedBridgeRemaining > 0) {
-      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering);
+      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering, userSteered);
       if (result !== null) this.forcedBridgeRemaining--;
       return result;
     }
@@ -794,7 +927,7 @@ export class KitPlayer {
         const blocksPlayed = this.blocksInSet;
         const pending = this.pendingLoadedKit;
         this.setActiveLoaded(pending);
-        const result = this.scheduleBlockInternal(engine, when, wanted, false, ALL_STEMS, false, steering);
+        const result = this.scheduleBlockInternal(engine, when, wanted, false, ALL_STEMS, false, steering, userSteered);
         if (result !== null) {
           this.blocksInSet = 1;
           result.setChanged = true;
@@ -808,18 +941,18 @@ export class KitPlayer {
         console.info("[KitPlayer] Next kit not ready — extending bridge");
       }
       void this.prepareNextKit();
-      return this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering);
+      return this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering, userSteered);
     }
 
     // Normal drumless bridge window at the end of the set.
     const bridgeThreshold = KIT_SET_BLOCKS - this.bridgeBlocksForNext;
     if (this.blocksInSet >= bridgeThreshold) {
-      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering);
+      const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, BRIDGE_STEMS, true, steering, userSteered);
       if (result !== null) this.blocksInSet++;
       return result;
     }
 
-    const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, ALL_STEMS, false, steering);
+    const result = this.scheduleBlockInternal(engine, when, wanted, sectionChanged, ALL_STEMS, false, steering, userSteered);
     if (result !== null) this.blocksInSet++;
     return result;
   }
@@ -831,7 +964,8 @@ export class KitPlayer {
     sectionChanged: boolean,
     stems: readonly StemName[],
     bridge: boolean,
-    steering?: KitSteering
+    steering?: KitSteering,
+    userSteered?: KitSteeringMask
   ): KitBlockResult | null {
     const kit = this.kit;
     if (kit === null) return null;
@@ -844,7 +978,8 @@ export class KitPlayer {
       this.recentPhraseIds.slice(-3),
       current,
       sectionChanged,
-      steering
+      steering,
+      userSteered
     );
     if (phrase === null) return null;
 
@@ -938,12 +1073,18 @@ export class KitPlayer {
     recentIds: readonly string[],
     currentPhrase?: KitPhrase | null,
     sectionChanged: boolean = false,
-    steering?: KitSteering
+    steering?: KitSteering,
+    userSteered?: KitSteeringMask
   ): KitPhrase | null {
     if (this.phrases.length === 0) return null;
     const current = currentPhrase ?? this.lastPhrase;
     const targetSection = normaliseSection(section);
     const target = Number.isFinite(energy) ? energy : (current?.energy ?? 0.65);
+    const steerTarget = this.steeringTarget(steering, userSteered);
+    this.lastSteerTargetPoint = steerTarget;
+    this.lastSteerDistanceValue = steerTarget === null
+      ? null
+      : this.closestPhraseDistance(steerTarget);
     const recent = (recentIds.length > 0 ? recentIds : this.recentPhraseIds).slice(-3);
     const all = this.phrases.map((phrase) => phrase.meta);
     const durationPool = all.filter((phrase) => phrase.duration_sec >= MIN_PHRASE_DURATION_SEC);
@@ -980,7 +1121,7 @@ export class KitPlayer {
             const transition = row[index] ?? 0;
             const quality = taste.quality[index] ?? 0;
             const presence = applyPresence ? this.stemPresenceMultiplier(phrase) : 1;
-            const steeringBias = this.steeringMultiplier(phrase, steering);
+            const steeringBias = this.steeringMultiplier(phrase, steering, userSteered);
             const weight = transition * (0.5 + quality) * presence * steeringBias;
             if (!Number.isFinite(weight) || weight <= 0) continue;
             weighted.push({ phrase, weight });
@@ -1061,7 +1202,7 @@ export class KitPlayer {
       const energyScore = current ? 1.5 * Math.max(0, 1 - energyDelta / 0.3) : 0.0;
       const embeddingScore = current ? cosineSimilarity(candidate.embedding, current.embedding) : 0.0;
       const recencyPenalty = recent.includes(candidate.id) ? -1.0 : 0.0;
-      const steeringBias = (this.steeringMultiplier(candidate, steering) - 1) * 0.5;
+      const steeringBias = (this.steeringMultiplier(candidate, steering, userSteered) - 1) * 0.5;
       const tieBreak = deterministicRoll(
         `score|${targetSection}|${current?.id ?? ""}|${recent.join(",")}|${candidate.id}|${target.toFixed(4)}`
       ) * 0.05;

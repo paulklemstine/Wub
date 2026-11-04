@@ -2532,6 +2532,7 @@ export class ClientGrooveboxConductor {
     vocals: { x: 0.35, y: 0.72 },
     other: { x: 0.35, y: 0.72 },
   };
+  private userSteeredStems: Set<StemName> = new Set();
 
   // Dynamic Sidechain Nodes
   private bassSidechainGain: GainNode | null = null;
@@ -2839,6 +2840,10 @@ export class ClientGrooveboxConductor {
 
     // Pure acoustic slices: keep filters transparently wide open at 20 kHz for maximum punch, clarity and grit
     this.engine.setStemFilter(stem, 20000, 0.7);
+
+    if (isUserDrag) {
+      this.userSteeredStems.add(stem);
+    }
 
     if (this.playbackMode === "kit") {
       // Kit mode uses reticles as a phrase-selection bias; the legacy slice
@@ -5024,6 +5029,18 @@ export class ClientGrooveboxConductor {
     return this.kitPlayer?.nebulaPoints() ?? [];
   }
 
+  public getAllKitPhrasePoints(): NebulaPoint[] {
+    return this.kitPlayer?.allPhrasePoints() ?? [];
+  }
+
+  public get kitSteerTarget(): { x: number; y: number } | null {
+    return this.kitPlayer?.kitSteerTarget ?? null;
+  }
+
+  public get kitSteerDistance(): number | null {
+    return this.kitPlayer?.kitSteerDistance ?? null;
+  }
+
   public get blocksInSet(): number {
     return this.kitPlayer?.blocksInSet ?? 0;
   }
@@ -5429,14 +5446,21 @@ export class ClientGrooveboxConductor {
     while (this.nextKitBlockTime < now + blockSec + 0.15) {
       const at = this.nextKitBlockTime;
       if (this.kitSteeringDirty) {
+        const kitChangeRequested = player.requestSteeringKitChange(
+          this.steering,
+          this.userSteeredStems
+        );
         this.kitSteeringDirty = false;
-        console.info("[KitPlayer] Reticle steering applied to next kit block");
+        console.info(
+          `[KitPlayer] Reticle steering applied to next kit block${kitChangeRequested ? " (kit change requested)" : ""}`
+        );
       }
       const result = player.scheduleBlock(
         this.engine,
         at,
         this.arranger.getSection(),
-        this.steering
+        this.steering,
+        this.userSteeredStems
       );
       if (result === null) break;
       this.kitBlockLogQueue.push({ at, result });
