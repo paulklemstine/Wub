@@ -2684,6 +2684,7 @@ export class ClientGrooveboxConductor {
     void (async () => {
       try {
         const manifest = await player.loadManifest(ClientGrooveboxConductor.KIT_BASE_PATH);
+        await player.loadTasteScores(ClientGrooveboxConductor.KIT_BASE_PATH);
         if (manifest.kits.length === 0) throw new Error("Kit manifest contains no kits");
         // Pick a full-length kit at random so each session starts on a different
         // record instead of always manifest order (which is track-id sorted).
@@ -5025,6 +5026,22 @@ export class ClientGrooveboxConductor {
 
   public get kitSetChanges(): number {
     return this.kitPlayer?.setChanges ?? 0;
+  }
+
+  public get tasteModelName(): string | null {
+    return this.kitPlayer?.tasteModelName ?? null;
+  }
+
+  public get tasteValAuc(): number | null {
+    return this.kitPlayer?.tasteValAuc ?? null;
+  }
+
+  public get lastTransitionTop3(): Array<{ id: string; weight: number }> {
+    return this.kitPlayer?.lastTransitionTop3 ?? [];
+  }
+
+  public get lastKitScore(): number | null {
+    return this.kitPlayer?.lastKitScore ?? null;
   }
 
   public forceNextKit(): void {

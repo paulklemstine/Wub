@@ -313,6 +313,10 @@ class WubApp {
               kitSetBlocksLeft: c.kitSetBlocksLeft ?? null,
               nextKitTrack: c.nextKitTrack ?? null,
               kitSetChanges: c.kitSetChanges ?? null,
+              tasteModel: c.tasteValAuc ?? null,
+              tasteModelName: c.tasteModelName ?? null,
+              lastTransitionTop3: c.lastTransitionTop3 ?? [],
+              lastKitScore: c.lastKitScore ?? null,
             }
             : { error: "engine not ready" };
         };
@@ -363,8 +367,10 @@ class WubApp {
       this.clientConductor.setKitSetChangeCallback((info) => {
         const track = info.kit.title || info.kit.track_id;
         const next = info.nextKit?.track_id ?? "pending";
+        const score = this.clientConductor?.lastKitScore;
+        const scoreText = score === null || score === undefined ? "" : ` • next score: ${score.toFixed(4)}`;
         this.setStatus(
-          `KIT SET → ${track} (${info.kit.style}, ${info.kit.bpm.toFixed(2)} BPM) • ${info.blocksLeft} blocks left • next: ${next}`
+          `KIT SET → ${track} (${info.kit.style}, ${info.kit.bpm.toFixed(2)} BPM) • ${info.blocksLeft} blocks left • next: ${next}${scoreText}`
         );
       });
     } catch (e) {

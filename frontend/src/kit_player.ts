@@ -45,6 +45,33 @@ export interface KitManifest {
   kits: Kit[];
 }
 
+export interface TasteNextKit {
+  track_id: string;
+  score: number;
+  style: string;
+  bpm: number;
+  key: string;
+}
+
+export interface TasteKitScores {
+  phrase_order: string[];
+  transition: number[][];
+  quality: number[];
+  next: TasteNextKit[];
+}
+
+export interface TasteScoresManifest {
+  version: number;
+  model: string;
+  val_auc: number;
+  kits: Record<string, TasteKitScores>;
+}
+
+export interface TasteTransitionTop {
+  id: string;
+  weight: number;
+}
+
 /** One scheduled 4-bar block, including rotation/bridge metadata. */
 export interface KitBlockResult {
   kit: Kit;
@@ -214,6 +241,11 @@ export class KitPlayer {
   private bridgeBlocksForNext: number = 1;
   private forcedBridgeRemaining: number = 0;
   private waitingForNextLogged: boolean = false;
+  private tasteScores: TasteScoresManifest | null = null;
+  private tasteFailureLogged: boolean = false;
+  private tasteRngState: number = 0x9e3779b9;
+  private lastTransition: TasteTransitionTop[] = [];
+  private lastKitScoreValue: number | null = null;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -271,6 +303,26 @@ export class KitPlayer {
     return [...this.compatibility];
   }
 
+  get tasteModelName(): string | null {
+    return this.tasteScores?.model ?? null;
+  }
+
+  get tasteValAuc(): number | null {
+    return this.tasteScores?.val_auc ?? null;
+  }
+
+  get lastTransitionTop3(): TasteTransitionTop[] {
+    return [...this.lastTransition];
+  }
+
+  get lastKitScore(): number | null {
+    return this.lastKitScoreValue;
+  }
+
+  get tasteReady(): boolean {
+    return this.tasteScores !== null;
+  }
+
   /** Fetch and validate the kit manifest. `basePath` is the manifest directory. */
   async loadManifest(basePath: string): Promise<KitManifest> {
     const base = basePath.replace(/\/+$/, "");
@@ -295,6 +347,42 @@ export class KitPlayer {
     this.manifest = manifest;
     console.info(`[KitPlayer] Manifest loaded: ${manifest.kits.length} kits from ${base}`);
     return manifest;
+  }
+
+  /**
+   * Load the trained taste model. A missing/broken file is non-fatal: log once
+   * and keep the rule-based selector/rotation.
+   */
+  public async loadTasteScores(basePath: string): Promise<boolean> {
+    const url = joinUrl(basePath, "taste_scores.json");
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Taste scores request failed (${response.status}) for ${url}`);
+      }
+      const raw: unknown = await response.json();
+      if (
+        !isRecord(raw) ||
+        !isRecord(raw["kits"]) ||
+        typeof raw["val_auc"] !== "number" ||
+        typeof raw["model"] !== "string"
+      ) {
+        throw new Error(`Taste scores at ${url} are invalid`);
+      }
+      const scores = raw as unknown as TasteScoresManifest;
+      this.tasteScores = scores;
+      console.info(
+        `[KitPlayer] Taste scores loaded: ${scores.model} (val_auc ${scores.val_auc.toFixed(4)}, ${Object.keys(scores.kits).length} kits)`
+      );
+      return true;
+    } catch (err) {
+      if (!this.tasteFailureLogged) {
+        this.tasteFailureLogged = true;
+        console.warn("[KitPlayer] Taste scores unavailable — using rule-based selection.", err);
+      }
+      this.tasteScores = null;
+      return false;
+    }
   }
 
   private async loadKitData(kit: Kit): Promise<LoadedKitData> {
@@ -387,6 +475,8 @@ export class KitPlayer {
     this.pendingLoadPromise = null;
     this.nextKit = null;
     this.waitingForNextLogged = false;
+    this.lastTransition = [];
+    this.seedTasteRng(data.kit.track_id);
     this.recordKitHistory(data.kit.track_id);
     this.compatibility = this.computeCompatibility(data.kit);
     if (this.fittedBpm !== null) {
@@ -398,6 +488,22 @@ export class KitPlayer {
 
   private recordKitHistory(trackId: string): void {
     this.kitHistory = [trackId, ...this.kitHistory.filter((id) => id !== trackId)].slice(0, 5);
+  }
+
+  private seedTasteRng(trackId: string): void {
+    let hash = 2166136261;
+    for (let i = 0; i < trackId.length; i++) {
+      hash ^= trackId.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    this.tasteRngState = hash >>> 0;
+  }
+
+  private nextTasteRandom(): number {
+    let t = (this.tasteRngState += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
 
   /**
@@ -444,6 +550,39 @@ export class KitPlayer {
   private chooseNextKit(): Kit | null {
     const current = this.kit;
     if (current === null) return null;
+
+    // Trained rotation: current kit's next list is already style/BPM filtered.
+    const tasteKit = this.tasteScores?.kits[current.track_id];
+    if (tasteKit && Array.isArray(tasteKit.next) && tasteKit.next.length > 0) {
+      const kits = this.manifest?.kits ?? [];
+      const eligible = tasteKit.next
+        .filter(
+          (entry) =>
+            entry !== null &&
+            typeof entry === "object" &&
+            typeof entry.track_id === "string" &&
+            !this.kitHistory.includes(entry.track_id)
+        )
+        .map((entry) => ({
+          entry,
+          kit: kits.find((kit) => kit.track_id === entry.track_id),
+        }))
+        .filter((row): row is { entry: TasteNextKit; kit: Kit } => row.kit !== undefined);
+      if (eligible.length > 0) {
+        eligible.sort(
+          (a, b) => b.entry.score - a.entry.score || a.entry.track_id.localeCompare(b.entry.track_id)
+        );
+        const best = eligible[0];
+        this.lastKitScoreValue = best.entry.score;
+        console.info(
+          `[KitPlayer] Taste next kit: ${best.entry.track_id} (score ${best.entry.score.toFixed(4)}, ${best.entry.style}, ${best.entry.bpm.toFixed(2)} BPM)`
+        );
+        return best.kit;
+      }
+    }
+
+    // Fallback: existing same-style/Camelot/BPM compatibility pool.
+    this.lastKitScoreValue = null;
     const pool = this.compatibility.filter((kit) => !this.kitHistory.includes(kit.track_id));
     if (pool.length === 0) return null;
 
@@ -489,8 +628,11 @@ export class KitPlayer {
         const loaded = await this.loadKitData(target);
         if (this.nextKit?.track_id !== target.track_id) return false;
         this.pendingLoadedKit = loaded;
+        const scoreSuffix = this.lastKitScoreValue !== null
+          ? `, taste ${this.lastKitScoreValue.toFixed(4)}`
+          : "";
         console.info(
-          `[KitPlayer] Next kit preloaded: ${target.track_id} (${target.style}, ${(loaded.fitBpm ?? target.bpm).toFixed(2)} BPM fit, median ${loaded.medianDurationSec.toFixed(2)}s)`
+          `[KitPlayer] Next kit preloaded: ${target.track_id} (${target.style}, ${(loaded.fitBpm ?? target.bpm).toFixed(2)} BPM fit, median ${loaded.medianDurationSec.toFixed(2)}s${scoreSuffix})`
         );
         return true;
       } catch (err) {
@@ -660,6 +802,67 @@ export class KitPlayer {
 
     // Holes: never pick a phrase materially shorter than the fitted block.
     const minDuration = this.medianDurationSec > 0 ? this.medianDurationSec * 0.9 : 0;
+    const activeKitId = this.kit?.track_id;
+    const taste = activeKitId ? this.tasteScores?.kits[activeKitId] : undefined;
+    if (taste && current) {
+      const currentIndex = taste.phrase_order.indexOf(current.id);
+      if (currentIndex >= 0) {
+        const lastTwo = recent.slice(-2);
+        const durationPool = all.filter(
+          (phrase) =>
+            (minDuration <= 0 || phrase.duration_sec >= minDuration) &&
+            !lastTwo.includes(phrase.id)
+        );
+        const row = taste.transition[currentIndex] ?? [];
+        const buildWeights = (applyEnergyGuard: boolean) => {
+          const weighted: Array<{ phrase: KitPhrase; weight: number }> = [];
+          let total = 0;
+          for (const phrase of durationPool) {
+            if (applyEnergyGuard && Math.abs(phrase.energy - current.energy) > 0.35) continue;
+            const index = taste.phrase_order.indexOf(phrase.id);
+            if (index < 0) continue;
+            const transition = row[index] ?? 0;
+            const quality = taste.quality[index] ?? 0;
+            const weight = transition * (0.5 + quality);
+            if (!Number.isFinite(weight) || weight <= 0) continue;
+            weighted.push({ phrase, weight });
+            total += weight;
+          }
+          return { weighted, total };
+        };
+
+        let filtered = buildWeights(true);
+        if (filtered.total <= 0) {
+          // Wrong-style / sparse-row guard: relax the 0.35 energy guard once.
+          filtered = buildWeights(false);
+        }
+        if (filtered.total > 0) {
+          this.lastTransition = taste.phrase_order
+            .map((id, index) => ({ id, weight: row[index] ?? 0 }))
+            .filter((entry) => Number.isFinite(entry.weight) && entry.weight > 0)
+            .sort((a, b) => b.weight - a.weight || a.id.localeCompare(b.id))
+            .slice(0, 3);
+
+          let roll = this.nextTasteRandom() * filtered.total;
+          let chosen = filtered.weighted[filtered.weighted.length - 1];
+          for (const entry of filtered.weighted) {
+            roll -= entry.weight;
+            if (roll <= 0) {
+              chosen = entry;
+              break;
+            }
+          }
+          const top3 = this.lastTransition
+            .map((entry) => `${entry.id}=${entry.weight.toFixed(4)}`)
+            .join(", ");
+          console.info(
+            `[KitPlayer] Taste pick: ${chosen.phrase.id} weight ${chosen.weight.toFixed(4)} • row top3: ${top3}`
+          );
+          return chosen.phrase;
+        }
+      }
+    }
+
     let pool = minDuration > 0
       ? all.filter((phrase) => phrase.duration_sec >= minDuration)
       : all;
