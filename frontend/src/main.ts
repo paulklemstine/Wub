@@ -267,6 +267,10 @@ class WubApp {
 
     this.nebula = new NebulaRenderer(el<HTMLCanvasElement>("nebula-canvas"), {
       onReticleMove: (stem, x, y) => {
+        // Live visual feedback only; the audio commits on drop.
+        this.clientConductor?.setReticleSteering(stem, x, y, false);
+      },
+      onReticleDrop: (stem, x, y) => {
         this.clientConductor?.setReticleSteering(stem, x, y, true);
       },
       onReticleRelease: (stem) => {
@@ -338,6 +342,42 @@ class WubApp {
         };
         (window as unknown as { __wubConductor: ClientGrooveboxConductor }).__wubConductor =
           this.clientConductor;
+        (window as unknown as { __wubRemixState: () => unknown }).__wubRemixState = () =>
+          this.clientConductor?.debugStemRemix() ?? [];
+        (window as unknown as { __wubAudioProbe: () => unknown }).__wubAudioProbe = () => {
+          const analyser = this.engine.getMasterAnalyser();
+          const data = new Float32Array(analyser.fftSize);
+          analyser.getFloatTimeDomainData(data);
+          let sum = 0;
+          let peak = 0;
+          for (let i = 0; i < data.length; i++) {
+            const v = data[i];
+            sum += v * v;
+            peak = Math.max(peak, Math.abs(v));
+          }
+          const stems = ["drums", "bass", "other", "vocals"].map((stem) => {
+            const an = this.engine.getAnalyser(stem as never);
+            const buf = new Float32Array(an.fftSize);
+            an.getFloatTimeDomainData(buf);
+            let s2 = 0;
+            for (let i = 0; i < buf.length; i++) s2 += buf[i] * buf[i];
+            const input = this.engine.getStemInput(stem as never) as GainNode;
+            return {
+              stem,
+              rms: Number(Math.sqrt(s2 / buf.length).toFixed(5)),
+              vol: this.engine.getVolume(stem as never),
+              busGain: Number((input.gain?.value ?? -1).toFixed(3)),
+              muted: this.engine.isMuted(stem as never),
+            };
+          });
+          return {
+            now: Number(this.engine.now().toFixed(2)),
+            rms: Number(Math.sqrt(sum / data.length).toFixed(5)),
+            peak: Number(peak.toFixed(5)),
+            playing: this.playing,
+            stems,
+          };
+        };
         (window as unknown as { __wubNextKit: () => void }).__wubNextKit = () => {
           this.clientConductor?.forceNextKit();
         };
@@ -395,6 +435,25 @@ class WubApp {
             this.nebula.setActiveSlice(stem, p.x, p.y, t);
           }
         }
+      };
+      this.clientConductor.onStemPhrases = (points) => {
+        const t = visualNow();
+        this.kitPoint = null;
+        this.kitBlockAt = points[0]?.at ?? this.kitBlockAt;
+        if (this.nebula === null) return;
+        for (const point of points) {
+          this.nebula.setActiveSlice(point.stem, point.x, point.y, t);
+          this.nebula.setReticleTarget(point.stem, point.x, point.y, 0.28);
+        }
+        this.nebula.setHighlight(
+          points.map((point) => ({
+            x: point.x,
+            y: point.y,
+            stem: point.stem,
+            phraseId: point.phraseId,
+            active: true,
+          }))
+        );
       };
     } catch (e) {
       console.warn("Client ML sequencer init failed:", e);
@@ -1282,9 +1341,16 @@ class WubApp {
           this.nebulaKitBaseSet = true;
         }
       }
-      const kitId = this.clientConductor.activeKit?.track_id ?? null;
+      const kitId = this.clientConductor.isStemRemix
+        ? `cluster:${this.clientConductor.activeClusterId ?? "none"}`
+        : (this.clientConductor.activeKit?.track_id ?? null);
       if (kitId !== this.lastNebulaKitId) {
         this.lastNebulaKitId = kitId;
+        if (this.clientConductor.isStemRemix && this.nebula !== null) {
+          // The pool changes with the cluster; rebuild the base cloud.
+          const basePoints = this.clientConductor.getAllKitPhrasePoints();
+          if (basePoints.length > 0) this.nebula.setPoints(basePoints);
+        }
         const highlight = this.clientConductor.getKitNebulaPoints();
         if (highlight.length > 0 && this.nebula !== null) {
           this.nebula.setHighlight(highlight);
@@ -1296,12 +1362,21 @@ class WubApp {
       this.nebula?.setHighlight([]);
     }
 
+    // Remix mode: show each stem's pinned style region as a ghost ring.
+    if (this.clientConductor !== null && this.clientConductor.isStemRemix && this.nebula !== null) {
+      for (const state of this.clientConductor.getStemRemixState()) {
+        if (state.pin) this.nebula.setPinTarget(state.stem, state.pin.x, state.pin.y);
+        else this.nebula.clearPinTarget(state.stem);
+      }
+    }
+
     // Every bar, glide the four reticles to the position representing that bar:
     // the current phrase point plus a small per-stem orbit so each bar reads as
     // a distinct spot in the kit constellation.
     if (
       this.clientConductor !== null &&
       this.clientConductor.getPlaybackMode() === "kit" &&
+      !this.clientConductor.isStemRemix &&
       this.kitPoint !== null &&
       this.nebula !== null
     ) {

@@ -10,7 +10,7 @@ Welcome to the **Wub KG-505** codebase. This document serves as the primary tech
 - **Domain**: Real-time generative electronic music, audio stem analysis, real 4-bar phrase performance, and web-based audio engineering.
 - **Mission**: Ingest an authentic audio training corpus (1,700+ dance tracks), separate into stems (drums, bass, other, vocals), mine real 4-bar phrases into song kits, learn a taste model for phrase and kit transitions, and play a neverending, highly musical DJ set directly in the browser.
 - **Dual-Engine Execution**:
-  1. **🧠 In-Browser Kit Jukebox (shipped)**: 100% standalone, client-side Web Audio engine that plays real 4-bar stem phrases from one source song at rate 1.0. No slice resynthesis, no resampling, no pitch shifting. Runs everywhere (including static hosting on GitHub Pages) with zero backend dependency. Full design: `docs/KIT_ENGINE.md`.
+  1. **🧠 In-Browser Kit Jukebox (shipped)**: 100% standalone, client-side Web Audio engine. The cluster bank runs four independent stem streams that share one bar grid; each stem can be dragged to a new style region, pinned for 32 bars, and the session rotates key/tempo every 48 bars. Real 4-bar phrases, no slice resynthesis or `playbackRate` resampling; tempo fit (<=2%) and Camelot transposition (<=5 semitones, vocals <=3) use Signalsmith Stretch. Full design: `docs/KIT_ENGINE.md`.
   2. **⚡ WebSocket Cloud Sync (legacy/hybrid)**: Client/server mode streaming tatums and slice references from the Python FastAPI server backed by FAISS indices. The deployed site does not need it; the kit bank is the shipped path.
 
 ---
@@ -76,31 +76,38 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   This guarantees that slices never shift by more than 6 semitones (half an octave), preserving natural acoustic timbre while maintaining perfect musical harmony.
 
 ### 7. Kit Playback Invariants
+**Legacy single-kit mode** (older manifests without `clusters`):
 - **Never resample, time-stretch, or repitch a kit phrase.** `scheduleSlice`
-  must use `rate: 1.0`; the kit's key is the session key. Source audio is the
-  reference, not raw material.
-- **Never normalise or re-gain individual stems in the corpus/asset pipeline.**
-  A kit phrase keeps the source's per-stem balance; per-stem `peak`/`rms_db`
-  are metadata, not baked gain targets. Runtime stem faders and section
-  automation remain a separate mixer layer.
-- **Block duration is the phrase's own duration.** Do not force a median
-  duration over a phrase. `blockDurationSec = phrase.duration_sec`, and the
-  next block starts exactly where the previous phrase ends.
-- **12-block set, 12th block bridge.** `KIT_SET_BLOCKS = 12`; the final block
-  of a set plays `other` + `vocals` only. Preload the next kit on block 10 and
-  switch only at a block boundary when it is ready; otherwise extend the
-  bridge. A BPM delta > 10 uses a two-block bridge.
-- **One source song per block.** Do not splice stems from different kits inside
-  a 4-bar block; rotate the whole kit at the bridge.
-- **Kit lock uses `fitBpm`.** Session tempo is `960 / median phrase duration`,
-  not the manifest's analysed BPM. Re-apply the key/tempo lock at the new kit's
-  downbeat, not during the outgoing bridge.
-- **Taste model is optional.** A missing or invalid `taste_scores.json` must
-  log once and fall back to the rule selector; it must never stop playback.
-- **Steering only after a real drag.** No-drag auto-follow is visual only.
-  Only stems in `userSteeredStems` may bias phrase choice; a far target
-  (> 0.30 from every active phrase) may request a same-style ±10 BPM kit
-  change through the normal bridge.
+  must use `rate: 1.0`; the kit's key is the session key.
+- **Block duration is the phrase's own duration.** `blockDurationSec =
+  phrase.duration_sec`; the next block starts exactly where the previous ends.
+- **12-block set, 12th block bridge.** The final block plays `other` +
+  `vocals`; preload the next kit on block 10 and switch only at a block
+  boundary when ready; otherwise extend the bridge.
+
+**Per-stem remix mode** (manifests with `clusters`; the shipped path):
+- **Four stem streams, one bar grid.** Each stem has its own current phrase,
+  voice, pin and lazy cache entry. Never splice two songs inside one stem's
+  phrase; cross-song recombination happens only at block boundaries.
+- **No `playbackRate` resampling.** Tempo fit uses Signalsmith Stretch `rate`
+  (cap 2%); key fit uses `semitones` (drums 0, vocals ±3, bass/other ±5).
+- **Staggered auto-advance.** Advance 1-2 least-recently-changed stems per
+  4-bar block; all four only at section changes or cluster rotation.
+- **Drag commits at the next bar; pins last 32 bars.** The reticle follows the
+  playing phrase; a dashed ghost ring marks the pinned region. Double-click
+  releases the pin. If the target audio is not decoded by the bar, wait one
+  more bar and show a buffering status.
+- **Cluster rotation every 48 bars.** Blocks 10-11 are a drumless
+  `other + vocals` bridge; block 12 switches to a Camelot-neighbour cluster
+  within ±3 BPM and releases all pins.
+- **Lazy audio only.** 64-entry LRU, one block of prefetch lead, two alternates
+  for drags. A failed load repeats the current phrase and blacklists the kit;
+  it must never stop the transport.
+- **Never normalise or re-gain assets.** A kit phrase keeps the source's
+  per-stem balance; per-stem `peak`/`rms_db` are metadata. The small runtime
+  level match in `stem_remix.ts` is a mixer layer, not a baked gain.
+- **Taste model is optional.** A missing or invalid `taste_scores.json` logs
+  once and falls back to the rule selector; it must never stop playback.
 
 ---
 
@@ -109,7 +116,9 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 ### Frontend (`frontend/src/`)
 | File | Responsibility |
 | :--- | :--- |
-| [`kit_player.ts`](file:///home/raver1975/Wub/frontend/src/kit_player.ts) | Shipped kit engine: manifest/taste loading, Opus decode, 12-block set state machine, drumless bridge, kit rotation, phrase selection, rate-1.0 scheduling, and nebula coordinates. |
+| [`kit_player.ts`](file:///home/raver1975/Wub/frontend/src/kit_player.ts) | Kit facade: manifest/taste loading, legacy 12-block single-kit player, and the remix `scheduleBlock` adapter. |
+| [`stem_remix.ts`](file:///home/raver1975/Wub/frontend/src/stem_remix.ts) | Per-stem remix engine: cluster pools, 4-bar bar grid, staggered advance, 32-bar pins, next-bar drag commit, cluster rotation, lazy cache, and per-stem nebula points. |
+| [`stretch_voice.ts`](file:///home/raver1975/Wub/frontend/src/stretch_voice.ts) | Signalsmith Stretch voice wrapper: pre-roll + phrase buffer, tempo/key scheduling, gain fades, disposal. |
 | [`client_ml_sequencer.ts`](file:///home/raver1975/Wub/frontend/src/client_ml_sequencer.ts) | In-browser conductor. Owns the kit block clock and kit tempo/key lock; retains the legacy jukebox/slice/step sequencer as fallback only. Also holds the chord/arranger state that drives kit section selection. |
 | [`audio_engine.ts`](file:///home/raver1975/Wub/frontend/src/audio_engine.ts) | Core Web Audio context wrapper, 4-stem gain buses, analysers, `scheduleSlice` (rate/fades), and AudioBuffer decode for Opus/WAV kit assets. |
 | [`main.ts`](file:///home/raver1975/Wub/frontend/src/main.ts) | Main application coordinator, UI event queue, transport controls, kit set-change status, reticle-to-phrase steering, and WebSocket listener. |
@@ -138,7 +147,14 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | [`train_taste_model.py`](file:///home/raver1975/Wub/scripts/train_taste_model.py) | Trains the binary arrangement classifier and the pairwise transition ranker (context Transformer + candidate MLP, InfoNCE). |
 | [`score_kits.py`](file:///home/raver1975/Wub/scripts/score_kits.py) | Scores the shipping bank into `taste_scores.json`: transition matrix, phrase quality, top-10 next kits; writes `/tmp/taste_report.json`. |
 | [`select_kit_bank.py`](file:///home/raver1975/Wub/scripts/select_kit_bank.py) | Selects a style-balanced shipping bank by phrase count, section coverage, energy, stem presence, and embedding novelty; copies only selected Opus files. |
-| [`add_kit_coords.py`](file:///home/raver1975/Wub/scripts/add_kit_coords.py) | Projects 64-d phrase embeddings to deterministic PCA `x`/`y` in `kit_manifest.json` for the nebula. |
+| [`add_kit_coords.py`](file:///home/raver1975/Wub/scripts/add_kit_coords.py) | Projects 64-d phrase embeddings to deterministic PCA `x`/`y` in `kit_manifest.json` for the legacy nebula. |
+| [`select_cluster_bank.py`](file:///home/raver1975/Wub/scripts/select_cluster_bank.py) | Selects the 16 style-balanced key/tempo clusters and writes the `clusters` pool map. |
+| [`add_pre_roll.py`](file:///home/raver1975/Wub/scripts/add_pre_roll.py) | Extracts the 80 ms pre-bar attack tails and writes `*_pre.opus` sidecars. |
+| [`link_pre_roll.py`](file:///home/raver1975/Wub/scripts/link_pre_roll.py) | Reattaches on-disk pre-roll sidecars to a manifest (worker mutations are not propagated). |
+| [`merge_kit_metadata.py`](file:///home/raver1975/Wub/scripts/merge_kit_metadata.py) | Merges chroma, bass root and once-only flags from the taste dataset into the selected bank. |
+| [`add_stem_coords.py`](file:///home/raver1975/Wub/scripts/add_stem_coords.py) | Computes per-stem log-mel descriptors and PCA `stem_xy` for the four nebula clouds. |
+| [`layout_stem_clouds.py`](file:///home/raver1975/Wub/scripts/layout_stem_clouds.py) | Places the four per-stem clouds in quadrants of the shared nebula. |
+| [`build_stem_bars.py`](file:///home/raver1975/Wub/scripts/build_stem_bars.py) | Builds per-stem 64x128 log-mel bar datasets for the four transition judges. |
 | [`kit_reconstruct.py`](file:///home/raver1975/Wub/scripts/kit_reconstruct.py) | Decodes and QC-checks kit audio against source stems (correlation, SNR, RMS delta, codec lag, overlap/duration errors). |
 | [`analyze_stem_corpus_vec.py`](file:///home/raver1975/Wub/scripts/analyze_stem_corpus_vec.py) | Vectorised stem analysis (whole-stem CQT/MFCC averaged per slice; much faster than the stock path). Run it where the stems live (`/mnt/e/Wub/data/stems` on the laptop) to build `processed/*.json`. |
 | [`export_standalone_client_bundle.py`](file:///home/raver1975/Wub/scripts/export_standalone_client_bundle.py) | Legacy bundle builder for the retired slice/VQ path; not part of the kit rebuild. |

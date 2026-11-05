@@ -2635,6 +2635,8 @@ export class ClientGrooveboxConductor {
   private kitBlockLogQueue: Array<{ at: number; result: KitBlockResult }> = [];
   /** Fired when a kit block becomes due, with the phrase's nebula coordinate. */
   public onKitPhrase?: (p: { x: number; y: number; at: number }) => void;
+  /** Per-stem active phrase coordinates (remix mode). */
+  public onStemPhrases?: (points: Array<{ stem: StemName; x: number; y: number; phraseId: string; at: number }>) => void;
   private kitSteeringDirty: boolean = false;
   private onKitSetChange?: (info: {
     kit: Kit;
@@ -2843,6 +2845,7 @@ export class ClientGrooveboxConductor {
   /** Release a reticle: stop treating it as a user steering input. */
   public clearReticleSteering(stem: StemName): void {
     this.userSteeredStems.delete(stem);
+    this.kitPlayer?.releaseStemPin(stem);
   }
 
   public setReticleSteering(stem: StemName, x: number, y: number, isUserDrag: boolean = false): void {
@@ -2855,6 +2858,10 @@ export class ClientGrooveboxConductor {
 
     if (isUserDrag) {
       this.userSteeredStems.add(stem);
+      if (this.kitPlayer?.remixActive) {
+        this.kitPlayer.setStemTarget(stem, cx, cy);
+        return;
+      }
     }
 
     if (this.playbackMode === "kit") {
@@ -5041,6 +5048,26 @@ export class ClientGrooveboxConductor {
     return this.kitPlayer?.nebulaPoints() ?? [];
   }
 
+  /** Per-stem reticle state (remix mode). */
+  public getStemRemixState(): ReturnType<KitPlayer["stemRemixState"]> {
+    return this.kitPlayer?.stemRemixState() ?? [];
+  }
+
+  /** Current cluster id (nebula base-point cache key). */
+  public get activeClusterId(): string | null {
+    return this.kitPlayer?.activeClusterId ?? null;
+  }
+
+  /** True while the per-stem remix engine owns the kit audio. */
+  public get isStemRemix(): boolean {
+    return this.kitPlayer?.remixActive ?? false;
+  }
+
+  /** Debug hook for the four stem currents. */
+  public debugStemRemix(): ReturnType<KitPlayer["stemRemixState"]> {
+    return this.kitPlayer?.stemRemixState() ?? [];
+  }
+
   public getAllKitPhrasePoints(): NebulaPoint[] {
     return this.kitPlayer?.allPhrasePoints() ?? [];
   }
@@ -5396,6 +5423,7 @@ export class ClientGrooveboxConductor {
     // Kit audio runs on its own 4-bar clock so UI/rendering stalls cannot
     // stretch the block spacing.
     if (this.playbackMode === "kit" && this.kitAudioActive) {
+      this.kitPlayer?.tick(now);
       this.scheduleKitBlocks(now);
     }
 
@@ -5513,11 +5541,24 @@ export class ClientGrooveboxConductor {
         entry.result.energyDelta,
         entry.result.selectionBand
       );
-      this.onKitPhrase?.({
-        x: entry.result.phrase.x ?? 0.5,
-        y: entry.result.phrase.y ?? 0.5,
-        at: entry.at,
-      });
+      if (entry.result.stemPoints) {
+        const points = Object.entries(entry.result.stemPoints)
+          .filter(([, value]) => value !== undefined)
+          .map(([stem, value]) => ({
+            stem: stem as StemName,
+            x: value.x,
+            y: value.y,
+            phraseId: value.phrase.id,
+            at: entry.at,
+          }));
+        this.onStemPhrases?.(points);
+      } else {
+        this.onKitPhrase?.({
+          x: entry.result.phrase.x ?? 0.5,
+          y: entry.result.phrase.y ?? 0.5,
+          at: entry.at,
+        });
+      }
     }
   }
 

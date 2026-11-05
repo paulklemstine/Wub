@@ -623,6 +623,12 @@ export interface NebulaPoint {
   y: number;
   stem: StemName;
   trackId?: string;
+  /** Phrase identifier, used to keep the four active points distinct. */
+  phraseId?: string;
+  /** Kit identifier (alias kept for older call sites). */
+  kitId?: string;
+  /** True for the phrase currently playing on this stem. */
+  active?: boolean;
 }
 
 export interface NebulaFrame {
@@ -639,6 +645,8 @@ export type ReticleMoveHandler = (stem: StemName, x: number, y: number) => void;
 
 export interface NebulaRendererOptions {
   onReticleMove?: ReticleMoveHandler;
+  /** Called once when a drag ends, with the final reticle position. */
+  onReticleDrop?: ReticleMoveHandler;
   /** Called when a reticle is double-clicked to hand control back to auto-follow. */
   onReticleRelease?: (stem: StemName) => void;
 }
@@ -685,6 +693,7 @@ export class NebulaRenderer {
   };
 
   private onReticleMove?: ReticleMoveHandler;
+  private onReticleDrop?: ReticleMoveHandler;
   private onReticleRelease?: (stem: StemName) => void;
   private dragStem: StemName | null = null;
   private dragOffset: { x: number; y: number } = { x: 0, y: 0 };
@@ -693,6 +702,8 @@ export class NebulaRenderer {
   private patternHistory: Array<{ x: number; y: number; t: number; stem: StemName }> = [];
   // Smoothly animated reticle targets (bar-by-bar placement from the player).
   private reticleAnims: Partial<Record<StemName, { fromX: number; fromY: number; toX: number; toY: number; start: number; dur: number }>> = {};
+  // Pinned style-region centres, drawn as dashed ghost rings.
+  private pinTargets: Partial<Record<StemName, { x: number; y: number }>> = {};
   // Stems the user has dragged: auto-follow must not yank them back.
   private manualReticles: Partial<Record<StemName, boolean>> = {};
   // Hovered reticle: freeze its auto-follow so it is easy to grab.
@@ -705,6 +716,15 @@ export class NebulaRenderer {
   private snapFlash: Record<StemName, number> = {
     drums: -10, bass: -10, vocals: -10, other: -10,
   };
+
+  /** Show the style region a stem is pinned to (dashed ghost ring). */
+  setPinTarget(stem: StemName, x: number, y: number): void {
+    this.pinTargets[stem] = { x: clamp01(x), y: clamp01(y) };
+  }
+
+  clearPinTarget(stem: StemName): void {
+    delete this.pinTargets[stem];
+  }
 
   setActiveSlice(stem: StemName, x: number, y: number, timeSec: number): void {
     this.activeSliceMarkers[stem] = { x: clamp01(x), y: clamp01(y), timeSec };
@@ -730,6 +750,7 @@ export class NebulaRenderer {
     if (ctx === null) throw new Error("2D canvas context unavailable");
     this.ctx = ctx;
     this.onReticleMove = opts.onReticleMove;
+    this.onReticleDrop = opts.onReticleDrop;
     this.onReticleRelease = opts.onReticleRelease;
     canvas.style.touchAction = "none";
 
@@ -764,14 +785,20 @@ export class NebulaRenderer {
     };
     this.handlePointerUp = (e: PointerEvent) => {
       if (this.dragStem !== null) {
-        this.moveReticleFromEvent(this.dragStem, e);
+        const stem = this.dragStem;
+        this.moveReticleFromEvent(stem, e);
+        const picked = this.reticleMap[stem];
         this.dragStem = null;
         this.dragOffset = { x: 0, y: 0 };
+        // Hand the reticle back to the auto-follow so it shows the phrase that
+        // is actually playing; the pinned region lives in the audio engine.
+        delete this.manualReticles[stem];
         try {
           canvas.releasePointerCapture(e.pointerId);
         } catch {
           // Ignore release failures.
         }
+        this.onReticleDrop?.(stem, picked.x, picked.y);
       }
     };
     canvas.addEventListener("pointerdown", this.handlePointerDown);
@@ -1046,6 +1073,33 @@ export class NebulaRenderer {
       }
       ctx.restore();
       ctx.globalAlpha = 1;
+    }
+
+    // Pinned style regions: a dashed ring around the target the user chose.
+    for (const stem of RETICLE_STEMS) {
+      const pin = this.pinTargets[stem];
+      if (!pin) continue;
+      const color = STEM_COLORS[stem];
+      const cx = pin.x * w;
+      const cy = pin.y * h;
+      const radius = 0.17 * Math.min(w, h);
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.38;
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - 5, cy);
+      ctx.lineTo(cx + 5, cy);
+      ctx.moveTo(cx, cy - 5);
+      ctx.lineTo(cx, cy + 5);
+      ctx.stroke();
+      ctx.restore();
     }
 
     // Gravity reticles with beat-synced bouncing pulse (draggable to steer sound)

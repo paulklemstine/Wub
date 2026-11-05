@@ -22,13 +22,14 @@ from scripts.audio_encode import write_opus
 STEMS = ("drums", "bass", "other", "vocals")
 
 
-def one(job: tuple) -> tuple[str, int, str]:
+def one(job: tuple) -> tuple[str, int, str, dict]:
     phrase, stems_root, kits_dir, pre = job
     tid = phrase["track_id"] if "track_id" in phrase else phrase["_tid"]
     start = float(phrase["start_sec"])
     made = 0
     err = ""
     max_pre = 0.0
+    pre_fields: dict[str, dict] = {}
     for stem in STEMS:
         asset = (phrase.get("stems") or {}).get(stem)
         if not isinstance(asset, dict) or not asset.get("file"):
@@ -53,10 +54,13 @@ def one(job: tuple) -> tuple[str, int, str]:
         write_opus(out, mono, sr)
         dur = round(len(mono) / sr, 6)
         asset["pre_roll"] = {"file": rel, "duration_sec": dur}
+        pre_fields[stem] = {"file": rel, "duration_sec": dur}
         max_pre = max(max_pre, dur)
         made += 1
-    phrase["pre_roll_sec"] = round(max_pre, 6)
-    return phrase["id"], made, err
+    return phrase["id"], made, err, {
+        "pre_roll_sec": round(max_pre, 6),
+        "stems": pre_fields,
+    }
 
 
 def main() -> None:
@@ -78,13 +82,25 @@ def main() -> None:
             phrase["_tid"] = kit["track_id"]
             jobs.append((phrase, args.stems, args.kits_dir, args.pre))
 
+    by_id: dict[str, dict] = {}
+    for kit in manifest.get("kits", []):
+        for phrase in kit.get("phrases", []):
+            by_id[phrase["id"]] = phrase
+
     made = errors = 0
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
-        for pid, n, err in ex.map(one, jobs):
+        for pid, n, err, fields in ex.map(one, jobs):
             made += n
             if err:
                 errors += 1
                 print(f"{pid}: {err}", flush=True)
+            phrase = by_id.get(pid)
+            if phrase is not None:
+                phrase["pre_roll_sec"] = fields["pre_roll_sec"]
+                for stem, pre in fields["stems"].items():
+                    asset = (phrase.get("stems") or {}).get(stem)
+                    if isinstance(asset, dict):
+                        asset["pre_roll"] = pre
     for kit in manifest.get("kits", []):
         for phrase in kit.get("phrases", []):
             phrase.pop("_tid", None)

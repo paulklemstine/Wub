@@ -8,6 +8,22 @@
 import type { StemName } from "./types";
 import type { AudioEngine } from "./audio_engine";
 import type { NebulaPoint } from "./visualizer";
+import { StemRemixPlayer, type StemRemixState, type StemPin } from "./stem_remix";
+
+export interface StemXY {
+  x: number;
+  y: number;
+}
+
+export interface KitCluster {
+  id: string;
+  style: string;
+  key: string;
+  bpm: number;
+  neighbour_keys: string[];
+  kits: string[];
+  pool_phrases: number;
+}
 
 export interface KitStemAsset {
   file: string;
@@ -44,6 +60,8 @@ export interface KitPhrase {
   pre_roll_sec?: number;
   /** File length = duration_sec + pre_roll_sec (when pre-roll is present). */
   file_duration_sec?: number;
+  /** Per-stem 2D nebula coordinates (four clouds in one space). */
+  stem_xy?: Partial<Record<StemName, StemXY>>;
 }
 
 export type KitSteering = Record<StemName, { x: number; y: number }>;
@@ -64,6 +82,8 @@ export interface KitManifest {
   bars: number;
   sample_rate: number;
   bitrate: string;
+  bank?: string;
+  clusters?: KitCluster[];
   kits: Kit[];
 }
 
@@ -99,6 +119,8 @@ export interface KitBlockResult {
   kit: Kit;
   phrase: KitPhrase;
   stems: StemName[];
+  /** Per-stem phrase coordinates for the four reticles (remix mode). */
+  stemPoints?: Partial<Record<StemName, { x: number; y: number; phrase: KitPhrase }>>;
   bridge: boolean;
   setChanged: boolean;
   blocksPlayedInSet: number;
@@ -263,6 +285,7 @@ export class KitPlayer {
   public setChanges: number = 0;
 
   private readonly engine: AudioEngine;
+  private remix: StemRemixPlayer | null = null;
   private baseUrl: string = "";
   private manifest: KitManifest | null = null;
   private kit: Kit | null = null;
@@ -338,7 +361,7 @@ export class KitPlayer {
   }
 
   get key(): string | null {
-    return this.kit?.key ?? null;
+    return this.remix?.key ?? this.kit?.key ?? null;
   }
 
   get kitSetBlocksLeft(): number {
@@ -361,6 +384,36 @@ export class KitPlayer {
     return [...this.compatibility];
   }
 
+  /** True while the per-stem remix engine owns audio. */
+  get remixActive(): boolean {
+    return this.remix !== null;
+  }
+
+  /** Current per-stem state for the reticles/status UI. */
+  stemRemixState(): StemRemixState[] {
+    return this.remix?.state() ?? [];
+  }
+
+  /** Cluster id for the nebula base-point cache. */
+  get activeClusterId(): string | null {
+    return this.remix?.currentCluster?.id ?? null;
+  }
+
+  /** Pin a stem style region and commit the nearest phrase at the next bar. */
+  setStemTarget(stem: StemName, x: number, y: number): StemPin | null {
+    return this.remix?.setTarget(stem, x, y) ?? null;
+  }
+
+  /** Return a stem to auto-mix. */
+  releaseStemPin(stem: StemName): void {
+    this.remix?.release(stem);
+  }
+
+  /** Scheduler tick for late drag commits and pin release. */
+  tick(now: number): void {
+    this.remix?.tick(now);
+  }
+
   /** Fired when a phrase is scheduled, with its nebula coordinate. */
   public onPhraseScheduled?: (p: {
     x: number;
@@ -372,6 +425,7 @@ export class KitPlayer {
 
   /** One nebula point per phrase in the active kit, coloured by loudest stem. */
   public nebulaPoints(): NebulaPoint[] {
+    if (this.remix) return this.remix.activePoints();
     const kit = this.kit;
     if (kit === null) return [];
     return this.phrases.map((entry) => ({
@@ -384,6 +438,7 @@ export class KitPlayer {
 
   /** The full 355-kit / 2,466-phrase space, independent of the active kit. */
   public allPhrasePoints(): NebulaPoint[] {
+    if (this.remix) return this.remix.points();
     const manifest = this.manifest;
     if (manifest === null) return [];
     const points: NebulaPoint[] = [];
@@ -521,7 +576,15 @@ export class KitPlayer {
     const manifest = raw as unknown as KitManifest;
     this.baseUrl = base;
     this.manifest = manifest;
-    console.info(`[KitPlayer] Manifest loaded: ${manifest.kits.length} kits from ${base}`);
+    if (Array.isArray(manifest.clusters) && manifest.clusters.length > 0) {
+      this.remix = new StemRemixPlayer(this.engine);
+      this.remix.onStatus = (message) => console.info(`[StemRemix] ${message}`);
+      await this.remix.load(base);
+    }
+    console.info(
+      `[KitPlayer] Manifest loaded: ${manifest.kits.length} kits from ${base}` +
+      (this.remix ? ` • ${manifest.clusters!.length} clusters (per-stem mode)` : "")
+    );
     return manifest;
   }
 
@@ -547,6 +610,7 @@ export class KitPlayer {
       }
       const scores = raw as unknown as TasteScoresManifest;
       this.tasteScores = scores;
+      this.remix?.setTasteScores(scores);
       console.info(
         `[KitPlayer] Taste scores loaded: ${scores.model} (val_auc ${scores.val_auc.toFixed(4)}, ${Object.keys(scores.kits).length} kits)`
       );
@@ -629,6 +693,21 @@ export class KitPlayer {
   async loadKit(kit: Kit): Promise<void> {
     if (this.manifest === null) {
       throw new Error("KitPlayer.loadKit called before loadManifest");
+    }
+    if (this.remix) {
+      const cluster = await this.remix.startSession();
+      const anchor = this.manifest.kits.find((candidate) => candidate.track_id === cluster.kits[0])
+        ?? this.manifest.kits[0];
+      this.kit = anchor;
+      this.fittedBpm = this.remix.bpm;
+      this.medianDurationSec = this.remix.blockDurationSec;
+      this.readyFlag = true;
+      this.blocksInSet = 0;
+      console.info(
+        `[KitPlayer] Remix session ready: ${cluster.id} • ${this.remix.bpm.toFixed(2)} BPM • ` +
+        `${this.remix.key} • ${cluster.pool_phrases} phrases`
+      );
+      return;
     }
     if (this.readyFlag && this.kit?.track_id === kit.track_id) return;
 
@@ -947,6 +1026,39 @@ export class KitPlayer {
     steering?: KitSteering,
     userSteered?: KitSteeringMask
   ): KitBlockResult | null {
+    if (this.remix) {
+      const result = this.remix.schedule(when, section);
+      if (!result) return null;
+      const stemPoints: Partial<Record<StemName, { x: number; y: number; phrase: KitPhrase }>> = {};
+      for (const stem of STEM_ORDER) {
+        const phrase = result.phrases[stem];
+        if (!phrase) continue;
+        const xy = phrase.stem_xy?.[stem];
+        stemPoints[stem] = {
+          x: xy?.x ?? phrase.x ?? 0.5,
+          y: xy?.y ?? phrase.y ?? 0.5,
+          phrase,
+        };
+      }
+      const phrase = result.phrases.drums ?? result.phrases.bass ?? result.phrases.other ?? result.phrases.vocals;
+      const kit = result.kits.drums ?? result.kits.bass ?? result.kits.other ?? result.kits.vocals;
+      if (!phrase || !kit) return null;
+      this.blocksInSet = this.remix.blocksInSet;
+      return {
+        kit,
+        phrase,
+        stems: result.changed,
+        stemPoints,
+        bridge: result.bridge,
+        setChanged: result.rotation,
+        blocksPlayedInSet: result.blocksPlayed,
+        blockDurationSec: this.remix.blockDurationSec,
+        fitBpm: this.remix.bpm,
+        targetSection: result.section,
+        energyDelta: 0,
+        selectionBand: result.bridge ? "bridge" : "remix",
+      };
+    }
     if (!this.readyFlag || this.kit === null || this.phrases.length === 0) return null;
     const wanted = normaliseSection(section);
     const sectionChanged = this.lastSection !== null && this.lastSection !== wanted;
@@ -1599,6 +1711,7 @@ export class KitPlayer {
 
   /** Stop everything this player scheduled (Play -> Stop). */
   stop(): void {
+    this.remix?.stop();
     for (const source of this.sources) {
       try {
         source.stop();

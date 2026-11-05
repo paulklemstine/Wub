@@ -1,17 +1,18 @@
 # 🎛️ Kit Engine — Song-Kit Phrase Jukebox
 
-**Status:** shipped in the `v0.2.x` site. `kit` is the default and only enabled
-playback mode; `JUKEBOX`, `SLICES`, and `PHRASES` are retired in the UI and
-remain only as internal fallbacks.
+**Status:** shipped in the `v0.2.x` site. `kit` is the default playback mode.
+The **cluster bank** enables the per-stem remix engine; the original single-kit
+block player remains as a fallback for older manifests.
 
 This is **not** VQ/medoid slice synthesis. A **kit** is one real four-stem track.
 A **phrase** is a real 4-bar window cut from that track, with the same time
-range in every stem. The player schedules those phrases at their decoded rate
-(`playbackRate = 1.0`, no detune, no time-stretch), so the source's groove,
-per-stem balance, and micro-timing survive at the asset level. The mixer's
-section faders are a separate, intentional layer. The kit also supplies the
-session tempo and key; phrases from different songs are never spliced inside a
-block.
+range in every stem. In the legacy single-kit mode, phrases play at their
+decoded rate (`playbackRate = 1.0`, no detune, no time-stretch). In the
+per-stem remix mode, each stem is a separate phrase stream: the phrase is
+tempo-fitted to the session grid (<= 2% rate) and transposed to the session key
+(<= 5 semitones; vocals <= 3) with Signalsmith Stretch, never with
+`playbackRate` resampling. The source's groove, micro-timing and per-stem
+character survive; the per-stem runtime gain is a separate mixer layer.
 
 ---
 
@@ -466,3 +467,93 @@ Playback rules on top of the learned transition matrix:
 
 The shipping 160-d ranker (d192/L4, 120 epochs) scores **73.1% within-kit
 top-1 / 96.3% top-3**; the 48-d control is 72.0% on the same split.
+
+
+---
+
+## 10. Per-stem remix engine (cluster bank, 2026-11)
+
+The shipped cluster bank in `frontend/public/data/kits/` is the per-stem mode:
+**390 kits / 2,154 phrases / 16 clusters / ~544 MB**.
+
+### 10.1 Why clusters
+
+Spreading 600 kits across 24 keys left only 0-12 phrases in a same-key pool, so
+a reticle had nowhere to move. The bank is now concentrated into 16
+style-balanced key/tempo clusters (four each for breaks / cyber / house / wave).
+A cluster is a session key + tempo plus its Camelot neighbours within 1% of the
+tempo. A dense session has **56-292 phrases per stem** after the key/tempo
+filter.
+
+| Cluster group | Example | Kits | Phrases |
+| --- | --- | --- | --- |
+| breaks | F minor 129 | 52 | 292 |
+| cyber | F minor 140 | 34 | 190 |
+| house | D minor 123 | 28 | 149 |
+| wave | F# minor 110 | 10 | 56 |
+
+`scripts/select_cluster_bank.py` builds it; `scripts/add_pre_roll.py` adds the
+80 ms attack tails; `scripts/merge_kit_metadata.py` adds chroma/bass roots and
+once-only flags; `scripts/add_stem_coords.py` adds the four per-stem PCA
+clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
+
+### 10.2 Session model
+
+* Four independent **stem streams** share one bar clock. Each stem owns its
+  current phrase, voice, lazy cache entry and pin.
+* The session key/tempo is the cluster's key/tempo. Candidate phrases are
+  filtered to the exact key, the relative major/minor, or a Camelot fifth
+  neighbour, and to `|phrase_duration / block_duration - 1| <= 2%`.
+* **Auto-advance is staggered**: each 4-bar block advances 1-2 stems (the
+  least-recently-changed), except at a section change or cluster rotation,
+  where all four advance. Holding stems replay a phrase from their current kit.
+* **Drag commit is at the next bar.** The reticle snaps to the nearest legal
+  phrase, pins that style region for **32 bars** (8 blocks), and the stem
+  starts at the bar offset that matches the global 4-bar phase. The reticle then
+  follows the phrase that is actually playing; a dashed ghost ring marks the
+  pinned region. Double-click releases the pin.
+* **Cluster rotation every 48 bars (12 blocks)**: blocks 10-11 are a drumless
+  `other + vocals` bridge; block 12 switches to a Camelot-neighbour cluster
+  within +/-3 BPM and starts all four stems on the new grid. Pins release at
+  the rotation.
+* **Lazy audio**: a 64-entry LRU cache (phrase x stem), one block of prefetch
+  lead, two alternates for drags. A failed load repeats the current phrase and
+  blacklists the kit; it never stops the transport.
+
+### 10.3 Signalsmith Stretch
+
+`frontend/src/stretch_voice.ts` wraps the official MIT `signalsmith-stretch`
+1.3.2 WASM/AudioWorklet module. The prebuilt `SignalsmithStretch.mjs` is
+vendored in `frontend/public/vendor/` and loaded with a runtime dynamic import;
+bundling it breaks the stringified AudioWorklet source and silences the node.
+One voice is created per phrase; the buffer is `[80 ms pre-roll][4-bar phrase]`
+and is scheduled at `bar - preRoll/rate`, so the downbeat lands exactly on the
+bar. The old voice's gain fades over the pre-roll window. The library's
+`stop()` is avoided because 1.3.2 drops its time argument; the voice is
+disposed after its gain fade.
+
+### 10.4 Per-stem nebula
+
+`stem_xy` in the manifest is a 2D PCA of a 256-d log-mel timbre descriptor for
+each stem. The four clouds are laid into quadrants of one plane (drums,
+bass, other, vocals), so distances are meaningful within a stem and the four
+regions are legible. The base cloud is the current cluster's pool; the four
+active phrases are the bright highlight; the reticles show the playing phrase,
+and pinned stems get a dashed ghost ring at the region centre.
+
+### 10.5 Per-stem judge
+
+`scripts/build_stem_bars.py` cuts 64x128 log-mel windows for every phrase/stem
+of the full corpus. Four two-tower CNNs (one per stem) are trained on real
+consecutive bars vs same-track section jumps, matched cross-song, reversed and
+cross-key negatives. The 128-d embeddings replace the timbre PCA for the
+nebula, and the transition scores become the per-stem next lists. The existing
+symbolic ranker and music-theory rules remain hard filters.
+
+### 10.6 Invariants
+
+* Never resample a phrase with `playbackRate`; use the stretcher's `rate`.
+* Drums are key-agnostic; pitched stems obey the Camelot limit.
+* One shared bar grid; a drag commits on a bar, a phrase advance on a block.
+* No pin may outlive 32 bars; no cluster may outlive 12 blocks.
+* A failed asset must fall back to a repeat, never a silence or a stall.

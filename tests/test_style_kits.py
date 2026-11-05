@@ -69,8 +69,10 @@ def test_kit_manifest_and_files():
     assert manifest_path.exists(), "kit manifest missing"
 
     manifest = json.loads(manifest_path.read_text())
-    assert manifest.get("version") == 1
+    assert manifest.get("version") in (1, 2)
     assert manifest.get("bars") == 4
+    if manifest.get("version") == 2:
+        assert manifest.get("clusters"), "cluster bank must expose its session pools"
     kits = manifest.get("kits") or []
     assert len(kits) >= 300, f"only {len(kits)} kits in the shipped bank"
 
