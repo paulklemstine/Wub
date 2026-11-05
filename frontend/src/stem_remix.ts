@@ -334,20 +334,26 @@ export class StemRemixPlayer {
     // for the transport's first schedule() call.
     const anchor = this.anchorKit ?? this.chooseAnchor();
     if (anchor) {
-      const entries = this.entriesForKit(anchor, "GROOVE_A").length > 0
-        ? this.entriesForKit(anchor, "GROOVE_A")
-        : this.entriesForKit(anchor);
-      const byStem = new Map<StemName, StemPoolEntry>();
-      for (const entry of entries) {
-        if (!byStem.has(entry.stem)) byStem.set(entry.stem, entry);
-      }
-      const fullEntry = entries.find((entry) => STEMS.every((stem) =>
-        entries.some((candidate) => candidate.stem === stem && candidate.phrase.id === entry.phrase.id)
+      const allEntries = this.entriesForKit(anchor);
+      const grooveEntries = allEntries.filter((entry) => entry.section === "GROOVE_A");
+      const fullEntry = allEntries.find((entry) => STEMS.every((stem) =>
+        allEntries.some((candidate) => candidate.stem === stem && candidate.phrase.id === entry.phrase.id)
       ));
       const fullAnySection = anchor.phrases.find((candidate) =>
         STEMS.every((stem) => this.entryById.has(`${candidate.id}:${stem}`))
       );
-      const phrase = fullEntry?.phrase ?? fullAnySection ?? entries[0]?.phrase ?? anchor.phrases[0];
+      // Start at the beginning of the longest consecutive run, so the first
+      // 24 bars can play the actual song in order instead of jumping windows.
+      const run = this.longestRunPhrases(anchor);
+      const phrase = run.length >= 2
+        ? run[0]
+        : (fullEntry?.phrase ?? fullAnySection ?? grooveEntries[0]?.phrase
+          ?? allEntries[0]?.phrase ?? anchor.phrases[0]);
+      const entries = allEntries.filter((entry) => entry.phrase.id === phrase.id);
+      const byStem = new Map<StemName, StemPoolEntry>();
+      for (const entry of entries) {
+        if (!byStem.has(entry.stem)) byStem.set(entry.stem, entry);
+      }
       const prepared = await Promise.all(STEMS.map(async (stem) => {
         const entry = byStem.get(stem) ?? this.anchorEntry(stem, phrase);
         if (!entry) return null;
@@ -424,6 +430,26 @@ export class StemRemixPlayer {
     this.currentAnchorPhrase = null;
   }
 
+  /** Longest chain of 4-bar phrases that are actually consecutive. */
+  private longestRunPhrases(kit: Kit): KitPhrase[] {
+    const byStart = new Map<number, KitPhrase>();
+    for (const phrase of kit.phrases) {
+      if (typeof phrase.start_bar === "number") byStart.set(phrase.start_bar, phrase);
+    }
+    let best: KitPhrase[] = [];
+    for (const phrase of kit.phrases) {
+      if (typeof phrase.start_bar !== "number") continue;
+      const run = [phrase];
+      let bar = phrase.start_bar;
+      while (byStart.has(bar + 4)) {
+        bar += 4;
+        run.push(byStart.get(bar)!);
+      }
+      if (run.length > best.length) best = run;
+    }
+    return best;
+  }
+
   private chooseAnchor(): Kit | null {
     const cluster = this.cluster;
     if (!cluster) return null;
@@ -446,6 +472,10 @@ export class StemRemixPlayer {
         && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
       );
       if (fullGroove) score += 2.5;
+      // Prefer a kit that actually contains the next 4 bars, so the anchor
+      // song can advance every 4 bars instead of looping an isolated window.
+      const run = this.longestRunPhrases(kit);
+      if (run.length > 1) score += Math.min(6, run.length) * 0.9;
       score += Math.min(1, kit.phrases.length / 6);
       score += hashRoll(kit.track_id) * 0.3;
       if (best === null || score > best.score) best = { kit, score };
@@ -586,7 +616,8 @@ export class StemRemixPlayer {
     // Hold the anchor phrase for two blocks (8 bars) unless the arrangement
     // section changes, so the record has room to breathe between phrases.
     const holdAnchor = !bridge && !rotation && !sectionChanged
-      && this.blockIndex % 2 === 1 && this.currentAnchorPhrase !== null;
+      && this.blockIndex % 2 === 1 && this.currentAnchorPhrase !== null
+      && !this.hasConsecutiveNext();
     const anchorPhrase = bridge && !rotation
       ? (this.currentAnchorPhrase ?? this.chooseAnchorPhrase(normalized))
       : rotation
@@ -653,6 +684,17 @@ export class StemRemixPlayer {
     return { result, tasks };
   }
 
+  /** True when the kit contains the real next 4 bars (start_bar + 4). */
+  private hasConsecutiveNext(): boolean {
+    const kit = this.anchorKit;
+    const current = this.currentAnchorPhrase;
+    if (!kit || !current || typeof current.start_bar !== "number") return false;
+    return kit.phrases.some((phrase) =>
+      phrase.start_bar === current.start_bar + 4
+      && this.entryById.has(`${phrase.id}:drums`),
+    );
+  }
+
   /** Pick the next phrase from the anchor song, following the section arc. */
   private chooseAnchorPhrase(section: string): KitPhrase | null {
     const kit = this.anchorKit;
@@ -676,6 +718,15 @@ export class StemRemixPlayer {
         - continuity * 0.6
         + (fullStem ? 0.5 : 0);
       if (continuity > 0.3 && String(phrase.section).toUpperCase() !== section) score -= 0.4;
+      const currentStart = this.currentAnchorPhrase?.start_bar;
+      if (typeof currentStart === "number" && typeof phrase.start_bar === "number") {
+        const delta = phrase.start_bar - currentStart;
+        if (delta === 4) score += 1.6;       // the real next 4 bars
+        else if (delta === 8) score += 0.7;  // one window skipped
+        else if (delta > 0 && delta < 16) score += 0.3;
+        else if (delta >= 16) score -= 0.5;
+        else if (delta < 0) score -= 0.2;    // prefer forward motion
+      }
       if (phrase.once) score -= 0.2;
       score += hashRoll(`${phrase.id}:${this.blockIndex}`) * 0.12;
       if (!best || score > best.score) best = { phrase, score };
