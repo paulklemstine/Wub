@@ -10,7 +10,7 @@ Welcome to the **Wub KG-505** codebase. This document serves as the primary tech
 - **Domain**: Real-time generative electronic music, audio stem analysis, real 4-bar phrase performance, and web-based audio engineering.
 - **Mission**: Ingest an authentic audio training corpus (1,700+ dance tracks), separate into stems (drums, bass, other, vocals), mine real 4-bar phrases into song kits, learn a taste model for phrase and kit transitions, and play a neverending, highly musical DJ set directly in the browser.
 - **Dual-Engine Execution**:
-  1. **🧠 In-Browser Kit Jukebox (shipped)**: 100% standalone, client-side Web Audio engine. The cluster bank runs four independent stem streams that share one bar grid; each stem can be dragged to a new style region, pinned for 32 bars, and the session rotates key/tempo every 48 bars. Real 4-bar phrases, no slice resynthesis or `playbackRate` resampling; tempo fit (<=2%) and Camelot transposition (<=5 semitones, vocals <=3) use Signalsmith Stretch. Full design: `docs/KIT_ENGINE.md`.
+  1. **🧠 In-Browser Kit Jukebox (shipped)**: 100% standalone, client-side Web Audio engine. The cluster bank runs four independent stem streams that share one bar grid; each stem can be dragged to a new style region, pinned for 32 bars, and the session follows a 4→8→16-bar arc before rotating key/tempo every 104 bars. Real 4-bar phrases, no slice resynthesis or `playbackRate` resampling; tempo fit (<=2%) and Camelot transposition (<=5 semitones, vocals <=3) use Signalsmith Stretch. Full design: `docs/KIT_ENGINE.md`.
   2. **⚡ WebSocket Cloud Sync (legacy/hybrid)**: Client/server mode streaming tatums and slice references from the Python FastAPI server backed by FAISS indices. The deployed site does not need it; the kit bank is the shipped path.
 
 ---
@@ -97,19 +97,29 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   two states + deltas) and picks the best. The mix judge is the teacher; the
   student is distilled to per-phrase features and runs in the browser. If the
   best candidate is below the calibrated threshold, the whole mix holds for a
-  block. Pinned stems hold while the others morph.
-- **Drag commits at the next bar; pins last 32 bars.** The reticle follows the
-  playing phrase; a dashed ghost ring marks the pinned region. Double-click
-  releases the pin. If the target audio is not decoded by the bar, wait one
-  more bar and show a buffering status.
-- **Cluster rotation every 48 bars.** Blocks 10-11 are a drumless
-  `other + vocals` bridge; block 12 switches to a Camelot-neighbour cluster
-  within ±3 BPM and releases all pins.
+  block. A held stem advances to its real +4-bar successor when its run has
+  one, otherwise it loops that run; pinned stems hold while the others morph.
+- **Drag commits at the next bar; pins last 32 bars.** The dragged stem schedules
+  one long run from the next bar to the pin's block boundary, so a following
+  8/16-bar block cannot take it back. The reticle follows the playing phrase; a
+  dashed ghost ring marks the pinned region. Double-click releases the pin. If
+  the target audio is not decoded by the bar, start on the next bar and show a
+  buffering status.
+- **4 → 8 → 16-bar arc.** A set is 104 bars / 19 blocks: 48 bars of 4-bar
+  blocks, 32 bars of 8-bar blocks, one 16-bar block, then an 8-bar drumless
+  `other + vocals` bridge. A block is a run of consecutive 4-bar phrases from
+  one source track, concatenated into one Stretch voice; short runs loop.
+  `blockBars`/`blockDurationSec` drive the audio grid while `slotSec` keeps the
+  displayed BPM at the 4-bar value.
+- **Cluster rotation every 104 bars.** The bridge starts at bar 96; the next
+  Camelot-neighbour cluster (within ±3 BPM) takes over at bar 104 and releases
+  all pins.
 - **Lazy audio only.** 64-entry LRU, one block of prefetch lead, two alternates
   for drags. A failed load repeats the current phrase and blacklists the kit;
   it must never stop the transport.
 - **Never create a StretchVoice per phrase.** Use the fixed two-voice-per-stem
-  pool (8 nodes total), reset and reuse them. Per-phrase nodes leak WASM memory
+  pool (8 nodes total), reset and reuse them. A run of 1-4 phrases is
+  concatenated into one buffer and one voice; per-phrase nodes leak WASM memory
   and crash the tab after ~4 minutes.
 - **Never normalise or re-gain assets.** A kit phrase keeps the source's
   per-stem balance; per-stem `peak`/`rms_db` are metadata. The small runtime
@@ -125,9 +135,9 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | File | Responsibility |
 | :--- | :--- |
 | [`kit_player.ts`](file:///home/raver1975/Wub/frontend/src/kit_player.ts) | Kit facade: manifest/taste loading, legacy 12-block single-kit player, and the remix `scheduleBlock` adapter. |
-| [`stem_remix.ts`](file:///home/raver1975/Wub/frontend/src/stem_remix.ts) | Per-stem remix engine: cluster pools, 4-bar bar grid, joint ranker selection, 32-bar pins, next-bar drag commit, cluster rotation, lazy cache, and per-stem nebula points. |
+| [`stem_remix.ts`](file:///home/raver1975/Wub/frontend/src/stem_remix.ts) | Per-stem remix engine: cluster pools, 4→8→16-bar arc, consecutive-phrase runs, joint ranker selection, 32-bar pins, next-bar drag commit, cluster rotation, lazy cache, and per-stem nebula points. |
 | [`joint_ranker.ts`](file:///home/raver1975/Wub/frontend/src/joint_ranker.ts) | Browser inference for the joint four-stem transition ranker: 400-d states, last-two-state context, 1/2-stem scoring, calibrated hold threshold. |
-| [`stretch_voice.ts`](file:///home/raver1975/Wub/frontend/src/stretch_voice.ts) | Signalsmith Stretch voice wrapper: pre-roll + phrase buffer, tempo/key scheduling, gain fades, disposal. |
+| [`stretch_voice.ts`](file:///home/raver1975/Wub/frontend/src/stretch_voice.ts) | Signalsmith Stretch voice wrapper: pre-roll + 1-4 phrase run buffer, tempo/key scheduling, gain fades, pooled reuse. |
 | [`client_ml_sequencer.ts`](file:///home/raver1975/Wub/frontend/src/client_ml_sequencer.ts) | In-browser conductor. Owns the kit block clock and kit tempo/key lock; retains the legacy jukebox/slice/step sequencer as fallback only. Also holds the chord/arranger state that drives kit section selection. |
 | [`audio_engine.ts`](file:///home/raver1975/Wub/frontend/src/audio_engine.ts) | Core Web Audio context wrapper, 4-stem gain buses, analysers, `scheduleSlice` (rate/fades), and AudioBuffer decode for Opus/WAV kit assets. |
 | [`main.ts`](file:///home/raver1975/Wub/frontend/src/main.ts) | Main application coordinator, UI event queue, transport controls, kit set-change status, reticle-to-phrase steering, and WebSocket listener. |

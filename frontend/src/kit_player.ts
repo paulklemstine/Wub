@@ -131,7 +131,11 @@ export interface KitBlockResult {
   bridge: boolean;
   setChanged: boolean;
   blocksPlayedInSet: number;
+  /** Bars in this block: 4 for the legacy kit path, 4/8/16 in remix mode. */
+  blockBars: number;
   blockDurationSec: number;
+  /** One 4-bar slot, so the session BPM never halves on an 8/16-bar block. */
+  slotSec: number;
   fitBpm: number | null;
   targetSection: string;
   energyDelta: number;
@@ -372,6 +376,7 @@ export class KitPlayer {
   }
 
   get kitSetBlocksLeft(): number {
+    if (this.remix) return this.remix.blocksLeft;
     return Math.max(0, KIT_SET_BLOCKS - this.blocksInSet);
   }
 
@@ -1059,7 +1064,9 @@ export class KitPlayer {
         bridge: result.bridge,
         setChanged: result.rotation,
         blocksPlayedInSet: result.blocksPlayed,
-        blockDurationSec: this.remix.blockDurationSec,
+        blockBars: result.blockBars,
+        blockDurationSec: result.blockDurationSec,
+        slotSec: result.slotSec,
         fitBpm: this.remix.bpm,
         targetSection: result.section,
         energyDelta: 0,
@@ -1234,7 +1241,9 @@ export class KitPlayer {
       bridge,
       setChanged: false,
       blocksPlayedInSet: this.blocksInSet,
+      blockBars: 4,
       blockDurationSec: blockDuration,
+      slotSec: blockDuration,
       fitBpm: this.fittedBpm,
       targetSection,
       energyDelta,
@@ -1698,14 +1707,15 @@ export class KitPlayer {
     bridge: boolean = false,
     targetSection: string = "",
     energyDelta: number = 0,
-    selectionBand: string = ""
+    selectionBand: string = "",
+    blockBars: number = 4
   ): void {
     const selection = targetSection.length > 0
       ? ` target=${targetSection} ΔE=${energyDelta.toFixed(2)} band=${selectionBand}`
       : "";
     const suffix = bridge ? ` [bridge: ${stems.join("+")}]` : "";
     console.info(
-      `[KitPlayer] 4-bar block @ ${when.toFixed(2)}s → ${phrase.id} (${phrase.section}, energy ${phrase.energy.toFixed(2)})${selection}${suffix}`
+      `[KitPlayer] ${blockBars}-bar block @ ${when.toFixed(2)}s → ${phrase.id} (${phrase.section}, energy ${phrase.energy.toFixed(2)})${selection}${suffix}`
     );
   }
 

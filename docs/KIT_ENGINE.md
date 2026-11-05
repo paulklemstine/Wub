@@ -512,22 +512,35 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   1- and 2-stem candidate mixes from different tracks against the current mix,
   using the last two joint states and their deltas. It picks the best candidate;
   if none clears the calibrated threshold, the whole mix holds for a block.
-  After a few morphs all four instruments come from different records — a new
-  song. Pinned stems hold while the others morph.
+  A held stem continues to its real +4-bar successor when its run has one;
+  when the source run ends it loops the run from the top. After a few morphs
+  all four instruments come from different records — a new song. Pinned stems
+  hold while the others morph.
 * **The morph is learned, not heuristic.** The mix-level audio judge (AUC
   0.951) is the teacher; the student ranker sees per-stem timbre, onset,
   chroma, roots, energy, section, run position and key/tempo fit. Held-out
   student AUC is **0.787** on the hard 1-2-stem swap task, above the teacher's
   own 0.731 on the same split.
 * **Drag commit is at the next bar.** The reticle snaps to the nearest legal
-  phrase, pins that style region for **32 bars** (8 blocks), and the stem
-  starts at the bar offset that matches the global 4-bar phase. The reticle then
+  phrase, then the stem starts at the bar offset that matches the global 4-bar
+  phase. It schedules one long run across block boundaries, so an 8/16-bar
+  block cannot take the pinned stem back. The pin lasts **32 bars**, rounded
+  to the next block boundary, and the run fades exactly there. The reticle
   follows the phrase that is actually playing; a dashed ghost ring marks the
   pinned region. Double-click releases the pin.
-* **Cluster rotation every 48 bars (12 blocks)**: blocks 10-11 are a drumless
-  `other + vocals` bridge; block 12 switches to a Camelot-neighbour cluster
-  within +/-3 BPM and starts all four stems on the new grid. Pins release at
-  the rotation.
+* **4 → 8 → 16-bar arc.** One set is **104 bars / 19 blocks**: 48 bars of
+  dynamic 4-bar blocks (12), 32 bars of 8-bar blocks (4), one 16-bar block,
+  then an **8-bar drumless `other + vocals` bridge** (two 4-bar blocks).
+  A block is a **run of consecutive 4-bar phrases from one source track**,
+  concatenated into one Signalsmith voice. Short source runs are looped rather
+  than freezing the last phrase. The 16-bar block prefers a real 4-phrase run.
+* **Cluster rotation every 104 bars (19 blocks)**: the bridge starts at bar 96
+  and the next Camelot/tempo neighbour (within +/-3 BPM) takes over at bar 104.
+  The new set starts with two anchor blocks on the new cluster; all pins release
+  at the rotation.
+* **One block, one BPM slot.** `blockBars` (4/8/16) and `blockDurationSec`
+  drive the audio grid; `slotSec` stays the 4-bar value, so the UI BPM is
+  `960 / slotSec` and never halves on a long block.
 * **Lazy audio**: a 64-entry LRU cache (phrase x stem), one block of prefetch
   lead, two alternates for drags. A failed load repeats the current phrase and
   blacklists the kit; it never stops the transport.
@@ -538,11 +551,12 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
 1.3.2 WASM/AudioWorklet module. The prebuilt `SignalsmithStretch.mjs` is
 vendored in `frontend/public/vendor/` and loaded with a runtime dynamic import;
 bundling it breaks the stringified AudioWorklet source and silences the node.
-One voice is created per phrase; the buffer is `[80 ms pre-roll][4-bar phrase]`
-and is scheduled at `bar - preRoll/rate`, so the downbeat lands exactly on the
-bar. The old voice's gain fades over the pre-roll window. The library's
-`stop()` is avoided because 1.3.2 drops its time argument; the voice is
-disposed after its gain fade.
+One voice is created per **run** (1-4 consecutive 4-bar phrases concatenated,
+`[80 ms pre-roll][phrase 1][phrase 2]...`) and scheduled at
+`bar - preRoll/rate`, so the run's downbeat lands exactly on the bar. The old
+voice's gain fades over the pre-roll window. The library's `stop()` is avoided
+because 1.3.2 drops its time argument; the fixed two-voice-per-stem pool is
+reset and reused, never disposed per phrase (per-phrase nodes leak WASM memory).
 
 ### 10.4 Per-stem nebula
 
@@ -581,5 +595,6 @@ is optional (playback never depends on it).
 * Never resample a phrase with `playbackRate`; use the stretcher's `rate`.
 * Drums are key-agnostic; pitched stems obey the Camelot limit.
 * One shared bar grid; a drag commits on a bar, a phrase advance on a block.
-* No pin may outlive 32 bars; no cluster may outlive 12 blocks.
+* No pin may outlive 32 bars, and no cluster may outlive the 104-bar arc
+  (19 blocks, including the 8-bar bridge).
 * A failed asset must fall back to a repeat, never a silence or a stall.

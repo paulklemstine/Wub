@@ -1,8 +1,9 @@
-// One-shot Signalsmith Stretch voice for a real 4-bar stem phrase.
+// One-shot Signalsmith Stretch voice for a real 4-bar stem phrase or a run of
+// consecutive phrases.
 //
 // The kit phrase is decoded at the AudioContext rate, so no resampling is
-// introduced.  A phrase is prepared (pre-roll + main body concatenated) once,
-// then scheduled with independent tempo (`rate`) and pitch (`semitones`).
+// introduced.  A run is prepared (pre-roll + concatenated mains) once, then
+// scheduled with independent tempo (`rate`) and pitch (`semitones`).
 // Signalsmith compensates for its own processing latency when `output` is
 // scheduled ahead of time.
 import type { StretchNode } from "signalsmith-stretch";
@@ -112,16 +113,35 @@ export class StretchVoice {
    * just before the bar and the phrase's downbeat lands exactly on it.
    */
   async load(buffer: AudioBuffer, preRoll: AudioBuffer | null): Promise<number> {
-    const main = mixToMono(buffer);
-    const pre = preRoll ? mixToMono(preRoll) : null;
-    const samples = new Float32Array((pre?.length ?? 0) + main.length);
-    if (pre) samples.set(pre, 0);
-    samples.set(main, pre?.length ?? 0);
-    await this.node.addBuffers([samples]);
-    return (pre?.length ?? 0) / buffer.sampleRate;
+    return this.loadRun([buffer], preRoll);
   }
 
-  /** Schedule the prepared phrase. Must be called after `load`. */
+  /**
+   * Concatenate a run of consecutive phrases (and the first phrase's pre-roll)
+   * into one voice.  A run is cut from consecutive 4-bar windows of the same
+   * source, so the joins are real bar lines and need no crossfade.
+   */
+  async loadRun(buffers: readonly AudioBuffer[], preRoll: AudioBuffer | null): Promise<number> {
+    if (buffers.length === 0) throw new Error("StretchVoice.loadRun needs at least one buffer");
+    const pre = preRoll ? mixToMono(preRoll) : null;
+    const mains = buffers.map((buffer) => mixToMono(buffer));
+    let total = 0;
+    for (const main of mains) total += main.length;
+    const samples = new Float32Array((pre?.length ?? 0) + total);
+    let offset = 0;
+    if (pre) {
+      samples.set(pre, 0);
+      offset = pre.length;
+    }
+    for (const main of mains) {
+      samples.set(main, offset);
+      offset += main.length;
+    }
+    await this.node.addBuffers([samples]);
+    return (pre?.length ?? 0) / (buffers[0]?.sampleRate ?? 48000);
+  }
+
+  /** Schedule the prepared phrase/run. Must be called after `load`. */
   schedule(options: StretchScheduleOptions): void {
     if (this.disposed) return;
     const ctx = this.gain.context;

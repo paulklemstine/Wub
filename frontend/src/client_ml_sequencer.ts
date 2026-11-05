@@ -5521,8 +5521,9 @@ export class ClientGrooveboxConductor {
         // while the bridge is still playing.
         this.applyKitLock();
       }
-      // Session BPM reflects this phrase's actual slot: 960 / slot seconds.
-      this.applySlotBpm(entry.result.blockDurationSec);
+      // Session BPM reflects one 4-bar slot, not the whole block, so an
+      // 8/16-bar arc block does not halve the displayed tempo.
+      this.applySlotBpm(entry.result.slotSec ?? entry.result.blockDurationSec);
       if (entry.result.setChanged) {
         player.logSetChange(entry.result.kit, entry.result.blocksPlayedInSet);
         this.onKitSetChange?.({
@@ -5539,7 +5540,8 @@ export class ClientGrooveboxConductor {
         entry.result.bridge,
         entry.result.targetSection,
         entry.result.energyDelta,
-        entry.result.selectionBand
+        entry.result.selectionBand,
+        entry.result.blockBars
       );
       if (entry.result.stemPoints) {
         const points = Object.entries(entry.result.stemPoints)

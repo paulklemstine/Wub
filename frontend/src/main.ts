@@ -225,6 +225,7 @@ class WubApp {
   private kitBarIndex = -1;
   private kitPoint: { x: number; y: number } | null = null;
   private kitBlockAt = 0;
+  private remixPhraseIds: Partial<Record<StemName, string | null>> = {};
   private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private masterTimeScratch: Uint8Array<ArrayBuffer> | null = null;
@@ -444,6 +445,7 @@ class WubApp {
         for (const point of points) {
           this.nebula.setActiveSlice(point.stem, point.x, point.y, t);
           this.nebula.setReticleTarget(point.stem, point.x, point.y, 0.28);
+          this.remixPhraseIds[point.stem] = point.phraseId;
         }
         this.nebula.setHighlight(
           points.map((point) => ({
@@ -1367,6 +1369,13 @@ class WubApp {
       for (const state of this.clientConductor.getStemRemixState()) {
         if (state.pin) this.nebula.setPinTarget(state.stem, state.pin.x, state.pin.y);
         else this.nebula.clearPinTarget(state.stem);
+        // A long 8/16-bar run advances through several phrases; move the
+        // reticle when the stem's actual playing phrase changes.
+        if (state.phraseId && this.remixPhraseIds[state.stem] !== state.phraseId) {
+          this.remixPhraseIds[state.stem] = state.phraseId;
+          this.nebula.setActiveSlice(state.stem, state.x, state.y, visualNow());
+          this.nebula.setReticleTarget(state.stem, state.x, state.y, 0.28);
+        }
       }
     }
 
