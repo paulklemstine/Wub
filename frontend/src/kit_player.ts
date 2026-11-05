@@ -102,11 +102,18 @@ export interface TasteKitScores {
   next: TasteNextKit[];
 }
 
+export interface StemNextEntry {
+  id: string;
+  score: number;
+}
+
 export interface TasteScoresManifest {
   version: number;
   model: string;
   val_auc: number;
   kits: Record<string, TasteKitScores>;
+  /** Per-stem top-K next phrases from the four audio judges. */
+  stem_next?: Record<string, Partial<Record<StemName, StemNextEntry[]>>>;
 }
 
 export interface TasteTransitionTop {

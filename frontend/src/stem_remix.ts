@@ -204,6 +204,7 @@ export class StemRemixPlayer {
   private playedOnce = new Set<string>();
   private failedKits = new Set<string>();
   private cache = new Map<string, LoadedStemAudio>();
+  private stemNext = new Map<string, number>();
 
   private sessionStartAt = 0;
   private nextBlockAt = 0;
@@ -254,6 +255,18 @@ export class StemRemixPlayer {
   /** Attach taste scores after the manifest has loaded. */
   setTasteScores(scores: TasteScoresManifest | null): void {
     this.tasteScores = scores;
+    this.stemNext.clear();
+    if (!scores?.stem_next) return;
+    for (const [phraseId, byStem] of Object.entries(scores.stem_next)) {
+      for (const [stem, list] of Object.entries(byStem)) {
+        for (const item of list ?? []) {
+          this.stemNext.set(`${phraseId}:${stem}:${item.id}`, item.score);
+        }
+      }
+    }
+    if (this.stemNext.size > 0) {
+      console.info(`[StemRemix] Per-stem judge scores loaded: ${this.stemNext.size} next entries`);
+    }
   }
 
   /** Load the cluster bank + optional taste scores. */
@@ -690,6 +703,7 @@ export class StemRemixPlayer {
       const style = entry.kit.style === this.cluster?.style ? 0.25 : 0;
       const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.25;
       const judge = this.judgeScore(stem, current?.phrase.id ?? null, entry.phrase.id);
+      const judgeBonus = judge > 0 ? 1.5 + 2.5 * judge : -0.2;
       const rms = stem === "vocals" ? clamp01((entry.rmsDb + 40) / 30) * 0.3 : 0;
       const score =
         1.0 * sectionScore +
@@ -699,7 +713,7 @@ export class StemRemixPlayer {
         0.25 * style +
         novelty +
         rms +
-        1.4 * judge;
+        judgeBonus;
 
       if (best === null || score > best.score) best = { entry, score };
     }
@@ -724,17 +738,8 @@ export class StemRemixPlayer {
   }
 
   private judgeScore(stem: StemName, fromId: string | null, toId: string): number {
-    if (!this.tasteScores || !fromId) return 0;
-    const scores = this.tasteScores.kits;
-    for (const kit of Object.values(scores)) {
-      const index = kit.phrase_order?.indexOf(fromId) ?? -1;
-      if (index < 0) continue;
-      const to = kit.phrase_order.indexOf(toId);
-      if (to >= 0 && Array.isArray(kit.transition?.[index])) {
-        return Number(kit.transition[index][to]) || 0;
-      }
-    }
-    return 0;
+    if (!fromId || this.stemNext.size === 0) return 0;
+    return this.stemNext.get(`${fromId}:${stem}:${toId}`) ?? 0;
   }
 
   private async prepareEntry(
@@ -835,11 +840,18 @@ export class StemRemixPlayer {
     if (this.cluster === null) return null;
     const cx = clamp01(x);
     const cy = clamp01(y);
-    const pin: StemPin = { x: cx, y: cy, untilBlock: this.blockIndex + PIN_BLOCKS };
-    this.pins[stem] = pin;
     const current = this.current[stem]?.entry ?? null;
     const nearest = this.nearest(stem, cx, cy);
+    // Pin the region at the nearest real phrase, not at an impossible point
+    // outside the stem's cloud; the dashed ring must always sit on the map.
+    const pinX = nearest?.x ?? cx;
+    const pinY = nearest?.y ?? cy;
+    const pin: StemPin = { x: pinX, y: pinY, untilBlock: this.blockIndex + PIN_BLOCKS };
+    this.pins[stem] = pin;
     if (!nearest) return pin;
+    if (Math.hypot(nearest.x - cx, nearest.y - cy) > 0.15) {
+      this.onStatus?.(`${stem}: target outside the ${stem} cloud, snapped to the nearest legal phrase`);
+    }
     const distance = current ? Math.hypot(nearest.x - current.x, nearest.y - current.y) : 1;
     if (distance > 0.06) {
       const now = this.engine.now();

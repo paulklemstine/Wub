@@ -1004,10 +1004,10 @@ export class NebulaRenderer {
       const p = this.points[i];
       const density = this.alphas[i] ?? 0.5;
       const twinkle = 0.72 + 0.28 * Math.sin(t * 1.7 + i * 2.39996);
-      ctx.globalAlpha = (0.18 + 0.17 * density) * twinkle;
+      ctx.globalAlpha = (0.26 + 0.22 * density) * twinkle;
       ctx.fillStyle = STEM_COLORS[p.stem];
       ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, 0.6 + density * 0.7, 0, 2 * Math.PI);
+      ctx.arc(p.x * w, p.y * h, 0.85 + density * 0.9, 0, 2 * Math.PI);
       ctx.fill();
     }
     ctx.restore();
@@ -1074,6 +1074,23 @@ export class NebulaRenderer {
       ctx.restore();
       ctx.globalAlpha = 1;
     }
+
+    // Quadrant labels: each stem's cloud lives in its own region of the map.
+    const quadrantLabels: Array<[string, number, number]> = [
+      ["DRUMS", 0.26, 0.90],
+      ["BASS", 0.74, 0.90],
+      ["OTHER", 0.26, 0.10],
+      ["VOCALS", 0.74, 0.10],
+    ];
+    ctx.save();
+    ctx.font = `${Math.max(9, Math.min(12, w * 0.024))}px ui-monospace, monospace`;
+    ctx.textAlign = "center";
+    ctx.globalAlpha = 0.32;
+    for (const [label, lx, ly] of quadrantLabels) {
+      ctx.fillStyle = "rgba(220,235,255,0.9)";
+      ctx.fillText(label, lx * w, ly * h);
+    }
+    ctx.restore();
 
     // Pinned style regions: a dashed ring around the target the user chose.
     for (const stem of RETICLE_STEMS) {
