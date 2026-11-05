@@ -507,16 +507,16 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
 * The session key/tempo is the cluster's key/tempo. Candidate phrases are
   filtered to the exact key, the relative major/minor, or a Camelot fifth
   neighbour, and to `|phrase_duration / block_duration - 1| <= 2%`.
-* **The anchor song is the default.** All unpinned stems play the same phrase
-  from the session's anchor kit. The kit starts at the first phrase of its
-  **longest consecutive 4-bar run** and follows that run in song order. When
-  the run ends, the phrase holds for 8 bars and then moves forward through the
-  song's arc. This is what keeps the set sounding like records instead of a
-  four-way collage.
-* **Cross-song recombination is user-driven.** Only a stem the user dragged
-  leaves the anchor song. The pinned stem draws from the wider cluster pool
-  (judge + theory), while the other three stay on the anchor. When the pin
-  releases, the stem rejoins the anchor phrase at the next block.
+* **Anchor opening, then morph.** The first two 4-bar blocks (8 bars) stay on
+  the session's anchor kit. Then **one unpinned stem per block** moves to a
+  phrase from a different track; the other three continue their own kit's
+  consecutive run. After four morphs all four instruments come from different
+  records — a new song. The player prefers a track no other stem is using,
+  then falls back to any different track.
+* **The morph is the point.** Cross-song recombination is not an exception; it
+  is how the set evolves. The anchor is only the seed. A pinned stem stays in
+  its style region while the other three keep morphing; when the pin releases,
+  that stem rejoins the morph cycle.
 * **Drag commit is at the next bar.** The reticle snaps to the nearest legal
   phrase, pins that style region for **32 bars** (8 blocks), and the stem
   starts at the bar offset that matches the global 4-bar phase. The reticle then

@@ -195,6 +195,9 @@ export class StemRemixPlayer {
   private cluster: KitCluster | null = null;
   private anchorKit: Kit | null = null;
   private currentAnchorPhrase: KitPhrase | null = null;
+  private readonly anchorOpeningBlocks = 2;
+  private readonly morphOrder: readonly StemName[] = ["drums", "bass", "other", "vocals"];
+  private morphIndex = 0;
   private sessionKey = "C minor";
   private sessionBpm = 128;
   private blockSec = 960 / 128;
@@ -204,6 +207,8 @@ export class StemRemixPlayer {
     drums: [], bass: [], other: [], vocals: [],
   };
   private current: Partial<Record<StemName, CurrentStem>> = {};
+  private voicePool: Partial<Record<StemName, StretchVoice[]>> = {};
+  private voiceIndex: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private pending: Partial<Record<StemName, PendingCommit>> = {};
   private pins: Partial<Record<StemName, StemPin>> = {};
   private blocksSinceChange: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
@@ -430,6 +435,7 @@ export class StemRemixPlayer {
     this.playedOnce.clear();
     this.anchorKit = this.chooseAnchor();
     this.currentAnchorPhrase = null;
+    this.morphIndex = 0;
   }
 
   /** Longest chain of consecutive 4-bar phrases, preferably with all stems. */
@@ -618,30 +624,43 @@ export class StemRemixPlayer {
       }
     }
 
-    // Default: every unpinned stem plays the same phrase from the anchor song.
-    // Cross-song recombination is only used for a stem the user dragged.
-    // Hold the anchor phrase for two blocks (8 bars) unless the arrangement
-    // section changes, so the record has room to breathe between phrases.
-    const holdAnchor = !bridge && !rotation && !sectionChanged
+    // Two opening blocks establish the anchor record, then one stem per block
+    // morphs into a different track. The other three continue their own run,
+    // so the mix becomes a new four-stem song without changing everything at
+    // once.
+    const opening = !bridge && this.blockIndex < this.anchorOpeningBlocks;
+    const holdAnchor = opening && !sectionChanged
       && this.blockIndex % 2 === 1 && this.currentAnchorPhrase !== null
       && !this.hasConsecutiveNext();
-    const anchorPhrase = bridge && !rotation
-      ? (this.currentAnchorPhrase ?? this.chooseAnchorPhrase(normalized))
-      : rotation
-        ? this.chooseAnchorPhrase(normalized)
-        : holdAnchor
-          ? this.currentAnchorPhrase
-          : this.chooseAnchorPhrase(normalized);
+    const anchorPhrase = opening
+      ? (holdAnchor ? this.currentAnchorPhrase : this.chooseAnchorPhrase(normalized))
+      : null;
+
+    let morphStem: StemName | null = null;
+    if (!opening && !bridge && !rotation) {
+      for (let k = 0; k < this.morphOrder.length; k++) {
+        const candidate = this.morphOrder[(this.morphIndex + k) % this.morphOrder.length];
+        if (!this.pins[candidate]) {
+          morphStem = candidate;
+          this.morphIndex = (this.morphIndex + k + 1) % this.morphOrder.length;
+          break;
+        }
+      }
+    }
+
     const order: StemName[] = bridge && !rotation
       ? ["other", "vocals"]
       : ["drums", "bass", "other", "vocals"];
-
     for (const stem of order) {
       let entry: StemPoolEntry | null = null;
       if (this.pins[stem]) {
         entry = this.select(stem, at, normalized, sectionChanged);
-      } else {
+      } else if (opening) {
         entry = this.anchorEntry(stem, anchorPhrase);
+      } else if (stem === morphStem) {
+        entry = this.selectMorph(stem, at, normalized);
+      } else {
+        entry = this.holdEntry(stem);
       }
       if (!entry) {
         const current = this.current[stem];
@@ -664,10 +683,12 @@ export class StemRemixPlayer {
       this.recent.push(entry.phrase.id);
       if (entry.phrase.once) this.playedOnce.add(entry.phrase.id);
     }
-    this.currentAnchorPhrase = anchorPhrase;
-    if (anchorPhrase) {
-      this.anchorRecent.push(anchorPhrase.id);
-      if (this.anchorRecent.length > 24) this.anchorRecent = this.anchorRecent.slice(-24);
+    if (opening) {
+      this.currentAnchorPhrase = anchorPhrase;
+      if (anchorPhrase) {
+        this.anchorRecent.push(anchorPhrase.id);
+        if (this.anchorRecent.length > 24) this.anchorRecent = this.anchorRecent.slice(-24);
+      }
     }
     if (this.recent.length > RECENT_BLOCKS * 5) {
       this.recent = this.recent.slice(-RECENT_BLOCKS * 5);
@@ -704,6 +725,94 @@ export class StemRemixPlayer {
       phrase.start_bar === current.start_bar + 4
       && this.entryById.has(`${phrase.id}:drums`),
     );
+  }
+
+  /** Follow the current stem's own kit run for one more 4-bar block. */
+  private holdEntry(stem: StemName): StemPoolEntry | null {
+    const current = this.current[stem];
+    if (!current) return null;
+    const start = current.entry.phrase.start_bar;
+    if (typeof start === "number") {
+      const next = current.entry.kit.phrases.find((phrase) =>
+        phrase.start_bar === start + 4
+        && this.entryById.has(`${phrase.id}:${stem}`),
+      );
+      if (next) {
+        const entry = this.entryById.get(`${next.id}:${stem}`);
+        if (entry) return entry;
+      }
+    }
+    return current.entry;
+  }
+
+  /** Pick a cross-song phrase for one stem, excluding its current track. */
+  private selectMorph(stem: StemName, at: number, section: string): StemPoolEntry | null {
+    const pool = this.pools[stem];
+    if (pool.length === 0) return null;
+    const current = this.current[stem]?.entry ?? null;
+    if (!current) return null;
+    const currentKit = current.kit.track_id;
+    const target = SECTION_ENERGY[section] ?? 0.65;
+    const chord = this.current.bass?.entry.chroma ?? null;
+    const anchorRoot = this.current.bass?.entry.bassRoot ?? null;
+    const recentSet = new Set(this.recent);
+    const usedTracks = new Set<string>();
+    for (const other of STEMS) {
+      if (other === stem) continue;
+      const tid = this.current[other]?.entry.kit.track_id;
+      if (tid) usedTracks.add(tid);
+    }
+    let best: { entry: StemPoolEntry; score: number } | null = null;
+
+    // Prefer a track no other stem is using, so after four morphs all four
+    // instruments come from different records; fall back if none exists.
+    for (const strict of [true, false]) {
+    for (const entry of pool) {
+      if (entry.kit.track_id === currentKit) continue;   // force a new track
+      if (strict && usedTracks.has(entry.kit.track_id)) continue;
+      if (this.failedKits.has(entry.kit.track_id)) continue;
+      if (entry.phrase.id === current.phrase.id) continue;
+      if (recentSet.has(entry.phrase.id)) continue;
+      if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) continue;
+      if (entry.phrase.is_intro && this.blockIndex > 0) continue;
+      if (entry.phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
+
+      const energy = Number(entry.energy) || 0.5;
+      const sectionScore = (entry.section === section ? 0.6 : 0)
+        - Math.abs(energy - target);
+      const jump = Math.abs(energy - current.energy);
+      const jumpPenalty = jump > 0.25 ? (jump - 0.25) * 0.8 : 0;
+
+      let harmonic = 0;
+      if (stem === "bass") {
+        harmonic = -rootPenalty(entry.bassRoot ?? null, anchorRoot);
+        if (chord && entry.chroma) harmonic += 0.4 * cosine(entry.chroma, chord);
+      } else if (stem !== "drums" && chord && entry.chroma) {
+        harmonic = 0.7 * cosine(entry.chroma, chord);
+      }
+
+      const judge = this.judgeScore(stem, current.phrase.id, entry.phrase.id);
+      const judgeBonus = judge > 0 ? 1.5 + 2.5 * judge : -0.2;
+      const style = entry.kit.style === this.cluster?.style ? 0.25 : 0;
+      const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *
+        (stem === "vocals" ? 0.25 : 0.6);
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.25;
+      const score =
+        1.0 * sectionScore +
+        0.9 * harmonic +
+        0.25 * style +
+        presence +
+        novelty +
+        judgeBonus -
+        jumpPenalty;
+      if (!best || score > best.score) best = { entry, score };
+    }
+    if (best) break;
+    }
+    if (!best) {
+      this.onStatus?.(`${stem}: no compatible cross-song phrase; keeping current`);
+    }
+    return best?.entry ?? null;
   }
 
   /** Pick the next phrase from the anchor song, following the section arc. */
@@ -938,6 +1047,27 @@ export class StemRemixPlayer {
     return loaded;
   }
 
+  /** Two reusable voices per stem: one playing, one being prepared. */
+  private async getVoice(stem: StemName): Promise<StretchVoice> {
+    let pool = this.voicePool[stem];
+    if (!pool) {
+      const ctx = this.engine.ensureCtx();
+      const destination = this.engine.getStemInput(stem);
+      const pan = stemPan(stem, stem);
+      pool = await Promise.all([
+        StretchVoice.create(ctx, destination, { pan }),
+        StretchVoice.create(ctx, destination, { pan }),
+      ]);
+      this.voicePool[stem] = pool;
+      this.voiceIndex[stem] = 0;
+    }
+    const index = this.voiceIndex[stem] % pool.length;
+    this.voiceIndex[stem] = (index + 1) % pool.length;
+    const voice = pool[index];
+    await voice.reset();
+    return voice;
+  }
+
   private async scheduleFull(
     stem: StemName,
     entry: StemPoolEntry,
@@ -945,10 +1075,7 @@ export class StemRemixPlayer {
     at: number,
   ): Promise<void> {
     try {
-      const ctx = this.engine.ensureCtx();
-      const voice = await StretchVoice.create(ctx, this.engine.getStemInput(stem), {
-        pan: stemPan(stem, entry.phrase.id),
-      });
+      const voice = await this.getVoice(stem);
       const preDur = await voice.load(audio.main, audio.pre);
       const startAt = at - preDur / Math.max(0.5, entry.rate);
       voice.schedule({
@@ -1050,10 +1177,7 @@ export class StemRemixPlayer {
     }
     pending.entry = prepared.entry;
     this.pending[stem] = pending;
-    const ctx = this.engine.ensureCtx();
-    const voice = await StretchVoice.create(ctx, this.engine.getStemInput(stem), {
-      pan: stemPan(stem, pending.entry.phrase.id),
-    });
+    const voice = await this.getVoice(stem);
     const preDur = await voice.load(prepared.audio.main, prepared.audio.pre);
     const inputSec = preDur + pending.partialBar * (prepared.audio.main.duration / 4);
     voice.schedule({
@@ -1166,6 +1290,10 @@ export class StemRemixPlayer {
       const current = this.current[stem];
       if (current) current.voice.fadeOut(this.engine.now(), 0.05);
     }
+    for (const stem of STEMS) {
+      for (const voice of this.voicePool[stem] ?? []) voice.dispose();
+    }
+    this.voicePool = {};
     this.current = {};
     this.pending = {};
     this.pins = {};

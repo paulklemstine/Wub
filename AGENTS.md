@@ -91,10 +91,13 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   phrase; cross-song recombination happens only at block boundaries.
 - **No `playbackRate` resampling.** Tempo fit uses Signalsmith Stretch `rate`
   (cap 2%); key fit uses `semitones` (drums 0, vocals ±3, bass/other ±5).
-- **Anchor-song default.** Unpinned stems play the same phrase from the
-  session's anchor kit; the anchor phrase holds 8 bars, then advances through
-  the song. Cross-song recombination is only for a stem the user dragged or
-  pinned. This is deliberate: free four-way recombination sounded disjoint.
+- **Anchor opening, then morph.** The first two 4-bar blocks stay on the
+  session's anchor kit. Then one unpinned stem per block moves to a phrase from
+  a **different track** (preferring a track no other stem is using); the other
+  three continue their own kit's consecutive run. After four morphs the mix is
+  a new four-stem song. Pinned stems hold their region while the others morph.
+  This is deliberate: cross-song stems are the goal, but changing everything at
+  once sounded disjoint.
 - **Drag commits at the next bar; pins last 32 bars.** The reticle follows the
   playing phrase; a dashed ghost ring marks the pinned region. Double-click
   releases the pin. If the target audio is not decoded by the bar, wait one
@@ -105,6 +108,9 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 - **Lazy audio only.** 64-entry LRU, one block of prefetch lead, two alternates
   for drags. A failed load repeats the current phrase and blacklists the kit;
   it must never stop the transport.
+- **Never create a StretchVoice per phrase.** Use the fixed two-voice-per-stem
+  pool (8 nodes total), reset and reuse them. Per-phrase nodes leak WASM memory
+  and crash the tab after ~4 minutes.
 - **Never normalise or re-gain assets.** A kit phrase keeps the source's
   per-stem balance; per-stem `peak`/`rms_db` are metadata. The small runtime
   level match in `stem_remix.ts` is a mixer layer, not a baked gain.

@@ -164,13 +164,30 @@ export class StretchVoice {
       // The library's stop(when) drops its time argument in 1.3.2 (it reads
       // `output` while the scheduler reads `outputTime`), which stops the
       // voice immediately. Schedule the deactivate segment directly.
-      // The library's schedule() drops the previous active segment when a
-      // deactivate segment is queued at the same future time, so let the
-      // buffer run out and dispose the node after the gain fade instead.
-      const delayMs = Math.max(0, (end - ctx.currentTime + 0.15) * 1000);
-      globalThis.setTimeout(() => this.dispose(), delayMs);
+      // The pooled voice is reused after this phrase; do not dispose it.
+      // The buffer simply runs out and the next reset() clears it.
     } catch {
       // Already stopped.
+    }
+  }
+
+  /** Clear the input buffer and silence the voice so the node can be reused. */
+  async reset(): Promise<void> {
+    if (this.disposed) return;
+    const ctx = this.gain.context;
+    this.scheduled = false;
+    this.targetGain = 0;
+    const gain = this.gain.gain;
+    try {
+      gain.cancelScheduledValues(0);
+      gain.setValueAtTime(0.0001, ctx.currentTime);
+    } catch {
+      // Context may be closing.
+    }
+    try {
+      await this.node.dropBuffers();
+    } catch {
+      // A failed reset must not stop the transport; the next load will append.
     }
   }
 
