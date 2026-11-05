@@ -13,6 +13,8 @@ export interface KitStemAsset {
   file: string;
   peak: number;
   rms_db: number;
+  /** Short pre-bar audio that restores the attack lost at the cut. */
+  pre_roll?: { file: string; duration_sec: number };
 }
 
 export interface KitPhrase {
@@ -38,6 +40,10 @@ export interface KitPhrase {
   is_outro?: boolean;
   /** Intro/outro phrases are played at most once per set. */
   once?: boolean;
+  /** Audio included before the bar line, played early to keep the attack. */
+  pre_roll_sec?: number;
+  /** File length = duration_sec + pre_roll_sec (when pre-roll is present). */
+  file_duration_sec?: number;
 }
 
 export type KitSteering = Record<StemName, { x: number; y: number }>;
@@ -106,6 +112,7 @@ export interface KitBlockResult {
 interface LoadedKitPhrase {
   meta: KitPhrase;
   buffers: Partial<Record<StemName, AudioBuffer>>;
+  preBuffers: Partial<Record<StemName, AudioBuffer>>;
 }
 
 interface LoadedKitData {
@@ -565,10 +572,10 @@ export class KitPlayer {
     const phrases = await Promise.all(
       kit.phrases.map(async (phrase): Promise<LoadedKitPhrase> => {
         const decoded = await Promise.all(
-          STEM_ORDER.map(async (stem): Promise<readonly [StemName, AudioBuffer | null]> => {
+          STEM_ORDER.map(async (stem): Promise<readonly [StemName, AudioBuffer | null, AudioBuffer | null]> => {
             const asset = phrase.stems?.[stem];
             if (!asset || typeof asset.file !== "string" || asset.file.length === 0) {
-              return [stem, null] as const;
+              return [stem, null, null] as const;
             }
             const response = await fetch(joinUrl(this.baseUrl, asset.file));
             if (!response.ok) {
@@ -576,15 +583,26 @@ export class KitPlayer {
             }
             const bytes = await response.arrayBuffer();
             const buffer = await this.engine.decodeAudio(bytes);
-            return [stem, buffer] as const;
+            let preBuffer: AudioBuffer | null = null;
+            if (asset.pre_roll && typeof asset.pre_roll.file === "string") {
+              try {
+                const preRes = await fetch(joinUrl(this.baseUrl, asset.pre_roll.file));
+                if (preRes.ok) preBuffer = await this.engine.decodeAudio(await preRes.arrayBuffer());
+              } catch {
+                // A missing pre-roll must never block the kit.
+              }
+            }
+            return [stem, buffer, preBuffer] as const;
           })
         );
 
         const buffers: Partial<Record<StemName, AudioBuffer>> = {};
-        for (const [stem, buffer] of decoded) {
+        const preBuffers: Partial<Record<StemName, AudioBuffer>> = {};
+        for (const [stem, buffer, preBuffer] of decoded) {
           if (buffer !== null) buffers[stem] = buffer;
+          if (preBuffer !== null) preBuffers[stem] = preBuffer;
         }
-        return { meta: phrase, buffers };
+        return { meta: phrase, buffers, preBuffers };
       })
     );
 
@@ -1024,24 +1042,42 @@ export class KitPlayer {
     const blockDuration = phrase.duration_sec > 0
       ? phrase.duration_sec
       : (64 * 60) / (kit.bpm * 4);
+    const scheduleAt = when;
+    const playDuration = blockDuration;
     const joinGaps: string[] = [];
     for (const stem of stems) {
       const voiceKey = `kit_${stem}`;
       if (this.lastBlockStems.has(stem)) {
         const prevEnd = engine.getVoiceEndAt(voiceKey) ?? this.lastStemEndAt[stem] ?? null;
         if (prevEnd !== null) {
-          const delta = prevEnd - when;
+          const delta = prevEnd - scheduleAt;
           if (delta < -0.005) {
             joinGaps.push(`${stem} ${(delta * 1000).toFixed(1)}ms`);
           }
         }
       }
 
+      const preBuffer = loaded.preBuffers[stem];
+      const preAsset = phrase.stems?.[stem]?.pre_roll;
+      const preDur = preAsset && Number.isFinite(preAsset.duration_sec) ? preAsset.duration_sec : 0;
+      if (preBuffer && preDur > 0.004) {
+        const preSource = engine.scheduleSlice(stem, preBuffer, when - preDur, {
+          rate: 1.0,
+          duration: preDur,
+          fadeMs: 2,
+          fadeInMs: 1,
+          fadeOutMs: 3,
+          gain: 1.0,
+          voiceKey: `kit_pre_${stem}`,
+        });
+        this.sources.push(preSource);
+      }
+
       const buffer = loaded.buffers[stem];
       if (!buffer) continue;
-      const source = engine.scheduleSlice(stem, buffer, when, {
+      const source = engine.scheduleSlice(stem, buffer, scheduleAt, {
         rate: 1.0,
-        duration: blockDuration,
+        duration: playDuration,
         fadeMs: KIT_FADE_MS[stem],
         fadeInMs: KIT_SEAM_FADE_IN_MS[stem],
         fadeOutMs: KIT_SEAM_FADE_OUT_MS[stem],
@@ -1162,7 +1198,21 @@ export class KitPlayer {
       candidatePool = dropPool.length > 0 ? dropPool : basePool;
       bandLabel = "drop";
     } else {
-      const sectionPool = this.sectionPoolForSelection(basePool, targetSection, current);
+      let sectionPool = this.sectionPoolForSelection(basePool, targetSection, current);
+
+      // Direction of travel: a build must not fall into a quiet phrase and a
+      // breakdown must not slam into a hot one. If the target section has no
+      // phrase in the right direction, use a phrase from any section that is.
+      if (current) {
+        if (targetSection === "BUILDUP" && sectionPool.every((p) => p.energy < current.energy - 0.05)) {
+          const rising = basePool.filter((p) => p.energy >= current.energy - 0.05);
+          if (rising.length > 0) sectionPool = rising;
+        } else if (targetSection === "BREAKDOWN" && sectionPool.every((p) => p.energy > current.energy + 0.10)) {
+          const falling = basePool.filter((p) => p.energy <= current.energy + 0.10);
+          if (falling.length > 0) sectionPool = falling;
+        }
+      }
+
       const banded = this.energyBandPool(sectionPool, current, sectionChanged, recent);
       candidatePool = banded.pool;
       bandLabel = banded.band >= 0 ? banded.band.toFixed(2) : (current ? "repeat" : "none");
