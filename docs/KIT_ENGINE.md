@@ -625,3 +625,23 @@ is optional (playback never depends on it).
 * No pin may outlive 32 bars, and no cluster may outlive the 104-bar arc
   (19 blocks, including the 8-bar bridge).
 * A failed asset must fall back to a repeat, never a silence or a stall.
+
+### 10.7 Transition telemetry baseline
+
+The hidden probe is the seam gate for future changes. A 240 s local session
+(24 boundaries) produced:
+
+| Metric | Value |
+| --- | --- |
+| boundaries captured | 24 / 24 |
+| sample-jump seam events (>0.85) | 0 |
+| RMS-dip events (>1.5 dB, excluding planned low-energy drops) | 3 |
+| p50 / p95 max sample jump | 0.171 / 0.401 |
+| max hold | 8 bars |
+
+Use `window.__wubTransitionSummary()` after a session and inspect
+`window.__wubTransitionLog` for the per-boundary rows. `window.__wubMovementSummary()`
+reports stem-track changes and max hold; `window.__wubGlueState()` reports the
+live vocal/kick duck gains. The probe is diagnostic only: it never gates audio
+and never writes UI. Seam metrics are session-dependent; compare a candidate
+build against a baseline recorded on the same bank and cluster.
