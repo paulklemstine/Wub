@@ -22,7 +22,7 @@ Run on the laptop where the source stems and analysis JSON live:
 | `OUT` | `kits_arc8` | fresh full-corpus kit output |
 | `STAGE` | `/tmp/wubtrain/arc8_stage` | all selected/scored artifacts |
 | `PHRASES_PER_KIT` | `8` | cutter phrase budget |
-| `KITS` | `390` | expected 16-cluster union |
+| `KITS` | `402` | expected 16-cluster union (390 was the initial target) |
 | `PER_STYLE` | `200` | style cap for the final subset |
 
 The script refuses any `OUT` or `STAGE` path inside:
@@ -63,7 +63,7 @@ Logs are deliberately flat and predictable:
 ```bash
 cd /tmp/wubtrain
 PHRASES_PER_KIT=8 \
-KITS=390 \
+KITS=402 \
 OUT=kits_arc8 \
 STAGE=/tmp/wubtrain/arc8_stage \
 bash scripts/recut_arc_bank.sh
@@ -79,7 +79,7 @@ RUN_JOINT_RANKER=0    # skip the optional joint 4-stem ranker
 RUN_QC=0              # skip reconstruction QC for a smoke run
 RUN_ADD_STEM_COORDS=1 # timbre PCA stem_xy instead of judge embeddings
 KEEP_CLUSTER=1        # keep the intermediate cluster copy for inspection
-ALLOW_KIT_MISMATCH=1  # do not fail if the cluster union is not exactly 390
+ALLOW_KIT_MISMATCH=1  # do not fail if the cluster union is not exactly 402
 ALLOW_COVERAGE_FAIL=1 # do not fail the run-coverage gate
 ```
 
@@ -146,7 +146,7 @@ PYTHONPATH=. python3 -u scripts/train_taste_model.py \
 
 `--device auto` is resolved once by the orchestrator to `cuda` or `cpu`.
 
-### 3.4 16-cluster bank and the 390-kit shipping subset
+### 3.4 16-cluster bank and the 402-kit shipping subset
 
 ```bash
 PYTHONPATH=. python3 -u scripts/select_cluster_bank.py \
@@ -163,14 +163,14 @@ PYTHONPATH=. python3 -u scripts/select_kit_bank.py \
 ```
 
 `select_cluster_bank` is the authoritative 16-cluster selection. The current
-16 pools union to **390 kits**. `select_kit_bank` then applies the style cap
+16 pools union to **402 kits**. `select_kit_bank` then applies the style cap
 and copies the final shipping subset.
 
 `PER_STYLE=200` is intentionally non-binding for the current pools
 (breaks 160, cyber 107, house 77, wave 46). It is a safety cap, not a hidden
 way to shrink the bank. The script verifies two things:
 
-1. the cluster union equals `KITS` (390 by default);
+1. the cluster union equals `KITS` (402 by default);
 2. `select_kit_bank` kept exactly the same track set.
 
 If a style cap drops a kit, the cluster metadata would reference a missing
@@ -257,7 +257,7 @@ done
 `build_stem_bars` produces 64×128 log-mel patches, four per phrase (one per
 stem). Training on the shipping bank directly is intentional; the older
 full-corpus `filter_stem_dataset.py` pass is unnecessary because the bars are
-already scoped to the 390-kit bank.
+already scoped to the 402-kit bank.
 
 ### 3.7 Kit-level and per-stem scores
 
@@ -350,7 +350,7 @@ The final stage reads the staged manifest and computes, per stem:
 Output: `$STAGE/qc/run_coverage.json` plus a printed table:
 
 ```
-kits=390 phrases=... avg=...
+kits=402 phrases=... avg=...
 drums  kits with >=1/2/4/8 phrase runs (4/8/16/32 bars): ...
 ...
 clusters with a full 4-phrase (16-bar) run per stem:
@@ -481,7 +481,7 @@ The recut pipeline stops at staging. Promotion is deliberately a reviewed
 step, but the copying/validation can be done by
 `scripts/promote_arc_bank.sh`:
 
-* dry run (default): validates the manifest (390 kits, 16 clusters, all stems),
+* dry run (default): validates the manifest (402 kits, 16 clusters, all stems),
   taste scores, joint model dimensions/feature file, QC failures, cluster
   coverage, and the staging size; prints the result.
 * `APPLY=1`: refuses if `frontend/public/data/kits` has uncommitted changes,

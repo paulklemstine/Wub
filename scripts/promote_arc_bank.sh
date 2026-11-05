@@ -25,7 +25,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 STAGE="${STAGE:-/tmp/wubtrain/arc8_stage}"
 APPLY="${APPLY:-0}"
-KITS="${KITS:-390}"
+KITS="${KITS:-402}"
 MIN_CLUSTER_COVERAGE="${MIN_CLUSTER_COVERAGE:-0.80}"
 MAX_BANK_MIB="${MAX_BANK_MIB:-860}"
 
