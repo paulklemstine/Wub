@@ -155,6 +155,9 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | [`add_stem_coords.py`](file:///home/raver1975/Wub/scripts/add_stem_coords.py) | Computes per-stem log-mel descriptors and PCA `stem_xy` for the four nebula clouds. |
 | [`layout_stem_clouds.py`](file:///home/raver1975/Wub/scripts/layout_stem_clouds.py) | Places the four per-stem clouds in quadrants of the shared nebula. |
 | [`build_stem_bars.py`](file:///home/raver1975/Wub/scripts/build_stem_bars.py) | Builds per-stem 64x128 log-mel bar datasets for the four transition judges. |
+| [`filter_stem_dataset.py`](file:///home/raver1975/Wub/scripts/filter_stem_dataset.py) | Filters a per-stem bar dataset to the 390 shipping tracks. |
+| [`train_stem_judge.py`](file:///home/raver1975/Wub/scripts/train_stem_judge.py) | Trains one same-song-vs-cross-song CNN per stem and writes its 128-d embedding. |
+| [`score_stem_kits.py`](file:///home/raver1975/Wub/scripts/score_stem_kits.py) | Scores the shipping bank per stem, writes top-K `stem_next` and judge-PCA `stem_xy`. |
 | [`kit_reconstruct.py`](file:///home/raver1975/Wub/scripts/kit_reconstruct.py) | Decodes and QC-checks kit audio against source stems (correlation, SNR, RMS delta, codec lag, overlap/duration errors). |
 | [`analyze_stem_corpus_vec.py`](file:///home/raver1975/Wub/scripts/analyze_stem_corpus_vec.py) | Vectorised stem analysis (whole-stem CQT/MFCC averaged per slice; much faster than the stock path). Run it where the stems live (`/mnt/e/Wub/data/stems` on the laptop) to build `processed/*.json`. |
 | [`export_standalone_client_bundle.py`](file:///home/raver1975/Wub/scripts/export_standalone_client_bundle.py) | Legacy bundle builder for the retired slice/VQ path; not part of the kit rebuild. |

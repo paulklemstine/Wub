@@ -355,11 +355,11 @@ export class KitPlayer {
 
   /** Tempo fitted to the median phrase duration: 960 / median seconds. */
   get fitBpm(): number | null {
-    return this.fittedBpm;
+    return this.remix?.bpm ?? this.fittedBpm;
   }
 
   get medianPhraseDuration(): number {
-    return this.medianDurationSec;
+    return this.remix?.blockDurationSec ?? this.medianDurationSec;
   }
 
   /** The phrase chosen by the most recent schedule() call. */

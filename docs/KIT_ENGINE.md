@@ -544,11 +544,25 @@ and pinned stems get a dashed ghost ring at the region centre.
 ### 10.5 Per-stem judge
 
 `scripts/build_stem_bars.py` cuts 64x128 log-mel windows for every phrase/stem
-of the full corpus. Four two-tower CNNs (one per stem) are trained on real
-consecutive bars vs same-track section jumps, matched cross-song, reversed and
-cross-key negatives. The 128-d embeddings replace the timbre PCA for the
-nebula, and the transition scores become the per-stem next lists. The existing
-symbolic ranker and music-theory rules remain hard filters.
+of the full corpus. `scripts/filter_stem_dataset.py` keeps the 390 shipping
+tracks. `scripts/train_stem_judge.py` trains one two-tower CNN per stem on
+same-song phrase pairs vs matched cross-song, cross-key and cross-style
+negatives; the mix-level judge (AUC 0.951) already covers bar-to-bar
+transitions. The 128-d embeddings drive a UMAP map for the nebula, and
+`scripts/score_stem_kits.py` writes the top-K `stem_next` lists.
+
+Held-out AUC on the shipping tracks (same-song vs cross-song):
+
+| stem | AUC | top-K entries |
+| --- | --- | --- |
+| drums | 0.825 | 51,696 |
+| bass | 0.801 | 51,696 |
+| other | 0.696 | 51,696 |
+| vocals | 0.669 | 51,696 |
+
+The weaker other/vocals scores reflect their sparse, sectional source stems;
+the symbolic ranker and theory rules remain hard filters, and a failed judge
+is optional (playback never depends on it).
 
 ### 10.6 Invariants
 

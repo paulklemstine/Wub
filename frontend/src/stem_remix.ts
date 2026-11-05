@@ -17,6 +17,11 @@ const PIN_BLOCKS = 8; // 32 bars
 const RECENT_BLOCKS = 6;
 const TEMPO_FIT_LIMIT = 0.02;
 const CACHE_LIMIT = 64;
+// Phrases whose stem is effectively absent are not useful as independent
+// streams; keep a floor per stem so a "bass" phrase actually has bass.
+const MIN_RMS_DB: Record<StemName, number> = {
+  drums: -28, bass: -28, other: -34, vocals: -42,
+};
 
 export interface StemPin {
   x: number;
@@ -384,6 +389,8 @@ export class StemRemixPlayer {
             if (value === null || Math.abs(value) > MAX_SHIFT[stem]) continue;
             shift = value;
           }
+          const rmsDb = Number(asset.rms_db) || -20;
+          if (rmsDb < MIN_RMS_DB[stem]) continue;
           const xy = phrase.stem_xy?.[stem];
           const entry: StemPoolEntry = {
             kit,
@@ -397,8 +404,8 @@ export class StemRemixPlayer {
             section: String(phrase.section ?? "GROOVE_A").toUpperCase(),
             chroma: rotateChroma(phrase.chroma, shift),
             bassRoot: shift === 0 ? (phrase.bass_root ?? null) : null,
-            rmsDb: Number(asset.rms_db) || -20,
-            gain: stemGain(stem, Number(asset.rms_db) || -20),
+            rmsDb,
+            gain: stemGain(stem, rmsDb),
           };
           this.pools[stem].push(entry);
           this.entryById.set(`${phrase.id}:${stem}`, entry);
@@ -699,12 +706,13 @@ export class StemRemixPlayer {
         if (pinDist > 0.42) pinScore *= 0.15;
       }
 
-      const sameKit = current && entry.kit.track_id === current.kit.track_id ? 0.35 : 0;
+      const sameKit = current && entry.kit.track_id === current.kit.track_id ? 0.3 : 0;
       const style = entry.kit.style === this.cluster?.style ? 0.25 : 0;
       const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.25;
       const judge = this.judgeScore(stem, current?.phrase.id ?? null, entry.phrase.id);
       const judgeBonus = judge > 0 ? 1.5 + 2.5 * judge : -0.2;
-      const rms = stem === "vocals" ? clamp01((entry.rmsDb + 40) / 30) * 0.3 : 0;
+      const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *
+        (stem === "vocals" ? 0.25 : 0.6);
       const score =
         1.0 * sectionScore +
         0.9 * harmonic +
@@ -712,7 +720,7 @@ export class StemRemixPlayer {
         0.55 * sameKit +
         0.25 * style +
         novelty +
-        rms +
+        presence +
         judgeBonus;
 
       if (best === null || score > best.score) best = { entry, score };
@@ -1037,13 +1045,13 @@ const SECTION_ENERGY: Record<string, number> = {
 };
 
 const TARGET_RMS_DB: Record<StemName, number> = {
-  drums: -14, bass: -17, other: -18, vocals: -20,
+  drums: -17, bass: -18, other: -20, vocals: -23,
 };
 
-/** Gentle runtime level match, capped at ±7 dB, never baked into the assets. */
+/** Runtime level match for quiet phrases, capped at ~+7 dB, never baked. */
 function stemGain(stem: StemName, rmsDb: number): number {
   const delta = TARGET_RMS_DB[stem] - rmsDb;
-  return Math.max(0.45, Math.min(1.45, Math.pow(10, delta / 20)));
+  return Math.max(0.45, Math.min(2.2, Math.pow(10, delta / 20)));
 }
 
 function stemPan(stem: StemName, key: string): number {

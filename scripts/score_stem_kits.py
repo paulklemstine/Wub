@@ -36,6 +36,11 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
+try:  # UMAP gives a legible 2-D cloud; PCA is the deterministic fallback.
+    import umap  # type: ignore
+except Exception:  # pragma: no cover
+    umap = None
+
 from scripts.audio_judge_model import AudioJudge
 
 STEMS = ("drums", "bass", "other", "vocals")
@@ -140,8 +145,17 @@ def main() -> None:
             stem_next[pid][stem] = items
 
         if args.write_coords:
-            pca = PCA(n_components=2, random_state=505, svd_solver="full")
-            xy = pca.fit_transform(embeddings.numpy())
+            if umap is not None:
+                reducer = umap.UMAP(
+                    n_components=2, random_state=505, n_neighbors=20,
+                    min_dist=0.12, metric="euclidean", verbose=False,
+                )
+                xy = reducer.fit_transform(embeddings.numpy())
+                method = "UMAP"
+            else:
+                pca = PCA(n_components=2, random_state=505, svd_solver="full")
+                xy = pca.fit_transform(embeddings.numpy())
+                method = "PCA"
             scaled = np.empty_like(xy)
             for axis in range(2):
                 lo, hi = np.percentile(xy[:, axis], [2.0, 98.0])
@@ -152,8 +166,8 @@ def main() -> None:
                 scaled[:, axis] = 0.08 + norm * 0.84
             for pid, (x, y) in zip(ids, scaled):
                 coords[pid][stem] = {"x": round(float(x), 4), "y": round(float(y), 4)}
-            print(f"{stem}: PCA {pca.explained_variance_ratio_[0]:.3f} / "
-                  f"{pca.explained_variance_ratio_[1]:.3f}", flush=True)
+            print(f"{stem}: {method} map {scaled[:, 0].min():.2f}..{scaled[:, 0].max():.2f} / "
+                  f"{scaled[:, 1].min():.2f}..{scaled[:, 1].max():.2f}", flush=True)
 
     out = {
         "version": 2,

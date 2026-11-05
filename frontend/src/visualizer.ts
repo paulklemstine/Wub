@@ -731,12 +731,17 @@ export class NebulaRenderer {
     const px = clamp01(x);
     const py = clamp01(y);
     const last = this.patternHistory[this.patternHistory.length - 1];
-    if (!last || Math.hypot(last.x - px, last.y - py) > 0.004 || timeSec - last.t > 1.5) {
-      this.patternHistory.push({ x: px, y: py, t: timeSec, stem });
-      if (this.patternHistory.length > 28) this.patternHistory.shift();
-    } else {
-      last.t = timeSec;
-      last.stem = stem;
+    const dist = last ? Math.hypot(last.x - px, last.y - py) : Number.POSITIVE_INFINITY;
+    // Only connect nearby points. Four independent stem clouds can jump far
+    // between phrases; drawing those jumps creates misleading crosshair lines.
+    if (!last || dist <= 0.12) {
+      if (!last || dist > 0.004 || timeSec - last.t > 1.5) {
+        this.patternHistory.push({ x: px, y: py, t: timeSec, stem });
+        if (this.patternHistory.length > 28) this.patternHistory.shift();
+      } else {
+        last.t = timeSec;
+        last.stem = stem;
+      }
     }
   }
 

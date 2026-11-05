@@ -127,7 +127,7 @@ export class StretchVoice {
     const ctx = this.gain.context;
     const when = Math.max(options.when, ctx.currentTime + 0.005);
     const fadeIn = Math.max(0.002, options.fadeInSec ?? 0.003);
-    const target = Math.max(0, Math.min(1.5, options.gain ?? 1));
+    const target = Math.max(0, Math.min(3.0, options.gain ?? 1));
     this.targetGain = target;
     const gain = this.gain.gain;
     gain.cancelScheduledValues(when);
