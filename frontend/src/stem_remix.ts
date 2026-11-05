@@ -1157,6 +1157,8 @@ export class StemRemixPlayer {
       }
     }
     const targetEnergy = SECTION_ENERGY[section] ?? 0.65;
+    const nextBlockBars = phrases * 4;
+    const threshold = ranker.thresholdFor(nextBlockBars);
     // Held stems continue their run where it left off (or loop when the
     // source run ends), so their candidate state is the next phrase, not the
     // phrase that just finished.  A manual pin keeps playing through the
@@ -1183,6 +1185,7 @@ export class StemRemixPlayer {
       if (!candidateState) return;
       const score = ranker.score(
         previousState, currentState, candidateState, changed, section, targetEnergy,
+        this.currentBlockBars, nextBlockBars,
       );
       if (!bestRef.value || score > bestRef.value.score) {
         bestRef.value = { entries: candidate, changed: subset, score };
@@ -1211,9 +1214,9 @@ export class StemRemixPlayer {
       this.onStatus?.(`Joint mix: no candidates (${counts}); holding`);
       return null;
     }
-    if (best.score < ranker.threshold) {
+    if (best.score < threshold) {
       this.onStatus?.(
-        `Joint mix: best ${best.score.toFixed(3)} < ${ranker.threshold.toFixed(3)}; holding`,
+        `Joint mix: best ${best.score.toFixed(3)} < ${threshold.toFixed(3)}; holding`,
       );
       return null;
     }

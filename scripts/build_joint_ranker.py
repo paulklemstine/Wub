@@ -5,6 +5,15 @@ isolation.  This script learns the **joint** transition: it scores a candidate
 four-stem mix against the current mix and trains a small student that can run
 in the browser from per-phrase features.
 
+The shipped player follows a 4 -> 8 -> 16-bar arc.  A block is a run of
+consecutive 4-bar phrases, and held stems continue to their real next phrase
+(or loop when the source run ends).  Training therefore includes:
+
+* 4-, 8- and 16-bar current / next block lengths
+* real-run boundaries (last phrase -> first phrase of the next run)
+* held-stem continuation (last phrase -> real next phrase, else run start)
+* 1- and 2-stem donor swaps against that continuation
+
 Teacher
 -------
 The mix-level audio judge (`data/audio_judge.pt`, val AUC 0.951) scores
@@ -13,20 +22,22 @@ candidate 1-/2-stem swaps.  Its logit is the target.
 
 Student
 -------
-For every phrase we build a 272-d joint state:
+For every phrase we build a 400-d joint state:
 
-    4 stems x 52 features + 64-d mix embedding
+    4 stems x (52 features + 32-d per-stem timbre) + 64-d mix embedding
 
     52 = 16 onset bits, 12 chroma, 12 root, energy, 5 section one-hot,
          stem RMS, run position, run length, has-next, key shift, tempo fit
 
 The transition input is:
 
-    prev 272, current 272, candidate 272, candidate-current delta,
-    current-prev delta, 4-bit change mask + count, 6-d target section/energy
+    prev 400, current 400, candidate 400, candidate-current delta,
+    current-prev delta, 4-bit change mask + count, 6-d target section/energy,
+    3-d current block one-hot (4/8/16), 3-d next block one-hot (4/8/16)
 
-(or 1,371 numbers).  A 3-layer MLP predicts the teacher logit.  A held-out
-track split reports real-vs-swap AUC for both teacher and student.
+(or 2,017 numbers).  A 3-layer MLP predicts the teacher logit.  A held-out
+track split reports real-vs-swap AUC for both teacher and student, overall and
+per block length.  Hold thresholds are calibrated per block length.
 
 Run on the laptop:
     PYTHONPATH=. python3 scripts/build_joint_ranker.py \
@@ -60,10 +71,16 @@ SEC_IDX = {"INTRO": 0, "GROOVE_A": 1, "BUILDUP": 2, "DROP": 3, "BREAKDOWN": 4}
 SEC_ENERGY = {"INTRO": 0.25, "GROOVE_A": 0.83, "BUILDUP": 0.65, "DROP": 0.90, "BREAKDOWN": 0.20}
 STEM_DIM = 52 + 32
 STATE_DIM = 4 * STEM_DIM + 64
-INPUT_DIM = STATE_DIM * 5 + 5 + 6
+BLOCK_BARS = (4, 8, 16)
+BLOCK_INDEX = {bars: index for index, bars in enumerate(BLOCK_BARS)}
+INPUT_DIM = STATE_DIM * 5 + 5 + 6 + 6
 SUBSETS = [(s,) for s in STEMS] + [
     (a, b) for i, a in enumerate(STEMS) for b in STEMS[i + 1:]
 ]
+# Current/next block pairs seen in the arc.  4->4 and 8->8 dominate; the
+# one-off 4->8, 8->16 and 16->4 boundaries are included so the ranker sees
+# every hand-off in the set.
+ARC_PAIRS = ((1, 1), (2, 2), (1, 2), (2, 4), (4, 1))
 
 PITCH = {"C": 0, "C#": 1, "DB": 1, "D": 2, "D#": 3, "EB": 3, "E": 4, "F": 5,
          "F#": 6, "GB": 6, "G": 7, "G#": 8, "AB": 8, "A": 9, "A#": 10, "BB": 10, "B": 11}
@@ -160,22 +177,52 @@ def load_data(manifest_path: Path, dataset_path: Path, bars_dir: Path):
     return manifest, rows, row_of, mels
 
 
-def run_info(kit: dict, start_bar: int):
-    starts = sorted(int(p["start_bar"]) for p in kit["phrases"])
-    if start_bar not in starts:
+def phrase_duration(phrase: dict) -> float:
+    return float(phrase.get("duration_sec", 0.0) or 0.0)
+
+
+def duration_fits(a: dict, b: dict, tolerance: float = 0.01) -> bool:
+    before = phrase_duration(a)
+    after = phrase_duration(b)
+    if before <= 0 or after <= 0:
+        return True
+    return abs(after - before) / before <= tolerance
+
+
+def run_info(kit: dict, start_bar: int, tolerance: float = 0.01):
+    """Run position/length for the 1%-duration run, matching the browser."""
+    by_start = {int(p["start_bar"]): p for p in kit["phrases"]}
+    if start_bar not in by_start:
         return 0.0, 1 / 6, 0.0
+    first = by_start[start_bar]
     pos = 0
     b = start_bar
-    while b - 4 in starts:
+    while b - 4 in by_start and duration_fits(by_start[b - 4], first, tolerance):
         b -= 4
         pos += 1
     ln = 1
     e = start_bar
-    while e + 4 in starts:
+    while e + 4 in by_start and duration_fits(first, by_start[e + 4], tolerance):
         e += 4
         ln += 1
-    has_next = 1.0 if start_bar + 4 in starts else 0.0
+    has_next = 1.0 if e > start_bar else 0.0
     return pos / max(1, ln - 1), ln / 6.0, has_next
+
+
+def build_runs(kit: dict, tolerance: float = 0.01) -> list[list[dict]]:
+    """Maximal consecutive 4-bar runs with the browser's 1% tempo tolerance."""
+    by_start = {int(p["start_bar"]): p for p in kit.get("phrases", [])}
+    runs: list[list[dict]] = []
+    for start in sorted(by_start):
+        if start - 4 in by_start and duration_fits(by_start[start - 4], by_start[start], tolerance):
+            continue
+        run = [by_start[start]]
+        bar = start
+        while bar + 4 in by_start and duration_fits(run[0], by_start[bar + 4], tolerance):
+            bar += 4
+            run.append(by_start[bar])
+        runs.append(run)
+    return runs
 
 
 def build_phrase_states(manifest, rows, row_of, mels, emb32):
@@ -262,7 +309,22 @@ def state_for(states, phrase_for_stem):
     return np.concatenate(chunks + [emb / 4.0])
 
 
-def transition_vector(prev, cur, cand, changed, target_section, target_energy):
+def block_one_hot(bars: int) -> np.ndarray:
+    out = np.zeros(3, dtype=np.float32)
+    out[BLOCK_INDEX.get(int(bars), 0)] = 1.0
+    return out
+
+
+def transition_vector(
+    prev,
+    cur,
+    cand,
+    changed,
+    target_section,
+    target_energy,
+    current_bars: int = 4,
+    next_bars: int = 4,
+):
     mask = np.zeros(5, dtype=np.float32)
     for stem in changed:
         mask[STEMS.index(stem)] = 1.0
@@ -272,6 +334,7 @@ def transition_vector(prev, cur, cand, changed, target_section, target_energy):
     target[5] = target_energy
     return np.concatenate([
         prev, cur, cand, cand - cur, cur - prev, mask, target,
+        block_one_hot(current_bars), block_one_hot(next_bars),
     ]).astype(np.float32)
 
 
@@ -290,6 +353,9 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=505)
     ap.add_argument("--max-kits", type=int, default=0)
     ap.add_argument("--max-neg", type=int, default=2)
+    ap.add_argument("--max-examples", type=int, default=120000)
+    ap.add_argument("--pos-subsets", type=int, default=3)
+    ap.add_argument("--neg-subsets", type=int, default=6)
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -336,18 +402,47 @@ def main() -> None:
     mix_judge.to(device).eval()
     print(f"[joint] teacher mix judge val_auc={ckpt.get('val_auc')}", flush=True)
 
-    # Cluster -> stem -> phrase IDs, for donor swaps.
-    cluster_stem = defaultdict(lambda: defaultdict(list))
-    for pid, m in meta.items():
-        for stem in STEMS:
-            cluster_stem[m["cluster"]["id"]][stem].append(pid)
+    # Run length remaining and donor pools are built inside the example
+    # generator, using the same 1% duration rule as the browser.
 
-    kits = manifest.get("kits", [])
+    kits = list(manifest.get("kits", []))
     if args.max_kits:
         kits = kits[:args.max_kits]
+    random.shuffle(kits)
 
-    x_rows, y_rows, teacher_rows, track_rows = [], [], [], []
+    # Run length remaining from each phrase, matching the browser's 1% run.
+    run_remaining = {}
+    for kit in manifest.get("kits", []):
+        for run in build_runs(kit):
+            for index, phrase in enumerate(run):
+                run_remaining[phrase["id"]] = len(run) - index
+
+    # Cluster -> stem -> donor run starts.  A phrase is a legal start for any
+    # stem that actually has audio on it.
+    donor_pool = defaultdict(lambda: defaultdict(list))
+    for pid, info in meta.items():
+        phrase = info["phrase"]
+        for stem in STEMS:
+            if ((phrase.get("stems") or {}).get(stem) or {}).get("file"):
+                donor_pool[info["cluster"]["id"]][stem].append(
+                    (pid, info["track_id"], run_remaining.get(pid, 1))
+                )
+
+    def sample_donor(cluster_id, stem, exclude_tracks, min_len):
+        pool = [item for item in donor_pool[cluster_id][stem]
+                if item[1] not in exclude_tracks]
+        good = [item for item in pool if item[2] >= min_len]
+        if not good:
+            good = pool
+        return random.choice(good)[0] if good else None
+
+    x_rows, y_rows, teacher_rows, track_rows, bars_rows = [], [], [], [], []
     teacher_batch_a, teacher_batch_b, teacher_meta = [], [], []
+    example_target = args.max_examples if args.max_examples > 0 else 10 ** 12
+    stop = False
+
+    def example_count():
+        return len(y_rows) + len(teacher_batch_a)
 
     def flush_teacher():
         if not teacher_batch_a:
@@ -357,89 +452,121 @@ def main() -> None:
         with torch.no_grad():
             logits, _ = mix_judge.score_pairs(a, b, batch=256)
         logits = logits.float().cpu().numpy()
-        for logit, (x, y, track) in zip(logits, teacher_meta):
+        for logit, (x, y, track, bars) in zip(logits, teacher_meta):
             x_rows.append(x)
             y_rows.append(y)
             teacher_rows.append(float(logit))
             track_rows.append(track)
+            bars_rows.append(bars)
         teacher_batch_a.clear()
         teacher_batch_b.clear()
         teacher_meta.clear()
 
-    def add_example(x, y, cur_rows, cand_rows, track):
+    def add_example(x, y, cur_rows, cand_rows, track, next_bars):
         teacher_batch_a.append(mix_rows(cur_rows, mels))
         teacher_batch_b.append(mix_rows(cand_rows, mels))
-        teacher_meta.append((x, float(y), track))
+        teacher_meta.append((x, float(y), track, int(next_bars)))
         if len(teacher_batch_a) >= 384:
             flush_teacher()
 
+    # Arc-aware boundary examples.  For every phrase position we walk the
+    # current/next block pairs in the set (4->4, 8->8, 4->8, 8->16, 16->4)
+    # and compare a real next phrase with donor swaps.
     for kit in kits:
-        phrases = sorted(kit.get("phrases", []), key=lambda p: int(p.get("start_bar", 0)))
-        for i in range(len(phrases) - 1):
-            cur = phrases[i]
-            nxt = phrases[i + 1]
-            if int(nxt.get("start_bar", 0)) != int(cur.get("start_bar", 0)) + 4:
-                continue
-            prev = phrases[i - 1] if i > 0 and int(phrases[i - 1].get("start_bar", 0)) == int(cur.get("start_bar", 0)) - 4 else cur
-            cid, nid, pid = cur["id"], nxt["id"], prev["id"]
-            if cid not in states or nid not in states or pid not in states:
-                continue
-            cluster = meta[cid]["cluster"]
-            cur_rows = {stem: row_of[cid] for stem in STEMS}
-            next_rows = {stem: row_of[nid] for stem in STEMS}
-            cur_state = state_for(states, {stem: cid for stem in STEMS})
-            prev_state = state_for(states, {stem: pid for stem in STEMS})
-            target_section = str(nxt.get("section", "GROOVE_A")).upper()
-            target_energy = SEC_ENERGY.get(target_section, 0.65)
-            cur_track = cur["id"]
-
-            for subset in SUBSETS:
-                # Positive: move this subset to the real next phrase.
-                cand_map = {stem: cid for stem in STEMS}
-                for stem in subset:
-                    cand_map[stem] = nid
-                cand_state = state_for(states, cand_map)
-                x = transition_vector(prev_state, cur_state, cand_state, subset, target_section, target_energy)
-                cand_rows = {stem: next_rows[stem] for stem in subset}
-                cand_rows.update({stem: cur_rows[stem] for stem in STEMS if stem not in subset})
-                add_example(x, 1.0, cur_rows, cand_rows, cur_track)
-
-                # Negatives: the same subset from a different track.
-                for stem in subset:
-                    pool = [d for d in cluster_stem[cluster["id"]][stem]
-                            if meta[d]["track_id"] != kit["track_id"]
-                            and meta[d]["track_id"] != meta[nid]["track_id"]]
-                    if not pool:
+        if stop:
+            break
+        first_pid = next((p["id"] for p in kit["phrases"] if p["id"] in meta), None)
+        if first_pid is None:
+            continue
+        cluster_id = meta[first_pid]["cluster"]["id"]
+        by_start = {int(p["start_bar"]): p for p in kit.get("phrases", [])}
+        runs = build_runs(kit)
+        for run in runs:
+            for i in range(len(run)):
+                if stop:
+                    break
+                for current_phrases, next_phrases in ARC_PAIRS:
+                    if i + current_phrases > len(run):
                         continue
-                donors = {}
-                for stem in subset:
-                    pool = [d for d in cluster_stem[cluster["id"]][stem]
-                            if meta[d]["track_id"] != kit["track_id"]
-                            and meta[d]["track_id"] != meta[nid]["track_id"]]
-                    if not pool:
-                        donors = {}
+                    cur = run[i + current_phrases - 1]
+                    prev = run[i - 1] if i > 0 else by_start.get(
+                        int(run[0]["start_bar"]) - 4, cur
+                    )
+                    next_phrase = run[i + current_phrases] if i + current_phrases < len(run) else run[i]
+                    if (cur["id"] not in states or prev["id"] not in states
+                            or next_phrase["id"] not in states):
+                        continue
+                    cur_rows = {stem: row_of[cur["id"]] for stem in STEMS}
+                    next_rows = {stem: row_of[next_phrase["id"]] for stem in STEMS}
+                    cur_state = state_for(states, {stem: cur["id"] for stem in STEMS})
+                    prev_state = state_for(states, {stem: prev["id"] for stem in STEMS})
+                    target_section = str(next_phrase.get("section", "GROOVE_A")).upper()
+                    target_energy = SEC_ENERGY.get(target_section, 0.65)
+                    cur_bars = current_phrases * 4
+                    next_bars = next_phrases * 4
+
+                    # Positive: the real next run start for every stem.  The
+                    # change mask says which stems are being "swapped" into it.
+                    pos_state = state_for(states, {stem: next_phrase["id"] for stem in STEMS})
+                    for subset in random.sample(SUBSETS, min(args.pos_subsets, len(SUBSETS))):
+                        x = transition_vector(
+                            prev_state, cur_state, pos_state, subset,
+                            target_section, target_energy, cur_bars, next_bars,
+                        )
+                        add_example(x, 1.0, cur_rows, next_rows, kit["track_id"], next_bars)
+                        if example_count() >= example_target:
+                            stop = True
+                            break
+                    if stop:
                         break
-                    donors[stem] = random.choice(pool)
-                if not donors:
-                    continue
-                for _ in range(args.max_neg):
-                    cand_map = {stem: cid for stem in STEMS}
-                    for stem, donor in donors.items():
-                        cand_map[stem] = donor
-                    cand_state = state_for(states, cand_map)
-                    x = transition_vector(prev_state, cur_state, cand_state, subset, target_section, target_energy)
-                    cand_rows = {stem: cur_rows[stem] for stem in STEMS}
-                    for stem, donor in donors.items():
-                        cand_rows[stem] = row_of[donor]
-                    add_example(x, 0.0, cur_rows, cand_rows, cur_track)
-        print(f"[joint] {kit['track_id']} examples={len(y_rows)}", flush=True) if len(y_rows) % 1000 < 30 else None
+
+                    # Negatives: held stems continue to the real next phrase,
+                    # the subset moves to donor run starts from other tracks.
+                    for subset in random.sample(SUBSETS, min(args.neg_subsets, len(SUBSETS))):
+                        exclude = {kit["track_id"], meta[next_phrase["id"]]["track_id"]}
+                        donors = {}
+                        for stem in subset:
+                            donor = sample_donor(cluster_id, stem, exclude, next_phrases)
+                            if donor is None:
+                                donors = {}
+                                break
+                            donors[stem] = donor
+                            exclude.add(meta[donor]["track_id"])
+                        if not donors:
+                            continue
+                        cand_map = {stem: next_phrase["id"] for stem in STEMS}
+                        cand_rows = dict(next_rows)
+                        for stem, donor in donors.items():
+                            cand_map[stem] = donor
+                            cand_rows[stem] = row_of[donor]
+                        cand_state = state_for(states, cand_map)
+                        x = transition_vector(
+                            prev_state, cur_state, cand_state, subset,
+                            target_section, target_energy, cur_bars, next_bars,
+                        )
+                        add_example(x, 0.0, cur_rows, cand_rows, kit["track_id"], next_bars)
+                        if example_count() >= example_target:
+                            stop = True
+                            break
+                    if stop:
+                        break
+                if stop:
+                    break
+        if example_count() >= 10000 and example_count() % 10000 < 40:
+            print(f"[joint] {example_count()} examples", flush=True)
+
+    flush_teacher()
 
     flush_teacher()
     x = np.stack(x_rows).astype(np.float32)
     y = np.asarray(y_rows, dtype=np.float32)
     t = np.asarray(teacher_rows, dtype=np.float32)
     tracks = np.asarray(track_rows)
+    bars = np.asarray(bars_rows, dtype=np.int32)
     print(f"[joint] examples={len(y)} pos={int(y.sum())} neg={int((y == 0).sum())} input={x.shape[1]}", flush=True)
+    print("[joint] by next block: " + " ".join(
+        f"{b} bars={int((bars == b).sum())}" for b in BLOCK_BARS
+    ), flush=True)
 
     # Track-disjoint split.
     unique_tracks = sorted(set(tracks.tolist()))
@@ -515,14 +642,38 @@ def main() -> None:
         model.load_state_dict(best_state)
     model.eval()
 
-    # Calibrate a hold threshold from the positive validation scores.
+    # Calibrate hold thresholds from the positive validation scores.  The
+    # arc's 4/8/16-bar blocks have different score distributions, so keep one
+    # threshold per block length (plus a global default).
     vals = []
     with torch.no_grad():
         for xb, yb, tb in val_dl:
             vals.append(torch.sigmoid(model(xb.to(device))).float().cpu().numpy())
     v = np.concatenate(vals)
-    pos = v[yv > 0.5]
+    val_y = y[val_mask]
+    val_t = t[val_mask]
+    val_bars = bars[val_mask]
+    pos = v[val_y > 0.5]
     threshold = float(np.percentile(pos, 20)) if len(pos) else 0.5
+    thresholds = {"default": threshold}
+    block_auc = {}
+    for block_len in BLOCK_BARS:
+        mask = val_bars == block_len
+        if mask.sum() < 10 or len(np.unique(val_y[mask])) < 2:
+            continue
+        positives = v[mask & (val_y > 0.5)]
+        block_threshold = (float(np.percentile(positives, 20))
+                           if len(positives) else threshold)
+        thresholds[str(block_len)] = block_threshold
+        block_auc[str(block_len)] = {
+            "auc": float(roc_auc_score(val_y[mask], v[mask])),
+            "teacher_auc": float(roc_auc_score(val_y[mask], val_t[mask])),
+            "threshold": block_threshold,
+            "n": int(mask.sum()),
+        }
+        print(f"[joint] {block_len}-bar val auc={block_auc[str(block_len)]['auc']:.4f} "
+              f"teacher={block_auc[str(block_len)]['teacher_auc']:.4f} "
+              f"threshold={block_threshold:.4f} n={int(mask.sum())}", flush=True)
     print(f"[joint] threshold={threshold:.4f} best_auc={best_auc:.4f}", flush=True)
 
     out_dir = Path(args.out)
@@ -532,6 +683,8 @@ def main() -> None:
         "mean": mean,
         "std": std,
         "threshold": threshold,
+        "thresholds": thresholds,
+        "block_auc": block_auc,
         "val_auc": best_auc,
         "input_dim": x.shape[1],
         "history": history,
@@ -553,10 +706,12 @@ def main() -> None:
     def flat(name):
         return sd[name].detach().cpu().numpy().astype(np.float32).reshape(-1).tolist()
     export = {
-        "version": 1,
-        "model": "joint_transition_v1",
+        "version": 2,
+        "model": "joint_transition_arc_v2",
         "val_auc": best_auc,
         "threshold": threshold,
+        "thresholds": thresholds,
+        "block_auc": block_auc,
         "input_dim": int(x.shape[1]),
         "state_dim": STATE_DIM,
         "feature_dim": int(feature.shape[1]),

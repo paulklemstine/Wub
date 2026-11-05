@@ -2,15 +2,17 @@
 //
 // The player assembles a 400-d state for any stem combination:
 //   4 stems x (52 phrase features + 32 timbre embedding) + 64-d mix embedding
-// and scores a candidate transition with the last two states and deltas.
-// The weights and per-phrase features are produced by
-// scripts/build_joint_ranker.py.
+// and scores a candidate transition with the last two states, deltas, and the
+// current/next block length (4/8/16 bars).  The weights and per-phrase
+// features are produced by scripts/build_joint_ranker.py.
 import type { StemName } from "./types";
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const STEM_DIM = 84;
 const STATE_DIM = 4 * STEM_DIM + 64;
-const INPUT_DIM = STATE_DIM * 5 + 5 + 6;
+// prev/current/candidate + two deltas, change mask, target, current/next bars.
+const INPUT_DIM = STATE_DIM * 5 + 5 + 6 + 6;
+const BLOCK_INDEX: Record<number, number> = { 4: 0, 8: 1, 16: 2 };
 const SEC_IDX: Record<string, number> = {
   INTRO: 0, GROOVE_A: 1, BUILDUP: 2, DROP: 3, BREAKDOWN: 4,
 };
@@ -29,6 +31,8 @@ interface JointManifest {
   model: string;
   val_auc: number;
   threshold: number;
+  thresholds?: Record<string, number>;
+  block_auc?: Record<string, { auc: number; teacher_auc: number; threshold: number; n: number }>;
   input_dim: number;
   state_dim: number;
   feature_dim: number;
@@ -50,7 +54,9 @@ export class JointRanker {
   private b3: Float32Array | null = null;
   private mean: Float32Array | null = null;
   private std: Float32Array | null = null;
-  private readonly inputScratch = new Float32Array(INPUT_DIM);
+  private inputDimValue = INPUT_DIM;
+  private stateDimValue = STATE_DIM;
+  private inputScratch = new Float32Array(INPUT_DIM);
   private readonly h1Scratch = new Float32Array(256);
   private readonly h2Scratch = new Float32Array(128);
 
@@ -62,12 +68,18 @@ export class JointRanker {
     return this.manifest?.threshold ?? 0.5;
   }
 
+  /** Hold threshold for the upcoming block length (4/8/16 bars). */
+  thresholdFor(blockBars: number): number {
+    const value = this.manifest?.thresholds?.[String(blockBars)];
+    return typeof value === "number" ? value : this.threshold;
+  }
+
   get valAuc(): number | null {
     return this.manifest?.val_auc ?? null;
   }
 
   get stateDim(): number {
-    return this.manifest?.state_dim ?? STATE_DIM;
+    return this.stateDimValue;
   }
 
   async load(baseUrl: string): Promise<boolean> {
@@ -77,6 +89,15 @@ export class JointRanker {
       if (!response.ok) return false;
       const manifest = (await response.json()) as JointManifest;
       if (!Array.isArray(manifest.phrase_ids) || !manifest.weights) return false;
+      const stateDim = manifest.state_dim ?? STATE_DIM;
+      const expectedInput = stateDim * 5 + 5 + 6 + 6;
+      if (manifest.input_dim !== expectedInput) {
+        console.warn(
+          `[JointRanker] input_dim ${manifest.input_dim}, expected ${expectedInput}; ` +
+          "retrain the arc model"
+        );
+        return false;
+      }
       const featureResponse = await fetch(`${base}/${manifest.feature_file}`);
       if (!featureResponse.ok) return false;
       const features = new Float32Array(await featureResponse.arrayBuffer());
@@ -87,6 +108,9 @@ export class JointRanker {
       }
       this.manifest = manifest;
       this.features = features;
+      this.stateDimValue = stateDim;
+      this.inputDimValue = manifest.input_dim;
+      this.inputScratch = new Float32Array(manifest.input_dim);
       this.rowOf.clear();
       manifest.phrase_ids.forEach((id, index) => this.rowOf.set(id, index));
       const w = manifest.weights;
@@ -98,9 +122,14 @@ export class JointRanker {
       this.b3 = new Float32Array(w.b3);
       this.mean = new Float32Array(manifest.scaler.mean);
       this.std = new Float32Array(manifest.scaler.std);
+      const perBlock = manifest.thresholds
+        ? ` • thresholds 4/8/16 = ${[4, 8, 16]
+          .map((bars) => (manifest.thresholds?.[String(bars)] ?? manifest.threshold).toFixed(3))
+          .join(" / ")}`
+        : "";
       console.info(
         `[JointRanker] loaded ${manifest.model} • val_auc ${manifest.val_auc.toFixed(4)} • ` +
-        `${manifest.phrase_ids.length} phrases • threshold ${manifest.threshold.toFixed(3)}`
+        `${manifest.phrase_ids.length} phrases • threshold ${manifest.threshold.toFixed(3)}${perBlock}`
       );
       return true;
     } catch (err) {
@@ -136,6 +165,8 @@ export class JointRanker {
     changed: ReadonlySet<StemName>,
     targetSection: string,
     targetEnergy: number,
+    currentBlockBars: number,
+    nextBlockBars: number,
   ): number {
     if (
       this.w1 === null || this.b1 === null || this.w2 === null ||
@@ -144,15 +175,16 @@ export class JointRanker {
     ) {
       return 0;
     }
+    const stateDim = this.stateDimValue;
     const input = this.inputScratch;
-    input.set(prev.subarray(0, STATE_DIM), 0);
-    input.set(current.subarray(0, STATE_DIM), STATE_DIM);
-    input.set(candidate.subarray(0, STATE_DIM), STATE_DIM * 2);
-    for (let i = 0; i < STATE_DIM; i++) {
-      input[STATE_DIM * 3 + i] = candidate[i] - current[i];
-      input[STATE_DIM * 4 + i] = current[i] - prev[i];
+    input.set(prev.subarray(0, stateDim), 0);
+    input.set(current.subarray(0, stateDim), stateDim);
+    input.set(candidate.subarray(0, stateDim), stateDim * 2);
+    for (let i = 0; i < stateDim; i++) {
+      input[stateDim * 3 + i] = candidate[i] - current[i];
+      input[stateDim * 4 + i] = current[i] - prev[i];
     }
-    const maskOffset = STATE_DIM * 5;
+    const maskOffset = stateDim * 5;
     input.fill(0, maskOffset, maskOffset + 5);
     for (const stem of changed) {
       input[maskOffset + STEMS.indexOf(stem)] = 1;
@@ -162,9 +194,13 @@ export class JointRanker {
     input.fill(0, targetOffset, targetOffset + 6);
     input[targetOffset + (SEC_IDX[targetSection.toUpperCase()] ?? 1)] = 1;
     input[targetOffset + 5] = targetEnergy;
+    const blockOffset = targetOffset + 6;
+    input.fill(0, blockOffset, blockOffset + 6);
+    input[blockOffset + (BLOCK_INDEX[currentBlockBars] ?? 0)] = 1;
+    input[blockOffset + 3 + (BLOCK_INDEX[nextBlockBars] ?? 0)] = 1;
 
     // Standardize.
-    for (let i = 0; i < input.length; i++) {
+    for (let i = 0; i < this.inputDimValue; i++) {
       input[i] = (input[i] - this.mean[i]) / this.std[i];
     }
 
@@ -173,8 +209,8 @@ export class JointRanker {
     const h1 = this.h1Scratch;
     for (let j = 0; j < 256; j++) {
       let sum = b1[j];
-      const offset = j * INPUT_DIM;
-      for (let i = 0; i < INPUT_DIM; i++) sum += w1[offset + i] * input[i];
+      const offset = j * this.inputDimValue;
+      for (let i = 0; i < this.inputDimValue; i++) sum += w1[offset + i] * input[i];
       h1[j] = sum > 0 ? sum : 0;
     }
     const w2 = this.w2;

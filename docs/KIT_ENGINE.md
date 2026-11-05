@@ -518,9 +518,11 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   hold while the others morph.
 * **The morph is learned, not heuristic.** The mix-level audio judge (AUC
   0.951) is the teacher; the student ranker sees per-stem timbre, onset,
-  chroma, roots, energy, section, run position and key/tempo fit. Held-out
-  student AUC is **0.787** on the hard 1-2-stem swap task, above the teacher's
-  own 0.731 on the same split.
+  chroma, roots, energy, section, run position, key/tempo fit and the
+  **current/next block length** (4/8/16 bars). Held-out real-vs-donor AUC is
+  **0.784 (4-bar), 0.783 (8-bar), 0.699 (16-bar)**; the teacher scores
+  **0.676 / 0.694 / 0.712** on the same split. Hold thresholds are calibrated
+  per block length.
 * **Drag commit is at the next bar.** The reticle snaps to the nearest legal
   phrase, then the stem starts at the bar offset that matches the global 4-bar
   phase. It schedules one long run across block boundaries, so an 8/16-bar
