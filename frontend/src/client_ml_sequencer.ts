@@ -2695,7 +2695,12 @@ export class ClientGrooveboxConductor {
         // Pick a full-length kit at random so each session starts on a different
         // record instead of always manifest order (which is track-id sorted).
         const pool = manifest.kits.filter((k) => k.phrases.length >= 6);
-        const choices = pool.length > 0 ? pool : manifest.kits;
+        // Prefer kits whose DROP phrase is actually hotter than the groove;
+        // a weak "DROP" label is what made builds loop instead of dropping.
+        const strongDrop = pool.filter((k) =>
+          k.phrases.some((ph) => ph.section === "DROP" && ph.energy >= 0.8)
+        );
+        const choices = strongDrop.length > 0 ? strongDrop : (pool.length > 0 ? pool : manifest.kits);
         const firstKit = choices[Math.floor(Math.random() * choices.length)];
         await player.loadKit(firstKit);
         this.kitAudioActive = true;

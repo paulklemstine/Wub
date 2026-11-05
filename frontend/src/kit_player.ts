@@ -745,10 +745,14 @@ export class KitPlayer {
         }))
         .filter((row): row is { entry: TasteNextKit; kit: Kit } => row.kit !== undefined);
       if (eligible.length > 0) {
-        eligible.sort(
+        const strong = eligible.filter((row) =>
+          row.kit.phrases.some((ph) => ph.section === "DROP" && ph.energy >= 0.8)
+        );
+        const ranked = strong.length > 0 ? strong : eligible;
+        ranked.sort(
           (a, b) => b.entry.score - a.entry.score || a.entry.track_id.localeCompare(b.entry.track_id)
         );
-        const best = eligible[0];
+        const best = ranked[0];
         this.lastKitScoreValue = best.entry.score;
         console.info(
           `[KitPlayer] Taste next kit: ${best.entry.track_id} (score ${best.entry.score.toFixed(4)}, ${best.entry.style}, ${best.entry.bpm.toFixed(2)} BPM)`
@@ -1092,17 +1096,28 @@ export class KitPlayer {
     const durationPool = all.filter((phrase) => phrase.duration_sec >= MIN_PHRASE_DURATION_SEC);
     const basePool = durationPool.length > 0 ? durationPool : all;
 
-    const sectionPool = this.sectionPoolForSelection(basePool, targetSection, current);
-    const banded = this.energyBandPool(sectionPool, current, sectionChanged, recent);
-    let candidatePool = banded.pool;
-    let bandLabel = banded.band >= 0 ? banded.band.toFixed(2) : (current ? "repeat" : "none");
+    let candidatePool: KitPhrase[];
+    let bandLabel: string;
+    if (targetSection === "DROP") {
+      // A drop is defined by energy, not by the source song's section label.
+      // Kits often label a mid-energy phrase "DROP" while their groove phrases
+      // are hotter, which produced a build that repeated instead of dropping.
+      const dropPool = this.dropPool(basePool, current, recent);
+      candidatePool = dropPool.length > 0 ? dropPool : basePool;
+      bandLabel = "drop";
+    } else {
+      const sectionPool = this.sectionPoolForSelection(basePool, targetSection, current);
+      const banded = this.energyBandPool(sectionPool, current, sectionChanged, recent);
+      candidatePool = banded.pool;
+      bandLabel = banded.band >= 0 ? banded.band.toFixed(2) : (current ? "repeat" : "none");
+    }
 
     if (candidatePool.length === 0) {
       if (current) {
         this.logPick("Rule", targetSection, current, current, "repeat", ` • ${current.id} (repeat)`);
         return current;
       }
-      candidatePool = sectionPool.length > 0 ? sectionPool : basePool;
+      candidatePool = basePool;
       bandLabel = "none";
     }
 
@@ -1315,6 +1330,42 @@ export class KitPlayer {
    * 0.25 so they never produce an audible energy flap; a section change gets
    * one wider 0.35/0.40 allowance.
    */
+  /**
+   * Drop candidates: the hottest phrases in the kit, regardless of their
+   * source section. A phrase only qualifies if it lifts the energy over the
+   * current block; if the whole kit is cooler, the top-energy phrases are
+   * used so the arrangement still lands with maximum impact.
+   */
+  private dropPool(
+    pool: KitPhrase[],
+    current: KitPhrase | null,
+    recent: readonly string[]
+  ): KitPhrase[] {
+    if (pool.length === 0) return [];
+    const currentEnergy = current?.energy ?? 0.6;
+    const lastTwo = recent.slice(-2);
+
+    // Already in a hot drop: hold the energy instead of alternating into a
+    // breakdown. Repeating the current phrase is better than falling 0.3.
+    if (currentEnergy >= 0.80) {
+      const hot = pool.filter((phrase) => phrase.energy >= currentEnergy - 0.10);
+      const freshHot = hot.filter((phrase) => !lastTwo.includes(phrase.id));
+      if (freshHot.length > 0) return freshHot;
+      return current ? [current] : hot;
+    }
+
+    // Coming out of a build: lift into the hottest phrases the kit has.
+    const floor = Math.max(0.70, currentEnergy + 0.03);
+    let candidates = pool.filter((phrase) => phrase.energy >= floor);
+    if (candidates.length < 2) {
+      candidates = [...pool]
+        .sort((a, b) => b.energy - a.energy)
+        .slice(0, Math.min(4, pool.length));
+    }
+    const fresh = candidates.filter((phrase) => !lastTwo.includes(phrase.id));
+    return fresh.length >= 2 ? fresh : candidates;
+  }
+
   private energyBandPool(
     pool: KitPhrase[],
     current: KitPhrase | null,
