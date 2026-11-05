@@ -477,20 +477,25 @@ and the per-cluster `max_run_phrases`.
 
 ## 8. Promotion (separate, reviewed step)
 
-The recut pipeline stops at staging. Promotion is deliberately not automated
-here:
+The recut pipeline stops at staging. Promotion is deliberately a reviewed
+step, but the copying/validation can be done by
+`scripts/promote_arc_bank.sh`:
+
+* dry run (default): validates the manifest (390 kits, 16 clusters, all stems),
+  taste scores, joint model dimensions/feature file, QC failures, cluster
+  coverage, and the staging size; prints the result.
+* `APPLY=1`: refuses if `frontend/public/data/kits` has uncommitted changes,
+  then copies the manifest, taste scores, joint model, and kit audio, runs the
+  frontend build, and prints `du -sh`. It never commits.
+
+Review `$STAGE/qc/kit_qc.json`, `$STAGE/qc/run_coverage.json`, and the dry run
+before applying. The manual checklist remains:
 
 1. Review `$STAGE/qc/kit_qc.json` and `$STAGE/qc/run_coverage.json`.
 2. Confirm `$STAGE/kits_bank/taste_scores.json` has both kit-level and
    `stem_next` fields.
 3. Build the frontend and check the 1 GiB budget.
-4. Copy, in a separate change/commit, only after approval:
-   * `$STAGE/kits_bank/kit_manifest.json`
-   * `$STAGE/kits_bank/kits/`
-   * `$STAGE/kits_bank/taste_scores.json`
-   * `$STAGE/joint_ranker/joint_features.f32`
-   * `$STAGE/joint_ranker/joint_ranker.json`
-   * `$STAGE/joint_ranker/joint_ranker.pt`
+4. Promote, then review `git diff` and listen locally before committing.
 5. Remove stale kit directories from the live bank only as part of that
    reviewed promotion; never delete `kits_flow` or the staging outputs.
 
