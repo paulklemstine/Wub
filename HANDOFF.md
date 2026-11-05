@@ -2,11 +2,14 @@
 
 ## What this is
 
-Wub KG-505 is now a **song-kit phrase jukebox**, not a VQ/medoid slice
+Wub KG-505 is now a **per-stem phrase remix jukebox**, not a VQ/medoid slice
 synthesizer. A kit is one real four-stem track; a phrase is a real 4-bar window
-cut from that track. The browser plays phrases at rate 1.0 (no resampling, no
-pitch shift), locks tempo/key to the kit, plays 12-block sets, and rotates whole
-kits through a drumless bridge. Full design: `docs/KIT_ENGINE.md`.
+cut from that track. The shipped cluster bank has four independent stem streams
+on one bar grid: each stem has its own reticle, next-bar commits, 32-bar style
+pins, lazy audio and a per-stem judge. The session rotates to a Camelot
+neighbour cluster every 48 bars through a two-block drumless bridge. Tempo fit
+(<=2%) and key fit (<=5 semitones, vocals <=3) use Signalsmith Stretch; phrases
+are never resampled with `playbackRate`. Full design: `docs/KIT_ENGINE.md`.
 
 Repo root: `/home/raver1975/Wub` (git repo). The deployed site is the static
 `frontend/dist` build; the FastAPI server and legacy slice paths are not needed
@@ -24,9 +27,10 @@ for the shipped engine.
   `vocals.wav`.
 - **Analysis on the laptop**: `/tmp/wubtrain/processed/*.json` — 1,699
   four-stem analyses are complete; a full rebuild to 1,842 is running.
-- **Kit work on the laptop**: `/tmp/wubtrain/kits_all` (full bank),
-  `/tmp/wubtrain/kits_ship` (style-balanced shipping subset), and
-  `/tmp/wubtrain/taste_dataset.json`.
+- **Kit work on the laptop**: `/tmp/wubtrain/kits_all2` (full-corpus bank),
+  `/tmp/wubtrain/kits_cluster` (shipped 16-cluster bank),
+  `/tmp/wubtrain/kits_ship` (old 600-kit bank), and
+  `/tmp/wubtrain/data/stem_bars` + `stem_judge_*.pt` (per-stem judges).
 - **Access**: reverse tunnel from WSL on the laptop:
   ```bash
   ssh -f -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
@@ -48,8 +52,9 @@ for the shipped engine.
 - Effective transfer rate is about **4 MB/s** over the tunnel. Plan for it; do
   not pull the 342 GB stem corpus across.
 - Transfer **analysis JSON, model checkpoints, kit manifests, and the selected
-  Opus bank** — not stems. The shipped kit bank is currently ~602 MB for 355
-  kits; a full 600-kit bank is ~0.9 GB with the app.
+  Opus bank** — not stems. The shipped cluster bank is **558 MB for 390 kits /
+  2,154 phrases / 16 clusters**; the `dist` build is ~575 MB, under the 1 GB
+  Pages limit.
 - Small-file copies are slower than the raw rate suggests. Tar/zip a kit bank
   or processed subset before `tools/laptop.sh get`, and verify file counts and
   sizes after transfer.
