@@ -341,11 +341,15 @@ export class StemRemixPlayer {
       for (const entry of entries) {
         if (!byStem.has(entry.stem)) byStem.set(entry.stem, entry);
       }
-      const phrase = entries.find((entry) => STEMS.every((stem) =>
+      const fullEntry = entries.find((entry) => STEMS.every((stem) =>
         entries.some((candidate) => candidate.stem === stem && candidate.phrase.id === entry.phrase.id)
-      ))?.phrase ?? entries[0]?.phrase ?? anchor.phrases[0];
+      ));
+      const fullAnySection = anchor.phrases.find((candidate) =>
+        STEMS.every((stem) => this.entryById.has(`${candidate.id}:${stem}`))
+      );
+      const phrase = fullEntry?.phrase ?? fullAnySection ?? entries[0]?.phrase ?? anchor.phrases[0];
       const prepared = await Promise.all(STEMS.map(async (stem) => {
-        const entry = byStem.get(stem) ?? this.bestEntryForPhrase(phrase, stem);
+        const entry = byStem.get(stem) ?? this.anchorEntry(stem, phrase);
         if (!entry) return null;
         const loaded = await this.prepareEntry(stem, entry);
         return loaded ? { stem, entry: loaded.entry, audio: loaded.audio } : null;
@@ -437,6 +441,11 @@ export class StemRemixPlayer {
         STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
       );
       if (fullPhrase) score += 2;
+      const fullGroove = kit.phrases.some((phrase) =>
+        String(phrase.section).toUpperCase() === "GROOVE_A"
+        && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
+      );
+      if (fullGroove) score += 2.5;
       score += Math.min(1, kit.phrases.length / 6);
       score += hashRoll(kit.track_id) * 0.3;
       if (best === null || score > best.score) best = { kit, score };
