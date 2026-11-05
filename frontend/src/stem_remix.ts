@@ -208,6 +208,7 @@ export class StemRemixPlayer {
   private pins: Partial<Record<StemName, StemPin>> = {};
   private blocksSinceChange: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private recent: string[] = [];
+  private anchorRecent: string[] = [];
   private playedOnce = new Set<string>();
   private failedKits = new Set<string>();
   private cache = new Map<string, LoadedStemAudio>();
@@ -344,7 +345,7 @@ export class StemRemixPlayer {
       );
       // Start at the beginning of the longest consecutive run, so the first
       // 24 bars can play the actual song in order instead of jumping windows.
-      const run = this.longestRunPhrases(anchor);
+      const run = this.longestRunPhrases(anchor, true);
       const phrase = run.length >= 2
         ? run[0]
         : (fullEntry?.phrase ?? fullAnySection ?? grooveEntries[0]?.phrase
@@ -425,19 +426,24 @@ export class StemRemixPlayer {
       }
     }
     this.recent = [];
+    this.anchorRecent = [];
     this.playedOnce.clear();
     this.anchorKit = this.chooseAnchor();
     this.currentAnchorPhrase = null;
   }
 
-  /** Longest chain of 4-bar phrases that are actually consecutive. */
-  private longestRunPhrases(kit: Kit): KitPhrase[] {
+  /** Longest chain of consecutive 4-bar phrases, preferably with all stems. */
+  private longestRunPhrases(kit: Kit, requireFull: boolean = false): KitPhrase[] {
+    const usable = requireFull
+      ? kit.phrases.filter((phrase) =>
+          STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`)))
+      : kit.phrases;
     const byStart = new Map<number, KitPhrase>();
-    for (const phrase of kit.phrases) {
+    for (const phrase of usable) {
       if (typeof phrase.start_bar === "number") byStart.set(phrase.start_bar, phrase);
     }
     let best: KitPhrase[] = [];
-    for (const phrase of kit.phrases) {
+    for (const phrase of usable) {
       if (typeof phrase.start_bar !== "number") continue;
       const run = [phrase];
       let bar = phrase.start_bar;
@@ -447,6 +453,7 @@ export class StemRemixPlayer {
       }
       if (run.length > best.length) best = run;
     }
+    if (best.length === 0 && requireFull) return this.longestRunPhrases(kit, false);
     return best;
   }
 
@@ -474,7 +481,7 @@ export class StemRemixPlayer {
       if (fullGroove) score += 2.5;
       // Prefer a kit that actually contains the next 4 bars, so the anchor
       // song can advance every 4 bars instead of looping an isolated window.
-      const run = this.longestRunPhrases(kit);
+      const run = this.longestRunPhrases(kit, true);
       if (run.length > 1) score += Math.min(6, run.length) * 0.9;
       score += Math.min(1, kit.phrases.length / 6);
       score += hashRoll(kit.track_id) * 0.3;
@@ -658,6 +665,10 @@ export class StemRemixPlayer {
       if (entry.phrase.once) this.playedOnce.add(entry.phrase.id);
     }
     this.currentAnchorPhrase = anchorPhrase;
+    if (anchorPhrase) {
+      this.anchorRecent.push(anchorPhrase.id);
+      if (this.anchorRecent.length > 24) this.anchorRecent = this.anchorRecent.slice(-24);
+    }
     if (this.recent.length > RECENT_BLOCKS * 5) {
       this.recent = this.recent.slice(-RECENT_BLOCKS * 5);
     }
@@ -701,7 +712,7 @@ export class StemRemixPlayer {
     if (!kit || kit.phrases.length === 0) return null;
     const target = SECTION_ENERGY[section] ?? 0.65;
     // Only avoid the last two phrases, so a six-phrase kit can keep cycling.
-    const recent = new Set(this.recent.slice(-2));
+    const recent = new Set(this.anchorRecent.slice(-2));
     let best: { phrase: KitPhrase; score: number } | null = null;
     for (const phrase of kit.phrases) {
       if (recent.has(phrase.id) && kit.phrases.length > 2) continue;
@@ -721,8 +732,9 @@ export class StemRemixPlayer {
       const currentStart = this.currentAnchorPhrase?.start_bar;
       if (typeof currentStart === "number" && typeof phrase.start_bar === "number") {
         const delta = phrase.start_bar - currentStart;
-        if (delta === 4) score += 1.6;       // the real next 4 bars
-        else if (delta === 8) score += 0.7;  // one window skipped
+        if (delta === 4 && fullStem) score += 2.8;   // the real next 4 bars wins
+        else if (delta === 4) score += 1.2;          // forward, but a stem is absent
+        else if (delta === 8) score += 1.0;          // one window skipped
         else if (delta > 0 && delta < 16) score += 0.3;
         else if (delta >= 16) score -= 0.5;
         else if (delta < 0) score -= 0.2;    // prefer forward motion

@@ -474,7 +474,10 @@ top-1 / 96.3% top-3**; the 48-d control is 72.0% on the same split.
 ## 10. Per-stem remix engine (cluster bank, 2026-11)
 
 The shipped cluster bank in `frontend/public/data/kits/` is the per-stem mode:
-**390 kits / 2,154 phrases / 16 clusters / ~544 MB**.
+**390 kits / 2,203 phrases / 16 clusters / ~567 MB**. Each kit is re-cut as a
+continuous 24-bar passage where the source allows it: **100 kits have a full
+six-phrase consecutive run**, 71 a four/five-phrase run, and the rest fall back
+to the best available windows.
 
 ### 10.1 Why clusters
 
@@ -562,10 +565,10 @@ Held-out AUC on the shipping tracks (same-song vs cross-song):
 
 | stem | AUC | top-K entries |
 | --- | --- | --- |
-| drums | 0.825 | 51,696 |
-| bass | 0.801 | 51,696 |
-| other | 0.696 | 51,696 |
-| vocals | 0.669 | 51,696 |
+| drums | 0.825 | 52,872 |
+| bass | 0.801 | 52,872 |
+| other | 0.696 | 52,872 |
+| vocals | 0.669 | 52,872 |
 
 The weaker other/vocals scores reflect their sparse, sectional source stems;
 the symbolic ranker and theory rules remain hard filters, and a failed judge

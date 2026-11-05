@@ -52,9 +52,9 @@ for the shipped engine.
 - Effective transfer rate is about **4 MB/s** over the tunnel. Plan for it; do
   not pull the 342 GB stem corpus across.
 - Transfer **analysis JSON, model checkpoints, kit manifests, and the selected
-  Opus bank** — not stems. The shipped cluster bank is **558 MB for 390 kits /
-  2,154 phrases / 16 clusters**; the `dist` build is ~575 MB, under the 1 GB
-  Pages limit.
+  Opus bank** — not stems. The shipped cluster bank is **567 MB for 390 kits /
+  2,203 phrases / 16 clusters**; the `dist` build is ~590 MB, under the 1 GB
+  Pages limit. 100 kits carry a full six-phrase consecutive run.
 - Small-file copies are slower than the raw rate suggests. Tar/zip a kit bank
   or processed subset before `tools/laptop.sh get`, and verify file counts and
   sizes after transfer.

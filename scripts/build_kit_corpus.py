@@ -222,6 +222,36 @@ def _overlaps(a: dict, b: dict) -> bool:
 # Window selection
 # ---------------------------------------------------------------------------
 
+def _best_consecutive_run(
+    candidates: Sequence[dict],
+    n_max: int,
+) -> List[dict]:
+    """Longest chain of 4-bar windows at start_bar + 4, best energy first."""
+    by_start = {int(c["start_bar"]): c for c in candidates if not c.get("taken")}
+    best: List[dict] = []
+    best_key = (-1, -1e9)
+    for c in candidates:
+        if c.get("taken"):
+            continue
+        run = [c]
+        bar = int(c["start_bar"])
+        while (bar + 4) in by_start:
+            bar += 4
+            run.append(by_start[bar])
+        if len(run) < MIN_PHRASES:
+            continue
+        energy = sum(float(x.get("energy_norm", 0.5)) for x in run) / len(run)
+        sections = len({x["span_key"] for x in run})
+        hot = 1.0 if any(str(x.get("section", "")).upper() in ("DROP", "BUILDUP")
+                         for x in run) else 0.0
+        score = energy + 0.15 * sections + 0.25 * hot
+        key = (min(len(run), n_max), score)
+        if key > best_key:
+            best_key = key
+            best = run[:n_max]
+    return best
+
+
 def _select_phrases(
     candidates: Sequence[dict],
     n_max: int,
@@ -240,8 +270,11 @@ def _select_phrases(
     durations = np.array([float(c["duration"]) for c in candidates], dtype=np.float64)
     duration_med = float(np.median(durations)) if len(durations) else 0.0
 
-    chosen: List[dict] = []
-    per_section: Counter = Counter()
+    run = _best_consecutive_run(candidates, n_max)
+    chosen: List[dict] = list(run)
+    for c in chosen:
+        c["taken"] = True
+    per_section: Counter = Counter(c["span_key"] for c in chosen)
     while len(chosen) < n_max:
         best: Optional[dict] = None
         best_score = -1e9
@@ -274,7 +307,7 @@ def _select_phrases(
         per_section[best["span_key"]] += 1
         chosen.append(best)
 
-    if duration_med > 1e-6 and len(chosen) > MIN_PHRASES:
+    if not run and duration_med > 1e-6 and len(chosen) > MIN_PHRASES:
         coherent = [
             c for c in chosen
             if abs(float(c["duration"]) - duration_med) / duration_med <= DURATION_TOL
