@@ -304,9 +304,10 @@ export class StemRemixPlayer {
   private sessionStartAt = 0;
   private nextBlockAt = 0;
   private blockIndex = 0;
-  /** Session bar of the last real stem-track change, and last vocal change. */
+  /** Session bar of the last real stem-track change, vocal and drum change. */
   private lastMoveBar = 0;
   private lastVocalChangeBar = -1;
+  private lastDrumChangeBar = 0;
   /** Scheduled blocks, so a mid-block drag can find the block it is inside. */
   private blockGrid: Array<{ startAt: number; endAt: number; startBar: number; bars: number }> = [];
   private bridgeStep = 0;
@@ -449,6 +450,7 @@ export class StemRemixPlayer {
     this.blockGrid = [];
     this.lastMoveBar = 0;
     this.lastVocalChangeBar = -1;
+    this.lastDrumChangeBar = 0;
 
     // Preload one real song: all four stems from the same kit so the first
     // 4 bars sound like a record before the remix starts. Scheduling waits
@@ -509,6 +511,7 @@ export class StemRemixPlayer {
       this.previousEntries = { ...this.lastBlockEntries };
       this.lastMoveBar = 0;
       this.lastVocalChangeBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 0 : -1;
+      this.lastDrumChangeBar = 0;
       for (const stem of STEMS) {
         if (!this.anchorPrepared.some((entry) => entry.stem === stem)) {
           console.warn(`[StemRemix] anchor missing ${stem}`);
@@ -585,6 +588,7 @@ export class StemRemixPlayer {
     this.morphIndex = 0;
     this.lastMoveBar = 0;
     this.lastVocalChangeBar = -1;
+    this.lastDrumChangeBar = 0;
   }
 
   /** Longest chain of consecutive 4-bar phrases, preferably with all stems. */
@@ -1044,6 +1048,7 @@ export class StemRemixPlayer {
     if (trackChanged.length > 0) {
       this.lastMoveBar = startBar;
       if (trackChanged.includes("vocals")) this.lastVocalChangeBar = startBar;
+      if (trackChanged.includes("drums")) this.lastDrumChangeBar = startBar;
     }
     if (opening) {
       this.currentAnchorPhrase = anchorPhrase;
@@ -1215,6 +1220,10 @@ export class StemRemixPlayer {
     const threshold = ranker.thresholdFor(nextBlockBars);
     const budget = movementBudgetAt(startBar, nextBlockBars);
     const allowVocals = vocalChangeAllowed(startBar, this.lastVocalChangeBar, sectionChanged);
+    // A drum track can stay for a long time while bass/pads carry the mix.
+    // After 24 bars, prefer a drum-inclusive candidate when it is nearly as
+    // strong as the best policy move; this breaks "same groove" plateaus.
+    const drumStale = startBar - this.lastDrumChangeBar >= 24;
     // 4-bar blocks are the busiest part of the arc; hold for at least two
     // blocks between track changes unless the arc changes section or the
     // max-hold budget forces a move.  8/16-bar blocks are already 8+ bars.
@@ -1292,6 +1301,14 @@ export class StemRemixPlayer {
         rawScore: number;
       } | null;
     } = { value: null };
+    const bestDrumRef: {
+      value: {
+        entries: Partial<Record<StemName, StemPoolEntry>>;
+        changed: StemName[];
+        score: number;
+        rawScore: number;
+      } | null;
+    } = { value: null };
 
     const consider = (subset: StemName[], picks: StemPoolEntry[]) => {
       const changed = new Set(subset);
@@ -1343,6 +1360,10 @@ export class StemRemixPlayer {
       if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
         bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
       }
+      if (subset.includes("drums")
+        && (!bestDrumRef.value || rawScore > bestDrumRef.value.rawScore)) {
+        bestDrumRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
+      }
       if (!bestRef.value || policy.score > bestRef.value.score) {
         bestRef.value = {
           entries: candidate,
@@ -1378,6 +1399,16 @@ export class StemRemixPlayer {
       return null;
     }
     const bestRaw = bestRawRef.value;
+    const bestDrum = bestDrumRef.value;
+    if (drumStale && bestDrum && !best.changed.includes("drums")
+      && bestDrum.rawScore >= threshold * 0.8
+      && bestDrum.rawScore >= best.rawScore * 0.9) {
+      this.onStatus?.(
+        `Joint mix: drum refresh ${bestDrum.changed.join("+")} → ` +
+        `${bestDrum.score.toFixed(3)} (raw ${bestDrum.rawScore.toFixed(3)})`,
+      );
+      return { entries: bestDrum.entries, changed: bestDrum.changed };
+    }
     if (best.rawScore < threshold) {
       // The policy may rank a candidate below another raw candidate; fall
       // back to the best raw candidate if it still clears the learned gate.

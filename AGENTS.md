@@ -118,7 +118,8 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   8/16-bar blocks may change 1–2 stems. The joint policy is a soft blend of the
   learned score, energy match, novelty, repetition and harmony — not a hard
   filter. Vocals are sticky (section change or 16 bars); bass is strict but
-  soft; other/pads carry most of the movement.
+  soft; other/pads carry most of the movement. Drums get a refresh after 24
+  bars when a near-best drum candidate exists, so the groove does not plateau.
 - **Glue bus.** A real-time per-stem glue gain after the analyser adds vocal
   ducking on other/bass and kick/bass sidechain. A short generated reverb send
   on other/vocals, a high-passed return, and equal-power boundary fades glue

@@ -546,7 +546,8 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   move; 8/16-bar blocks may change 1–2 stems. The joint score is blended with
   energy match, novelty, repetition and a soft harmony penalty. Vocals are
   sticky (section change or 16 bars); bass is strict but soft; other/pads carry
-  most of the movement.
+  most of the movement. After 24 bars without a drum change, a near-best
+  drum-inclusive candidate is preferred so the groove does not plateau.
 * **Glue bus.** Each stem has a real-time glue gain after its analyser. A vocal
   envelope ducks other/bass by up to 1.5 dB; a drum transient detector ducks
   bass by up to 2.5 dB. A generated short stereo impulse feeds a shared reverb
