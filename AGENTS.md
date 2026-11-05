@@ -91,13 +91,13 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   phrase; cross-song recombination happens only at block boundaries.
 - **No `playbackRate` resampling.** Tempo fit uses Signalsmith Stretch `rate`
   (cap 2%); key fit uses `semitones` (drums 0, vocals ±3, bass/other ±5).
-- **Anchor opening, then morph.** The first two 4-bar blocks stay on the
-  session's anchor kit. Then one unpinned stem per block moves to a phrase from
-  a **different track** (preferring a track no other stem is using); the other
-  three continue their own kit's consecutive run. After four morphs the mix is
-  a new four-stem song. Pinned stems hold their region while the others morph.
-  This is deliberate: cross-song stems are the goal, but changing everything at
-  once sounded disjoint.
+- **Anchor opening, then joint morph.** The first two 4-bar blocks stay on the
+  session's anchor kit. Then a **joint transition ranker** evaluates 1- and
+  2-stem candidate mixes from different tracks against the current mix (last
+  two states + deltas) and picks the best. The mix judge is the teacher; the
+  student is distilled to per-phrase features and runs in the browser. If the
+  best candidate is below the calibrated threshold, the whole mix holds for a
+  block. Pinned stems hold while the others morph.
 - **Drag commits at the next bar; pins last 32 bars.** The reticle follows the
   playing phrase; a dashed ghost ring marks the pinned region. Double-click
   releases the pin. If the target audio is not decoded by the bar, wait one
@@ -125,7 +125,8 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | File | Responsibility |
 | :--- | :--- |
 | [`kit_player.ts`](file:///home/raver1975/Wub/frontend/src/kit_player.ts) | Kit facade: manifest/taste loading, legacy 12-block single-kit player, and the remix `scheduleBlock` adapter. |
-| [`stem_remix.ts`](file:///home/raver1975/Wub/frontend/src/stem_remix.ts) | Per-stem remix engine: cluster pools, 4-bar bar grid, staggered advance, 32-bar pins, next-bar drag commit, cluster rotation, lazy cache, and per-stem nebula points. |
+| [`stem_remix.ts`](file:///home/raver1975/Wub/frontend/src/stem_remix.ts) | Per-stem remix engine: cluster pools, 4-bar bar grid, joint ranker selection, 32-bar pins, next-bar drag commit, cluster rotation, lazy cache, and per-stem nebula points. |
+| [`joint_ranker.ts`](file:///home/raver1975/Wub/frontend/src/joint_ranker.ts) | Browser inference for the joint four-stem transition ranker: 400-d states, last-two-state context, 1/2-stem scoring, calibrated hold threshold. |
 | [`stretch_voice.ts`](file:///home/raver1975/Wub/frontend/src/stretch_voice.ts) | Signalsmith Stretch voice wrapper: pre-roll + phrase buffer, tempo/key scheduling, gain fades, disposal. |
 | [`client_ml_sequencer.ts`](file:///home/raver1975/Wub/frontend/src/client_ml_sequencer.ts) | In-browser conductor. Owns the kit block clock and kit tempo/key lock; retains the legacy jukebox/slice/step sequencer as fallback only. Also holds the chord/arranger state that drives kit section selection. |
 | [`audio_engine.ts`](file:///home/raver1975/Wub/frontend/src/audio_engine.ts) | Core Web Audio context wrapper, 4-stem gain buses, analysers, `scheduleSlice` (rate/fades), and AudioBuffer decode for Opus/WAV kit assets. |
@@ -166,6 +167,7 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | [`filter_stem_dataset.py`](file:///home/raver1975/Wub/scripts/filter_stem_dataset.py) | Filters a per-stem bar dataset to the 390 shipping tracks. |
 | [`train_stem_judge.py`](file:///home/raver1975/Wub/scripts/train_stem_judge.py) | Trains one same-song-vs-cross-song CNN per stem and writes its 128-d embedding. |
 | [`score_stem_kits.py`](file:///home/raver1975/Wub/scripts/score_stem_kits.py) | Scores the shipping bank per stem, writes top-K `stem_next` and judge-PCA `stem_xy`. |
+| [`build_joint_ranker.py`](file:///home/raver1975/Wub/scripts/build_joint_ranker.py) | Builds the joint transition dataset, distils the mix judge into the 400-d student ranker, and exports browser features/weights. |
 | [`kit_reconstruct.py`](file:///home/raver1975/Wub/scripts/kit_reconstruct.py) | Decodes and QC-checks kit audio against source stems (correlation, SNR, RMS delta, codec lag, overlap/duration errors). |
 | [`analyze_stem_corpus_vec.py`](file:///home/raver1975/Wub/scripts/analyze_stem_corpus_vec.py) | Vectorised stem analysis (whole-stem CQT/MFCC averaged per slice; much faster than the stock path). Run it where the stems live (`/mnt/e/Wub/data/stems` on the laptop) to build `processed/*.json`. |
 | [`export_standalone_client_bundle.py`](file:///home/raver1975/Wub/scripts/export_standalone_client_bundle.py) | Legacy bundle builder for the retired slice/VQ path; not part of the kit rebuild. |

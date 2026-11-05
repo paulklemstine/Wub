@@ -8,6 +8,7 @@ import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
 import { StretchVoice } from "./stretch_voice";
+import { JointRanker } from "./joint_ranker";
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const PITCHED: readonly StemName[] = ["bass", "other", "vocals"];
@@ -209,6 +210,9 @@ export class StemRemixPlayer {
   private current: Partial<Record<StemName, CurrentStem>> = {};
   private voicePool: Partial<Record<StemName, StretchVoice[]>> = {};
   private voiceIndex: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
+  private jointRanker: JointRanker | null = null;
+  private lastBlockEntries: Partial<Record<StemName, StemPoolEntry>> = {};
+  private previousEntries: Partial<Record<StemName, StemPoolEntry>> = {};
   private pending: Partial<Record<StemName, PendingCommit>> = {};
   private pins: Partial<Record<StemName, StemPin>> = {};
   private blocksSinceChange: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
@@ -302,6 +306,13 @@ export class StemRemixPlayer {
     }
     this.kitById.clear();
     for (const kit of manifest.kits) this.kitById.set(kit.track_id, kit);
+    try {
+      const ranker = new JointRanker();
+      const ok = await ranker.load(base);
+      this.jointRanker = ok ? ranker : null;
+    } catch {
+      this.jointRanker = null;
+    }
   }
 
   /** Pick a cluster (optionally by style/id) and preload the opening phrase. */
@@ -367,6 +378,11 @@ export class StemRemixPlayer {
         return loaded ? { stem, entry: loaded.entry, audio: loaded.audio } : null;
       }));
       this.anchorPrepared = prepared.filter((entry): entry is { stem: StemName; entry: StemPoolEntry; audio: LoadedStemAudio } => entry !== null);
+      this.lastBlockEntries = {};
+      for (const preparedEntry of this.anchorPrepared) {
+        this.lastBlockEntries[preparedEntry.stem] = preparedEntry.entry;
+      }
+      this.previousEntries = { ...this.lastBlockEntries };
       for (const stem of STEMS) {
         if (!this.anchorPrepared.some((entry) => entry.stem === stem)) {
           console.warn(`[StemRemix] anchor missing ${stem}`);
@@ -624,10 +640,10 @@ export class StemRemixPlayer {
       }
     }
 
-    // Two opening blocks establish the anchor record, then one stem per block
-    // morphs into a different track. The other three continue their own run,
-    // so the mix becomes a new four-stem song without changing everything at
-    // once.
+    // Two opening blocks establish the anchor record.  After that the joint
+    // transition ranker chooses 1-2 stems to move to a different track; the
+    // other stems hold.  If no candidate clears the threshold, the whole mix
+    // holds for a block instead of forcing a bad morph.
     const opening = !bridge && this.blockIndex < this.anchorOpeningBlocks;
     const holdAnchor = opening && !sectionChanged
       && this.blockIndex % 2 === 1 && this.currentAnchorPhrase !== null
@@ -636,42 +652,31 @@ export class StemRemixPlayer {
       ? (holdAnchor ? this.currentAnchorPhrase : this.chooseAnchorPhrase(normalized))
       : null;
 
-    let morphStem: StemName | null = null;
-    if (!opening && !bridge && !rotation) {
-      for (let k = 0; k < this.morphOrder.length; k++) {
-        const candidate = this.morphOrder[(this.morphIndex + k) % this.morphOrder.length];
-        if (!this.pins[candidate]) {
-          morphStem = candidate;
-          this.morphIndex = (this.morphIndex + k + 1) % this.morphOrder.length;
-          break;
-        }
-      }
-    }
+    const priorEntries = { ...this.lastBlockEntries };
+    const joint = !opening && !bridge && !rotation && this.jointRanker?.ready
+      ? this.selectJoint(normalized)
+      : null;
 
     const order: StemName[] = bridge && !rotation
       ? ["other", "vocals"]
       : ["drums", "bass", "other", "vocals"];
+    const chosen: Partial<Record<StemName, StemPoolEntry>> = { ...priorEntries };
     for (const stem of order) {
       let entry: StemPoolEntry | null = null;
       if (this.pins[stem]) {
-        entry = this.select(stem, at, normalized, sectionChanged);
+        entry = this.holdEntry(stem);
       } else if (opening) {
         entry = this.anchorEntry(stem, anchorPhrase);
-      } else if (stem === morphStem) {
-        entry = this.selectMorph(stem, at, normalized);
+      } else if (joint) {
+        entry = joint.entries[stem] ?? this.holdEntry(stem);
       } else {
         entry = this.holdEntry(stem);
       }
       if (!entry) {
-        const current = this.current[stem];
-        if (current) {
-          phrases[stem] = current.entry.phrase;
-          kits[stem] = current.entry.kit;
-          const audio = this.cache.get(this.cacheKey(current.entry));
-          if (audio) tasks.push({ stem, entry: current.entry, audio });
-        }
-        continue;
+        entry = this.holdEntry(stem);
       }
+      if (!entry) continue;
+      chosen[stem] = entry;
       const current = this.current[stem];
       const same = current
         && current.entry.phrase.id === entry.phrase.id
@@ -683,6 +688,8 @@ export class StemRemixPlayer {
       this.recent.push(entry.phrase.id);
       if (entry.phrase.once) this.playedOnce.add(entry.phrase.id);
     }
+    this.previousEntries = priorEntries;
+    this.lastBlockEntries = chosen;
     if (opening) {
       this.currentAnchorPhrase = anchorPhrase;
       if (anchorPhrase) {
@@ -727,22 +734,142 @@ export class StemRemixPlayer {
     );
   }
 
-  /** Follow the current stem's own kit run for one more 4-bar block. */
-  private holdEntry(stem: StemName): StemPoolEntry | null {
-    const current = this.current[stem];
-    if (!current) return null;
-    const start = current.entry.phrase.start_bar;
-    if (typeof start === "number") {
-      const next = current.entry.kit.phrases.find((phrase) =>
-        phrase.start_bar === start + 4
-        && this.entryById.has(`${phrase.id}:${stem}`),
-      );
-      if (next) {
-        const entry = this.entryById.get(`${next.id}:${stem}`);
-        if (entry) return entry;
+  /** Assemble the 400-d joint state for four chosen entries. */
+  private jointState(entries: Partial<Record<StemName, StemPoolEntry>>): Float32Array | null {
+    const ranker = this.jointRanker;
+    if (!ranker?.ready) return null;
+    const out = new Float32Array(400);
+    const emb = new Float32Array(64);
+    for (let i = 0; i < 4; i++) {
+      const stem = STEMS[i];
+      const entry = entries[stem];
+      if (!entry) return null;
+      const shift = keyShift(this.sessionKey, entry.kit.key) ?? 0;
+      const state = ranker.stateFor(entry.phrase.id, shift, entry.rate);
+      if (!state) return null;
+      out.set(state.subarray(i * 84, (i + 1) * 84), i * 84);
+      for (let k = 0; k < 64; k++) emb[k] += state[336 + k] / 4;
+    }
+    out.set(emb, 336);
+    return out;
+  }
+
+  /** Top cross-song options for one stem, ranked by the per-stem judge. */
+  private jointOptions(
+    stem: StemName,
+    current: StemPoolEntry,
+    usedTracks: ReadonlySet<string>,
+  ): StemPoolEntry[] {
+    const options = this.pools[stem].filter((entry) => {
+      if (entry.kit.track_id === current.kit.track_id) return false;
+      if (this.failedKits.has(entry.kit.track_id)) return false;
+      if (usedTracks.has(entry.kit.track_id)) return false;
+      if (this.recent.includes(entry.phrase.id)) return false;
+      if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) return false;
+      if (entry.phrase.is_intro && this.blockIndex > 0) return false;
+      if (entry.phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) return false;
+      return true;
+    });
+    options.sort((a, b) =>
+      this.judgeScore(stem, current.phrase.id, b.phrase.id)
+      - this.judgeScore(stem, current.phrase.id, a.phrase.id));
+    return options.slice(0, 6);
+  }
+
+  /**
+   * Choose the best joint transition over 1- and 2-stem replacements.
+   * Returns null when the best candidate is below the calibrated threshold.
+   */
+  private selectJoint(section: string): {
+    entries: Partial<Record<StemName, StemPoolEntry>>;
+    changed: StemName[];
+  } | null {
+    const ranker = this.jointRanker;
+    if (!ranker?.ready) return null;
+    const current: Partial<Record<StemName, StemPoolEntry>> = {};
+    for (const stem of STEMS) {
+      current[stem] = this.lastBlockEntries[stem] ?? this.current[stem]?.entry;
+      if (!current[stem]) return null;
+    }
+    const previous: Partial<Record<StemName, StemPoolEntry>> = {};
+    for (const stem of STEMS) previous[stem] = this.previousEntries[stem] ?? current[stem];
+    const currentState = this.jointState(current);
+    const previousState = this.jointState(previous);
+    if (!currentState || !previousState) return null;
+
+    const unpinned = STEMS.filter((stem) => this.pins[stem] === undefined);
+    if (unpinned.length === 0) return null;
+    const usedTracks = new Set<string>();
+    for (const stem of STEMS) {
+      const entry = current[stem];
+      if (entry) usedTracks.add(entry.kit.track_id);
+    }
+    const options = new Map<StemName, StemPoolEntry[]>();
+    for (const stem of unpinned) {
+      options.set(stem, this.jointOptions(stem, current[stem]!, usedTracks));
+    }
+    const subsets: StemName[][] = [];
+    for (const stem of unpinned) subsets.push([stem]);
+    for (let i = 0; i < unpinned.length; i++) {
+      for (let j = i + 1; j < unpinned.length; j++) {
+        subsets.push([unpinned[i], unpinned[j]]);
       }
     }
-    return current.entry;
+    const targetEnergy = SECTION_ENERGY[section] ?? 0.65;
+    const bestRef: {
+      value: {
+        entries: Partial<Record<StemName, StemPoolEntry>>;
+        changed: StemName[];
+        score: number;
+      } | null;
+    } = { value: null };
+
+    const consider = (subset: StemName[], picks: StemPoolEntry[]) => {
+      const changed = new Set(subset);
+      const candidate: Partial<Record<StemName, StemPoolEntry>> = { ...current };
+      for (let i = 0; i < subset.length; i++) candidate[subset[i]] = picks[i];
+      const candidateState = this.jointState(candidate);
+      if (!candidateState) return;
+      const score = ranker.score(
+        previousState, currentState, candidateState, changed, section, targetEnergy,
+      );
+      if (!bestRef.value || score > bestRef.value.score) {
+        bestRef.value = { entries: candidate, changed: subset, score };
+      }
+    };
+
+    for (const subset of subsets) {
+      const lists = subset.map((stem) => options.get(stem) ?? []);
+      if (lists.some((list) => list.length === 0)) continue;
+      if (subset.length === 1) {
+        for (const entry of lists[0]) consider(subset, [entry]);
+      } else {
+        for (const first of lists[0]) {
+          for (const second of lists[1]) {
+            if (first.kit.track_id === second.kit.track_id) continue;
+            if (usedTracks.has(first.kit.track_id) || usedTracks.has(second.kit.track_id)) continue;
+            consider(subset, [first, second]);
+          }
+        }
+      }
+    }
+
+    const best = bestRef.value;
+    if (!best || best.score < ranker.threshold) {
+      if (best) {
+        this.onStatus?.(
+          `Joint mix: best ${best.score.toFixed(3)} < ${ranker.threshold.toFixed(3)}; holding`,
+        );
+      }
+      return null;
+    }
+    this.onStatus?.(`Joint mix: ${best.changed.join("+")} → ${best.score.toFixed(3)}`);
+    return { entries: best.entries, changed: best.changed };
+  }
+
+  /** Hold the stem's current phrase while another stem morphs. */
+  private holdEntry(stem: StemName): StemPoolEntry | null {
+    return this.lastBlockEntries[stem] ?? this.current[stem]?.entry ?? null;
   }
 
   /** Pick a cross-song phrase for one stem, excluding its current track. */

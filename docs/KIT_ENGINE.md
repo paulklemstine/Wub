@@ -507,16 +507,18 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
 * The session key/tempo is the cluster's key/tempo. Candidate phrases are
   filtered to the exact key, the relative major/minor, or a Camelot fifth
   neighbour, and to `|phrase_duration / block_duration - 1| <= 2%`.
-* **Anchor opening, then morph.** The first two 4-bar blocks (8 bars) stay on
-  the session's anchor kit. Then **one unpinned stem per block** moves to a
-  phrase from a different track; the other three continue their own kit's
-  consecutive run. After four morphs all four instruments come from different
-  records — a new song. The player prefers a track no other stem is using,
-  then falls back to any different track.
-* **The morph is the point.** Cross-song recombination is not an exception; it
-  is how the set evolves. The anchor is only the seed. A pinned stem stays in
-  its style region while the other three keep morphing; when the pin releases,
-  that stem rejoins the morph cycle.
+* **Anchor opening, then joint morph.** The first two 4-bar blocks (8 bars) stay
+  on the session's anchor kit. Then a **joint transition ranker** scores
+  1- and 2-stem candidate mixes from different tracks against the current mix,
+  using the last two joint states and their deltas. It picks the best candidate;
+  if none clears the calibrated threshold, the whole mix holds for a block.
+  After a few morphs all four instruments come from different records — a new
+  song. Pinned stems hold while the others morph.
+* **The morph is learned, not heuristic.** The mix-level audio judge (AUC
+  0.951) is the teacher; the student ranker sees per-stem timbre, onset,
+  chroma, roots, energy, section, run position and key/tempo fit. Held-out
+  student AUC is **0.787** on the hard 1-2-stem swap task, above the teacher's
+  own 0.731 on the same split.
 * **Drag commit is at the next bar.** The reticle snaps to the nearest legal
   phrase, pins that style region for **32 bars** (8 blocks), and the stem
   starts at the bar offset that matches the global 4-bar phase. The reticle then
