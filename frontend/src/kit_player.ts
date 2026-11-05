@@ -745,8 +745,10 @@ export class KitPlayer {
         }))
         .filter((row): row is { entry: TasteNextKit; kit: Kit } => row.kit !== undefined);
       if (eligible.length > 0) {
-        const strong = eligible.filter((row) =>
-          row.kit.phrases.some((ph) => ph.section === "DROP" && ph.energy >= 0.8)
+        const strong = eligible.filter(
+          (row) =>
+            row.kit.phrases.some((ph) => ph.section === "DROP" && ph.energy >= 0.8) &&
+            row.kit.phrases.some((ph) => ph.section === "GROOVE_A")
         );
         const ranked = strong.length > 0 ? strong : eligible;
         ranked.sort(
@@ -1094,7 +1096,29 @@ export class KitPlayer {
     const recent = (recentIds.length > 0 ? recentIds : this.recentPhraseIds).slice(-3);
     const all = this.phrases.map((phrase) => phrase.meta);
     const durationPool = all.filter((phrase) => phrase.duration_sec >= MIN_PHRASE_DURATION_SEC);
-    const basePool = durationPool.length > 0 ? durationPool : all;
+    let basePool = durationPool.length > 0 ? durationPool : all;
+
+    // Length coherence: kit phrases are all 4 bars, but beat-grid jitter can
+    // make one 2-4% shorter. Playing that outlier changes the block tempo and
+    // is heard as a gap/jerk at the join. Keep the tightest cluster around the
+    // median when enough phrases remain.
+    if (basePool.length > 3) {
+      const sortedDur = [...basePool].map((p) => p.duration_sec).sort((a, b) => a - b);
+      const medianDur = sortedDur[Math.floor(sortedDur.length / 2)] ?? 0;
+      if (medianDur > 1e-6) {
+        const tight = basePool.filter(
+          (p) => Math.abs(p.duration_sec - medianDur) / medianDur <= 0.015
+        );
+        if (tight.length >= 3) {
+          basePool = tight;
+        } else {
+          const wide = basePool.filter(
+            (p) => Math.abs(p.duration_sec - medianDur) / medianDur <= 0.03
+          );
+          if (wide.length >= 3) basePool = wide;
+        }
+      }
+    }
 
     let candidatePool: KitPhrase[];
     let bandLabel: string;

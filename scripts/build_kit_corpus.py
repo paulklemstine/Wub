@@ -89,6 +89,11 @@ MAX_PER_SECTION = 2
 W_ENERGY = 0.40
 W_SECTION_START = 0.35
 W_NOVELTY = 0.35
+# Phrase-length coherence: a kit whose phrases differ in length makes the
+# player's tempo jump at every 4-bar join. Prefer windows near the kit's
+# median length and drop outliers when enough phrases remain.
+W_DURATION = 1.8
+DURATION_TOL = 0.006  # 0.6% of the median window length
 EMBED_MELS = 64
 MANIFEST_NAME = "kit_manifest.json"
 INDEX_NAME = "_track_index.json"
@@ -232,6 +237,9 @@ def _select_phrases(
     for c, e in zip(candidates, energies):
         c["energy_norm"] = float((e - lo) / span) if span > 1e-6 else 0.5
 
+    durations = np.array([float(c["duration"]) for c in candidates], dtype=np.float64)
+    duration_med = float(np.median(durations)) if len(durations) else 0.0
+
     chosen: List[dict] = []
     per_section: Counter = Counter()
     while len(chosen) < n_max:
@@ -251,9 +259,13 @@ def _select_phrases(
                     continue
             else:
                 novelty = 1.0
+            duration_fit = 1.0 - min(
+                1.0, abs(float(c["duration"]) - duration_med) / max(1e-6, 0.02 * duration_med)
+            )
             score = (W_ENERGY * c["energy_norm"]
                      + W_SECTION_START * (1.0 if c["is_section_start"] else 0.0)
-                     + W_NOVELTY * novelty)
+                     + W_NOVELTY * novelty
+                     + W_DURATION * duration_fit)
             if score > best_score:
                 best_score, best = score, c
         if best is None:
@@ -261,6 +273,14 @@ def _select_phrases(
         best["taken"] = True
         per_section[best["span_key"]] += 1
         chosen.append(best)
+
+    if duration_med > 1e-6 and len(chosen) > MIN_PHRASES:
+        coherent = [
+            c for c in chosen
+            if abs(float(c["duration"]) - duration_med) / duration_med <= DURATION_TOL
+        ]
+        if len(coherent) >= MIN_PHRASES:
+            chosen = coherent
     return chosen
 
 
@@ -419,6 +439,7 @@ def _process_track(job: Dict[str, Any]) -> Dict[str, Any]:
             "start_frame": start_frame,
             "end_frame": end_frame,
             "n_frames": end_frame - start_frame,
+            "duration": float(duration),
             "tatum_start": tatum_start,
             "section": str(sec_of_bar[b]),
             "span_key": int(span_of_bar[b]),

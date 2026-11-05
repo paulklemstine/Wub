@@ -44,10 +44,26 @@ def kit_score(kit: dict) -> float:
         for asset in (p.get("stems") or {}).values()
     ]
     mean_peak = sum(peaks) / len(peaks) if peaks else 0.0
+    present = {p.get("section") for p in phrases}
+    coverage = 0.0
+    if "GROOVE_A" in present and "DROP" in present:
+        coverage += 1.6
+    if "BUILDUP" in present:
+        coverage += 0.6
+    if "BREAKDOWN" in present:
+        coverage += 0.3
+    # Length coherence inside the kit keeps the block tempo steady.
+    durations = [float(p.get("duration_sec", 0.0)) for p in phrases]
+    med = sorted(durations)[len(durations) // 2] if durations else 0.0
+    coherent = 0.0
+    if med > 0:
+        coherent = sum(1 for d in durations if abs(d - med) / med <= 0.012) / len(durations)
     return (
         2.2 * (count / 8.0)
         + 1.2 * (sections / 5.0)
         + 1.0 * energy
+        + 1.4 * coverage
+        + 1.2 * coherent
         + 0.8 * min(1.0, mean_peak / 0.5)
         + 0.8 * novelty(phrases)
     )
