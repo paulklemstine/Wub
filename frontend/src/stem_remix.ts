@@ -9,6 +9,9 @@ import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } fro
 import type { NebulaPoint } from "./visualizer";
 import { StretchVoice } from "./stretch_voice";
 import { JointRanker } from "./joint_ranker";
+import {
+  targetAt, movementBudgetAt, harmonyPenalty, vocalChangeAllowed, scoreTransition,
+} from "./arc_planner";
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const PITCHED: readonly StemName[] = ["bass", "other", "vocals"];
@@ -28,6 +31,14 @@ const CACHE_LIMIT = 64;
 // streams; keep a floor per stem so a "bass" phrase actually has bass.
 const MIN_RMS_DB: Record<StemName, number> = {
   drums: -28, bass: -28, other: -34, vocals: -42,
+};
+// Boundary fade profiles: snap drums, settle bass quickly, let pads/vocals
+// overlap so the cross-song hand-off is felt rather than heard.
+const STEM_FADE_IN: Record<StemName, number> = {
+  drums: 0.004, bass: 0.014, other: 0.05, vocals: 0.08,
+};
+const STEM_FADE_OUT: Record<StemName, number> = {
+  drums: 0.008, bass: 0.025, other: 0.07, vocals: 0.11,
 };
 
 export interface StemPin {
@@ -62,8 +73,12 @@ export interface StemBlockResult {
   blockDurationSec: number;
   /** One 4-bar slot for the session BPM display (960 / slotSec). */
   slotSec: number;
+  /** Planned arc energy for this block, 0..1. */
+  targetEnergy: number;
   phrases: Partial<Record<StemName, KitPhrase>>;
   kits: Partial<Record<StemName, Kit>>;
+  /** Source track per stem for hidden transition telemetry. */
+  stemTracks: Partial<Record<StemName, string>>;
   clusterId: string;
 }
 
@@ -289,6 +304,9 @@ export class StemRemixPlayer {
   private sessionStartAt = 0;
   private nextBlockAt = 0;
   private blockIndex = 0;
+  /** Session bar of the last real stem-track change, and last vocal change. */
+  private lastMoveBar = 0;
+  private lastVocalChangeBar = -1;
   /** Scheduled blocks, so a mid-block drag can find the block it is inside. */
   private blockGrid: Array<{ startAt: number; endAt: number; startBar: number; bars: number }> = [];
   private bridgeStep = 0;
@@ -429,6 +447,8 @@ export class StemRemixPlayer {
     this.scheduledRuns = {};
     this.manualPins = {};
     this.blockGrid = [];
+    this.lastMoveBar = 0;
+    this.lastVocalChangeBar = -1;
 
     // Preload one real song: all four stems from the same kit so the first
     // 4 bars sound like a record before the remix starts. Scheduling waits
@@ -443,13 +463,31 @@ export class StemRemixPlayer {
       const fullAnySection = anchor.phrases.find((candidate) =>
         STEMS.every((stem) => this.entryById.has(`${candidate.id}:${stem}`))
       );
-      // Start at the beginning of the longest consecutive run, so the first
-      // 24 bars can play the actual song in order instead of jumping windows.
+      // Prefer a real intro phrase when the anchor has one (planned arc).  If
+      // the kit has no intro, start near the arc's 0.30 intro energy instead of
+      // opening on a drop.
+      const introPhrase = anchor.phrases.find((candidate) =>
+        candidate.is_intro === true
+        && STEMS.every((stem) => this.entryById.has(`${candidate.id}:${stem}`))
+      );
+      const fullPhrases = anchor.phrases.filter((candidate) =>
+        STEMS.every((stem) => this.entryById.has(`${candidate.id}:${stem}`))
+      );
+      const introEnergy = targetAt(0).energy;
+      const phraseEnergy = (candidate: KitPhrase): number => {
+        const value = Number(candidate.energy);
+        return Number.isFinite(value) ? value : 0.5;
+      };
+      const lowEnergyPhrase = [...fullPhrases].sort((a, b) =>
+        Math.abs(phraseEnergy(a) - introEnergy) - Math.abs(phraseEnergy(b) - introEnergy)
+      )[0];
       const run = this.longestRunPhrases(anchor, true);
-      const phrase = run.length >= 2
-        ? run[0]
-        : (fullEntry?.phrase ?? fullAnySection ?? grooveEntries[0]?.phrase
-          ?? allEntries[0]?.phrase ?? anchor.phrases[0]);
+      const phrase = introPhrase
+        ?? lowEnergyPhrase
+        ?? (run.length >= 2
+          ? run[0]
+          : (fullEntry?.phrase ?? fullAnySection ?? grooveEntries[0]?.phrase
+            ?? allEntries[0]?.phrase ?? anchor.phrases[0]));
       const entries = allEntries.filter((entry) => entry.phrase.id === phrase.id);
       const byStem = new Map<StemName, StemPoolEntry>();
       for (const entry of entries) {
@@ -469,6 +507,8 @@ export class StemRemixPlayer {
         this.lastBlockRuns[preparedEntry.stem] = [preparedEntry.entry];
       }
       this.previousEntries = { ...this.lastBlockEntries };
+      this.lastMoveBar = 0;
+      this.lastVocalChangeBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 0 : -1;
       for (const stem of STEMS) {
         if (!this.anchorPrepared.some((entry) => entry.stem === stem)) {
           console.warn(`[StemRemix] anchor missing ${stem}`);
@@ -543,6 +583,8 @@ export class StemRemixPlayer {
     this.anchorKit = this.chooseAnchor();
     this.currentAnchorPhrase = null;
     this.morphIndex = 0;
+    this.lastMoveBar = 0;
+    this.lastVocalChangeBar = -1;
   }
 
   /** Longest chain of consecutive 4-bar phrases, preferably with all stems. */
@@ -669,15 +711,35 @@ export class StemRemixPlayer {
       if (sections.has("GROOVE_A")) score += 2;
       if (sections.has("DROP")) score += 1.5;
       if (sections.has("BUILDUP")) score += 0.5;
-      const fullPhrase = kit.phrases.some((phrase) =>
+      const fullPhraseList = kit.phrases.filter((phrase) =>
         STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
       );
+      const fullPhrase = fullPhraseList.length > 0;
       if (fullPhrase) score += 2;
+      // The planned arc opens on a 0.30 INTRO.  A kit whose quietest
+      // full-stem phrase is near that target makes a much better cold open
+      // than a kit that only contains drops.
+      const energyOf = (phrase: KitPhrase): number => {
+        const value = Number(phrase.energy);
+        return Number.isFinite(value) ? value : 0.5;
+      };
+      const lowEnergy = fullPhraseList.length > 0
+        ? Math.min(...fullPhraseList.map(energyOf))
+        : 0.65;
+      if (lowEnergy <= 0.40) score += 2.5;
+      else if (lowEnergy <= 0.55) score += 1.0;
       const fullGroove = kit.phrases.some((phrase) =>
         String(phrase.section).toUpperCase() === "GROOVE_A"
         && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
       );
       if (fullGroove) score += 2.5;
+      // The planned arc opens on INTRO; prefer an anchor that actually has a
+      // full-stem intro phrase instead of starting at a peak-energy drop.
+      const fullIntro = kit.phrases.some((phrase) =>
+        phrase.is_intro === true
+        && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
+      );
+      if (fullIntro) score += 6.0;
       // Prefer a kit that actually contains the next 4 bars, so the anchor
       // song can advance every 4 bars instead of looping an isolated window.
       const run = this.longestRunPhrases(kit, true);
@@ -724,7 +786,7 @@ export class StemRemixPlayer {
         startBar: 0,
         bars: 4,
       });
-      const result = this.anchorResult(this.sessionStartAt, section);
+      const result = this.anchorResult(this.sessionStartAt, targetAt(0).phase);
       this.lastResult = result;
       void this.scheduleAnchor();
       return result;
@@ -758,9 +820,11 @@ export class StemRemixPlayer {
   private anchorResult(at: number, section: string): StemBlockResult {
     const phrases: Partial<Record<StemName, KitPhrase>> = {};
     const kits: Partial<Record<StemName, Kit>> = {};
+    const stemTracks: Partial<Record<StemName, string>> = {};
     for (const prepared of this.anchorPrepared) {
       phrases[prepared.stem] = prepared.entry.phrase;
       kits[prepared.stem] = prepared.entry.kit;
+      stemTracks[prepared.stem] = prepared.entry.kit.track_id;
     }
     const normalized = String(section || "GROOVE_A").toUpperCase();
     this.lastSection = normalized;
@@ -777,8 +841,10 @@ export class StemRemixPlayer {
       blockBars: 4,
       blockDurationSec: this.currentBlockSec,
       slotSec: this.blockSec,
+      targetEnergy: targetAt(0).energy,
       phrases,
       kits,
+      stemTracks,
       clusterId: this.cluster?.id ?? "",
     };
   }
@@ -799,9 +865,6 @@ export class StemRemixPlayer {
     result: StemBlockResult;
     tasks: Array<{ stem: StemName; run: StemPoolEntry[] }>;
   } {
-    const normalized = String(section || "GROOVE_A").toUpperCase();
-    const sectionChanged = normalized !== this.lastSection;
-    this.lastSection = normalized;
     const blocksPlayed = this.blockIndex;
 
     // End of the 104-bar arc: rotate to a Camelot/tempo neighbour.  The new
@@ -838,6 +901,14 @@ export class StemRemixPlayer {
     }
 
     const startBar = this.sessionBar;
+    // Planned 104-bar arc.  The arranger's live section is no longer the
+    // target in remix mode; the arc plans the wave, the ranker fills it in.
+    const arc = targetAt(startBar);
+    const normalized = arc.section;
+    const displaySection = arc.phase;
+    const sectionChanged = normalized !== this.lastSection;
+    this.lastSection = normalized;
+    const targetEnergy = arc.energy;
     const bridge = !rotation && this.isBridgeBar(startBar);
     if (bridge && this.nextCluster === null) {
       this.nextCluster = this.chooseNeighbourCluster();
@@ -848,6 +919,7 @@ export class StemRemixPlayer {
     const bars = rotation ? 4 : this.blockBarsAt(startBar);
     const blockSec = bars * this.barSec;
     const phrasesPerStem = Math.max(1, Math.round(bars / 4));
+    const budget = movementBudgetAt(startBar, bars);
 
     // Pins are measured in session bars.  Release at the first block boundary
     // at or after 32 bars; the manual hold voice fades at the same boundary.
@@ -868,8 +940,10 @@ export class StemRemixPlayer {
     }
 
     const changed: StemName[] = [];
+    const trackChanged: StemName[] = [];
     const phrases: Partial<Record<StemName, KitPhrase>> = {};
     const kits: Partial<Record<StemName, Kit>> = {};
+    const stemTracks: Partial<Record<StemName, string>> = {};
     const tasks: Array<{ stem: StemName; run: StemPoolEntry[] }> = [];
 
     if (bridge && !rotation) {
@@ -891,8 +965,12 @@ export class StemRemixPlayer {
       : null;
 
     const priorEntries = { ...this.lastBlockEntries };
+    const forceMove = !opening && !bridge && !rotation
+      && startBar - this.lastMoveBar >= budget.maxHoldBars;
     const joint = !opening && !bridge && !rotation && this.jointRanker?.ready
-      ? this.selectJoint(normalized, phrasesPerStem)
+      ? this.selectJoint(
+        normalized, targetEnergy, phrasesPerStem, startBar, sectionChanged, forceMove,
+      )
       : null;
 
     const order: StemName[] = bridge && !rotation
@@ -910,6 +988,7 @@ export class StemRemixPlayer {
         if (first) {
           phrases[stem] = first.phrase;
           kits[stem] = first.kit;
+          stemTracks[stem] = first.kit.track_id;
         }
         continue;
       }
@@ -935,13 +1014,17 @@ export class StemRemixPlayer {
       const run = this.runFor(entry, phrasesPerStem);
       chosenRuns[stem] = run;
       const current = this.current[stem];
-      const same = current
+      const samePhrase = current
         && current.entry.phrase.id === run[0].phrase.id
+        && current.entry.kit.track_id === run[0].kit.track_id;
+      const sameTrack = current
         && current.entry.kit.track_id === run[0].kit.track_id;
       phrases[stem] = run[0].phrase;
       kits[stem] = run[0].kit;
+      stemTracks[stem] = run[0].kit.track_id;
       tasks.push({ stem, run });
-      if (!same) changed.push(stem);
+      if (!samePhrase) changed.push(stem);
+      if (!sameTrack) trackChanged.push(stem);
       for (const runEntry of run) {
         if (!this.recent.includes(runEntry.phrase.id)) {
           this.recent.push(runEntry.phrase.id);
@@ -958,6 +1041,10 @@ export class StemRemixPlayer {
       else if (priorEntries[stem]) boundaryEntries[stem] = priorEntries[stem];
     }
     this.lastBlockEntries = boundaryEntries;
+    if (trackChanged.length > 0) {
+      this.lastMoveBar = startBar;
+      if (trackChanged.includes("vocals")) this.lastVocalChangeBar = startBar;
+    }
     if (opening) {
       this.currentAnchorPhrase = anchorPhrase;
       if (anchorPhrase) {
@@ -973,7 +1060,7 @@ export class StemRemixPlayer {
 
     const result: StemBlockResult = {
       at,
-      section: normalized,
+      section: displaySection,
       changed,
       blocksPlayed,
       bridge,
@@ -981,8 +1068,10 @@ export class StemRemixPlayer {
       blockBars: bars,
       blockDurationSec: blockSec,
       slotSec: this.blockSec,
+      targetEnergy,
       phrases,
       kits,
+      stemTracks,
       clusterId: this.cluster?.id ?? "",
     };
 
@@ -1035,6 +1124,7 @@ export class StemRemixPlayer {
     usedTracks: ReadonlySet<string>,
     phrases: number,
     section: string,
+    targetEnergy: number,
   ): StemPoolEntry[] {
     // For a 4-bar block, avoid the last couple of blocks to keep the mix
     // moving.  For 8/16-bar runs, only avoid replaying the exact run we just
@@ -1046,7 +1136,6 @@ export class StemRemixPlayer {
       for (const id of this.recent.slice(-8)) avoid.add(id);
     }
     const outroAllowed = this.blockIndex >= BLOCKS_PER_SET - 2;
-    const targetEnergy = SECTION_ENERGY[section] ?? 0.65;
     const candidates = this.pools[stem].filter((entry) => {
       if (entry.kit.track_id === current.kit.track_id) return false;
       if (this.failedKits.has(entry.kit.track_id)) return false;
@@ -1109,12 +1198,31 @@ export class StemRemixPlayer {
    * Choose the best joint transition over 1- and 2-stem replacements.
    * Returns null when the best candidate is below the calibrated threshold.
    */
-  private selectJoint(section: string, phrases: number): {
+  private selectJoint(
+    section: string,
+    targetEnergy: number,
+    phrases: number,
+    startBar: number,
+    sectionChanged: boolean,
+    forceMove: boolean,
+  ): {
     entries: Partial<Record<StemName, StemPoolEntry>>;
     changed: StemName[];
   } | null {
     const ranker = this.jointRanker;
     if (!ranker?.ready) return null;
+    const nextBlockBars = phrases * 4;
+    const threshold = ranker.thresholdFor(nextBlockBars);
+    const budget = movementBudgetAt(startBar, nextBlockBars);
+    const allowVocals = vocalChangeAllowed(startBar, this.lastVocalChangeBar, sectionChanged);
+    // 4-bar blocks are the busiest part of the arc; hold for at least two
+    // blocks between track changes unless the arc changes section or the
+    // max-hold budget forces a move.  8/16-bar blocks are already 8+ bars.
+    const cooldownBars = nextBlockBars <= 4 ? 8 : 0;
+    if (cooldownBars > 0 && !sectionChanged && !forceMove
+      && startBar - this.lastMoveBar < cooldownBars) {
+      return null;
+    }
     const current: Partial<Record<StemName, StemPoolEntry>> = {};
     for (const stem of STEMS) {
       const manual = this.manualPins[stem];
@@ -1138,7 +1246,9 @@ export class StemRemixPlayer {
       return null;
     }
 
-    const unpinned = STEMS.filter((stem) => this.pins[stem] === undefined);
+    const unpinned = STEMS.filter((stem) =>
+      this.pins[stem] === undefined && (stem !== "vocals" || allowVocals)
+    );
     if (unpinned.length === 0) return null;
     const usedTracks = new Set<string>();
     for (const stem of STEMS) {
@@ -1147,7 +1257,10 @@ export class StemRemixPlayer {
     }
     const options = new Map<StemName, StemPoolEntry[]>();
     for (const stem of unpinned) {
-      options.set(stem, this.jointOptions(stem, current[stem]!, usedTracks, phrases, section));
+      options.set(
+        stem,
+        this.jointOptions(stem, current[stem]!, usedTracks, phrases, section, targetEnergy),
+      );
     }
     const subsets: StemName[][] = [];
     for (const stem of unpinned) subsets.push([stem]);
@@ -1156,13 +1269,6 @@ export class StemRemixPlayer {
         subsets.push([unpinned[i], unpinned[j]]);
       }
     }
-    const targetEnergy = SECTION_ENERGY[section] ?? 0.65;
-    const nextBlockBars = phrases * 4;
-    const threshold = ranker.thresholdFor(nextBlockBars);
-    // Held stems continue their run where it left off (or loop when the
-    // source run ends), so their candidate state is the next phrase, not the
-    // phrase that just finished.  A manual pin keeps playing through the
-    // boundary, so it uses the playing phrase.
     const heldBase: Partial<Record<StemName, StemPoolEntry>> = {};
     for (const stem of STEMS) {
       heldBase[stem] = this.manualPins[stem]
@@ -1174,6 +1280,16 @@ export class StemRemixPlayer {
         entries: Partial<Record<StemName, StemPoolEntry>>;
         changed: StemName[];
         score: number;
+        rawScore: number;
+        reasons: string[];
+      } | null;
+    } = { value: null };
+    const bestRawRef: {
+      value: {
+        entries: Partial<Record<StemName, StemPoolEntry>>;
+        changed: StemName[];
+        score: number;
+        rawScore: number;
       } | null;
     } = { value: null };
 
@@ -1183,16 +1299,63 @@ export class StemRemixPlayer {
       for (let i = 0; i < subset.length; i++) candidate[subset[i]] = picks[i];
       const candidateState = this.jointState(candidate);
       if (!candidateState) return;
-      const score = ranker.score(
+      const rawScore = ranker.score(
         previousState, currentState, candidateState, changed, section, targetEnergy,
         this.currentBlockBars, nextBlockBars,
       );
-      if (!bestRef.value || score > bestRef.value.score) {
-        bestRef.value = { entries: candidate, changed: subset, score };
+      let candidateEnergy = 0;
+      let harmony = 0;
+      let repetition = 0;
+      for (const stem of STEMS) {
+        const entry = candidate[stem];
+        if (!entry) return;
+        candidateEnergy += entry.energy;
+        if (changed.has(stem)) {
+          const from = current[stem];
+          if (from) {
+            harmony += harmonyPenalty({
+              stem,
+              fromRoot: from.bassRoot,
+              toRoot: entry.bassRoot,
+              fromChroma: from.chroma,
+              toChroma: entry.chroma,
+              keyShift: entry.keyShift,
+            });
+          }
+          if (this.recent.includes(entry.phrase.id)) repetition += 0.5;
+        }
+      }
+      candidateEnergy /= 4;
+      harmony /= Math.max(1, subset.length);
+      repetition = Math.min(1, repetition);
+      const policy = scoreTransition({
+        jointScore: rawScore,
+        targetEnergy,
+        candidateEnergy,
+        novelty: subset.length / 2,
+        repetition,
+        harmony,
+        changedCount: subset.length,
+        budget,
+        includesVocals: subset.includes("vocals"),
+        vocalAllowed: allowVocals,
+      });
+      if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
+        bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
+      }
+      if (!bestRef.value || policy.score > bestRef.value.score) {
+        bestRef.value = {
+          entries: candidate,
+          changed: subset,
+          score: policy.score,
+          rawScore,
+          reasons: policy.reasons,
+        };
       }
     };
 
     for (const subset of subsets) {
+      if (subset.length > budget.maxChanges) continue;
       const lists = subset.map((stem) => options.get(stem) ?? []);
       if (lists.some((list) => list.length === 0)) continue;
       if (subset.length === 1) {
@@ -1214,13 +1377,34 @@ export class StemRemixPlayer {
       this.onStatus?.(`Joint mix: no candidates (${counts}); holding`);
       return null;
     }
-    if (best.score < threshold) {
+    const bestRaw = bestRawRef.value;
+    if (best.rawScore < threshold) {
+      // The policy may rank a candidate below another raw candidate; fall
+      // back to the best raw candidate if it still clears the learned gate.
+      if (bestRaw && bestRaw.rawScore >= threshold) {
+        this.onStatus?.(
+          `Joint mix: policy pick ${best.score.toFixed(3)} below gate; ` +
+          `using best raw ${bestRaw.changed.join("+")} → ${bestRaw.rawScore.toFixed(3)}`,
+        );
+        return { entries: bestRaw.entries, changed: bestRaw.changed };
+      }
+      if (forceMove && bestRaw && bestRaw.rawScore >= threshold * 0.5) {
+        this.onStatus?.(
+          `Joint mix: forced ${bestRaw.changed.join("+")} after ` +
+          `${startBar} bars (raw ${bestRaw.rawScore.toFixed(3)})`,
+        );
+        return { entries: bestRaw.entries, changed: bestRaw.changed };
+      }
       this.onStatus?.(
-        `Joint mix: best ${best.score.toFixed(3)} < ${threshold.toFixed(3)}; holding`,
+        `Joint mix: best raw ${best.rawScore.toFixed(3)} < ${threshold.toFixed(3)}; holding`,
       );
       return null;
     }
-    this.onStatus?.(`Joint mix: ${best.changed.join("+")} → ${best.score.toFixed(3)}`);
+    const detail = best.reasons.length > 0 ? ` [${best.reasons.join(",")}]` : "";
+    this.onStatus?.(
+      `Joint mix: ${best.changed.join("+")} → ${best.score.toFixed(3)} ` +
+      `(raw ${best.rawScore.toFixed(3)})${detail}`,
+    );
     return { entries: best.entries, changed: best.changed };
   }
 
@@ -1333,7 +1517,7 @@ export class StemRemixPlayer {
     for (const phrase of kit.phrases) {
       if (recent.has(phrase.id) && kit.phrases.length > 2) continue;
       if (phrase.once && this.playedOnce.has(phrase.id)) continue;
-      if (phrase.is_intro && this.blockIndex > 0) continue;
+      if (phrase.is_intro && this.blockIndex > 1) continue;
       if (phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
       const energy = Number(phrase.energy) || 0.5;
       const fullStem = STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`));
@@ -1611,18 +1795,21 @@ export class StemRemixPlayer {
       const preDur = await voice.loadRun(audio.mains, audio.pre);
       const rate = Math.max(0.5, first.rate);
       const startAt = at - preDur / rate;
+      const crossfadeSec = preDur > 0
+        ? Math.max(preDur / rate, STEM_FADE_IN[stem])
+        : STEM_FADE_IN[stem];
       voice.schedule({
         when: startAt,
         inputSec: 0,
         rate,
         semitones: first.keyShift,
         formantCompensation: stem === "vocals",
-        fadeInSec: 0.006,
+        fadeInSec: crossfadeSec,
         gain: first.gain,
       });
       const blockSec = bars * this.barSec;
       const runEndAt = at + blockSec;
-      voice.fadeOut(runEndAt, 0.09);
+      voice.fadeOut(runEndAt, STEM_FADE_OUT[stem]);
 
       const offsets: number[] = [];
       let offset = 0;
@@ -1633,7 +1820,7 @@ export class StemRemixPlayer {
 
       const previous = this.current[stem];
       if (previous && previous.voice !== voice) {
-        previous.voice.fadeOut(startAt, preDur > 0 ? preDur / rate : 0.06);
+        previous.voice.fadeOut(startAt, crossfadeSec);
       }
       const scheduled = this.scheduledRuns[stem] ?? [];
       scheduled.push({
@@ -1766,6 +1953,7 @@ export class StemRemixPlayer {
       const voice = await this.getVoice(stem, this.current[stem]?.voice);
       const rate = Math.max(0.5, runEntry.rate);
       const preDur = await voice.loadRun(audio.mains, audio.pre);
+      const crossfadeSec = Math.max(0.02, STEM_FADE_IN[stem], preDur / rate);
       let startAt = at;
       let inputBars = partialBar;
       const now = this.engine.now();
@@ -1787,15 +1975,15 @@ export class StemRemixPlayer {
         rate,
         semitones: runEntry.keyShift,
         formantCompensation: stem === "vocals",
-        fadeInSec: 0.02,
+        fadeInSec: crossfadeSec,
         gain: runEntry.gain,
       });
-      voice.fadeOut(fadeAt, 0.06);
+      voice.fadeOut(fadeAt, STEM_FADE_OUT[stem]);
 
       // Silence the current voice and any block voice already queued inside
       // the pin window; this stem is now one continuous manual run.
       const previous = this.current[stem];
-      if (previous && previous.voice !== voice) previous.voice.fadeOut(startAt, 0.05);
+      if (previous && previous.voice !== voice) previous.voice.fadeOut(startAt, crossfadeSec);
       const kept: ScheduledRun[] = [];
       for (const scheduled of this.scheduledRuns[stem] ?? []) {
         if (scheduled.startedAt >= startAt - 0.02 && scheduled.startedAt < endAt) {

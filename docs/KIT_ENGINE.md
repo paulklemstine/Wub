@@ -536,6 +536,29 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   A block is a **run of consecutive 4-bar phrases from one source track**,
   concatenated into one Signalsmith voice. Short source runs are looped rather
   than freezing the last phrase. The 16-bar block prefers a real 4-phrase run.
+* **Planned energy wave.** `arc_planner.ts` drives the target independently of
+  the live arranger: 0–16 INTRO (0.30), 16–48 GROOVE_A (0.72), 48–64 BUILDUP
+  (0.82), 64–96 DROP (0.95), 96–104 BRIDGE (0.20; the ranker sees BREAKDOWN).
+  The table is aligned to the block grid, so a target never changes inside a
+  16-bar block.
+* **Movement and stem policy.** 4-bar blocks hold for at least 8 bars between
+  track changes unless the arc changes section or a 16-bar max-hold forces a
+  move; 8/16-bar blocks may change 1–2 stems. The joint score is blended with
+  energy match, novelty, repetition and a soft harmony penalty. Vocals are
+  sticky (section change or 16 bars); bass is strict but soft; other/pads carry
+  most of the movement.
+* **Glue bus.** Each stem has a real-time glue gain after its analyser. A vocal
+  envelope ducks other/bass by up to 1.5 dB; a drum transient detector ducks
+  bass by up to 2.5 dB. A generated short stereo impulse feeds a shared reverb
+  send on other/vocals with a 300 Hz high-pass and -20 dB return. Boundary
+  fades are equal-power, with per-stem profiles (drums snap, pads/vocals
+  overlap). The existing master compressor, limiter and soft clipper remain
+  the final safety stage. Nothing is baked into the assets.
+* **Hidden telemetry.** `TransitionProbe` reads a long-window master analyser
+  tap at every block boundary and records max sample jump, 20 ms pre/post RMS
+  dip and spectral flux in `window.__wubTransitionLog`. The summary hooks are
+  `window.__wubTransitionSummary`, `window.__wubMovementSummary` and
+  `window.__wubGlueState`; there is no UI.
 * **Cluster rotation every 104 bars (19 blocks)**: the bridge starts at bar 96
   and the next Camelot/tempo neighbour (within +/-3 BPM) takes over at bar 104.
   The new set starts with two anchor blocks on the new cluster; all pins release
@@ -555,10 +578,12 @@ vendored in `frontend/public/vendor/` and loaded with a runtime dynamic import;
 bundling it breaks the stringified AudioWorklet source and silences the node.
 One voice is created per **run** (1-4 consecutive 4-bar phrases concatenated,
 `[80 ms pre-roll][phrase 1][phrase 2]...`) and scheduled at
-`bar - preRoll/rate`, so the run's downbeat lands exactly on the bar. The old
-voice's gain fades over the pre-roll window. The library's `stop()` is avoided
-because 1.3.2 drops its time argument; the fixed two-voice-per-stem pool is
-reset and reused, never disposed per phrase (per-phrase nodes leak WASM memory).
+`bar - preRoll/rate`, so the run's downbeat lands exactly on the bar. Boundary
+gain ramps use **equal-power curves** (`sin`/`cos`), and old/new voices use the
+same crossfade duration; the pre-roll is faded in before the bar, so the body
+arrives at full gain. The library's `stop()` is avoided because 1.3.2 drops its
+time argument; the fixed two-voice-per-stem pool is reset and reused, never
+disposed per phrase (per-phrase nodes leak WASM memory).
 
 ### 10.4 Per-stem nebula
 

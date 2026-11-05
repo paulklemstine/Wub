@@ -150,9 +150,14 @@ export class StretchVoice {
     const target = Math.max(0, Math.min(3.0, options.gain ?? 1));
     this.targetGain = target;
     const gain = this.gain.gain;
-    gain.cancelScheduledValues(when);
-    gain.setValueAtTime(0.0001, when);
-    gain.linearRampToValueAtTime(target, when + fadeIn);
+    try {
+      gain.cancelScheduledValues(when);
+      gain.setValueCurveAtTime(fadeCurve(target, true), when, fadeIn);
+    } catch {
+      // Older/edge contexts: fall back to a linear fade.
+      gain.setValueAtTime(0.0001, when);
+      gain.linearRampToValueAtTime(target, when + fadeIn);
+    }
     this.node.schedule({
       outputTime: when,
       active: true,
@@ -169,16 +174,20 @@ export class StretchVoice {
     if (this.disposed) return;
     const ctx = this.gain.context;
     const stopAt = Math.max(at, ctx.currentTime + 0.005);
-    const end = stopAt + Math.max(0.005, durationSec);
+    const duration = Math.max(0.005, durationSec);
     const gain = this.gain.gain;
     try {
-      // Do not cancel earlier automation here: a phrase is scheduled and its
-      // end fade is queued in the same call, and cancelAndHoldAtTime would
-      // cancel the fade-in and leave the voice silent.
-      gain.setValueAtTime(this.targetGain, stopAt);
-      gain.linearRampToValueAtTime(0.0001, end);
+      // Cancel the queued end fade at/after the new crossfade point, then
+      // use an equal-power curve so old + new do not sum to a level dip.
+      gain.cancelScheduledValues(stopAt);
+      gain.setValueCurveAtTime(fadeCurve(this.targetGain, false), stopAt, duration);
     } catch {
-      // Parameter automation can fail if the context is closing.
+      try {
+        gain.setValueAtTime(this.targetGain, stopAt);
+        gain.linearRampToValueAtTime(0.0001, stopAt + duration);
+      } catch {
+        // Parameter automation can fail if the context is closing.
+      }
     }
     try {
       // The library's stop(when) drops its time argument in 1.3.2 (it reads
@@ -241,6 +250,17 @@ export class StretchVoice {
   get gainValue(): number {
     return this.gain.gain.value;
   }
+}
+
+function fadeCurve(target: number, rising: boolean, points: number = 32): Float32Array {
+  const curve = new Float32Array(Math.max(2, points));
+  const last = curve.length - 1;
+  for (let i = 0; i < curve.length; i++) {
+    const t = last > 0 ? i / last : 0;
+    const shape = rising ? Math.sin(0.5 * Math.PI * t) : Math.cos(0.5 * Math.PI * t);
+    curve[i] = Math.max(0.0001, target * shape);
+  }
+  return curve;
 }
 
 function mixToMono(buffer: AudioBuffer): Float32Array {

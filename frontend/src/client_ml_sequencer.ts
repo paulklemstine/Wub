@@ -2637,6 +2637,8 @@ export class ClientGrooveboxConductor {
   public onKitPhrase?: (p: { x: number; y: number; at: number }) => void;
   /** Per-stem active phrase coordinates (remix mode). */
   public onStemPhrases?: (points: Array<{ stem: StemName; x: number; y: number; phraseId: string; at: number }>) => void;
+  /** Hidden transition telemetry: fired when a kit block becomes due. */
+  public onKitTransition?: (at: number, result: KitBlockResult) => void;
   private kitSteeringDirty: boolean = false;
   private onKitSetChange?: (info: {
     kit: Kit;
@@ -5507,6 +5509,9 @@ export class ClientGrooveboxConductor {
         this.userSteeredStems
       );
       if (result === null) break;
+      // Telemetry wants the boundary at schedule time, not when the log line
+      // becomes due; the probe needs a pre-boundary analyser snapshot.
+      this.onKitTransition?.(at, result);
       this.kitBlockLogQueue.push({ at, result });
       blockSec = result.blockDurationSec > 0 ? result.blockDurationSec : blockSec;
       this.lastKitBlockDurationSec = blockSec;

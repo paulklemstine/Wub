@@ -105,12 +105,30 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   dashed ghost ring marks the pinned region. Double-click releases the pin. If
   the target audio is not decoded by the bar, start on the next bar and show a
   buffering status.
-- **4 → 8 → 16-bar arc.** A set is 104 bars / 19 blocks: 48 bars of 4-bar
-  blocks, 32 bars of 8-bar blocks, one 16-bar block, then an 8-bar drumless
-  `other + vocals` bridge. A block is a run of consecutive 4-bar phrases from
-  one source track, concatenated into one Stretch voice; short runs loop.
+- **4 → 8 → 16-bar arc with a planned wave.** A set is 104 bars / 19 blocks:
+  48 bars of 4-bar blocks, 32 bars of 8-bar blocks, one 16-bar block, then an
+  8-bar drumless `other + vocals` bridge. The planned target is 0–16 INTRO
+  (0.30), 16–48 GROOVE (0.72), 48–64 BUILDUP (0.82), 64–96 DROP (0.95),
+  96–104 BRIDGE (0.20). A block is a run of consecutive 4-bar phrases from one
+  source track, concatenated into one Stretch voice; short runs loop.
   `blockBars`/`blockDurationSec` drive the audio grid while `slotSec` keeps the
   displayed BPM at the 4-bar value.
+- **Movement budget.** 4-bar blocks hold for at least 8 bars between track
+  changes unless the arc changes section or the 16-bar max-hold forces a move;
+  8/16-bar blocks may change 1–2 stems. The joint policy is a soft blend of the
+  learned score, energy match, novelty, repetition and harmony — not a hard
+  filter. Vocals are sticky (section change or 16 bars); bass is strict but
+  soft; other/pads carry most of the movement.
+- **Glue bus.** A real-time per-stem glue gain after the analyser adds vocal
+  ducking on other/bass and kick/bass sidechain. A short generated reverb send
+  on other/vocals, a high-passed return, and equal-power boundary fades glue
+  cross-song stems without baking gain into assets. The master compressor,
+  limiter and soft clipper remain the final safety stage.
+- **Hidden transition telemetry.** `TransitionProbe` records max sample jump,
+  20 ms pre/post RMS dip and spectral flux at every block boundary into
+  `window.__wubTransitionLog`; `window.__wubTransitionSummary`,
+  `window.__wubMovementSummary` and `window.__wubGlueState` expose counts and
+  live glue state. No UI.
 - **Cluster rotation every 104 bars.** The bridge starts at bar 96; the next
   Camelot-neighbour cluster (within ±3 BPM) takes over at bar 104 and releases
   all pins.
@@ -135,7 +153,9 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | File | Responsibility |
 | :--- | :--- |
 | [`kit_player.ts`](file:///home/raver1975/Wub/frontend/src/kit_player.ts) | Kit facade: manifest/taste loading, legacy 12-block single-kit player, and the remix `scheduleBlock` adapter. |
-| [`stem_remix.ts`](file:///home/raver1975/Wub/frontend/src/stem_remix.ts) | Per-stem remix engine: cluster pools, 4→8→16-bar arc, consecutive-phrase runs, joint ranker selection, 32-bar pins, next-bar drag commit, cluster rotation, lazy cache, and per-stem nebula points. |
+| [`stem_remix.ts`](file:///home/raver1975/Wub/frontend/src/stem_remix.ts) | Per-stem remix engine: cluster pools, 4→8→16-bar arc, consecutive-phrase runs, joint ranker selection, planned energy wave, 32-bar pins, next-bar drag commit, cluster rotation, lazy cache, and per-stem nebula points. |
+| [`arc_planner.ts`](file:///home/raver1975/Wub/frontend/src/arc_planner.ts) | Pure 104-bar planned arc (INTRO/GROOVE/BUILDUP/DROP/BRIDGE), movement budget, soft harmony penalty, vocal stickiness, and transition scoring. |
+| [`transition_probe.ts`](file:///home/raver1975/Wub/frontend/src/transition_probe.ts) | Hidden seam telemetry: max sample jump, pre/post RMS dip and spectral flux at block boundaries, stored in `window.__wubTransitionLog`. |
 | [`joint_ranker.ts`](file:///home/raver1975/Wub/frontend/src/joint_ranker.ts) | Browser inference for the arc-conditioned joint four-stem transition ranker: 400-d states, last-two-state context, 1/2-stem scoring, 4/8/16-bar block one-hots, per-block hold thresholds. |
 | [`stretch_voice.ts`](file:///home/raver1975/Wub/frontend/src/stretch_voice.ts) | Signalsmith Stretch voice wrapper: pre-roll + 1-4 phrase run buffer, tempo/key scheduling, gain fades, pooled reuse. |
 | [`client_ml_sequencer.ts`](file:///home/raver1975/Wub/frontend/src/client_ml_sequencer.ts) | In-browser conductor. Owns the kit block clock and kit tempo/key lock; retains the legacy jukebox/slice/step sequencer as fallback only. Also holds the chord/arranger state that drives kit section selection. |

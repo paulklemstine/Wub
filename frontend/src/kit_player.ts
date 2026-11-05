@@ -128,6 +128,8 @@ export interface KitBlockResult {
   stems: StemName[];
   /** Per-stem phrase coordinates for the four reticles (remix mode). */
   stemPoints?: Partial<Record<StemName, { x: number; y: number; phrase: KitPhrase }>>;
+  /** Per-stem source track IDs for hidden transition telemetry. */
+  stemTracks?: Partial<Record<StemName, string>>;
   bridge: boolean;
   setChanged: boolean;
   blocksPlayedInSet: number;
@@ -136,6 +138,8 @@ export interface KitBlockResult {
   blockDurationSec: number;
   /** One 4-bar slot, so the session BPM never halves on an 8/16-bar block. */
   slotSec: number;
+  /** Planned arc energy for this block, 0..1. */
+  targetEnergy: number;
   fitBpm: number | null;
   targetSection: string;
   energyDelta: number;
@@ -1061,12 +1065,14 @@ export class KitPlayer {
         phrase,
         stems: result.changed,
         stemPoints,
+        stemTracks: result.stemTracks,
         bridge: result.bridge,
         setChanged: result.rotation,
         blocksPlayedInSet: result.blocksPlayed,
         blockBars: result.blockBars,
         blockDurationSec: result.blockDurationSec,
         slotSec: result.slotSec,
+        targetEnergy: result.targetEnergy,
         fitBpm: this.remix.bpm,
         targetSection: result.section,
         energyDelta: 0,
@@ -1244,6 +1250,7 @@ export class KitPlayer {
       blockBars: 4,
       blockDurationSec: blockDuration,
       slotSec: blockDuration,
+      targetEnergy: SECTION_ENERGY[normaliseSection(targetSection)] ?? 0.65,
       fitBpm: this.fittedBpm,
       targetSection,
       energyDelta,

@@ -3,7 +3,12 @@
 // Signal path per stem:
 //   slice SourceNode -> per-slice GainNode (equal-power fades)
 //     -> bus GainNode (volume/mute/solo) -> BiquadFilterNode -> AnalyserNode
-//     -> master DynamicsCompressorNode -> destination.
+//     -> glue GainNode -> master DynamicsCompressorNode -> destination.
+//
+// Shared glue reverb:
+//   stem AnalyserNode -> reverb send GainNode -> ConvolverNode
+//     -> high-pass BiquadFilterNode (~300 Hz) -> return GainNode (-20 dB)
+//     -> master.
 //
 // Scheduling model: callers pass an absolute AudioContext timestamp (`when`)
 // and this engine calls `source.start(when)` directly, which is already
@@ -19,6 +24,45 @@ export const SCHEDULER_INTERVAL_MS = 25;
 export const SCHEDULE_AHEAD_TIME_S = 0.15;
 export const DEFAULT_FADE_MS = 6;
 export const MAX_VOLUME = 1.5;
+
+// Glue bus / shared reverb tuning. Deliberately conservative: the glue stage is
+// a mix layer, never a replacement for setStemMixLevel's input gain.
+const GLUE_ANALYSER_FFT = 2048;
+const GLUE_MIN = 0.5;
+const GLUE_MAX = 1.0;
+const GLUE_RAMP_SEC = 0.05;
+const VOCAL_RMS_FLOOR = 0.01;
+const VOCAL_RMS_FULL = 0.06;
+const VOCAL_DUCK_DB = 1.5;
+const KICK_DUCK_DB = 2.5;
+const VOCAL_ATTACK_SEC = 0.02;
+const VOCAL_RELEASE_SEC = 0.25;
+const KICK_ATTACK_SEC = 0.008;
+const KICK_RELEASE_SEC = 0.12;
+const KICK_TRANSIENT_HOLD_SEC = 0.06;
+const KICK_SHORT_WINDOW = 512;
+const REVERB_SECONDS = 0.55;
+const REVERB_PRE_DELAY_SEC = 0.012;
+const REVERB_RETURN_DB = -20;
+const REVERB_HIGHPASS_HZ = 300;
+
+const DEFAULT_REVERB_SENDS: Record<StemName, number> = {
+  drums: 0,
+  bass: 0,
+  other: 0.08,
+  vocals: 0.10,
+};
+
+export interface GlueState {
+  enabled: boolean;
+  gains: Record<StemName, number>;
+  base: Record<StemName, number>;
+  duck: Record<StemName, number>;
+  vocalRms: number;
+  vocalPresence: number;
+  drumShortRms: number;
+  drumTransient: boolean;
+}
 
 export interface SliceScheduleOptions {
   /** Playback rate multiplier (time-stretch factor from the server). */
@@ -61,11 +105,76 @@ interface StemBus {
   input: GainNode;
   filter: BiquadFilterNode;
   analyser: AnalyserNode;
+  glue: GainNode;
+  reverbSend: GainNode;
 }
 
 function clampVolume(v: number): number {
   if (!Number.isFinite(v)) return 1;
   return Math.min(MAX_VOLUME, Math.max(0, v));
+}
+
+function clamp01(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  return Math.min(1, Math.max(0, v));
+}
+
+function dbToGain(db: number): number {
+  return Math.pow(10, db / 20);
+}
+
+function clampGlue(v: number): number {
+  if (!Number.isFinite(v)) return GLUE_MAX;
+  return Math.min(GLUE_MAX, Math.max(GLUE_MIN, v));
+}
+
+function rmsOf(data: Float32Array, start = 0, end = data.length): number {
+  const from = Math.max(0, Math.min(data.length, start));
+  const to = Math.max(from, Math.min(data.length, end));
+  if (to <= from) return 0;
+  let sum = 0;
+  for (let i = from; i < to; i++) {
+    const v = data[i];
+    sum += v * v;
+  }
+  return Math.sqrt(sum / (to - from));
+}
+
+function peakOf(data: Float32Array, start = 0, end = data.length): number {
+  const from = Math.max(0, Math.min(data.length, start));
+  const to = Math.max(from, Math.min(data.length, end));
+  let peak = 0;
+  for (let i = from; i < to; i++) {
+    const a = Math.abs(data[i]);
+    if (a > peak) peak = a;
+  }
+  return peak;
+}
+
+/**
+ * Short stereo plate impulse, generated in JS so the kit bank never needs an
+ * extra asset. Independent L/R noise and a gentle one-pole low-pass keep the
+ * tail dark; ConvolverNode's built-in normalisation handles absolute level.
+ */
+function createReverbImpulse(ctx: AudioContext): AudioBuffer {
+  const length = Math.max(1, Math.floor(ctx.sampleRate * REVERB_SECONDS));
+  const preDelay = Math.min(length - 1, Math.floor(ctx.sampleRate * REVERB_PRE_DELAY_SEC));
+  const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+  for (let ch = 0; ch < impulse.numberOfChannels; ch++) {
+    const data = impulse.getChannelData(ch);
+    let smooth = 0;
+    for (let i = 0; i < length; i++) {
+      if (i < preDelay) {
+        data[i] = 0;
+        continue;
+      }
+      const tail = (i - preDelay) / Math.max(1, length - preDelay);
+      smooth += ((Math.random() * 2 - 1) - smooth) * 0.35;
+      const fadeOut = Math.min(1, (1 - tail) * 20);
+      data[i] = smooth * Math.exp(-5.5 * tail) * fadeOut;
+    }
+  }
+  return impulse;
 }
 
 function resolveAudioContextCtor(): typeof AudioContext | null {
@@ -88,6 +197,7 @@ export class AudioEngine {
   private ctx_: AudioContext | null = null;
   private master_: DynamicsCompressorNode | null = null;
   private masterAnalyser_: AnalyserNode | null = null;
+  private probeAnalyser_: AnalyserNode | null = null;
   private buses_: Record<StemName, StemBus> | null = null;
   private timer_: ReturnType<typeof setInterval> | null = null;
   private liveSources_: Map<AudioBufferSourceNode, number> = new Map();
@@ -100,6 +210,21 @@ export class AudioEngine {
   private autoVolumes_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
   private mutes_: Record<StemName, boolean> = { drums: false, bass: false, vocals: false, other: false };
   private solos_: Record<StemName, boolean> = { drums: false, bass: false, vocals: false, other: false };
+
+  // Glue bus state. glueBase_ is the manual target set by setStemGlue();
+  // glueDuck_ is the automatic sidechain factor applied by updateGlue().
+  private glueEnabled_ = true;
+  private glueBase_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
+  private glueDuck_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
+  private glueTargets_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
+  private reverbSends_: Record<StemName, number> = { ...DEFAULT_REVERB_SENDS };
+  private readonly vocalTimeData_ = new Float32Array(GLUE_ANALYSER_FFT);
+  private readonly drumTimeData_ = new Float32Array(GLUE_ANALYSER_FFT);
+  private vocalRms_ = 0;
+  private vocalPresence_ = 0;
+  private drumShortRms_ = 0;
+  private drumTransient_ = false;
+  private drumTransientUntil_ = 0;
 
   get ready(): boolean {
     return this.ctx_ !== null && this.buses_ !== null;
@@ -154,11 +279,37 @@ export class AudioEngine {
     masterAnalyser.fftSize = 2048;
     masterAnalyser.smoothingTimeConstant = 0.8;
 
+    // Hidden seam probe tap: a long time-domain window so a 10-20 fps main
+    // thread still contains the block boundary. It is not connected onward.
+    const probeAnalyser = ctx.createAnalyser();
+    probeAnalyser.fftSize = 16384;
+    probeAnalyser.smoothingTimeConstant = 0;
+
     master.connect(masterTrim);
     masterTrim.connect(limiter);
     limiter.connect(shaper);
     shaper.connect(masterAnalyser);
+    shaper.connect(probeAnalyser);
     masterAnalyser.connect(ctx.destination);
+
+    // One shared, short reverb for the whole kit. The impulse is generated in
+    // JS (no asset) and the return is high-passed + trimmed so it reads as
+    // glue, not as a wash.
+    const convolver = ctx.createConvolver();
+    convolver.normalize = true;
+    convolver.buffer = createReverbImpulse(ctx);
+
+    const reverbHighpass = ctx.createBiquadFilter();
+    reverbHighpass.type = "highpass";
+    reverbHighpass.frequency.value = REVERB_HIGHPASS_HZ;
+    reverbHighpass.Q.value = 0.707;
+
+    const reverbReturn = ctx.createGain();
+    reverbReturn.gain.value = dbToGain(REVERB_RETURN_DB);
+
+    convolver.connect(reverbHighpass);
+    reverbHighpass.connect(reverbReturn);
+    reverbReturn.connect(master);
 
     const buses = {} as Record<StemName, StemBus>;
     for (const stem of STEMS) {
@@ -169,17 +320,27 @@ export class AudioEngine {
       filter.frequency.value = spec.frequency;
       filter.Q.value = spec.q;
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
+      analyser.fftSize = GLUE_ANALYSER_FFT;
       analyser.smoothingTimeConstant = 0.8;
+      const glue = ctx.createGain();
+      glue.gain.value = this.glueEnabled_ ? this.glueBase_[stem] : GLUE_MAX;
+      this.glueDuck_[stem] = 1;
+      this.glueTargets_[stem] = glue.gain.value;
+      const reverbSend = ctx.createGain();
+      reverbSend.gain.value = this.reverbSends_[stem];
       input.connect(filter);
       filter.connect(analyser);
-      analyser.connect(master);
-      buses[stem] = { input, filter, analyser };
+      analyser.connect(glue);
+      glue.connect(master);
+      analyser.connect(reverbSend);
+      reverbSend.connect(convolver);
+      buses[stem] = { input, filter, analyser, glue, reverbSend };
     }
 
     this.ctx_ = ctx;
     this.master_ = master;
     this.masterAnalyser_ = masterAnalyser;
+    this.probeAnalyser_ = probeAnalyser;
     this.buses_ = buses;
     this.applyGains();
     this.startWatchdog();
@@ -238,6 +399,168 @@ export class AudioEngine {
 
   getStemMixLevel(stem: StemName): number {
     return this.autoVolumes_[stem];
+  }
+
+  // ---- glue bus ---------------------------------------------------------
+
+  /**
+   * Manual glue-base gain for one stem. updateGlue() may duck below this base
+   * while enabled, but the stem input gain (setStemMixLevel) is never touched.
+   */
+  setStemGlue(stem: StemName, gain: number, rampSec: number = GLUE_RAMP_SEC): void {
+    this.glueBase_[stem] = clampGlue(gain);
+    const ctx = this.ctx_;
+    if (!this.glueEnabled_ || ctx === null || this.buses_ === null) return;
+    const target = clampGlue(this.glueBase_[stem] * this.glueDuck_[stem]);
+    this.scheduleGlue(stem, target, ctx.currentTime, rampSec);
+  }
+
+  setGlueEnabled(enabled: boolean): void {
+    this.glueEnabled_ = enabled;
+    const ctx = this.ctx_;
+    const buses = this.buses_;
+    if (ctx === null || buses === null) return;
+    const t = ctx.currentTime;
+    for (const stem of STEMS) {
+      if (!enabled) this.glueDuck_[stem] = 1;
+      const target = enabled
+        ? clampGlue(this.glueBase_[stem] * this.glueDuck_[stem])
+        : GLUE_MAX;
+      this.scheduleGlue(stem, target, t, GLUE_RAMP_SEC);
+    }
+    if (!enabled) {
+      this.vocalPresence_ = 0;
+      this.drumTransient_ = false;
+      this.drumTransientUntil_ = 0;
+    }
+  }
+
+  /**
+   * Per-frame automatic glue. Reads the vocal analyser for presence and the
+   * drum analyser for transients, then ducks only the glue gains:
+   *   vocals -> other/bass  (up to 1.5 dB, 20 ms attack / 250 ms release)
+   *   drums  -> bass        (up to 2.5 dB, 8 ms attack / 120 ms release)
+   * Never touches input.gain, so section mixing remains authoritative.
+   */
+  updateGlue(now: number): void {
+    const ctx = this.ctx_;
+    const buses = this.buses_;
+    if (ctx === null || buses === null || !this.glueEnabled_) return;
+
+    const t = Number.isFinite(now) ? Math.max(now, ctx.currentTime) : ctx.currentTime;
+
+    buses.vocals.analyser.getFloatTimeDomainData(this.vocalTimeData_);
+    const vocalRms = rmsOf(this.vocalTimeData_);
+    this.vocalRms_ = vocalRms;
+    const vocalPresence = clamp01(
+      (vocalRms - VOCAL_RMS_FLOOR) / (VOCAL_RMS_FULL - VOCAL_RMS_FLOOR),
+    );
+    this.vocalPresence_ = vocalPresence;
+
+    buses.drums.analyser.getFloatTimeDomainData(this.drumTimeData_);
+    const drumFullRms = rmsOf(this.drumTimeData_);
+    const shortStart = this.drumTimeData_.length - KICK_SHORT_WINDOW;
+    const drumShortRms = rmsOf(this.drumTimeData_, shortStart);
+    const drumShortPeak = peakOf(this.drumTimeData_, shortStart);
+    this.drumShortRms_ = drumShortRms;
+    const transientDetected =
+      drumShortRms > 0.012 &&
+      (drumShortRms > drumFullRms * 1.6 || drumShortPeak > Math.max(0.35, drumFullRms * 4));
+    if (transientDetected) {
+      this.drumTransientUntil_ = Math.max(
+        this.drumTransientUntil_,
+        t + KICK_TRANSIENT_HOLD_SEC,
+      );
+    }
+    const drumTransient = t < this.drumTransientUntil_;
+    this.drumTransient_ = drumTransient;
+
+    const vocalDuckDb = VOCAL_DUCK_DB * vocalPresence;
+    const bassDuckDb = vocalDuckDb + (drumTransient ? KICK_DUCK_DB : 0);
+    this.glueDuck_.other = dbToGain(-vocalDuckDb);
+    this.glueDuck_.bass = dbToGain(-bassDuckDb);
+
+    const otherTarget = clampGlue(this.glueBase_.other * this.glueDuck_.other);
+    const bassTarget = clampGlue(this.glueBase_.bass * this.glueDuck_.bass);
+
+    const otherTau =
+      otherTarget < this.glueTargets_.other ? VOCAL_ATTACK_SEC : VOCAL_RELEASE_SEC;
+    const kickRecent = t < this.drumTransientUntil_ + KICK_RELEASE_SEC;
+    const bassTau =
+      bassTarget < this.glueTargets_.bass
+        ? drumTransient
+          ? KICK_ATTACK_SEC
+          : VOCAL_ATTACK_SEC
+        : kickRecent
+          ? KICK_RELEASE_SEC
+          : VOCAL_RELEASE_SEC;
+    this.scheduleGlue("other", otherTarget, t, otherTau);
+    this.scheduleGlue("bass", bassTarget, t, bassTau);
+  }
+
+  private scheduleGlue(stem: StemName, target: number, t: number, tau: number): void {
+    const buses = this.buses_;
+    if (buses === null) return;
+    // setTargetAtTime already approaches asymptotically; avoid re-scheduling
+    // an unchanged target every animation frame.
+    if (Math.abs(target - this.glueTargets_[stem]) < 1e-4) return;
+    try {
+      buses[stem].glue.gain.setTargetAtTime(target, t, Math.max(0.005, tau));
+    } catch {
+      // Automation is best-effort; never let glue stop the transport.
+    }
+    this.glueTargets_[stem] = target;
+  }
+
+  glueState(): GlueState {
+    const gains = {} as Record<StemName, number>;
+    const base = {} as Record<StemName, number>;
+    const duck = {} as Record<StemName, number>;
+    const buses = this.buses_;
+    for (const stem of STEMS) {
+      base[stem] = this.glueBase_[stem];
+      duck[stem] = this.glueDuck_[stem];
+      gains[stem] = buses !== null
+        ? buses[stem].glue.gain.value
+        : this.glueEnabled_
+          ? this.glueBase_[stem]
+          : GLUE_MAX;
+    }
+    return {
+      enabled: this.glueEnabled_,
+      gains,
+      base,
+      duck,
+      vocalRms: this.vocalRms_,
+      vocalPresence: this.vocalPresence_,
+      drumShortRms: this.drumShortRms_,
+      drumTransient: this.drumTransient_,
+    };
+  }
+
+  // ---- shared reverb ----------------------------------------------------
+
+  /** Set one stem's send into the shared short reverb. Defaults: other 0.08,
+   * vocals 0.10, drums/bass 0. */
+  setReverbSend(stem: StemName, amount: number, rampSec: number = GLUE_RAMP_SEC): void {
+    const clamped = clamp01(amount);
+    this.reverbSends_[stem] = clamped;
+    const ctx = this.ctx_;
+    const buses = this.buses_;
+    if (ctx === null || buses === null) return;
+    try {
+      buses[stem].reverbSend.gain.setTargetAtTime(
+        clamped,
+        ctx.currentTime,
+        Math.max(0.005, rampSec),
+      );
+    } catch {
+      // Safe fallback
+    }
+  }
+
+  getReverbSend(stem: StemName): number {
+    return this.reverbSends_[stem];
   }
 
   /** Create (lazily) and resume the context. Must be called from a gesture. */
@@ -343,6 +666,13 @@ export class AudioEngine {
     this.ensureCtx();
     if (this.masterAnalyser_ === null) throw new Error("AudioEngine master analyser not initialised");
     return this.masterAnalyser_;
+  }
+
+  /** Long-window analyser for the hidden transition probe. */
+  getProbeAnalyser(): AnalyserNode {
+    this.ensureCtx();
+    if (this.probeAnalyser_ === null) throw new Error("AudioEngine probe analyser not initialised");
+    return this.probeAnalyser_;
   }
 
   /** Current audio-clock time, or 0 when the context does not exist yet. */
@@ -682,7 +1012,11 @@ export class AudioEngine {
     this.ctx_ = null;
     this.master_ = null;
     this.masterAnalyser_ = null;
+    this.probeAnalyser_ = null;
     this.buses_ = null;
+    this.drumTransient_ = false;
+    this.drumTransientUntil_ = 0;
+    this.vocalPresence_ = 0;
     if (ctx !== null) {
       void ctx.close().catch(() => undefined);
     }

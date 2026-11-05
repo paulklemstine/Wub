@@ -18,6 +18,7 @@ import type { TripMode, TripPalette } from "./psychedelic_bg";
 import { VERSION_INFO } from "./version";
 import { ClientGrooveboxConductor } from "./client_ml_sequencer";
 import { TamagotchiAvatar } from "./tamagotchi";
+import { TransitionProbe } from "./transition_probe";
 
 export interface StemState {
   stem: StemName;
@@ -226,6 +227,19 @@ class WubApp {
   private kitPoint: { x: number; y: number } | null = null;
   private kitBlockAt = 0;
   private remixPhraseIds: Partial<Record<StemName, string | null>> = {};
+  private transitionProbe = new TransitionProbe();
+  private lastRemixTracks: Partial<Record<StemName, string>> = {};
+  private movementBlocks = 0;
+  private movementTrackChanges = 0;
+  private movementHoldBars = 0;
+  private movementMaxHoldBars = 0;
+  private movementLog: Array<{
+    at: number;
+    bars: number;
+    changedTracks: StemName[];
+    target: string;
+    tracks: Partial<Record<StemName, string>>;
+  }> = [];
   private timeScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private freqScratch = new Map<StemName, Uint8Array<ArrayBuffer>>();
   private masterTimeScratch: Uint8Array<ArrayBuffer> | null = null;
@@ -337,6 +351,15 @@ class WubApp {
             : { error: "engine not ready" };
         };
         (window as any).__wubReticles = () => this.nebula?.reticles ?? null;
+        (window as any).__wubTransitionSummary = () => this.transitionProbe.summary();
+        (window as any).__wubGlueState = () => this.engine.glueState();
+        (window as any).__wubMovementSummary = () => ({
+          blocks: this.movementBlocks,
+          trackChanges: this.movementTrackChanges,
+          lastHoldBars: this.movementHoldBars,
+          maxHoldBars: this.movementMaxHoldBars,
+          log: this.movementLog,
+        });
         (window as any).__wubDebugBar = () => {
           const c = this.clientConductor as any;
           return typeof c?.debugBar === "function" ? c.debugBar() : { error: "engine not ready" };
@@ -456,6 +479,43 @@ class WubApp {
             active: true,
           }))
         );
+      };
+      // Hidden seam telemetry. No UI; logs only suspicious boundaries and
+      // keeps the full capture in window.__wubTransitionLog.
+      this.clientConductor.onKitTransition = (at, result) => {
+        const tracks = result.stemTracks ?? {};
+        const changedTracks: StemName[] = [];
+        for (const stem of STEMS) {
+          const track = tracks[stem];
+          if (track && this.lastRemixTracks[stem] !== track) changedTracks.push(stem);
+        }
+        this.transitionProbe.markBoundary({
+          at,
+          blockBars: result.blockBars,
+          changed: changedTracks,
+          bridge: result.bridge,
+          rotation: result.setChanged,
+          clusterId: this.clientConductor?.activeClusterId ?? "",
+          targetEnergy: result.targetEnergy,
+          tracks,
+        });
+        this.movementBlocks += 1;
+        this.movementTrackChanges += changedTracks.length;
+        if (changedTracks.length > 0) {
+          this.movementHoldBars = 0;
+        } else {
+          this.movementHoldBars += result.blockBars;
+          this.movementMaxHoldBars = Math.max(this.movementMaxHoldBars, this.movementHoldBars);
+        }
+        this.lastRemixTracks = { ...tracks };
+        this.movementLog.push({
+          at,
+          bars: result.blockBars,
+          changedTracks,
+          target: result.targetSection,
+          tracks,
+        });
+        if (this.movementLog.length > 200) this.movementLog.splice(0, this.movementLog.length - 200);
       };
     } catch (e) {
       console.warn("Client ML sequencer init failed:", e);
@@ -1322,6 +1382,10 @@ class WubApp {
   private frame(_t: number): void {
     const t = visualNow();
     const audioNow = this.engine.now();
+    // Shared glue bus: vocal ducking and kick/bass sidechain, control-rate
+    // but sample-scheduled by the AudioParam automation inside the engine.
+    this.engine.updateGlue(audioNow);
+    this.transitionProbe.update(audioNow, this.engine);
 
     // Kit blocks have per-phrase slots; surface the resulting session BPM.
     if (this.playing && this.clientConductor) {
