@@ -193,6 +193,8 @@ export class StemRemixPlayer {
   private entryById = new Map<string, StemPoolEntry>();
 
   private cluster: KitCluster | null = null;
+  private anchorKit: Kit | null = null;
+  private currentAnchorPhrase: KitPhrase | null = null;
   private sessionKey = "C minor";
   private sessionBpm = 128;
   private blockSec = 960 / 128;
@@ -330,7 +332,7 @@ export class StemRemixPlayer {
     // Preload one real song: all four stems from the same kit so the first
     // 4 bars sound like a record before the remix starts. Scheduling waits
     // for the transport's first schedule() call.
-    const anchor = this.chooseAnchor();
+    const anchor = this.anchorKit ?? this.chooseAnchor();
     if (anchor) {
       const entries = this.entriesForKit(anchor, "GROOVE_A").length > 0
         ? this.entriesForKit(anchor, "GROOVE_A")
@@ -414,6 +416,8 @@ export class StemRemixPlayer {
     }
     this.recent = [];
     this.playedOnce.clear();
+    this.anchorKit = this.chooseAnchor();
+    this.currentAnchorPhrase = null;
   }
 
   private chooseAnchor(): Kit | null {
@@ -496,9 +500,14 @@ export class StemRemixPlayer {
       phrases[prepared.stem] = prepared.entry.phrase;
       kits[prepared.stem] = prepared.entry.kit;
     }
+    const normalized = String(section || "GROOVE_A").toUpperCase();
+    this.lastSection = normalized;
+    this.currentAnchorPhrase = this.anchorPrepared.find((prepared) => prepared.stem === "drums")?.entry.phrase
+      ?? this.anchorPrepared[0]?.entry.phrase
+      ?? null;
     return {
       at,
-      section: String(section || "GROOVE_A").toUpperCase(),
+      section: normalized,
       changed: [...STEMS],
       blocksPlayed: 0,
       bridge: false,
@@ -563,35 +572,30 @@ export class StemRemixPlayer {
       }
     }
 
-    const advance = new Set<StemName>();
-    if (this.blockIndex === 0 || rotation || sectionChanged) {
-      for (const stem of STEMS) advance.add(stem);
-    } else {
-      for (const stem of STEMS) {
-        if (this.pins[stem]) advance.add(stem);
-      }
-      const auto = STEMS.filter((stem) => !advance.has(stem))
-        .sort((a, b) => this.blocksSinceChange[b] - this.blocksSinceChange[a]);
-      const need = Math.max(1, Math.min(2, auto.length));
-      for (const stem of auto.slice(0, need)) advance.add(stem);
-    }
-
+    // Default: every unpinned stem plays the same phrase from the anchor song.
+    // Cross-song recombination is only used for a stem the user dragged.
+    // Hold the anchor phrase for two blocks (8 bars) unless the arrangement
+    // section changes, so the record has room to breathe between phrases.
+    const holdAnchor = !bridge && !rotation && !sectionChanged
+      && this.blockIndex % 2 === 1 && this.currentAnchorPhrase !== null;
+    const anchorPhrase = bridge && !rotation
+      ? (this.currentAnchorPhrase ?? this.chooseAnchorPhrase(normalized))
+      : rotation
+        ? this.chooseAnchorPhrase(normalized)
+        : holdAnchor
+          ? this.currentAnchorPhrase
+          : this.chooseAnchorPhrase(normalized);
     const order: StemName[] = bridge && !rotation
       ? ["other", "vocals"]
       : ["drums", "bass", "other", "vocals"];
+
     for (const stem of order) {
-      if (!advance.has(stem)) {
-        const current = this.current[stem];
-        if (current) {
-          phrases[stem] = current.entry.phrase;
-          kits[stem] = current.entry.kit;
-          const audio = this.cache.get(this.cacheKey(current.entry));
-          if (audio) tasks.push({ stem, entry: current.entry, audio });
-        }
-        this.blocksSinceChange[stem] += 1;
-        continue;
+      let entry: StemPoolEntry | null = null;
+      if (this.pins[stem]) {
+        entry = this.select(stem, at, normalized, sectionChanged);
+      } else {
+        entry = this.anchorEntry(stem, anchorPhrase);
       }
-      const entry = this.select(stem, at, normalized, sectionChanged);
       if (!entry) {
         const current = this.current[stem];
         if (current) {
@@ -602,14 +606,18 @@ export class StemRemixPlayer {
         }
         continue;
       }
+      const current = this.current[stem];
+      const same = current
+        && current.entry.phrase.id === entry.phrase.id
+        && current.entry.kit.track_id === entry.kit.track_id;
       phrases[stem] = entry.phrase;
       kits[stem] = entry.kit;
       tasks.push({ stem, entry });
-      changed.push(stem);
-      this.blocksSinceChange[stem] = 0;
+      if (!same) changed.push(stem);
       this.recent.push(entry.phrase.id);
       if (entry.phrase.once) this.playedOnce.add(entry.phrase.id);
     }
+    this.currentAnchorPhrase = anchorPhrase;
     if (this.recent.length > RECENT_BLOCKS * 5) {
       this.recent = this.recent.slice(-RECENT_BLOCKS * 5);
     }
@@ -634,6 +642,62 @@ export class StemRemixPlayer {
     };
     this.onBlock?.(result);
     return { result, tasks };
+  }
+
+  /** Pick the next phrase from the anchor song, following the section arc. */
+  private chooseAnchorPhrase(section: string): KitPhrase | null {
+    const kit = this.anchorKit;
+    if (!kit || kit.phrases.length === 0) return null;
+    const target = SECTION_ENERGY[section] ?? 0.65;
+    // Only avoid the last two phrases, so a six-phrase kit can keep cycling.
+    const recent = new Set(this.recent.slice(-2));
+    let best: { phrase: KitPhrase; score: number } | null = null;
+    for (const phrase of kit.phrases) {
+      if (recent.has(phrase.id) && kit.phrases.length > 2) continue;
+      if (phrase.once && this.playedOnce.has(phrase.id)) continue;
+      if (phrase.is_intro && this.blockIndex > 0) continue;
+      if (phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
+      const energy = Number(phrase.energy) || 0.5;
+      const fullStem = STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`));
+      const continuity = this.currentAnchorPhrase
+        ? Math.abs(energy - (Number(this.currentAnchorPhrase.energy) || 0.5))
+        : 0;
+      let score = (String(phrase.section).toUpperCase() === section ? 0.9 : 0)
+        - Math.abs(energy - target)
+        - continuity * 0.6
+        + (fullStem ? 0.5 : 0);
+      if (continuity > 0.3 && String(phrase.section).toUpperCase() !== section) score -= 0.4;
+      if (phrase.once) score -= 0.2;
+      score += hashRoll(`${phrase.id}:${this.blockIndex}`) * 0.12;
+      if (!best || score > best.score) best = { phrase, score };
+    }
+    if (best) return best.phrase;
+    let fallback = kit.phrases[0];
+    let bestDelta = Number.POSITIVE_INFINITY;
+    for (const phrase of kit.phrases) {
+      const delta = Math.abs((Number(phrase.energy) || 0.5) - target);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        fallback = phrase;
+      }
+    }
+    return fallback;
+  }
+
+  /** The anchor phrase's entry for a stem, or the best same-song fallback. */
+  private anchorEntry(stem: StemName, phrase: KitPhrase | null): StemPoolEntry | null {
+    const kit = this.anchorKit;
+    if (!kit) return null;
+    if (phrase) {
+      const exact = this.entryById.get(`${phrase.id}:${stem}`);
+      if (exact) return exact;
+    }
+    const candidates = this.pools[stem].filter((entry) => entry.kit.track_id === kit.track_id);
+    if (candidates.length === 0) return null;
+    const targetSection = String(phrase?.section ?? "GROOVE_A").toUpperCase();
+    const target = SECTION_ENERGY[targetSection] ?? 0.65;
+    candidates.sort((a, b) => Math.abs(a.energy - target) - Math.abs(b.energy - target));
+    return candidates[0];
   }
 
   private async finishBlock(

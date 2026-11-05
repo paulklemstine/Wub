@@ -91,8 +91,10 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   phrase; cross-song recombination happens only at block boundaries.
 - **No `playbackRate` resampling.** Tempo fit uses Signalsmith Stretch `rate`
   (cap 2%); key fit uses `semitones` (drums 0, vocals ±3, bass/other ±5).
-- **Staggered auto-advance.** Advance 1-2 least-recently-changed stems per
-  4-bar block; all four only at section changes or cluster rotation.
+- **Anchor-song default.** Unpinned stems play the same phrase from the
+  session's anchor kit; the anchor phrase holds 8 bars, then advances through
+  the song. Cross-song recombination is only for a stem the user dragged or
+  pinned. This is deliberate: free four-way recombination sounded disjoint.
 - **Drag commits at the next bar; pins last 32 bars.** The reticle follows the
   playing phrase; a dashed ghost ring marks the pinned region. Double-click
   releases the pin. If the target audio is not decoded by the bar, wait one
