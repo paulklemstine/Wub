@@ -1,4 +1,4 @@
-"""Build the "taste" dataset: one 48-d feature vector per real 4-bar window.
+"""Build the "taste" dataset: one 160-d feature vector per real 4-bar window.
 
 A *taste* model scores synthetic arrangements by how much they resemble real
 songs, so the training set is every real 4-bar window of the analysed corpus
@@ -19,7 +19,11 @@ Per track
 
 Feature layout
 --------------
-The requested blocks are, in order::
+Dimensions ``0..47`` are the original 48-d block and stay byte-identical to
+the v1 dataset.  Dimensions ``48..159`` add the causal evidence the ranker
+needs to choose the *next* phrase rather than merely recognise a real
+arrangement: which stem actually fired on which tatum, and what the bass and
+harmony are doing.  The full layout is::
 
      0..11   12  chroma       mean ``pitches`` of the unique non-silent bass /
                               other / vocals segments referenced by the
@@ -65,13 +69,52 @@ The requested blocks are, in order::
                               ``VOCAL_AUDIBLE_DB`` to ``-inf`` for the plain
                               non-silent reading.
     41..47    7  reserved     zeros, kept free for future features.
+    48..111  64  onset bits   stems in order drums, bass, other, vocals; each
+                              stem owns 16 bits, one per tatum of the bar grid.
+                              The four bars of the window are folded onto that
+                              16-step grid: bit ``k`` is 1 when a segment of
+                              that stem starts on tatum ``k`` of *any* of the
+                              four bars.  A segment is first assigned to the
+                              tatum containing its ``start`` (its first
+                              overlap), then that tatum contributes its modulo
+                              16 position; a segment referenced by several
+                              consecutive tatums therefore sets exactly one
+                              position.  This is the standard 16-step rhythmic
+                              signature (kick / bass / chord / vocal pattern)
+                              and the only 64-bit reading that keeps
+                              ``FEATURE_DIM = 160``; it is positional in the
+                              bar, not in the 4-bar span.
+   112..123  12  bass chroma  mean ``pitches`` of the unique non-silent bass
+                              segments of the window, L1-normalised; zeros
+                              when the window has no bass material.
+   124..135  12  other chroma same for the ``other`` stem.
+   136..147  12  bass root    one-hot of ``argmax(bass chroma)``; all-zero bass
+                              chroma yields root 0 (C) by convention.
+   148..159  12  chord root   one-hot of ``argmax(bass chroma + other chroma)``.
+                              Bass and ``other`` are each L1-normalised, so
+                              they contribute equally regardless of how much
+                              material each stem carries.  All-zero input
+                              yields root 0 (C) by convention.
 
-That is 12+12+4+4+1+1+5+1+1 = 41 real features plus the reserved tail.  Note
-the arithmetic in the brief: its blocks sum to 44, not 48, while
-``feature_dim: 48`` is a hard contract checked by the validator.  The reserved
-tail therefore absorbs the 4-dim gap (3 requested + 4 pad = 7 zeros) instead of
-inventing four unspecified features; the padded columns are inert, so they do
-not affect a trained scorer.
+That is 12+12+4+4+1+1+5+1+1 = 41 real features plus the reserved tail in
+``0..47``, then 64 onset bits and 4 x 12 harmonic features:
+48 + 64 + 48 = 160.  ``feature_dim: 160`` is a hard contract checked by the
+validator, including a check that every value is finite and that every
+one-hot block sums to 1.
+
+Window metadata
+---------------
+Every window (and every joined kit phrase) also carries the evidence the
+browser player uses to gate phrase choices::
+
+    chroma      the existing 12-d harmonic chroma (equal to features 0..11)
+    bass_root   int argmax of the bass chroma (0..11)
+    is_intro    start_bar <= 4 or the window's section is INTRO
+    is_outro    start_bar + 4 >= n_bars - 4
+    once        is_intro or is_outro (a phrase that should play at most once)
+
+``once`` is deliberately a derived copy rather than a third independent flag:
+the player can trust either reading.
 
 Kit join
 --------
@@ -89,7 +132,7 @@ Usage::
         --processed processed --kits kits_full/kit_manifest.json \\
         --out /tmp/wubtrain/taste_dataset.json
 
-Output: ``{"version": 1, "feature_dim": 48, "tracks": [...],
+Output: ``{"version": 2, "feature_dim": 160, "tracks": [...],
 "kit_phrases": [...], "stats": {...}}``, every float rounded to 5 decimals.
 The pass is deterministic: files, tracks, windows and phrases are all sorted.
 """
@@ -102,6 +145,7 @@ import math
 import os
 import sys
 import time
+from bisect import bisect_right
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -127,8 +171,17 @@ SECTIONS: Tuple[str, ...] = ("INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"
 WINDOW_BARS = 4
 TATUMS_PER_BAR = 16
 TATUMS_PER_WINDOW = WINDOW_BARS * TATUMS_PER_BAR  # 64
-FEATURE_DIM = 48
-RESERVED_DIMS = 7  # 3 requested + 4 pad so the blocks reach the promised 48
+BASE_FEATURE_DIM = 48          # v1 layout, byte-identical at indices 0..47
+# 16 bits per stem = the standard 16-step (one-bar) onset signature; the four
+# bars of the window are folded (OR) onto that grid.  4 stems x 16 = 64 bits,
+# which is the only reading consistent with the FEATURE_DIM=160 contract.
+ONSET_BITS_PER_STEM = TATUMS_PER_BAR
+ONSET_DIM = ONSET_BITS_PER_STEM * len(STEMS)
+CHROMA_DIM = 12
+HARMONIC_DIM = 4 * CHROMA_DIM  # bass / other chroma + bass-root / chord-root
+FEATURE_DIM = BASE_FEATURE_DIM + ONSET_DIM + HARMONIC_DIM  # 160
+RESERVED_DIMS = 7  # 3 requested + 4 pad so the v1 block reaches 48
+ONSET_EPS = 1e-6   # tatum/segment boundary tolerance (seconds)
 
 LOUD_DB_MIN = -60.0
 LOUD_DB_MAX = 0.0
@@ -195,6 +248,22 @@ def _prefix_sum(flags: np.ndarray) -> np.ndarray:
     return np.concatenate(([0.0], np.cumsum(flags, dtype=np.float64)))
 
 
+def _root_onehot(chroma: Sequence[float]) -> Tuple[List[float], int]:
+    """12-d one-hot of ``argmax(chroma)`` plus the integer root.
+
+    An all-zero chroma vector has no musical root; ``argmax`` still returns 0,
+    so the documented convention is C.  The caller keeps the raw chroma next
+    to this flag, so a consumer can test ``sum(chroma) == 0`` if it needs to
+    distinguish "C" from "unknown".
+    """
+    values = np.asarray(chroma, dtype=np.float64)
+    root = int(np.argmax(values)) if values.size == CHROMA_DIM else 0
+    root = max(0, min(CHROMA_DIM - 1, root))
+    onehot = [0.0] * CHROMA_DIM
+    onehot[root] = 1.0
+    return onehot, root
+
+
 # ---------------------------------------------------------------------------
 # Per-track feature extraction
 # ---------------------------------------------------------------------------
@@ -213,6 +282,7 @@ class _WindowFeaturizer:
         self.seg_timbre: Dict[str, Optional[np.ndarray]] = {}
         self.seg_loud: Dict[str, float] = {}
         self.seg_silent: Dict[str, bool] = {}
+        self.seg_start: Dict[str, Optional[float]] = {}
         for seg in analysis.get("segments") or []:
             if not isinstance(seg, dict):
                 continue
@@ -224,6 +294,15 @@ class _WindowFeaturizer:
             self.seg_timbre[sid] = _stats_vec(seg.get("timbre"))
             loud = seg.get("loudness_max")
             self.seg_loud[sid] = float(loud) if loud is not None else LOUD_DB_MIN
+            start = seg.get("start")
+            if start is None:
+                self.seg_start[sid] = None
+            else:
+                try:
+                    value = float(start)
+                except (TypeError, ValueError):
+                    value = float("nan")
+                self.seg_start[sid] = value if math.isfinite(value) else None
 
         # --- per-bar segment references (union over the bar's 16 tatums) ----
         self.bar_refs: List[Dict[str, List[str]]] = []
@@ -269,6 +348,68 @@ class _WindowFeaturizer:
         self.onset_prefix = {s: _prefix_sum(onsets[s]) for s in STEMS}
         self.vocals_prefix = _prefix_sum(vocals_on)
 
+        # --- positional onset bits (one bit per stem segment, first overlap) --
+        # ``onsets`` above measures "the segment id changed"; the 64-d block
+        # needs the tatum in which each segment actually begins.  Analyse every
+        # tatum of the track in order so a segment referenced by several
+        # consecutive tatums is assigned to the one containing its ``start``.
+        self.onset_flags = {s: np.zeros(n_tatums, dtype=np.float64)
+                            for s in STEMS}
+        self.onset_bad = {"missing_segment": 0, "missing_start": 0,
+                          "outside_tatums": 0, "not_referenced": 0}
+        self.bad_tatums: set = set()
+        tatum_starts = np.asarray(
+            [float(tat.get("start") or 0.0) for tat in self.tatums],
+            dtype=np.float64)
+        tatum_ends = tatum_starts + np.asarray(
+            [float(tat.get("duration") or 0.0) for tat in self.tatums],
+            dtype=np.float64)
+        first_ref: Dict[str, Dict[str, int]] = {s: {} for s in STEMS}
+        tatum_ids: List[Dict[str, List[str]]] = []
+        for i, tat in enumerate(self.tatums):
+            stem_segments = tat.get("stem_segments") or {}
+            ids_here: Dict[str, List[str]] = {}
+            for stem in STEMS:
+                ids = [str(raw_id) for raw_id in (stem_segments.get(stem) or [])]
+                ids_here[stem] = ids
+                for sid in ids:
+                    first_ref[stem].setdefault(sid, i)
+            tatum_ids.append(ids_here)
+        for stem in STEMS:
+            for sid, first_i in first_ref[stem].items():
+                target = first_i
+                if sid not in self.seg_start:
+                    self.onset_bad["missing_segment"] += 1
+                    self.bad_tatums.add(target)
+                elif self.seg_start[sid] is None:
+                    self.onset_bad["missing_start"] += 1
+                    self.bad_tatums.add(target)
+                else:
+                    start = float(self.seg_start[sid])
+                    idx = bisect_right(tatum_starts, start + ONSET_EPS) - 1
+                    idx = max(0, min(n_tatums - 1, idx))
+                    inside = (start >= tatum_starts[idx] - ONSET_EPS
+                              and start <= tatum_ends[idx] + ONSET_EPS)
+                    if not inside:
+                        # Start outside the analysed tatum grid (usually a
+                        # segment cut at the very end): keep the onset at its
+                        # first reference instead of dropping it.
+                        self.onset_bad["outside_tatums"] += 1
+                        self.bad_tatums.add(target)
+                    elif sid not in tatum_ids[idx].get(stem, []):
+                        # The tatum covering the start does not reference the
+                        # segment (analysis gap).  Fall back to the first
+                        # referencing tatum so the onset is not lost.
+                        self.onset_bad["not_referenced"] += 1
+                        self.bad_tatums.add(target)
+                    else:
+                        target = idx
+                self.onset_flags[stem][target] = 1.0
+        bad_mask = np.zeros(n_tatums, dtype=bool)
+        for tatum_idx in self.bad_tatums:
+            bad_mask[tatum_idx] = True
+        self.onset_bad_prefix = _prefix_sum(bad_mask)
+
         # --- section map ----------------------------------------------------
         self.sec_of_bar: List[str] = ["GROOVE_A"] * self.n_bars
         self.sec_start_of_bar: List[int] = [0] * self.n_bars
@@ -305,6 +446,19 @@ class _WindowFeaturizer:
         total = float(np.sum(np.abs(mean)))
         if total <= 1e-9:
             return [0.0] * 12
+        return [float(v) for v in mean / total]
+
+    def _stem_chroma(self, start_bar: int, stem: str) -> List[float]:
+        """Mean ``pitches`` of one stem's unique non-silent window segments."""
+        ids = self._union(start_bar, (stem,))
+        acc = [self.seg_pitch[sid] for sid in ids
+               if self.seg_pitch.get(sid) is not None]
+        if not acc:
+            return [0.0] * CHROMA_DIM
+        mean = np.mean(np.stack(acc), axis=0)
+        total = float(np.sum(np.abs(mean)))
+        if total <= 1e-9:
+            return [0.0] * CHROMA_DIM
         return [float(v) for v in mean / total]
 
     def _timbre(self, start_bar: int) -> List[float]:
@@ -347,29 +501,74 @@ class _WindowFeaturizer:
         return float((self.vocals_prefix[hi] - self.vocals_prefix[lo])
                      / TATUMS_PER_WINDOW)
 
-    def features(self, start_bar: int) -> List[float]:
-        """The 48-d feature vector of the 4-bar window at ``start_bar``."""
+    def _onset_bits(self, start_bar: int) -> List[float]:
+        """64 onset bits: 4 stem 16-step signatures, 4 bars folded onto 16."""
+        lo = start_bar * TATUMS_PER_BAR
+        hi = lo + TATUMS_PER_WINDOW
+        out: List[float] = []
+        for stem in STEMS:
+            folded = np.zeros(TATUMS_PER_BAR, dtype=np.float64)
+            for step, value in enumerate(self.onset_flags[stem][lo:hi]):
+                if value:
+                    folded[step % TATUMS_PER_BAR] = 1.0
+            out.extend(float(v) for v in folded)
+        return out
+
+    def window_has_bad_onset(self, start_bar: int) -> bool:
+        """True when any tatum in the window needed an onset fallback."""
+        lo = start_bar * TATUMS_PER_BAR
+        hi = lo + TATUMS_PER_WINDOW
+        return bool(self.onset_bad_prefix[hi] - self.onset_bad_prefix[lo] > 0.0)
+
+    def describe(self, start_bar: int) -> Tuple[List[float], Dict[str, Any]]:
+        """The 160-d vector and the player metadata of the window."""
         energy, slope = self.energy(start_bar)
         label = self.sec_of_bar[start_bar]
         onehot = [1.0 if label == sec else 0.0 for sec in SECTIONS]
         since = float(np.clip((start_bar - self.sec_start_of_bar[start_bar])
                               / SECTION_LEN_NORM, 0.0, 1.0))
+        chroma = self._chroma(start_bar)
+        bass_chroma = _round_vec(self._stem_chroma(start_bar, "bass"))
+        other_chroma = _round_vec(self._stem_chroma(start_bar, "other"))
+        # Derive the roots from the *serialised* (rounded) chroma so the
+        # one-hot always agrees with the values a consumer reads back.
+        bass_root_vec, bass_root = _root_onehot(bass_chroma)
+        chord_root_vec, _chord_root = _root_onehot(
+            [a + b for a, b in zip(bass_chroma, other_chroma)])
         vector = (
-            self._chroma(start_bar)               # 12
-            + self._timbre(start_bar)             # 12
-            + self._density(start_bar)            #  4
-            + self._loudness(start_bar)           #  4
+            chroma                                # 12  (v1, unchanged)
+            + self._timbre(start_bar)             # 12  (v1, unchanged)
+            + self._density(start_bar)            #  4  (v1, unchanged)
+            + self._loudness(start_bar)           #  4  (v1, unchanged)
             + [energy]                            #  1
             + [slope]                             #  1
             + onehot                              #  5
             + [since]                             #  1
             + [self._vocal_presence(start_bar)]   #  1
             + [0.0] * RESERVED_DIMS               #  7
+            + self._onset_bits(start_bar)         # 64
+            + bass_chroma                         # 12
+            + other_chroma                        # 12
+            + bass_root_vec                       # 12
+            + chord_root_vec                      # 12
         )
         if len(vector) != FEATURE_DIM:  # pragma: no cover - layout guard
             raise AssertionError(
                 f"feature layout is {len(vector)}, expected {FEATURE_DIM}")
-        return _round_vec(vector)
+        is_intro = bool(start_bar <= WINDOW_BARS or label == "INTRO")
+        is_outro = bool(start_bar + WINDOW_BARS >= self.n_bars - WINDOW_BARS)
+        meta: Dict[str, Any] = {
+            "chroma": _round_vec(chroma),
+            "bass_root": int(bass_root),
+            "is_intro": is_intro,
+            "is_outro": is_outro,
+            "once": bool(is_intro or is_outro),
+        }
+        return _round_vec(vector), meta
+
+    def features(self, start_bar: int) -> List[float]:
+        """The 160-d feature vector of the 4-bar window at ``start_bar``."""
+        return self.describe(start_bar)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -430,22 +629,31 @@ def _process_track(job: Dict[str, Any]) -> Dict[str, Any]:
                     if 0 <= b <= max_start and b not in on_grid})
 
     windows: List[Dict[str, Any]] = []
+    bad_windows = 0
     for start_bar in grid + extra:
         try:
-            vector = featurizer.features(start_bar)
+            vector, meta = featurizer.describe(start_bar)
             energy = featurizer.energy(start_bar)[0]
         except Exception as exc:
             result["status"] = "error"
             result["reason"] = f"window_error:{type(exc).__name__}@{start_bar}"
             return result
+        if featurizer.window_has_bad_onset(start_bar):
+            bad_windows += 1
         windows.append({
             "start_bar": int(start_bar),
             "section": str(featurizer.sec_of_bar[start_bar]),
             "energy": _r5(energy),
             "aligned": bool(start_bar % WINDOW_BARS == 0),
+            **meta,
             "features": vector,
         })
     windows.sort(key=lambda w: w["start_bar"])
+
+    onset = dict(featurizer.onset_bad)
+    onset["windows_affected"] = int(bad_windows)
+    onset["total"] = int(sum(featurizer.onset_bad.values()))
+    result["onset"] = onset
 
     bpm = float(raw.get("bpm") or 0.0)
     result["track"] = {
@@ -504,17 +712,74 @@ def _validate(dataset: Dict[str, Any], n_phrases: int, matched: int,
 
     bad_dim = 0
     non_finite = 0
+    bad_meta = 0
+    bad_bits = 0
+    bad_onehot = 0
+    meta_mismatch = 0
     vectors = [w["features"] for t in dataset["tracks"] for w in t["windows"]]
     vectors += [p["features"] for p in dataset["kit_phrases"]]
     for vec in vectors:
         if len(vec) != FEATURE_DIM:
             bad_dim += 1
-        elif not all(math.isfinite(v) for v in vec):
+            continue
+        if not all(math.isfinite(v) for v in vec):
             non_finite += 1
+            continue
+        bits = vec[BASE_FEATURE_DIM:BASE_FEATURE_DIM + ONSET_DIM]
+        if any(v not in (0.0, 1.0) for v in bits):
+            bad_bits += 1
+        # 48..159 must contain the 4 one-hot blocks (2 chroma, 2 one-hot).
+        roots = (
+            vec[BASE_FEATURE_DIM + ONSET_DIM + 2 * CHROMA_DIM:
+                BASE_FEATURE_DIM + ONSET_DIM + 3 * CHROMA_DIM],
+            vec[BASE_FEATURE_DIM + ONSET_DIM + 3 * CHROMA_DIM:],
+        )
+        if any(abs(sum(block) - 1.0) > 1e-4 for block in roots):
+            bad_onehot += 1
     if bad_dim:
         problems.append(f"{bad_dim} vector(s) with dimension != {FEATURE_DIM}")
     if non_finite:
         problems.append(f"{non_finite} vector(s) with NaN/inf")
+    if bad_bits:
+        problems.append(f"{bad_bits} vector(s) with non-binary onset bits")
+    if bad_onehot:
+        problems.append(f"{bad_onehot} vector(s) with a broken root one-hot")
+
+    def _check_meta(row: Dict[str, Any]) -> None:
+        nonlocal bad_meta, meta_mismatch
+        chroma = row.get("chroma")
+        root = row.get("bass_root")
+        flags = (row.get("is_intro"), row.get("is_outro"), row.get("once"))
+        if (not isinstance(chroma, list) or len(chroma) != CHROMA_DIM
+                or not all(isinstance(v, (int, float)) and math.isfinite(v)
+                           for v in chroma)
+                or not isinstance(root, int) or not 0 <= root < CHROMA_DIM
+                or not all(isinstance(v, bool) for v in flags)
+                or flags[2] != (flags[0] or flags[1])):
+            bad_meta += 1
+            return
+        vec = row.get("features") or []
+        if len(vec) != FEATURE_DIM:
+            return
+        mismatch = any(abs(float(a) - float(b)) > 1e-6
+                       for a, b in zip(chroma, vec[:CHROMA_DIM]))
+        bass = vec[BASE_FEATURE_DIM + ONSET_DIM:
+                   BASE_FEATURE_DIM + ONSET_DIM + CHROMA_DIM]
+        if int(np.argmax(np.asarray(bass, dtype=np.float64))) != root:
+            mismatch = True
+        if mismatch:
+            meta_mismatch += 1
+
+    for track in dataset["tracks"]:
+        for window in track["windows"]:
+            _check_meta(window)
+    for phrase in dataset["kit_phrases"]:
+        _check_meta(phrase)
+    if bad_meta:
+        problems.append(f"{bad_meta} row(s) with missing/invalid window metadata")
+    if meta_mismatch:
+        problems.append(f"{meta_mismatch} row(s) whose metadata disagrees with "
+                        f"its feature vector")
 
     if matched != n_phrases:
         problems.append(f"kit join {matched}/{n_phrases} phrases")
@@ -534,7 +799,7 @@ def _validate(dataset: Dict[str, Any], n_phrases: int, matched: int,
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Build the 48-d, 4-bar-window taste dataset from analysis JSON.")
+        description="Build the 160-d, 4-bar-window taste dataset from analysis JSON.")
     ap.add_argument("--processed", default="processed",
                     help="directory of per-track analysis JSON (default: processed)")
     ap.add_argument("--kits", default="kits_full/kit_manifest.json",
@@ -596,6 +861,8 @@ def main() -> None:
     status: Counter = Counter()
     reasons: Counter = Counter()
     anomalies: List[Dict[str, Any]] = []
+    onset_anomalies: List[Dict[str, Any]] = []
+    onset_totals: Counter = Counter()
     n_windows = 0
     n_aligned = 0
     done = 0
@@ -610,6 +877,15 @@ def main() -> None:
             anomalies.append({"track_id": res.get("track_id"),
                               "reason": res.get("reason") or "partial_bar",
                               **anomaly})
+        onset = res.get("onset") or {}
+        if onset.get("total") or onset.get("windows_affected"):
+            onset_anomalies.append({"track_id": res.get("track_id"),
+                                    **onset})
+            onset_totals["tracks"] += 1
+            onset_totals["windows"] += int(onset.get("windows_affected") or 0)
+            for key, value in onset.items():
+                if isinstance(value, int) and key != "windows_affected":
+                    onset_totals[key] += value
         if res.get("status") != "ok" or not res.get("track"):
             if res.get("reason"):
                 reasons[str(res["reason"])] += 1
@@ -657,32 +933,51 @@ def main() -> None:
                 _progress()
 
     tracks.sort(key=lambda t: t["track_id"])
-    feature_index = {t["track_id"]: {w["start_bar"]: w["features"]
-                                     for w in t["windows"]}
-                     for t in tracks}
+    onset_anomalies.sort(key=lambda row: str(row.get("track_id")))
+    window_index = {t["track_id"]: {w["start_bar"]: w for w in t["windows"]}
+                    for t in tracks}
 
     # --- kit phrase join ----------------------------------------------------
     kit_phrases: List[Dict[str, Any]] = []
     unmatched: Counter = Counter()
     for phrase in phrases:
-        windows = feature_index.get(phrase["track_id"]) or {}
-        vector = windows.get(phrase["start_bar"])
-        if vector is None:
+        windows = window_index.get(phrase["track_id"]) or {}
+        window = windows.get(phrase["start_bar"])
+        if window is None:
             unmatched[f"{phrase['track_id']}@{phrase['start_bar']}"] += 1
             continue
         kit_phrases.append({
             "phrase_id": phrase["phrase_id"],
             "track_id": phrase["track_id"],
             "start_bar": int(phrase["start_bar"]),
-            "features": list(vector),
+            "chroma": list(window["chroma"]),
+            "bass_root": int(window["bass_root"]),
+            "is_intro": bool(window["is_intro"]),
+            "is_outro": bool(window["is_outro"]),
+            "once": bool(window["once"]),
+            "features": list(window["features"]),
         })
     kit_phrases.sort(key=lambda p: (p["phrase_id"], p["track_id"], p["start_bar"]))
     matched = len(kit_phrases)
 
     style_counts = Counter(t["style"] for t in tracks)
     dataset: Dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "feature_dim": FEATURE_DIM,
+        "feature_layout": {
+            "base": [0, BASE_FEATURE_DIM],
+            "onset_bits": [BASE_FEATURE_DIM,
+                           BASE_FEATURE_DIM + ONSET_DIM],
+            "bass_chroma": [BASE_FEATURE_DIM + ONSET_DIM,
+                            BASE_FEATURE_DIM + ONSET_DIM + CHROMA_DIM],
+            "other_chroma": [BASE_FEATURE_DIM + ONSET_DIM + CHROMA_DIM,
+                             BASE_FEATURE_DIM + ONSET_DIM + 2 * CHROMA_DIM],
+            "bass_root": [BASE_FEATURE_DIM + ONSET_DIM + 2 * CHROMA_DIM,
+                          BASE_FEATURE_DIM + ONSET_DIM + 3 * CHROMA_DIM],
+            "chord_root": [BASE_FEATURE_DIM + ONSET_DIM + 3 * CHROMA_DIM,
+                           FEATURE_DIM],
+            "onset_stem_order": list(STEMS),
+        },
         "tracks": tracks,
         "kit_phrases": kit_phrases,
         "stats": {
@@ -693,6 +988,22 @@ def main() -> None:
             "phrases_matched": matched,
             "aligned_windows": n_aligned,
             "kit_windows": n_windows - n_aligned,
+            "feature_dim": FEATURE_DIM,
+            "onset_bits": ONSET_DIM,
+            "onset_anomalies": {
+                "tracks_affected": int(onset_totals.get("tracks", 0)),
+                "windows_affected": int(onset_totals.get("windows", 0)),
+                "segments_with_fallback": int(onset_totals.get("total", 0)),
+                "segments_missing_segment": int(
+                    onset_totals.get("missing_segment", 0)),
+                "segments_missing_start": int(
+                    onset_totals.get("missing_start", 0)),
+                "segments_outside_tatums": int(
+                    onset_totals.get("outside_tatums", 0)),
+                "segments_not_referenced": int(
+                    onset_totals.get("not_referenced", 0)),
+                "track_details": onset_anomalies,
+            },
         },
     }
 
@@ -721,6 +1032,8 @@ def main() -> None:
           flush=True)
     print(f"  windows          : {n_windows} ({n_aligned} aligned = {aligned_frac:.1%}, "
           f"{n_windows - n_aligned} kit)", flush=True)
+    print(f"  features         : {FEATURE_DIM} = {BASE_FEATURE_DIM} base + "
+          f"{ONSET_DIM} onset bits + {HARMONIC_DIM} harmonic", flush=True)
     print(f"  windows/track    : median {np.median(window_counts):.0f}, "
           f"min {min(window_counts)}, max {max(window_counts)}", flush=True)
     print(f"  tracks >= {args.min_windows} windows: "
@@ -744,6 +1057,18 @@ def main() -> None:
               f"(partial last bar ignored): "
               + ", ".join(f"{a['track_id']}({a['n_tatums']})" for a in partial[:10]),
               flush=True)
+    if onset_totals.get("total") or onset_totals.get("windows"):
+        print(f"  ! onset fallbacks : {onset_totals.get('total', 0)} segment(s) "
+              f"in {onset_totals.get('tracks', 0)} track(s), "
+              f"{onset_totals.get('windows', 0)} window(s) affected "
+              f"(missing_segment={onset_totals.get('missing_segment', 0)}, "
+              f"missing_start={onset_totals.get('missing_start', 0)}, "
+              f"outside_tatums={onset_totals.get('outside_tatums', 0)}, "
+              f"not_referenced={onset_totals.get('not_referenced', 0)})",
+              flush=True)
+    else:
+        print("  onset bits       : 100% derived from segment starts "
+              "(no fallbacks)", flush=True)
     if reasons:
         print("  skip reasons     : " + ", ".join(f"{k}={v}" for k, v
                                                    in sorted(reasons.items())), flush=True)

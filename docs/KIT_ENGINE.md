@@ -434,3 +434,35 @@ runs.
   connection can extend the bridge.
 - **Corpus/style bias.** The current bank is 355 kits across four style labels
   from the analysed corpus; it is not a balanced survey of electronic music.
+
+## 9. Transition features, music-theory rules and one-shot phrases
+
+The taste dataset is **160-d** per 4-bar window: the original 48 dimensions
+(chroma, timbre, densities, loudness, section, energy, vocal presence) plus
+
+- **64 onset bits** — 16-step drum/bass/other/vocal patterns folded from the
+  four bars (bit *k* = an onset on step *k* in any bar),
+- **12-d bass chroma**, **12-d other chroma**,
+- **12-d bass-root one-hot**, **12-d chord-root one-hot**.
+
+Every kit phrase also carries `chroma`, `bass_root`, `is_intro`, `is_outro`
+and `once` (intro = first four bars or section INTRO; outro = last four bars;
+`once = is_intro or is_outro`).
+
+Playback rules on top of the learned transition matrix:
+
+- **One-shot moments:** an intro or outro phrase plays at most once per set;
+  intros are only eligible in the first block (or when the arranger is in
+  INTRO), outros only in the last two blocks. A general 6-block recency
+  window stops short loops.
+- **Harmony:** candidate weights are multiplied by a chroma-overlap factor
+  and a bass-root interval factor. Minor-second / major-second / tritone
+  root moves are cut to 0.35; root, fourth and fifth are boosted.
+- **Energy:** drop targets use the hottest phrases in the kit and hold within
+  0.10 once hot; other sections use the staged 0.15/0.25 band.
+- **Broken assets:** a kit whose stems fail to load is blacklisted for the
+  session and the player immediately picks another compatible kit, so a
+  missing file cannot trap the bridge loop.
+
+The shipping 160-d ranker (d192/L4, 120 epochs) scores **73.1% within-kit
+top-1 / 96.3% top-3**; the 48-d control is 72.0% on the same split.

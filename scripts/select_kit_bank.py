@@ -106,6 +106,32 @@ def main() -> None:
                     shutil.copy2(s, dst / s.name)
                     copied += 1
 
+    # Integrity pass: never ship a manifest entry whose audio was not copied.
+    validated: list[dict] = []
+    dropped_phrases = 0
+    dropped_kits = 0
+    for kit in selected:
+        phrases = []
+        for phrase in kit.get("phrases") or []:
+            ok = True
+            for asset in (phrase.get("stems") or {}).values():
+                rel = asset.get("file")
+                if not rel or not (out / Path(rel)).is_file():
+                    ok = False
+                    break
+            if ok:
+                phrases.append(phrase)
+            else:
+                dropped_phrases += 1
+        if len(phrases) >= 4:
+            kit = {**kit, "phrases": phrases}
+            validated.append(kit)
+        else:
+            dropped_kits += 1
+    if dropped_phrases or dropped_kits:
+        print(f"integrity: dropped {dropped_phrases} phrases, {dropped_kits} kits", flush=True)
+    selected = validated
+
     out_manifest = {**manifest, "kits": selected}
     # Keep only fields the client understands.
     (out / "kit_manifest.json").write_text(json.dumps(out_manifest, separators=(",", ":")))

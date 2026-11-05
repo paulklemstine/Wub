@@ -28,6 +28,16 @@ export interface KitPhrase {
   stems: Record<StemName, KitStemAsset>;
   x?: number;
   y?: number;
+  /** 12-d harmonic chroma for transition compatibility (optional). */
+  chroma?: number[];
+  /** Pitch class of the bass root, 0..11 (optional). */
+  bass_root?: number;
+  /** First bars of the source song. */
+  is_intro?: boolean;
+  /** Last bars of the source song. */
+  is_outro?: boolean;
+  /** Intro/outro phrases are played at most once per set. */
+  once?: boolean;
 }
 
 export type KitSteering = Record<StemName, { x: number; y: number }>;
@@ -251,6 +261,9 @@ export class KitPlayer {
   private kit: Kit | null = null;
   private phrases: LoadedKitPhrase[] = [];
   private recentPhraseIds: string[] = [];
+  private playedPhraseIds: Set<string> = new Set();
+  /** Kits whose audio failed to load this session; never retry them. */
+  private failedKitIds: Set<string> = new Set();
   private sources: AudioBufferSourceNode[] = [];
   private lastBlockStems: Set<StemName> = new Set();
   private lastStemEndAt: Partial<Record<StemName, number>> = {};
@@ -627,6 +640,7 @@ export class KitPlayer {
     this.lastPhrase = null;
     this.lastSection = null;
     this.recentPhraseIds = [];
+    this.playedPhraseIds.clear();
     this.lastBlockStems.clear();
     this.lastStemEndAt = {};
     this.pendingLoadedKit = null;
@@ -737,7 +751,8 @@ export class KitPlayer {
             entry !== null &&
             typeof entry === "object" &&
             typeof entry.track_id === "string" &&
-            !this.kitHistory.includes(entry.track_id)
+            !this.kitHistory.includes(entry.track_id) &&
+            !this.failedKitIds.has(entry.track_id)
         )
         .map((entry) => ({
           entry,
@@ -765,7 +780,9 @@ export class KitPlayer {
 
     // Fallback: existing same-style/Camelot/BPM compatibility pool.
     this.lastKitScoreValue = null;
-    const pool = this.compatibility.filter((kit) => !this.kitHistory.includes(kit.track_id));
+    const pool = this.compatibility.filter(
+      (kit) => !this.kitHistory.includes(kit.track_id) && !this.failedKitIds.has(kit.track_id)
+    );
     if (pool.length === 0) return null;
 
     const sorted = [...pool].sort(
@@ -819,8 +836,12 @@ export class KitPlayer {
         return true;
       } catch (err) {
         console.warn("[KitPlayer] Next kit preload failed; keeping current kit.", err);
+        this.failedKitIds.add(target.track_id);
         this.nextKit = null;
         this.pendingLoadedKit = null;
+        // Immediately try a different compatible kit so the bridge does not
+        // extend forever behind a broken asset.
+        setTimeout(() => { void this.prepareNextKit(); }, 0);
         return false;
       } finally {
         this.pendingLoadPromise = null;
@@ -983,7 +1004,7 @@ export class KitPlayer {
     const phrase = this.selectPhrase(
       section,
       targetEnergy,
-      this.recentPhraseIds.slice(-3),
+      this.recentPhraseIds.slice(-6),
       current,
       sectionChanged,
       steering,
@@ -1038,9 +1059,10 @@ export class KitPlayer {
     }
 
     this.recentPhraseIds.push(phrase.id);
-    if (this.recentPhraseIds.length > 3) {
-      this.recentPhraseIds = this.recentPhraseIds.slice(-3);
+    if (this.recentPhraseIds.length > 6) {
+      this.recentPhraseIds = this.recentPhraseIds.slice(-6);
     }
+    this.playedPhraseIds.add(phrase.id);
     this.lastPhrase = phrase;
     this.onPhraseScheduled?.({
       x: phrase.x ?? 0.5,
@@ -1093,10 +1115,20 @@ export class KitPlayer {
     this.lastSteerDistanceValue = steerTarget === null
       ? null
       : this.closestPhraseDistance(steerTarget);
-    const recent = (recentIds.length > 0 ? recentIds : this.recentPhraseIds).slice(-3);
+    const recent = (recentIds.length > 0 ? recentIds : this.recentPhraseIds).slice(-6);
     const all = this.phrases.map((phrase) => phrase.meta);
     const durationPool = all.filter((phrase) => phrase.duration_sec >= MIN_PHRASE_DURATION_SEC);
     let basePool = durationPool.length > 0 ? durationPool : all;
+
+    // Intro/outro phrases are unique moments: play them once, in the right
+    // part of the set, and never recycle them as a groove loop.
+    const curated = basePool.filter((phrase) => {
+      if (phrase.once === true && this.playedPhraseIds.has(phrase.id)) return false;
+      if (phrase.is_intro === true && this.blocksInSet > 1 && targetSection !== "INTRO") return false;
+      if (phrase.is_outro === true && this.blocksInSet < KIT_SET_BLOCKS - 2) return false;
+      return true;
+    });
+    if (curated.length >= 2) basePool = curated;
 
     // Length coherence: kit phrases are all 4 bars, but beat-grid jitter can
     // make one 2-4% shorter. Playing that outlier changes the block tempo and
@@ -1163,7 +1195,8 @@ export class KitPlayer {
             const quality = taste.quality[index] ?? 0;
             const presence = applyPresence ? this.stemPresenceMultiplier(phrase) : 1;
             const steeringBias = this.steeringMultiplier(phrase, steering, userSteered);
-            const weight = transition * (0.5 + quality) * presence * steeringBias;
+            const harmonic = this.harmonicMultiplier(phrase, current);
+            const weight = transition * (0.5 + quality) * presence * steeringBias * harmonic;
             if (!Number.isFinite(weight) || weight <= 0) continue;
             weighted.push({ phrase, weight });
             total += weight;
@@ -1420,6 +1453,36 @@ export class KitPlayer {
     return { pool: fallbackWithin, band: fallbackBand };
   }
 
+  /** Music-theory bias: chroma overlap and bass-root interval. */
+  private harmonicMultiplier(phrase: KitPhrase, current: KitPhrase | null): number {
+    if (current === null) return 1;
+    let mult = 1;
+    const a = current.chroma;
+    const b = phrase.chroma;
+    if (Array.isArray(a) && Array.isArray(b) && a.length === 12 && b.length === 12) {
+      let dot = 0;
+      let na = 0;
+      let nb = 0;
+      for (let i = 0; i < 12; i++) {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+      }
+      const sim = dot / Math.sqrt(Math.max(1e-9, na) * Math.max(1e-9, nb));
+      if (sim < 0.4) mult *= 0.25;
+      else if (sim < 0.6) mult *= 0.6;
+      else if (sim > 0.85) mult *= 1.15;
+    }
+    const ra = current.bass_root;
+    const rb = phrase.bass_root;
+    if (typeof ra === "number" && typeof rb === "number") {
+      const interval = ((rb - ra) % 12 + 12) % 12;
+      if (interval === 1 || interval === 2 || interval === 6) mult *= 0.35;
+      else if (interval === 0 || interval === 5 || interval === 7) mult *= 1.1;
+    }
+    return mult;
+  }
+
   private logPick(
     kind: "Taste" | "Rule",
     targetSection: string,
@@ -1498,6 +1561,7 @@ export class KitPlayer {
     this.lastPhrase = null;
     this.lastSection = null;
     this.recentPhraseIds = [];
+    this.playedPhraseIds.clear();
     this.lastBlockStems.clear();
     this.lastStemEndAt = {};
     this.forcedBridgeRemaining = 0;
