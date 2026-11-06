@@ -120,6 +120,8 @@ interface StemPoolEntry {
   bassRoot: number | null;
   rmsDb: number;
   gain: number;
+  /** Ears quality 0..1 (0.5 neutral when no ears sidecar is shipped). */
+  earQ: number;
 }
 
 interface LoadedStemAudio {
@@ -278,6 +280,10 @@ const EXPLORE_WINDOW = 0.06;
 const EXPLORE_TOP_K = 5;
 /** Pair combinations evaluated per stem pair (top of each sorted list). */
 const PAIR_TOP_N = 6;
+/** Ears soft-prior weight in jointOptions (good phrases win ties only). */
+const EAR_W_JOINT = 0.20;
+/** Ears soft-prior weight in heuristic fallbacks (morph/pin). */
+const EAR_W_FALLBACK = 0.30;
 
 export class StemRemixPlayer {
   private readonly engine: AudioEngine;
@@ -339,6 +345,8 @@ export class StemRemixPlayer {
   private failedKits = new Set<string>();
   private cache = new Map<string, LoadedStemAudio>();
   private stemNext = new Map<string, number>();
+  /** Ears quality keyed `${phraseId}:${stem}` (fallback: phrase q). */
+  private earQuality = new Map<string, number>();
 
   private sessionStartAt = 0;
   private nextBlockAt = 0;
@@ -410,6 +418,25 @@ export class StemRemixPlayer {
   setTasteScores(scores: TasteScoresManifest | null): void {
     this.tasteScores = scores;
     this.stemNext.clear();
+    this.earQuality.clear();
+    if (scores?.ears) {
+      for (const [phraseId, entry] of Object.entries(scores.ears)) {
+        if (entry === null || typeof entry !== "object") continue;
+        const q = Number(entry.q);
+        if (Number.isFinite(q)) {
+          this.earQuality.set(`${phraseId}:*`, Math.max(0, Math.min(1, q)));
+          for (const stem of STEMS) {
+            const perStemQ = Number(entry.perStem?.[stem]?.q);
+            if (Number.isFinite(perStemQ)) {
+              this.earQuality.set(`${phraseId}:${stem}`, Math.max(0, Math.min(1, perStemQ)));
+            }
+          }
+        }
+      }
+      if (this.earQuality.size > 0) {
+        console.info(`[StemRemix] Ears quality loaded: ${this.earQuality.size} entries`);
+      }
+    }
     if (!scores?.stem_next) return;
     for (const [phraseId, byStem] of Object.entries(scores.stem_next)) {
       for (const [stem, list] of Object.entries(byStem)) {
@@ -633,6 +660,7 @@ export class StemRemixPlayer {
             bassRoot,
             rmsDb,
             gain: stemGain(stem, rmsDb),
+            earQ: this.earQOf(stem, phrase.id),
           };
           this.pools[stem].push(entry);
           this.entryById.set(`${phrase.id}:${stem}`, entry);
@@ -771,6 +799,13 @@ export class StemRemixPlayer {
 
   private playCountOf(stem: StemName, phraseId: string): number {
     return this.playCount.get(`${phraseId}:${stem}`) ?? 0;
+  }
+
+  /** Ears quality in 0..1; 0.5 neutral when the sidecar is absent. */
+  private earQOf(stem: StemName, phraseId: string): number {
+    return this.earQuality.get(`${phraseId}:${stem}`)
+      ?? this.earQuality.get(`${phraseId}:*`)
+      ?? 0.5;
   }
 
   private recordPlayed(stem: StemName, entry: StemPoolEntry): void {
@@ -1319,11 +1354,12 @@ export class StemRemixPlayer {
         + hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.20;
       const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
         + entry.keyCost * KEY_COST_WEIGHT;
+      const earBonus = EAR_W_JOINT * (entry.earQ - 0.5);
       return {
         entry,
         full: legal,
         judge,
-        score: (judge > 0 ? judge : fallback) + novelty - tierCost,
+        score: (judge > 0 ? judge : fallback) + novelty - tierCost + earBonus,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -1533,6 +1569,11 @@ export class StemRemixPlayer {
       harmony /= Math.max(1, subset.length);
       repetition = Math.min(1, repetition / Math.max(1, subset.length));
       novelty = subset.length > 0 ? novelty / subset.length : 0;
+      let earSum = 0;
+      for (let i = 0; i < subset.length; i++) {
+        earSum += candidate[subset[i]]!.earQ;
+      }
+      const earQuality = subset.length > 0 ? earSum / subset.length : 0.5;
       const policy = scoreTransition({
         jointScore: rawScore,
         targetEnergy,
@@ -1544,6 +1585,7 @@ export class StemRemixPlayer {
         budget,
         includesVocals: subset.includes("vocals"),
         vocalAllowed: allowVocals,
+        earQuality,
       });
       if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
         bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
@@ -1792,6 +1834,7 @@ export class StemRemixPlayer {
         + (plays === 0 ? 0.3 : Math.max(-0.3, -0.12 * plays));
       const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT * 0.5
         + entry.keyCost * KEY_COST_WEIGHT * 0.5;
+      const earBonus = EAR_W_FALLBACK * (entry.earQ - 0.5);
       const score =
         2.4 * proximity +
         0.9 * energyFit +
@@ -1804,7 +1847,8 @@ export class StemRemixPlayer {
         lastRunPenalty -
         samePenalty -
         trackPenalty -
-        tierCost;
+        tierCost +
+        earBonus;
       if (!best || score > best.score) best = { entry, score };
     }
     return best?.entry ?? nearest?.entry ?? null;
@@ -1870,6 +1914,7 @@ export class StemRemixPlayer {
         + (plays === 0 ? 0.4 : Math.max(-0.4, -0.15 * plays));
       const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
         + entry.keyCost * KEY_COST_WEIGHT;
+      const earBonus = EAR_W_FALLBACK * (entry.earQ - 0.5);
       const score =
         1.0 * sectionScore +
         0.9 * harmonic +
@@ -1879,7 +1924,8 @@ export class StemRemixPlayer {
         judgeBonus -
         jumpPenalty -
         shortRunPenalty -
-        tierCost;
+        tierCost +
+        earBonus;
       if (!best || score > best.score) best = { entry, score };
     }
     if (best) break;

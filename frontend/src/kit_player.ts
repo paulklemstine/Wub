@@ -107,6 +107,16 @@ export interface StemNextEntry {
   score: number;
 }
 
+export interface EarsStemScore {
+  q: number;
+}
+
+export interface EarsPhraseScore {
+  q: number;
+  perStem?: Partial<Record<StemName, EarsStemScore>>;
+  reserved?: number[];
+}
+
 export interface TasteScoresManifest {
   version: number;
   model: string;
@@ -114,6 +124,8 @@ export interface TasteScoresManifest {
   kits: Record<string, TasteKitScores>;
   /** Per-stem top-K next phrases from the four audio judges. */
   stem_next?: Record<string, Partial<Record<StemName, StemNextEntry[]>>>;
+  /** Per-phrase ears quality (soft prior; absent = neutral 0.5). */
+  ears?: Record<string, EarsPhraseScore>;
 }
 
 export interface TasteTransitionTop {

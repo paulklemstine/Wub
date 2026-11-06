@@ -280,6 +280,12 @@ export interface TransitionScoreInput {
   includesVocals: boolean;
   /** Result of `vocalChangeAllowed` for this boundary. */
   vocalAllowed: boolean;
+  /**
+   * Mean ears quality (0..1) of the changed stems' phrases.  Optional and
+   * neutral (0.5) when no ears sidecar is shipped: good phrases win ties,
+   * weak phrases stay eligible (quality-first soft prior, never a filter).
+   */
+  earQuality?: number;
 }
 
 export interface TransitionScore {
@@ -329,6 +335,11 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
   const harmonyPenalty = 0.15 * harmony;
   score -= harmonyPenalty;
   reasons.push(`harmony ${signed(-harmonyPenalty)}`);
+
+  const earQuality = clamp01(finiteOr(input.earQuality ?? 0.5, 0.5));
+  const earBonus = 0.20 * (earQuality - 0.5);
+  score += earBonus;
+  reasons.push(`ears ${signed(earBonus)} (q ${earQuality.toFixed(2)})`);
 
   if (input.includesVocals && !input.vocalAllowed) {
     score -= 0.05;
@@ -526,6 +537,11 @@ export function selfTest(): string[] {
     ...base, includesVocals: true, vocalAllowed: true,
   });
   check(blockedVocals.score < allowedVocals.score, "held vocals should score lower");
+
+  const goodEars = scoreTransition({ ...base, earQuality: 0.9 });
+  const badEars = scoreTransition({ ...base, earQuality: 0.1 });
+  check(goodEars.score > baseScore.score, "good ears should score above neutral");
+  check(badEars.score < baseScore.score, "weak ears should score below neutral");
 
   const clampsHigh = scoreTransition({ ...base, jointScore: 2, novelty: 1 });
   const clampsLow = scoreTransition({
