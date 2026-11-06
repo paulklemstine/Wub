@@ -50,6 +50,9 @@ Run on the laptop:
       --dataset /tmp/wubtrain/taste_dataset_flow.json \
       --bars data/stem_bars_flow --mix-judge data/audio_judge.pt \
       --out data/joint_ranker --device cuda --epochs 30
+
+Add ``--dump-val /tmp/joint_val.npz`` to save the raw held-out features,
+labels and teacher targets for comparing multiple runs on a common split.
 """
 from __future__ import annotations
 
@@ -433,6 +436,11 @@ def main() -> None:
     ap.add_argument("--max-examples", type=int, default=120000)
     ap.add_argument("--pos-subsets", type=int, default=3)
     ap.add_argument("--neg-subsets", type=int, default=6)
+    ap.add_argument(
+        "--dump-val",
+        default="",
+        help="optional .npz path for the raw held-out features/labels/teacher targets",
+    )
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -660,6 +668,19 @@ def main() -> None:
         train_mask = np.zeros(len(y), dtype=bool)
         train_mask[perm[:cut]] = True
         val_mask = ~train_mask
+
+    if args.dump_val:
+        np.savez_compressed(
+            args.dump_val,
+            x=x[val_mask].astype(np.float32),
+            y=y[val_mask].astype(np.float32),
+            t=t[val_mask].astype(np.float32),
+        )
+        print(
+            f"[joint] dumped validation set {args.dump_val} "
+            f"({int(val_mask.sum())} rows)",
+            flush=True,
+        )
 
     mean = x[train_mask].mean(axis=0)
     std = x[train_mask].std(axis=0)

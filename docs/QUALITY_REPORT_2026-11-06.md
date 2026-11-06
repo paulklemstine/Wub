@@ -28,9 +28,9 @@ sub-`-40 dBFS` exemption.
 | Model | Result |
 | --- | --- |
 | Per-stem judges (drums / bass / other / vocals) | 0.891 / 0.835 / 0.720 / 0.706 AUC |
-| Joint ranker, overall | 0.7966 held-out AUC |
-| Joint 4-bar / 8-bar / 16-bar | 0.7977 / 0.8012 / 0.7800 |
-| Joint thresholds 4 / 8 / 16 | 0.076 / 0.089 / 0.068 |
+| Joint ranker, overall | 0.8109 held-out AUC |
+| Joint 4-bar / 8-bar / 16-bar | 0.8114 / 0.8187 / 0.7860 |
+| Joint thresholds 4 / 8 / 16 | 0.178 / 0.179 / 0.126 |
 | Phrases / state / input | 2,565 / 424-d / 2,137-d |
 
 The shipped v3 joint state interleaves four 90-d stem chunks + 64-d mix:
@@ -38,12 +38,22 @@ The shipped v3 joint state interleaves four 90-d stem chunks + 64-d mix:
 old grouped-layout misalignment and adds onset density, offbeat/backbeat
 ratio, syncopation, vocal presence and vocal crest.
 
+The shipped scorer is a **weight-space soup** (alpha 0.5) of two 60-epoch
+students: one trained on the 68k-example baseline set and one on a
+121k-example deep set with more negative subsets. On a common
+track-held-out set, the soup improves 4/8/16-bar AUC from
+**0.796 / 0.800 / 0.782** to **0.811 / 0.819 / 0.786**; it also beats either
+single run overall (0.811 vs 0.798 and 0.803).
+
 ## Runtime quality
 
 - 300 s new-bank soak: **0 errors**, four distinct tracks, master RMS
   0.115–0.279, rotation covered.
 - 70 s 370-kit/v4 soak: **0 errors**, **11/11** transitions captured,
   **0 seams**, **0 dips**; the joint ranker loaded **2,565** phrases.
+- 300 s 370-kit/soup soak: **0 errors**, **34/35** transitions captured,
+  **0 seams**, **4 level dips**, 33 track changes. The dips are the known
+  phrase-boundary level-match issue, not clicks.
 - Glue bus active: vocal duck on other/bass to **0.841** (−1.5 dB).
 - 240 s reference-bank baseline: 24/24 captured, 0 seams, 3 dips,
   p50/p95 0.171/0.401.

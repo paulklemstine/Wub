@@ -383,7 +383,7 @@ The 402-kit candidate union produced 2,798 phrases. Full reconstruction QC
 tracks were removed. A follow-up recovery pass found 15 strict passes and
 merged the 12 trim-only kits (78 phrases), leaving 370 kits. Every cluster
 still has a full 4-phrase (16-bar) run for all four stems (100% cluster
-coverage), and the retrained joint ranker scores **0.798 / 0.801 / 0.780 AUC**
+coverage), and the retrained joint ranker scores **0.811 / 0.819 / 0.786 AUC**
 on 4/8/16-bar validation.
 
 Measured older reference bank:
