@@ -810,37 +810,32 @@ export class KitPlayer {
   }
 
   /**
-   * Compatibility pool for the next set: same style, Camelot distance <= 1,
-   * BPM within 4 then 10 then closest available, excluding the last 5 kits.
+   * Compatibility pool for the next set: any style, any key (transposition
+   * handles the key in remix mode; legacy sets follow the phrase tempo at
+   * the set boundary), BPM within 12 then 30 then closest available,
+   * excluding the last 5 kits.  Widened so the whole bank stays reachable
+   * instead of trapping the session in one style/Camelot band.
    */
   private computeCompatibility(current: Kit): Kit[] {
     const kits = this.manifest?.kits ?? [];
     const history = new Set(this.kitHistory);
     const base = kits.filter(
-      (kit) => kit.track_id !== current.track_id && !history.has(kit.track_id) && kit.style === current.style
+      (kit) => kit.track_id !== current.track_id && !history.has(kit.track_id)
     );
-    const currentCamelot = camelotForKey(current.key);
-    const camelotOk = currentCamelot === null
-      ? base
-      : base.filter((kit) => {
-        const candidate = camelotForKey(kit.key);
-        return candidate !== null && camelotDistance(currentCamelot, candidate) <= 1;
-      });
 
     const preferBpm = (list: Kit[]): Kit[] => {
-      const close4 = list.filter((kit) => Math.abs(kit.bpm - current.bpm) <= 4);
-      if (close4.length > 0) return close4;
-      const close10 = list.filter((kit) => Math.abs(kit.bpm - current.bpm) <= 10);
-      if (close10.length > 0) return close10;
-      // No same-style kit near the tempo: keep the closest available so the set
-      // can still rotate (the bridge extends to two blocks in this case).
+      const close12 = list.filter((kit) => Math.abs(kit.bpm - current.bpm) <= 12);
+      if (close12.length > 0) return close12;
+      const close30 = list.filter((kit) => Math.abs(kit.bpm - current.bpm) <= 30);
+      if (close30.length > 0) return close30;
+      // No kit near the tempo: keep the closest available so the set can
+      // still rotate (the bridge extends to two blocks in this case).
       return [...list]
         .sort((a, b) => Math.abs(a.bpm - current.bpm) - Math.abs(b.bpm - current.bpm))
-        .slice(0, 8);
+        .slice(0, 16);
     };
 
-    let pool = preferBpm(camelotOk);
-    if (pool.length === 0) pool = preferBpm(base);
+    let pool = preferBpm(base);
     if (pool.length === 0) {
       const anyStyle = kits.filter(
         (kit) => kit.track_id !== current.track_id && !history.has(kit.track_id)

@@ -10,7 +10,7 @@ Welcome to the **Wub KG-505** codebase. This document serves as the primary tech
 - **Domain**: Real-time generative electronic music, audio stem analysis, real 4-bar phrase performance, and web-based audio engineering.
 - **Mission**: Ingest an authentic audio training corpus (1,700+ dance tracks), separate into stems (drums, bass, other, vocals), mine real 4-bar phrases into song kits, learn a taste model for phrase and kit transitions, and play a neverending, highly musical DJ set directly in the browser.
 - **Dual-Engine Execution**:
-  1. **🧠 In-Browser Kit Jukebox (shipped)**: 100% standalone, client-side Web Audio engine. The cluster bank runs four independent stem streams that share one bar grid; each stem can be dragged to a new style region, pinned for 32 bars, and the session follows a 4→8→16-bar arc before rotating key/tempo every 104 bars. Real 4-bar phrases, no slice resynthesis or `playbackRate` resampling; tempo fit (<=2%) and Camelot transposition (<=5 semitones, vocals <=3) use Signalsmith Stretch. Full design: `docs/KIT_ENGINE.md`.
+  1. **🧠 In-Browser Kit Jukebox (shipped)**: 100% standalone, client-side Web Audio engine. The cluster bank runs four independent stem streams that share one bar grid; each stem can be dragged to a new style region, pinned for 32 bars, and the session follows a 4→8→16-bar arc before walking the BPM ladder every 104 bars. Real 4-bar phrases, no slice resynthesis or `playbackRate` resampling; the pool is the whole shipped bank (all 2,565 phrases) with tiered tempo/key costs — tempo uses Signalsmith Stretch `rate` in [0.60, 1.65] and key uses `semitones` within ±6 (drums 0), strongly preferring near matches while far matches surface as the near pool is played out. Full design: `docs/KIT_ENGINE.md`.
   2. **⚡ WebSocket Cloud Sync (legacy/hybrid)**: Client/server mode streaming tatums and slice references from the Python FastAPI server backed by FAISS indices. The deployed site does not need it; the kit bank is the shipped path.
 
 ---
@@ -90,7 +90,11 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   voice, pin and lazy cache entry. Never splice two songs inside one stem's
   phrase; cross-song recombination happens only at block boundaries.
 - **No `playbackRate` resampling.** Tempo fit uses Signalsmith Stretch `rate`
-  (cap 2%); key fit uses `semitones` (drums 0, vocals ±3, bass/other ±5).
+  in [0.60, 1.65] (the full 88–140 BPM bank range); key fit uses `semitones`
+  (drums 0, pitched stems within ±6). Near-tempo/near-key phrases are
+  strongly preferred by tiered scoring costs, so extreme stretches only
+  surface once the near pool is played out; the joint ranker's shift/rate
+  features are clamped to the trained regime to avoid extrapolation blowup.
 - **Anchor opening, then joint morph.** The first two 4-bar blocks stay on the
   session's anchor kit. Then a **joint transition ranker** evaluates 1- and
   2-stem candidate mixes from different tracks against the current mix (last
@@ -117,10 +121,11 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   changes **per stem** unless the arc changes section or the 16-bar max-hold
   forces a move; 8/16-bar blocks may change 1–2 stems. The joint policy is a
   soft blend of the learned score, energy match, play-count novelty/
-  repetition and harmony — not a hard filter. Per-stem play counts and a
-  16-phrase per-stem history rotate the whole cluster pool through; near-best
-  gated candidates are explored instead of always taking the argmax. Vocals
-  are sticky (section change or 16 bars); bass is strict but soft; other/pads
+  repetition and harmony — not a hard filter. Per-stem play counts (kept
+  across cluster rotations within a session) and a 16-phrase per-stem history
+  rotate the whole bank through; near-best gated candidates are explored
+  instead of always taking the argmax, and never-played shortlist slots
+  guarantee far-tempo/key material is always evaluated. Vocals are sticky (section change or 16 bars); bass is strict but soft; other/pads
   carry most of the movement. Drums get a refresh after 24 bars when a
   near-best drum candidate exists, so the groove does not plateau. A missing
   ranker (or a stale stem with no gated joint move) falls back to a heuristic
@@ -137,8 +142,10 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   `window.__wubMovementSummary` and `window.__wubGlueState` expose counts and
   live glue state. No UI.
 - **Cluster rotation every 104 bars.** The bridge starts at bar 96; the next
-  Camelot-neighbour cluster (within ±3 BPM) takes over at bar 104 and releases
-  all pins.
+  rung of the BPM ladder (clusters sorted by tempo, bouncing at the ends)
+  takes over at bar 104 and releases all pins. The candidate pool is the
+  whole bank at every tempo/key, so rotation mainly moves the session
+  tempo/key and the anchor song.
 - **Lazy audio only.** 64-entry LRU, one block of prefetch lead, two alternates
   for drags. A failed load repeats the current phrase and blacklists the kit;
   it must never stop the transport.

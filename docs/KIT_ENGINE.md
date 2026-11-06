@@ -505,9 +505,17 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
 
 * Four independent **stem streams** share one bar clock. Each stem owns its
   current phrase, voice, lazy cache entry and pin.
-* The session key/tempo is the cluster's key/tempo. Candidate phrases are
-  filtered to the exact key, the relative major/minor, or a Camelot fifth
-  neighbour, and to `|phrase_duration / block_duration - 1| <= 2%`.
+* The session key/tempo is the cluster's key/tempo. The candidate pool is
+  the **whole shipped bank** (all 2,565 phrases; 2,564 audible — one phrase
+  is silent on all stems and fails the RMS floors): any phrase whose Stretch
+  `rate` falls in `[0.60, 1.65]` (the full ~88–140 BPM bank range) and whose
+  key transposes within ±6 semitones (drums unpitched) is eligible. Scoring
+  tiers strongly prefer near-tempo/near-key phrases (tempo cost
+  `|rate − 1|`, key cost `|shift|`), so extreme stretches only surface once
+  the near pool is played out; play counts persist across sets within a
+  session and never-played shortlist slots guarantee far material is always
+  evaluated. The ranker's shift/rate features are clamped to the trained
+  regime so far matches read as "very far" instead of extrapolating.
 * **Anchor opening, then joint morph.** The first two 4-bar blocks (8 bars) stay
   on the session's anchor kit. Then a **joint transition ranker** scores
   1- and 2-stem candidate mixes from different tracks against the current mix,
@@ -577,9 +585,12 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   `window.__wubTransitionSummary`, `window.__wubMovementSummary` and
   `window.__wubGlueState`; there is no UI.
 * **Cluster rotation every 104 bars (19 blocks)**: the bridge starts at bar 96
-  and the next Camelot/tempo neighbour (within +/-3 BPM) takes over at bar 104.
-  The new set starts with two anchor blocks on the new cluster; all pins release
-  at the rotation.
+  and the next rung of the BPM ladder (clusters sorted by tempo, bouncing at
+  the ends) takes over at bar 104. The new set starts with two anchor blocks
+  on the new cluster; all pins release at the rotation. Because the pool is
+  the whole bank at every tempo/key, rotation mainly moves the session
+  tempo/key and hands the session to a new tempo band over successive sets
+  instead of trapping it in one BPM neighbourhood.
 * **One block, one BPM slot.** `blockBars` (4/8/16) and `blockDurationSec`
   drive the audio grid; `slotSec` stays the 4-bar value, so the UI BPM is
   `960 / slotSec` and never halves on a long block.
@@ -607,9 +618,11 @@ disposed per phrase (per-phrase nodes leak WASM memory).
 `stem_xy` in the manifest is a 2D PCA of a 256-d log-mel timbre descriptor for
 each stem. The four clouds are laid into quadrants of one plane (drums,
 bass, other, vocals), so distances are meaningful within a stem and the four
-regions are legible. The base cloud is the current cluster's pool; the four
-active phrases are the bright highlight; the reticles show the playing phrase,
-and pinned stems get a dashed ghost ring at the region centre.
+regions are legible. The base cloud is the full-bank pool (all four stem
+clouds); the four active phrases are the bright highlight; the reticles show
+the playing phrase, and pinned stems get a dashed ghost ring at the region
+centre. The faint cloud is drawn with cheap `fillRect`s so ~9.5k points
+(2,565 phrases × 4 stems) stay at 60 fps.
 
 ### 10.5 Per-stem judge
 
@@ -637,7 +650,9 @@ is optional (playback never depends on it).
 ### 10.6 Invariants
 
 * Never resample a phrase with `playbackRate`; use the stretcher's `rate`.
-* Drums are key-agnostic; pitched stems obey the Camelot limit.
+* Drums are key-agnostic; pitched stems transpose within ±6 semitones to the
+  session key (any key, major/minor included); tempo uses Stretch `rate` in
+  [0.60, 1.65] with tiered costs preferring near matches.
 * One shared bar grid; a drag commits on a bar, a phrase advance on a block.
 * No pin may outlive 32 bars, and no cluster may outlive the 104-bar arc
   (19 blocks, including the 8-bar bridge).

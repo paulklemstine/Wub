@@ -1,8 +1,13 @@
 // Per-stem remix engine: four independent 4-bar phrase streams sharing one
 // bar grid.  Every stem owns a current phrase, a lazy audio cache, a pinned
 // style region, and its own Signalsmith Stretch voice.  The engine keeps the
-// session key/tempo fixed, transposes Camelot-compatible neighbours, and
-// rotates to a new cluster every 12 blocks.
+// session key/tempo fixed within a set, transposes any phrase key to the
+// session key (up to a tritone), time-stretches any phrase tempo to the
+// session grid, and rotates to the next BPM-ladder cluster every 104 bars.
+// The candidate pool is the whole shipped bank (all 2,565 phrases) filtered
+// only by the stretch/transpose hard limits below; near-tempo/near-key
+// phrases are strongly preferred by scoring, far ones surface as the near
+// pool is played out, so a long session traverses the full bank.
 import type { AudioEngine } from "./audio_engine";
 import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
@@ -15,7 +20,9 @@ import {
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const PITCHED: readonly StemName[] = ["bass", "other", "vocals"];
-const MAX_SHIFT: Record<StemName, number> = { drums: 0, bass: 5, other: 5, vocals: 3 };
+// Any pitch class is reachable within a tritone, so every phrase key can be
+// transposed to the session key.  Drums are unpitched (no shift).
+const MAX_SHIFT: Record<StemName, number> = { drums: 0, bass: 6, other: 6, vocals: 6 };
 // 48 bars of 4-bar blocks, 32 bars of 8-bar blocks, one 16-bar block, then an
 // 8-bar drumless bridge: 104 bars / 19 blocks, then rotate the cluster.
 const ARC_8_BAR_START = 48;
@@ -30,7 +37,15 @@ const PIN_RADIUS = 0.2;
 const PIN_SIGMA = 0.15;
 const PIN_TRACK_PENALTY = 0.75;
 const RECENT_BLOCKS = 6;
-const TEMPO_FIT_LIMIT = 0.02;
+// Hard stretch limits: the bank spans ~88–140 BPM, so a fixed grid needs
+// rate 0.63–1.59 to reach every phrase.  The hard gate below is slightly
+// wider ([0.60, 1.65]) so all 2,565 phrases are eligible; scoring tiers
+// (TEMPO_COST_WEIGHT / KEY_COST_WEIGHT) strongly prefer near matches, so
+// extreme stretches only surface once the near pool is played out.
+const RATE_MIN = 0.60;
+const RATE_MAX = 1.65;
+const TEMPO_COST_WEIGHT = 1.0;
+const KEY_COST_WEIGHT = 0.05;
 const CACHE_LIMIT = 64;
 // Phrases whose stem is effectively absent are not useful as independent
 // streams; keep a floor per stem so a "bass" phrase actually has bass.
@@ -93,6 +108,10 @@ interface StemPoolEntry {
   stem: StemName;
   keyShift: number;
   rate: number;
+  /** |rate - 1|: tempo distance from the session grid, for tiered scoring. */
+  tempoCost: number;
+  /** |keyShift|: transpose distance from the session key, for tiered scoring. */
+  keyCost: number;
   x: number;
   y: number;
   energy: number;
@@ -185,19 +204,17 @@ function camelot(key: string): { number: number; letter: "A" | "B" } | null {
   return { number: table[parsed.root], letter: parsed.minor ? "A" : "B" };
 }
 
-/** Semitone shift from `phraseKey` to `sessionKey`; 0 for relative major/minor. */
+/**
+ * Semitone shift from `phraseKey` to `sessionKey`, in -6..+6.  Any key is
+ * reachable (major/minor included); relative major/minor and exact matches
+ * naturally give 0.  Mode mismatches are allowed — the harmony scoring
+ * (root intervals + chroma overlap) deprioritises clashes instead of
+ * excluding the phrase outright, so the whole bank stays eligible.
+ */
 export function keyShift(sessionKey: string, phraseKey: string): number | null {
   const a = parseKey(sessionKey);
   const b = parseKey(phraseKey);
-  const ca = camelot(sessionKey);
-  const cb = camelot(phraseKey);
-  if (!a || !b || !ca || !cb) return null;
-  // Exact key and relative major/minor share the same key signature.
-  if (ca.number === cb.number) return 0;
-  const sameMode = ca.letter === cb.letter;
-  const wheel = Math.abs(ca.number - cb.number);
-  const distance = Math.min(wheel, 12 - wheel);
-  if (!sameMode || distance !== 1) return null;
+  if (!a || !b) return null;
   let shift = ((b.root - a.root + 12) % 12);
   if (shift > 6) shift -= 12;
   return shift;
@@ -313,8 +330,10 @@ export class StemRemixPlayer {
   private recent: string[] = [];
   /** Per-stem phrase history (last 32) so each stem's memory is independent. */
   private stemHistory: Record<StemName, string[]> = { drums: [], bass: [], other: [], vocals: [] };
-  /** How many times each phrase+stem has been scheduled this set. */
+  /** How many times each phrase+stem has been scheduled this session. */
   private playCount = new Map<string, number>();
+  /** BPM-ladder walk direction for cluster rotation (+1 up, -1 down). */
+  private ladderDirection = 1;
   private anchorRecent: string[] = [];
   private playedOnce = new Set<string>();
   private failedKits = new Set<string>();
@@ -455,6 +474,13 @@ export class StemRemixPlayer {
       }
     }
     this.applyCluster(chosen);
+    // Fresh session: reset the cross-set traversal memory (applyCluster
+    // preserves it across rotations so the full bank keeps rotating).
+    this.recent = [];
+    this.stemHistory = { drums: [], bass: [], other: [], vocals: [] };
+    this.playCount.clear();
+    this.playedOnce.clear();
+    this.ladderDirection = 1;
     this.nextBlockAt = 0;
     this.blockIndex = 0;
     this.sessionBar = 0;
@@ -558,15 +584,20 @@ export class StemRemixPlayer {
     this.barSec = this.blockSec / 4;
     this.pools = { drums: [], bass: [], other: [], vocals: [] };
     this.entryById.clear();
-    const kitIds = new Set(cluster.kits);
-    for (const kitId of kitIds) {
-      const kit = this.kitById.get(kitId);
-      if (!kit || this.failedKits.has(kitId)) continue;
+    // The pool is the whole shipped bank, not just the session cluster's
+    // kits: the cluster only fixes the session key/tempo and the anchor song.
+    // Every phrase whose stretch rate falls in [RATE_MIN, RATE_MAX] and whose
+    // key can be transposed within MAX_SHIFT is eligible, so all 2,565
+    // phrases are reachable; tiered scoring prefers near matches (see
+    // jointOptions / selectMorph).
+    for (const kit of this.kitById.values()) {
+      if (this.failedKits.has(kit.track_id)) continue;
       for (const phrase of kit.phrases) {
         const duration = Number(phrase.duration_sec);
         if (!(duration > 0)) continue;
         const rate = duration / this.blockSec;
-        if (Math.abs(rate - 1) > TEMPO_FIT_LIMIT) continue;
+        if (rate < RATE_MIN || rate > RATE_MAX) continue;
+        const tempoCost = Math.abs(rate - 1);
         for (const stem of STEMS) {
           const asset = phrase.stems?.[stem];
           if (!asset || !asset.file) continue;
@@ -579,18 +610,27 @@ export class StemRemixPlayer {
           const rmsDb = Number(asset.rms_db) || -20;
           if (rmsDb < MIN_RMS_DB[stem]) continue;
           const xy = phrase.stem_xy?.[stem];
+          // Keep the bass root in session-key space when transposed, so the
+          // harmony scoring can reason about shifted phrases instead of
+          // treating every shifted root as unknown.
+          const rawRoot = phrase.bass_root ?? null;
+          const bassRoot = rawRoot === null
+            ? null
+            : (((rawRoot + shift) % 12) + 12) % 12;
           const entry: StemPoolEntry = {
             kit,
             phrase,
             stem,
             keyShift: shift,
             rate,
+            tempoCost,
+            keyCost: Math.abs(shift),
             x: xy?.x ?? phrase.x ?? 0.5,
             y: xy?.y ?? phrase.y ?? 0.5,
             energy: Number(phrase.energy) || 0.5,
             section: String(phrase.section ?? "GROOVE_A").toUpperCase(),
             chroma: rotateChroma(phrase.chroma, shift),
-            bassRoot: shift === 0 ? (phrase.bass_root ?? null) : null,
+            bassRoot,
             rmsDb,
             gain: stemGain(stem, rmsDb),
           };
@@ -599,11 +639,11 @@ export class StemRemixPlayer {
         }
       }
     }
-    this.recent = [];
-    this.stemHistory = { drums: [], bass: [], other: [], vocals: [] };
-    this.playCount.clear();
+    // Play history is session-scoped, not set-scoped: it survives cluster
+    // rotation so the full bank keeps rotating across sets instead of
+    // resetting to the same near matches every 104 bars.  startSession()
+    // clears it for a fresh session.
     this.anchorRecent = [];
-    this.playedOnce.clear();
     this.lastBlockEntries = {};
     this.previousEntries = {};
     this.lastBlockRuns = {};
@@ -1271,14 +1311,19 @@ export class StemRemixPlayer {
       // every block.  Play-count novelty plus a block-seeded hash breaks
       // those ties toward material that has not played yet, rotating the
       // whole pool through over a set instead of cycling a top-8.
+      // Tempo/key tiers keep far stretches rare: near matches win while they
+      // are fresh, but their play counts grow until a far, never-played
+      // phrase's novelty outweighs its stretch cost and it surfaces.
       const plays = this.playCountOf(stem, entry.phrase.id);
       const novelty = (plays === 0 ? 0.35 : Math.max(-0.30, -0.12 * plays))
         + hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.20;
+      const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
+        + entry.keyCost * KEY_COST_WEIGHT;
       return {
         entry,
         full: legal,
         judge,
-        score: (judge > 0 ? judge : fallback) + novelty,
+        score: (judge > 0 ? judge : fallback) + novelty - tierCost,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -1299,6 +1344,29 @@ export class StemRemixPlayer {
       seen.add(trackId);
       out.push(item.entry);
       if (out.length >= JOINT_CANDIDATES_PER_STEM) break;
+    }
+    // Reserve a few shortlist slots for never-played material (least-played,
+    // then nearest tempo/key) so far stretches are always evaluated by the
+    // joint ranker instead of being scored out of the shortlist entirely.
+    // This is what guarantees the full bank traverses over a long session.
+    const reserve = [...pool]
+      .filter((item) => !out.includes(item.entry))
+      .sort((a, b) => {
+        const pa = this.playCountOf(stem, a.entry.phrase.id);
+        const pb = this.playCountOf(stem, b.entry.phrase.id);
+        if (pa !== pb) return pa - pb;
+        return a.entry.tempoCost + a.entry.keyCost * 0.05
+          - (b.entry.tempoCost + b.entry.keyCost * 0.05);
+      });
+    let added = 0;
+    for (const item of reserve) {
+      if (added >= 3) break;
+      const trackId = item.entry.kit.track_id;
+      if (seen.has(trackId)) continue;
+      if (this.playCountOf(stem, item.entry.phrase.id) !== 0) continue;
+      seen.add(trackId);
+      out.push(item.entry);
+      added += 1;
     }
     return out;
   }
@@ -1722,6 +1790,8 @@ export class StemRemixPlayer {
       const plays = this.playCountOf(stem, entry.phrase.id);
       const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.15
         + (plays === 0 ? 0.3 : Math.max(-0.3, -0.12 * plays));
+      const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT * 0.5
+        + entry.keyCost * KEY_COST_WEIGHT * 0.5;
       const score =
         2.4 * proximity +
         0.9 * energyFit +
@@ -1733,7 +1803,8 @@ export class StemRemixPlayer {
         recentPenalty -
         lastRunPenalty -
         samePenalty -
-        trackPenalty;
+        trackPenalty -
+        tierCost;
       if (!best || score > best.score) best = { entry, score };
     }
     return best?.entry ?? nearest?.entry ?? null;
@@ -1797,6 +1868,8 @@ export class StemRemixPlayer {
       const plays = this.playCountOf(stem, entry.phrase.id);
       const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.35
         + (plays === 0 ? 0.4 : Math.max(-0.4, -0.15 * plays));
+      const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
+        + entry.keyCost * KEY_COST_WEIGHT;
       const score =
         1.0 * sectionScore +
         0.9 * harmonic +
@@ -1805,7 +1878,8 @@ export class StemRemixPlayer {
         novelty +
         judgeBonus -
         jumpPenalty -
-        shortRunPenalty;
+        shortRunPenalty -
+        tierCost;
       if (!best || score > best.score) best = { entry, score };
     }
     if (best) break;
@@ -2103,7 +2177,7 @@ export class StemRemixPlayer {
     try {
       const voice = await this.getVoice(stem, this.current[stem]?.voice);
       const preDur = await voice.loadRun(audio.mains, audio.pre);
-      const rate = Math.max(0.5, first.rate);
+      const rate = Math.max(RATE_MIN, Math.min(RATE_MAX, first.rate));
       const startAt = at - preDur / rate;
       const crossfadeSec = preDur > 0
         ? Math.max(preDur / rate, STEM_FADE_IN[stem])
@@ -2264,7 +2338,7 @@ export class StemRemixPlayer {
     }
     try {
       const voice = await this.getVoice(stem, this.current[stem]?.voice);
-      const rate = Math.max(0.5, runEntry.rate);
+      const rate = Math.max(RATE_MIN, Math.min(RATE_MAX, runEntry.rate));
       const preDur = await voice.loadRun(audio.mains, audio.pre);
       const crossfadeSec = Math.max(0.02, STEM_FADE_IN[stem], preDur / rate);
       let startAt = at;
@@ -2510,20 +2584,26 @@ export class StemRemixPlayer {
 
   private chooseNeighbourCluster(): KitCluster | null {
     if (!this.cluster) return null;
-    const current = camelot(this.cluster.key);
-    const candidates = this.clusters
-      .filter((c) => c.id !== this.cluster!.id)
-      .filter((c) => Math.abs(c.bpm - this.cluster!.bpm) <= 3)
-      .map((c) => {
-        const other = camelot(c.key);
-        if (!current || !other) return { cluster: c, distance: 99 };
-        const wheel = Math.abs(current.number - other.number);
-        const distance = Math.min(wheel, 12 - wheel) + (current.letter === other.letter ? 0 : 0.5);
-        return { cluster: c, distance };
-      })
-      .filter((c) => c.distance <= 1.5)
-      .sort((a, b) => a.distance - b.distance);
-    return candidates[0]?.cluster ?? null;
+    // BPM-ladder walk: clusters sorted by tempo (then key), step one rung
+    // per set, bouncing at the ends.  The old ±3 BPM / Camelot-neighbour rule
+    // trapped the session in a single tempo band forever (e.g. 129 BPM could
+    // only ever reach 126/129), so whole BPM groups of the bank were never
+    // in session.  Walking the ladder systematically brings every tempo
+    // group into range over successive sets; any-key transposition makes the
+    // key jump at the set boundary safe (fresh anchor record).
+    const ladder = [...this.clusters].sort((a, b) => {
+      if (a.bpm !== b.bpm) return a.bpm - b.bpm;
+      return a.key.localeCompare(b.key) || a.id.localeCompare(b.id);
+    });
+    const index = ladder.findIndex((c) => c.id === this.cluster!.id);
+    if (index < 0 || ladder.length < 2) return null;
+    let next = index + this.ladderDirection;
+    if (next < 0 || next >= ladder.length) {
+      this.ladderDirection = -this.ladderDirection;
+      next = index + this.ladderDirection;
+    }
+    if (next < 0 || next >= ladder.length) return null;
+    return ladder[next] ?? null;
   }
 
   stop(): void {

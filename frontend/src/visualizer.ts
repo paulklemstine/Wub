@@ -1001,19 +1001,25 @@ export class NebulaRenderer {
     }
 
     // Scatter points as additive glowing stardust with a gentle twinkle.
-    // The full 2,466-phrase cloud is deliberately small/dim; the active kit is
-    // drawn as a bright highlight subset below.
+    // The pool is now the whole 2,565-phrase bank (x4 stems), so use cheap
+    // fillRects for the faint cloud (arc+beginPath per point at 60fps
+    // janks); the active-kit highlight below stays as bright rings.
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
+    // Points arrive grouped by stem (see StemRemixPlayer.points()), so only
+    // four fillStyle assignments are needed per frame.
+    let lastStem: string | null = null;
     for (let i = 0; i < this.points.length; i++) {
       const p = this.points[i];
+      if (p.stem !== lastStem) {
+        ctx.fillStyle = STEM_COLORS[p.stem];
+        lastStem = p.stem;
+      }
       const density = this.alphas[i] ?? 0.5;
       const twinkle = 0.72 + 0.28 * Math.sin(t * 1.7 + i * 2.39996);
       ctx.globalAlpha = (0.26 + 0.22 * density) * twinkle;
-      ctx.fillStyle = STEM_COLORS[p.stem];
-      ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, 0.85 + density * 0.9, 0, 2 * Math.PI);
-      ctx.fill();
+      const size = 1.2 + density * 1.8;
+      ctx.fillRect(p.x * w - size / 2, p.y * h - size / 2, size, size);
     }
     ctx.restore();
     ctx.globalAlpha = 1;

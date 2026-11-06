@@ -173,9 +173,13 @@ export class JointRanker {
       (row + 1) * this.manifest.feature_dim,
     );
     const stemDim = this.stemDimValue;
+    // The ranker was trained on near matches (|rate-1|<=2%, small shifts).
+    // Clamp the overrides to the trained regime so far stretches/transposes
+    // read as "very far" instead of extrapolating the MLP to absurd scores;
+    // the caller's tiered costs differentiate far vs very far.
     for (let stem = 0; stem < 4; stem++) {
-      out[stem * stemDim + 50] = keyShiftSemitones / 5;
-      out[stem * stemDim + 51] = (rate - 1) * 10;
+      out[stem * stemDim + 50] = Math.max(-1, Math.min(1, keyShiftSemitones / 5));
+      out[stem * stemDim + 51] = Math.max(-1.5, Math.min(1.5, (rate - 1) * 10));
     }
     return out;
   }
