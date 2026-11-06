@@ -27,7 +27,7 @@ sub-`-40 dBFS` exemption.
 
 | Model | Result |
 | --- | --- |
-| Per-stem judges (drums / bass / other / vocals) | 0.891 / 0.835 / 0.720 / 0.706 AUC |
+| Per-stem judges (drums / bass / other / vocals) | 0.891 / 0.841 / 0.720 / 0.744 AUC |
 | Joint ranker, overall | 0.8109 held-out AUC |
 | Joint 4-bar / 8-bar / 16-bar | 0.8114 / 0.8187 / 0.7860 |
 | Joint thresholds 4 / 8 / 16 | 0.178 / 0.179 / 0.126 |
@@ -91,3 +91,11 @@ full mix is read from the master analyser rather than a max of the four stems.
 4. **Recovery audit of the 44 QC-failed tracks.** 15 strict passes were found;
    12 trim-only kits are merged. The three re-cut kits and three quiet-window
    conditionals remain staging-only.
+5. **Per-stem judge retrain (40 epochs each, best checkpoint per stem).**
+   Vocals 0.706 → **0.744**, bass 0.835 → **0.841**; drums/other were already
+   at their ceiling (kept the old checkpoints). The `stem_next` table was
+   rescored for all 2,565 shipping phrases; kit-level taste scores are
+   unchanged. A joint rebuild with the new timbre embeddings scored
+   0.807 vs the shipped soup's 0.811 on the common held-out set — within
+   run-to-run soup variance — so the deployed joint ranker/features were
+   kept.

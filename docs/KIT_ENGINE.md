@@ -613,10 +613,10 @@ Held-out AUC on the shipping tracks (same-song vs cross-song):
 
 | stem | AUC | top-K entries |
 | --- | --- | --- |
-| drums | 0.891 | 67,152 |
-| bass | 0.835 | 67,152 |
-| other | 0.720 | 67,152 |
-| vocals | 0.706 | 67,152 |
+| drums | 0.891 | 82,080 |
+| bass | 0.841 | 82,080 |
+| other | 0.720 | 82,080 |
+| vocals | 0.744 | 82,080 |
 
 The weaker other/vocals scores reflect their sparse, sectional source stems;
 the symbolic ranker and theory rules remain hard filters, and a failed judge
