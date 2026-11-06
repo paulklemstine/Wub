@@ -474,11 +474,11 @@ top-1 / 96.3% top-3**; the 48-d control is 72.0% on the same split.
 ## 10. Per-stem remix engine (cluster bank, 2026-11)
 
 The shipped cluster bank in `frontend/public/data/kits/` is the per-stem mode:
-**358 kits / 2,487 phrases / 16 clusters / ~659 MB**. This is the 8-phrase
+**370 kits / 2,565 phrases / 16 clusters / ~675 MB**. This is the 8-phrase
 candidate union (402 kits) after full reconstruction QC removed 44 tracks /
-73 failing phrases; the extra score/feature entries are harmless. Every
-cluster keeps a full 4-phrase (16-bar) run for all four stems, and the average
-is **6.95 phrases/kit**.
+73 failing phrases, then 12 strict trim-only tracks (78 phrases) were recovered
+and merged. Every cluster keeps a full 4-phrase (16-bar) run for all four
+stems, and the average is **6.93 phrases/kit**.
 
 ### 10.1 Why clusters
 
@@ -521,9 +521,9 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   0.951) is the teacher; the student ranker sees per-stem timbre, onset,
   chroma, roots, energy, section, run position, key/tempo fit and the
   **current/next block length** (4/8/16 bars). Held-out real-vs-donor AUC is
-  **0.801 (4-bar), 0.784 (8-bar), 0.747 (16-bar)**; the teacher scores
-  **0.730 / 0.732 / 0.739** on the same split. Hold thresholds are
-  **0.082 / 0.067 / 0.038** per block length. The joint state is **424-d**:
+  **0.798 (4-bar), 0.801 (8-bar), 0.780 (16-bar)**; the teacher scores
+  **0.721 / 0.736 / 0.753** on the same split. Hold thresholds are
+  **0.076 / 0.089 / 0.068** per block length. The joint state is **424-d**:
   four interleaved per-stem chunks of 90 (52 phrase + 4 groove + 2 vocal +
   32 timbre) plus a 64-d mix, giving a **2,137-d** transition input.
 * **Drag commit is at the next bar.** The reticle snaps to the nearest legal
@@ -601,7 +601,7 @@ and pinned stems get a dashed ghost ring at the region centre.
 ### 10.5 Per-stem judge
 
 `scripts/build_stem_bars.py` cuts 64x128 log-mel windows for every phrase/stem
-of the full corpus. `scripts/filter_stem_dataset.py` keeps the 358 shipping
+of the full corpus. `scripts/filter_stem_dataset.py` keeps the shipping
 tracks. `scripts/train_stem_judge.py` trains one two-tower CNN per stem on
 same-song phrase pairs vs matched cross-song, cross-key and cross-style
 negatives; the mix-level judge (AUC 0.951) already covers bar-to-bar

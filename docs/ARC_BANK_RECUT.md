@@ -375,14 +375,16 @@ clusters with a full 4-phrase (16-bar) run per stem:
 Final shipping result for this pass:
 
 ```
-358 kits / 2,487 phrases / 16 clusters / 659 MiB
+370 kits / 2,565 phrases / 16 clusters / ~675 MiB
 ```
 
 The 402-kit candidate union produced 2,798 phrases. Full reconstruction QC
 (0.90 correlation / 10 dB SNR) found 73 failures across 44 tracks; those
-tracks were removed, leaving 358 kits. Every cluster still has a full
-4-phrase (16-bar) run for all four stems (100% cluster coverage), and the new
-joint ranker scores 0.801 / 0.784 / 0.747 AUC on 4/8/16-bar validation.
+tracks were removed. A follow-up recovery pass found 15 strict passes and
+merged the 12 trim-only kits (78 phrases), leaving 370 kits. Every cluster
+still has a full 4-phrase (16-bar) run for all four stems (100% cluster
+coverage), and the retrained joint ranker scores **0.798 / 0.801 / 0.780 AUC**
+on 4/8/16-bar validation.
 
 Measured older reference bank:
 
@@ -424,7 +426,7 @@ A run is shippable only when all of these pass:
 
 1. **Manifest integrity** — every phrase has four Opus files; the cluster
    selection drops nothing silently.
-2. **Kit count** — exactly `KITS` (402 candidate; 358 after QC filtering) kits in the 16-cluster union.
+2. **Kit count** — exactly `KITS` (402 candidate; 370 after QC filtering and 12 strict recoveries) kits in the 16-cluster union.
 3. **Metadata join** — ≥99% of phrases receive `chroma`/`bass_root`/`once`;
    expected 100% because the dataset is built from the same manifest.
 4. **Reconstruction** — `kit_reconstruct.py --mode compare --fail-on-error`
