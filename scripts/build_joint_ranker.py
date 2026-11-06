@@ -22,20 +22,25 @@ candidate 1-/2-stem swaps.  Its logit is the target.
 
 Student
 -------
-For every phrase we build a 400-d joint state:
+For every phrase we build a 424-d joint state:
 
-    4 stems x (52 features + 32-d per-stem timbre) + 64-d mix embedding
+    4 stems x (90 per-stem features) + 64-d mix embedding
 
-    52 = 16 onset bits, 12 chroma, 12 root, energy, 5 section one-hot,
-         stem RMS, run position, run length, has-next, key shift, tempo fit
+    90 = 16 onset bits, 12 chroma, 12 root, energy, 5 section one-hot,
+         stem RMS, run position, run length, has-next, key shift, tempo fit,
+         onset density, offbeat ratio, backbeat ratio, syncopation,
+         vocal presence, vocal crest, 32-d per-stem timbre
+
+The four stem chunks are **interleaved**: drums 0:90, bass 90:180,
+other 180:270, vocals 270:360, then the 64-d mix embedding at 360:424.
 
 The transition input is:
 
-    prev 400, current 400, candidate 400, candidate-current delta,
+    prev 424, current 424, candidate 424, candidate-current delta,
     current-prev delta, 4-bit change mask + count, 6-d target section/energy,
     3-d current block one-hot (4/8/16), 3-d next block one-hot (4/8/16)
 
-(or 2,017 numbers).  A 3-layer MLP predicts the teacher logit.  A held-out
+(or 2,137 numbers).  A 3-layer MLP predicts the teacher logit.  A held-out
 track split reports real-vs-swap AUC for both teacher and student, overall and
 per block length.  Hold thresholds are calibrated per block length.
 
@@ -69,8 +74,9 @@ from audio_judge_model import AudioJudge  # noqa: E402
 STEMS = ("drums", "bass", "other", "vocals")
 SEC_IDX = {"INTRO": 0, "GROOVE_A": 1, "BUILDUP": 2, "DROP": 3, "BREAKDOWN": 4}
 SEC_ENERGY = {"INTRO": 0.25, "GROOVE_A": 0.83, "BUILDUP": 0.65, "DROP": 0.90, "BREAKDOWN": 0.20}
-STEM_DIM = 52 + 32
+STEM_DIM = 90
 STATE_DIM = 4 * STEM_DIM + 64
+MIX_OFFSET = 4 * STEM_DIM
 BLOCK_BARS = (4, 8, 16)
 BLOCK_INDEX = {bars: index for index, bars in enumerate(BLOCK_BARS)}
 INPUT_DIM = STATE_DIM * 5 + 5 + 6 + 6
@@ -225,8 +231,67 @@ def build_runs(kit: dict, tolerance: float = 0.01) -> list[list[dict]]:
     return runs
 
 
+def clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def stem_state_vector(
+    *,
+    stem: str,
+    onset_bits,
+    chroma,
+    root,
+    energy: float,
+    section: int,
+    rms_db: float,
+    peak: float,
+    rpos: float,
+    rlen: float,
+    has_next: float,
+    key_shift_norm: float,
+    tempo_rate: float,
+    timbre,
+) -> np.ndarray:
+    """90-d per-stem phrase state, interleaved so each chunk is self-contained.
+
+    0:16 onset bits, 16:28 chroma, 28:40 root, 40 energy,
+    41:46 section one-hot, 46 stem RMS (normalised), 47 run position,
+    48 run length, 49 has-next, 50 key shift / 5, 51 tempo rate * 10,
+    52 onset density, 53 offbeat ratio, 54 backbeat ratio, 55 syncopation,
+    56 vocal presence, 57 vocal crest, 58:90 per-stem timbre embedding.
+    """
+    onset = np.asarray(onset_bits, dtype=np.float32).reshape(-1)
+    v = np.zeros(STEM_DIM, dtype=np.float32)
+    v[0:16] = onset[:16]
+    v[16:28] = chroma
+    v[28:40] = root
+    v[40] = energy
+    v[41 + section] = 1.0
+    v[46] = clamp01((rms_db + 40.0) / 30.0)
+    v[47] = rpos
+    v[48] = rlen
+    v[49] = has_next
+    v[50] = key_shift_norm
+    v[51] = tempo_rate * 10.0
+    count = float(onset[:16].sum())
+    if count > 0:
+        denom = count
+        v[52] = count / 16.0
+        v[53] = float(onset[[2, 6, 10, 14]].sum()) / denom
+        v[54] = float(onset[[4, 12]].sum()) / denom
+        v[55] = 1.0 - float(onset[[0, 4, 8, 12]].sum()) / denom
+    # Silence/absent stem: density and all ratios stay 0, not 1.0 syncopation.
+    if stem == "vocals":
+        v[56] = clamp01((rms_db + 40.0) / 25.0)
+        peak_db = 20.0 * math.log10(max(float(peak), 1e-6))
+        v[57] = clamp01((peak_db - rms_db) / 24.0)
+    timbre_vec = np.asarray(timbre, dtype=np.float32).reshape(-1)
+    v[58:58 + min(32, timbre_vec.size)] = timbre_vec[:32]
+    return v
+
+
 def build_phrase_states(manifest, rows, row_of, mels, emb32):
-    """Return phrase_id -> 272-d joint state, and the kit/cluster maps."""
+    """Return phrase_id -> 424-d joint state, and the kit/cluster maps."""
     clusters = manifest.get("clusters") or []
     kit_cluster = {}
     for cluster in clusters:
@@ -253,33 +318,45 @@ def build_phrase_states(manifest, rows, row_of, mels, emb32):
             energy = float(phrase.get("energy", 0.5))
             section = SEC_IDX.get(str(phrase.get("section", "GROOVE_A")).upper(), 1)
             tempo_rate = float(phrase.get("duration_sec", block_sec)) / block_sec - 1.0
+            stem_stats = phrase.get("stems") or {}
             vec = []
+            # Interleave the four 90-d stem chunks; never group feature blocks.
             for si, stem in enumerate(STEMS):
-                v = np.zeros(52, dtype=np.float32)
-                v[0:16] = onset[si * 16:(si + 1) * 16]
                 if stem == "bass":
-                    v[16:28] = bass_chroma
-                    v[28:40] = bass_root
+                    chroma, root = bass_chroma, bass_root
                 elif stem == "other":
-                    v[16:28] = other_chroma
-                    v[28:40] = chord_root
+                    chroma, root = other_chroma, chord_root
                 elif stem == "vocals":
-                    v[16:28] = chord_root
-                    v[28:40] = chord_root
-                v[40] = energy
-                v[41 + section] = 1.0
-                rms = float(((phrase.get("stems") or {}).get(stem) or {}).get("rms_db", -20.0))
-                v[46] = max(0.0, min(1.0, (rms + 40.0) / 30.0))
-                v[47] = rpos
-                v[48] = rlen
-                v[49] = has_next
-                v[50] = shift / 5.0
-                v[51] = tempo_rate * 10.0
-                vec.extend(v)
-            for stem in STEMS:
-                vec.extend([float(x) for x in emb32[stem].get(pid, [0.0] * 32)])
-            vec.extend([float(x) for x in (phrase.get("embedding") or [0.0] * 64)])
-            states[pid] = np.asarray(vec, dtype=np.float32)
+                    chroma, root = chord_root, chord_root
+                else:
+                    chroma, root = [0.0] * 12, [0.0] * 12
+                stats = stem_stats.get(stem) or {}
+                vec.append(stem_state_vector(
+                    stem=stem,
+                    onset_bits=onset[si * 16:(si + 1) * 16],
+                    chroma=chroma,
+                    root=root,
+                    energy=energy,
+                    section=section,
+                    rms_db=float(stats.get("rms_db", -20.0) or -20.0),
+                    peak=float(stats.get("peak", 0.0) or 0.0),
+                    rpos=rpos,
+                    rlen=rlen,
+                    has_next=has_next,
+                    key_shift_norm=shift / 5.0,
+                    tempo_rate=tempo_rate,
+                    timbre=emb32[stem].get(pid, [0.0] * 32),
+                ))
+            mix = np.asarray(
+                phrase.get("embedding") or [0.0] * 64, dtype=np.float32
+            ).reshape(-1)
+            if mix.size < 64:
+                mix = np.pad(mix, (0, 64 - mix.size))
+            vec.append(mix[:64])
+            state = np.concatenate(vec).astype(np.float32)
+            if state.size != STATE_DIM:
+                raise ValueError(f"{pid}: state has {state.size} dims, expected {STATE_DIM}")
+            states[pid] = state
             phrase_meta[pid] = {
                 "track_id": kit["track_id"], "kit": kit, "phrase": phrase,
                 "cluster": cluster, "shift": shift, "rpos": rpos, "rlen": rlen,
@@ -298,14 +375,14 @@ def mix_rows(rows: dict, mels: dict):
 
 
 def state_for(states, phrase_for_stem):
-    """4 x 52 chunks + mean of the four 64-d source embeddings."""
+    """4 x 90 interleaved stem chunks + mean of the four 64-d mix embeddings."""
     chunks = []
     emb = np.zeros(64, dtype=np.float32)
     for stem in STEMS:
         s = states[phrase_for_stem[stem]]
         si = STEMS.index(stem)
         chunks.append(s[si * STEM_DIM:(si + 1) * STEM_DIM])
-        emb += s[4 * STEM_DIM:4 * STEM_DIM + 64]
+        emb += s[MIX_OFFSET:MIX_OFFSET + 64]
     return np.concatenate(chunks + [emb / 4.0])
 
 
@@ -706,14 +783,15 @@ def main() -> None:
     def flat(name):
         return sd[name].detach().cpu().numpy().astype(np.float32).reshape(-1).tolist()
     export = {
-        "version": 2,
-        "model": "joint_transition_arc_v2",
+        "version": 3,
+        "model": "joint_transition_arc_v3",
         "val_auc": best_auc,
         "threshold": threshold,
         "thresholds": thresholds,
         "block_auc": block_auc,
         "input_dim": int(x.shape[1]),
         "state_dim": STATE_DIM,
+        "stem_dim": STEM_DIM,
         "feature_dim": int(feature.shape[1]),
         "phrase_ids": phrase_ids,
         "feature_file": "joint_features.f32",

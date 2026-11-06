@@ -93,10 +93,19 @@ if not isinstance(taste.get("kits"), dict) or not taste["kits"]:
     raise SystemExit("taste_scores.json is missing kit scores")
 
 model = load(os.path.join(joint, "joint_ranker.json"))
-if model.get("input_dim") != 2017 or model.get("state_dim") != 400:
-    raise SystemExit(f"unexpected joint model dims: {model.get('input_dim')}/{model.get('state_dim')}")
-if model.get("feature_dim") != 400:
-    raise SystemExit("joint feature_dim is not 400")
+state_dim = int(model.get("state_dim") or 0)
+feature_dim = int(model.get("feature_dim") or 0)
+input_dim = int(model.get("input_dim") or 0)
+stem_dim = (feature_dim - 64) // 4
+if state_dim < 400 or feature_dim != state_dim or stem_dim * 4 + 64 != feature_dim:
+    raise SystemExit(
+        f"unexpected joint model dims: input={input_dim} state={state_dim} feature={feature_dim}"
+    )
+expected_input = state_dim * 5 + 5 + 6 + 6
+if input_dim != expected_input:
+    raise SystemExit(
+        f"joint input_dim {input_dim}, expected {expected_input} for state_dim {state_dim}"
+    )
 if not isinstance(model.get("thresholds"), dict):
     raise SystemExit("joint model has no per-block thresholds")
 feature_path = os.path.join(joint, "joint_features.f32")

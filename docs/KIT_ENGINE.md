@@ -521,9 +521,11 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   0.951) is the teacher; the student ranker sees per-stem timbre, onset,
   chroma, roots, energy, section, run position, key/tempo fit and the
   **current/next block length** (4/8/16 bars). Held-out real-vs-donor AUC is
-  **0.784 (4-bar), 0.775 (8-bar), 0.722 (16-bar)**; the teacher scores
-  **0.710 / 0.723 / 0.729** on the same split. Hold thresholds are
-  **0.049 / 0.041 / 0.019** per block length.
+  **0.801 (4-bar), 0.784 (8-bar), 0.747 (16-bar)**; the teacher scores
+  **0.730 / 0.732 / 0.739** on the same split. Hold thresholds are
+  **0.082 / 0.067 / 0.038** per block length. The joint state is **424-d**:
+  four interleaved per-stem chunks of 90 (52 phrase + 4 groove + 2 vocal +
+  32 timbre) plus a 64-d mix, giving a **2,137-d** transition input.
 * **Drag commit is at the next bar.** The reticle snaps to the nearest legal
   phrase, then the stem starts at the bar offset that matches the global 4-bar
   phase. It schedules one long run across block boundaries, so an 8/16-bar

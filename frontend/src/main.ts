@@ -1379,6 +1379,46 @@ class WubApp {
     }
   }
 
+  /** Latest time-domain waveform for one stem (reused scratch buffer). */
+  private stemWaveform(stem: StemName): Uint8Array | null {
+    try {
+      const analyser = this.engine.getAnalyser(stem);
+      let time = this.timeScratch.get(stem);
+      if (time === undefined || time.length !== analyser.fftSize) {
+        time = new Uint8Array(analyser.fftSize);
+        this.timeScratch.set(stem, time);
+      }
+      analyser.getByteTimeDomainData(time);
+      return time;
+    } catch {
+      return null;
+    }
+  }
+
+  /** True post-glue/post-limiter full mix: level plus waveform for the bear. */
+  private masterMixFrame(): { level: number; waveform: Uint8Array | null } {
+    try {
+      const analyser = this.engine.getMasterAnalyser();
+      const n = analyser.fftSize;
+      if (this.masterTimeScratch === null || this.masterTimeScratch.length !== n) {
+        this.masterTimeScratch = new Uint8Array(n);
+      }
+      const time = this.masterTimeScratch;
+      analyser.getByteTimeDomainData(time);
+      let sum = 0;
+      for (let i = 0; i < time.length; i++) {
+        const v = (time[i] - 128) / 128;
+        sum += v * v;
+      }
+      return {
+        level: Math.min(1, Math.sqrt(sum / time.length) * 2.2),
+        waveform: time,
+      };
+    } catch {
+      return { level: 0, waveform: null };
+    }
+  }
+
   private frame(_t: number): void {
     const t = visualNow();
     const audioNow = this.engine.now();
@@ -1644,16 +1684,17 @@ class WubApp {
       const bassLvl = this.analyserLevel("bass");
       const vocalsLvl = this.analyserLevel("vocals");
       const otherLvl = this.analyserLevel("other");
-      const masterLvl = Math.max(drumsLvl, bassLvl, vocalsLvl, otherLvl);
-      // Voice instrument audio waveform
-      const vocalWaveform = this.timeScratch.get("vocals") ?? null;
-      const drumWaveform = this.timeScratch.get("drums") ?? null;
-      const bassWaveform = this.timeScratch.get("bass") ?? null;
-      const otherWaveform = this.timeScratch.get("other") ?? null;
+      // The true post-glue, post-limiter full mix, not a max of the stems.
+      const mixFrame = this.masterMixFrame();
+      // Per-instrument time-domain waveforms for the eyes/mouth/heart.
+      const vocalWaveform = this.stemWaveform("vocals");
+      const drumWaveform = this.stemWaveform("drums");
+      const bassWaveform = this.stemWaveform("bass");
+      const otherWaveform = this.stemWaveform("other");
       this.tamagotchi.update(
         this.lastGrooveboxMeta,
         audioNow,
-        masterLvl,
+        mixFrame.level,
         this.currentStepIndex,
         this.bpm,
         vocalWaveform,
@@ -1663,7 +1704,8 @@ class WubApp {
         drumsLvl,
         bassLvl,
         otherWaveform,
-        otherLvl
+        otherLvl,
+        mixFrame.waveform
       );
     }
 

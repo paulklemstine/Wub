@@ -24,6 +24,11 @@ const BRIDGE_START_BAR = 96;
 const SET_BARS = 104;
 const BLOCKS_PER_SET = 19;
 const PIN_BARS = 32;
+// A pin is a soft style region, not one frozen loop.  Candidate run starts
+// inside this radius are preferred; the score then varies phrases within it.
+const PIN_RADIUS = 0.2;
+const PIN_SIGMA = 0.15;
+const PIN_TRACK_PENALTY = 0.75;
 const RECENT_BLOCKS = 6;
 const TEMPO_FIT_LIMIT = 0.02;
 const CACHE_LIMIT = 64;
@@ -135,7 +140,7 @@ interface ScheduledRun {
   manual: boolean;
 }
 
-/** A dragged/pinned stem plays one long run across block boundaries. */
+/** The partial manual run that covers a drag until the next block boundary. */
 interface ManualPin {
   entry: StemPoolEntry;
   run: StemPoolEntry[];
@@ -286,7 +291,7 @@ export class StemRemixPlayer {
   private lastBlockRuns: Partial<Record<StemName, StemPoolEntry[]>> = {};
   /** Voices scheduled ahead of their downbeat, promoted by tick(). */
   private scheduledRuns: Partial<Record<StemName, ScheduledRun[]>> = {};
-  /** Stems dragged/pinned to one long run across block boundaries. */
+  /** Stems with a partial manual commit awaiting the next block boundary. */
   private manualPins: Partial<Record<StemName, ManualPin>> = {};
   /** Stems whose pin audio is still being fetched; do not double-schedule. */
   private pinning = new Set<StemName>();
@@ -982,10 +987,17 @@ export class StemRemixPlayer {
       : [...STEMS];
     const chosenRuns: Partial<Record<StemName, StemPoolEntry[]>> = {};
     for (const stem of order) {
-      const manual = this.manualPins[stem];
+      let manual = this.manualPins[stem];
+      if (manual && manual.runEndAt <= at + 0.05) {
+        // The partial manual commit has handed off at this boundary.  Keep
+        // pins[stem] and let the normal block scheduler choose a fresh run in
+        // the pinned region.
+        delete this.manualPins[stem];
+        manual = undefined;
+      }
       if (manual || this.pinning.has(stem)) {
-        // One long voice already covers this block and every block until the
-        // pin expires; do not schedule a competing voice while it loads.
+        // A manual voice or its initial load already covers this block; do not
+        // schedule a competing voice while it loads.
         const heldRun = manual?.run ?? this.lastBlockRuns[stem] ?? [];
         if (heldRun.length > 0) chosenRuns[stem] = heldRun;
         const first = manual?.entry ?? heldRun[0];
@@ -998,7 +1010,8 @@ export class StemRemixPlayer {
       }
       let entry: StemPoolEntry | null = null;
       if (this.pins[stem]) {
-        entry = this.holdEntry(stem);
+        entry = this.selectPinnedEntry(stem, this.pins[stem]!, phrasesPerStem)
+          ?? this.holdEntry(stem);
       } else if (bridge) {
         const base = this.holdEntry(stem);
         if (base) {
@@ -1045,10 +1058,11 @@ export class StemRemixPlayer {
       else if (priorEntries[stem]) boundaryEntries[stem] = priorEntries[stem];
     }
     this.lastBlockEntries = boundaryEntries;
-    if (trackChanged.length > 0) {
+    const autoTrackChanged = trackChanged.filter((stem) => this.pins[stem] === undefined);
+    if (autoTrackChanged.length > 0) {
       this.lastMoveBar = startBar;
-      if (trackChanged.includes("vocals")) this.lastVocalChangeBar = startBar;
-      if (trackChanged.includes("drums")) this.lastDrumChangeBar = startBar;
+      if (autoTrackChanged.includes("vocals")) this.lastVocalChangeBar = startBar;
+      if (autoTrackChanged.includes("drums")) this.lastDrumChangeBar = startBar;
     }
     if (opening) {
       this.currentAnchorPhrase = anchorPhrase;
@@ -1102,11 +1116,13 @@ export class StemRemixPlayer {
     );
   }
 
-  /** Assemble the 400-d joint state for four chosen entries. */
+  /** Assemble the joint state (424-d for v3, 400-d for the old v2 model). */
   private jointState(entries: Partial<Record<StemName, StemPoolEntry>>): Float32Array | null {
     const ranker = this.jointRanker;
     if (!ranker?.ready) return null;
-    const out = new Float32Array(400);
+    const stemDim = ranker.stemDim;
+    const embOffset = 4 * stemDim;
+    const out = new Float32Array(ranker.stateDim);
     const emb = new Float32Array(64);
     for (let i = 0; i < 4; i++) {
       const stem = STEMS[i];
@@ -1115,10 +1131,10 @@ export class StemRemixPlayer {
       const shift = keyShift(this.sessionKey, entry.kit.key) ?? 0;
       const state = ranker.stateFor(entry.phrase.id, shift, entry.rate);
       if (!state) return null;
-      out.set(state.subarray(i * 84, (i + 1) * 84), i * 84);
-      for (let k = 0; k < 64; k++) emb[k] += state[336 + k] / 4;
+      out.set(state.subarray(i * stemDim, (i + 1) * stemDim), i * stemDim);
+      for (let k = 0; k < 64; k++) emb[k] += state[embOffset + k] / 4;
     }
-    out.set(emb, 336);
+    out.set(emb, embOffset);
     return out;
   }
 
@@ -1465,6 +1481,112 @@ export class StemRemixPlayer {
       return null;
     }
     return this.entryById.get(`${nextPhrase.id}:${stem}`) ?? null;
+  }
+
+  /**
+   * Pick a fresh phrase/run start inside a pinned style region.  The pin is a
+   * region, not a frozen loop: candidates near the dropped point are scored by
+   * distance, arc energy/section, the per-stem judge, recency and style.
+   */
+  private selectPinnedEntry(
+    stem: StemName,
+    pin: StemPin,
+    phrases: number,
+  ): StemPoolEntry | null {
+    const pool = this.pools[stem];
+    if (pool.length === 0) return null;
+    const current = this.current[stem]?.entry ?? this.lastBlockEntries[stem] ?? null;
+    const arc = targetAt(this.sessionBar);
+    const targetSection = this.lastSection || arc.section;
+    const targetEnergy = arc.energy;
+    const outroAllowed = this.blockIndex >= BLOCKS_PER_SET - 2;
+    const recent = new Set(this.recent);
+
+    const eligible = pool.filter((entry) => {
+      if (this.failedKits.has(entry.kit.track_id)) return false;
+      if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) return false;
+      if (entry.phrase.is_intro && this.blockIndex > 0) return false;
+      if (entry.phrase.is_outro && !outroAllowed) return false;
+      return true;
+    });
+    if (eligible.length === 0) return null;
+
+    // Consecutive phrases are preferable, but a pin must still move when the
+    // cluster only has isolated windows near the region.
+    const runLength = (entry: StemPoolEntry): number => {
+      const run = this.runFor(entry, phrases, false);
+      let length = 0;
+      for (const item of run) {
+        if (item.phrase.once && this.playedOnce.has(item.phrase.id)) break;
+        length += 1;
+      }
+      return length;
+    };
+
+    const near: Array<{ entry: StemPoolEntry; distance: number }> = [];
+    let nearest: { entry: StemPoolEntry; distance: number } | null = null;
+    for (const entry of eligible) {
+      const distance = Math.hypot(entry.x - pin.x, entry.y - pin.y);
+      if (!nearest || distance < nearest.distance) nearest = { entry, distance };
+      if (distance <= PIN_RADIUS) near.push({ entry, distance });
+    }
+    if (near.length === 0) {
+      // Nothing survives the legal filters inside the region: fall back to the
+      // nearest legal phrase, which is normally the exact phrase dropped on.
+      if (nearest) {
+        this.onStatus?.(`${stem}: pin region empty; using the nearest legal phrase`);
+        return nearest.entry;
+      }
+      return null;
+    }
+
+    const fullNear = near.filter((item) => runLength(item.entry) >= phrases);
+    const candidates = fullNear.length > 0 ? fullNear : near;
+
+    const lastRun = new Set<string>();
+    for (const entry of this.lastBlockRuns[stem] ?? []) lastRun.add(entry.phrase.id);
+
+    const usedTracks = new Set<string>();
+    for (const other of STEMS) {
+      if (other === stem) continue;
+      const otherEntry = this.current[other]?.entry ?? this.lastBlockEntries[other];
+      if (otherEntry) usedTracks.add(otherEntry.kit.track_id);
+    }
+
+    let best: { entry: StemPoolEntry; score: number } | null = null;
+    for (const { entry, distance } of candidates) {
+      const proximity = Math.exp(-(distance * distance) / (2 * PIN_SIGMA * PIN_SIGMA));
+      const energyFit = 1 - Math.min(1, Math.abs(entry.energy - targetEnergy));
+      const sectionBonus = entry.section === targetSection ? 0.35 : 0;
+      const sectionEnergy = SECTION_ENERGY[entry.section];
+      const sectionFit = sectionEnergy === undefined
+        ? 0
+        : 0.12 * (1 - Math.abs(entry.energy - sectionEnergy));
+      const judge = this.judgeScore(stem, current?.phrase.id ?? null, entry.phrase.id);
+      const judgeBonus = judge > 0 ? 0.8 * judge : 0;
+      const recentPenalty = recent.has(entry.phrase.id) ? 0.8 : 0;
+      const lastRunPenalty = lastRun.has(entry.phrase.id) ? 1.4 : 0;
+      const samePenalty = current
+        && current.phrase.id === entry.phrase.id
+        && current.kit.track_id === entry.kit.track_id ? 0.5 : 0;
+      const styleBonus = entry.kit.style === this.cluster?.style ? 0.22 : 0;
+      const trackPenalty = usedTracks.has(entry.kit.track_id) ? PIN_TRACK_PENALTY : 0;
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.15;
+      const score =
+        2.4 * proximity +
+        0.9 * energyFit +
+        sectionBonus +
+        sectionFit +
+        judgeBonus +
+        styleBonus +
+        novelty -
+        recentPenalty -
+        lastRunPenalty -
+        samePenalty -
+        trackPenalty;
+      if (!best || score > best.score) best = { entry, score };
+    }
+    return best?.entry ?? nearest?.entry ?? null;
   }
 
   /** Pick a cross-song phrase for one stem, excluding its current track. */
@@ -1911,7 +2033,7 @@ export class StemRemixPlayer {
     const generation = (this.pinGeneration[stem] ?? 0) + 1;
     this.pinGeneration[stem] = generation;
     this.pinning.add(stem);
-    void this.applyPin(stem, nearest, pin, at, partialBar, blockStartAt, blockStartBar, generation);
+    void this.applyPin(stem, nearest, pin, at, partialBar, generation);
     if (distance > 0.06) {
       this.onStatus?.(`${stem} → ${nearest.phrase.section} (${nearest.kit.style}) at next bar`);
     } else {
@@ -1947,9 +2069,9 @@ export class StemRemixPlayer {
   }
 
   /**
-   * Schedule one long run for a pinned stem.  It starts on the next bar and
-   * fades exactly at the pin's 32-bar boundary, so it survives the 8/16-bar
-   * block grid without a competing voice taking over.
+   * Commit a pinned style region at the next bar.  The voice only covers the
+   * partial run up to the next block boundary (`handoffAt`); from there the
+   * normal block scheduler keeps the pin and selects fresh phrases inside it.
    */
   private async applyPin(
     stem: StemName,
@@ -1957,18 +2079,21 @@ export class StemRemixPlayer {
     pin: StemPin,
     at: number,
     partialBar: number,
-    blockStartAt: number,
-    blockStartBar: number,
     generation: number,
   ): Promise<void> {
+    const handoffAt = this.nextBlockAt;
+    if (at >= handoffAt - 0.05) {
+      // The drag landed on/after the block boundary: no partial manual voice.
+      // The block scheduler will pick the pinned phrase at the boundary.
+      delete this.manualPins[stem];
+      this.pinning.delete(stem);
+      return;
+    }
     const blockSpan = 4 * this.barSec;
-    const barsToEnd = Math.max(1, pin.untilBar - (blockStartBar
-      + Math.round((at - blockStartAt) / this.barSec)));
-    const endAt = at + barsToEnd * this.barSec;
-    const phrases = Math.max(1, Math.ceil((endAt - at) / blockSpan) + 1);
+    const phrases = Math.max(1, Math.ceil((handoffAt - at) / blockSpan) + 1);
     // If the snapped phrase is an isolated window, prefer a nearby phrase from
-    // the same kit with a real consecutive run; a 32-bar pin should not loop
-    // one 4-bar window if the kit can move.
+    // the same kit with a real consecutive run; the partial commit should not
+    // loop one 4-bar window if the kit can move.
     const runEntry = this.pinRunEntry(entry, phrases, pin.x, pin.y);
     const run = this.runFor(runEntry, phrases);
     const audio = await this.loadRunAudio(run);
@@ -1993,13 +2118,21 @@ export class StemRemixPlayer {
         startAt += Math.max(1, lateBars) * this.barSec;
         inputBars += Math.max(1, lateBars);
       }
+      if (startAt >= handoffAt - 0.05) {
+        // The load arrived after the partial window; hand straight over to the
+        // block scheduler at the boundary instead of scheduling a dead voice.
+        delete this.manualPins[stem];
+        this.pinning.delete(stem);
+        this.onStatus?.(`${stem}: pin commit late; starting at the next block`);
+        return;
+      }
       let sourceSec = 0;
       for (const buffer of audio.mains) sourceSec += buffer.duration;
       const inputSec = Math.min(
         preDur + inputBars * (audio.mains[0].duration / 4),
         preDur + sourceSec - 0.05,
       );
-      const fadeAt = Math.max(endAt, startAt + 0.2);
+      const endAt = handoffAt;
       voice.schedule({
         when: startAt,
         inputSec: Math.max(preDur, inputSec),
@@ -2009,10 +2142,10 @@ export class StemRemixPlayer {
         fadeInSec: crossfadeSec,
         gain: runEntry.gain,
       });
-      voice.fadeOut(fadeAt, STEM_FADE_OUT[stem]);
+      voice.fadeOut(endAt, STEM_FADE_OUT[stem]);
 
       // Silence the current voice and any block voice already queued inside
-      // the pin window; this stem is now one continuous manual run.
+      // the partial commit window; this stem is manual until the handoff.
       const previous = this.current[stem];
       if (previous && previous.voice !== voice) previous.voice.fadeOut(startAt, crossfadeSec);
       const kept: ScheduledRun[] = [];
@@ -2142,8 +2275,22 @@ export class StemRemixPlayer {
 
       const manual = this.manualPins[stem];
       if (manual && now >= manual.runEndAt - 0.02) {
+        // The partial manual commit has handed off.  Keep pins[stem] so the
+        // block scheduler can keep varying phrases inside the region until the
+        // 32-bar boundary.
         delete this.manualPins[stem];
+        const playing = this.current[stem]?.entry;
+        if (playing) {
+          this.lastBlockEntries[stem] = playing;
+          this.lastBlockRuns[stem] = [playing];
+        }
+      }
+      const pin = this.pins[stem];
+      if (pin && this.blockStartBar >= pin.untilBar) {
+        // Safety net; beginBlock normally releases at the same boundary.
         delete this.pins[stem];
+        delete this.manualPins[stem];
+        this.pinning.delete(stem);
         const playing = this.current[stem]?.entry;
         if (playing) {
           this.lastBlockEntries[stem] = playing;

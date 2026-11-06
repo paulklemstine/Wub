@@ -382,7 +382,7 @@ The 402-kit candidate union produced 2,798 phrases. Full reconstruction QC
 (0.90 correlation / 10 dB SNR) found 73 failures across 44 tracks; those
 tracks were removed, leaving 358 kits. Every cluster still has a full
 4-phrase (16-bar) run for all four stems (100% cluster coverage), and the new
-joint ranker scores 0.784 / 0.775 / 0.722 AUC on 4/8/16-bar validation.
+joint ranker scores 0.801 / 0.784 / 0.747 AUC on 4/8/16-bar validation.
 
 Measured older reference bank:
 

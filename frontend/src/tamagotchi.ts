@@ -153,6 +153,15 @@ export class TamagotchiAvatar {
   private smoothedVocalAmp: number = 0;
   private singingLoopPhase: number = 0;
 
+  // Per-stem reactive envelopes. Every visual feature reads one instrument so
+  // the bear reads like a four-piece band: eyes=drums/bass, mouth=vocals,
+  // heart=other, body/halo/motes=the full mix.
+  private stemEnv = { drums: 0, bass: 0, other: 0, vocals: 0 };
+  private stemPunch = { drums: 0, bass: 0, other: 0, vocals: 0 };
+  private mixEnv: number = 0;
+  private mixPunch: number = 0;
+  private otherTone: number = 0;
+
   constructor() {
     this.loadState();
   }
@@ -269,6 +278,102 @@ export class TamagotchiAvatar {
   // Step & Audio Frame Update
   // ---------------------------------------------------------------------------
 
+  private static clamp01(value: number): number {
+    return Math.max(0, Math.min(1, value));
+  }
+
+  /** Asymmetric envelope follower: fast attack, musical release. */
+  private smoothEnvelope(
+    current: number,
+    target: number,
+    dt: number,
+    attackSec: number,
+    releaseSec: number
+  ): number {
+    const tau = target > current ? attackSec : releaseSec;
+    return current + (target - current) * (1 - Math.exp(-dt / Math.max(0.001, tau)));
+  }
+
+  /** Zero-crossing brightness (0..1) of a live stem waveform. */
+  private waveformBrightness(waveform?: Uint8Array | null): number {
+    if (!waveform || waveform.length < 8) return 0;
+    let crossings = 0;
+    let prevSign = waveform[0] >= 128 ? 1 : -1;
+    for (let i = 2; i < waveform.length; i += 2) {
+      const sample = waveform[i] - 128;
+      const sign = sample >= 0 ? 1 : -1;
+      if (sign !== prevSign) crossings++;
+      prevSign = sign;
+    }
+    const zcr = crossings / (waveform.length * 0.5);
+    return TamagotchiAvatar.clamp01(zcr * 3.2);
+  }
+
+  /** Smooth every stem plus the true post-mix master into visual envelopes. */
+  private updateAudioEnvelopes(
+    dt: number,
+    drumLevel: number,
+    bassLevel: number,
+    vocalsLevel: number,
+    otherLevel: number,
+    mixLevel: number,
+    otherWaveform?: Uint8Array | null
+  ): void {
+    const prevDrums = this.stemEnv.drums;
+    const prevBass = this.stemEnv.bass;
+    const prevVocals = this.stemEnv.vocals;
+    const prevOther = this.stemEnv.other;
+    const prevMix = this.mixEnv;
+
+    // The analyser levels are already RMS*2.5; lift the quieter stems with a
+    // soft knee so a 0.1 RMS vocal still opens the mouth while peaks keep
+    // their headroom instead of flat-topping at 1.0.
+    const lift = (level: number, gain: number): number =>
+      1 - Math.exp(-Math.max(0, level) * gain);
+    const drumTarget = TamagotchiAvatar.clamp01(lift(drumLevel, 2.4));
+    const bassTarget = TamagotchiAvatar.clamp01(lift(bassLevel, 1.8));
+    const vocalTarget = TamagotchiAvatar.clamp01(lift(vocalsLevel, 3.2));
+    const otherTarget = TamagotchiAvatar.clamp01(lift(otherLevel, 1.9));
+    const mixTarget = TamagotchiAvatar.clamp01(lift(mixLevel, 1.7));
+
+    this.stemEnv.drums = this.smoothEnvelope(prevDrums, drumTarget, dt, 0.022, 0.16);
+    this.stemEnv.bass = this.smoothEnvelope(prevBass, bassTarget, dt, 0.030, 0.22);
+    this.stemEnv.vocals = this.smoothEnvelope(prevVocals, vocalTarget, dt, 0.040, 0.26);
+    this.stemEnv.other = this.smoothEnvelope(prevOther, otherTarget, dt, 0.080, 0.42);
+    this.mixEnv = this.smoothEnvelope(prevMix, mixTarget, dt, 0.030, 0.24);
+
+    // Attack transients: one-shot decaying pulses used for kicks, syllables,
+    // bass plucks and pad swells. They make the bear hit, not just lean.
+    const decay = (value: number, tau: number): number => value * Math.exp(-dt / tau);
+    this.stemPunch.drums = Math.max(
+      Math.max(0, this.stemEnv.drums - prevDrums) * 5.0,
+      decay(this.stemPunch.drums, 0.12)
+    );
+    this.stemPunch.bass = Math.max(
+      Math.max(0, this.stemEnv.bass - prevBass) * 4.0,
+      decay(this.stemPunch.bass, 0.18)
+    );
+    this.stemPunch.vocals = Math.max(
+      Math.max(0, this.stemEnv.vocals - prevVocals) * 4.5,
+      decay(this.stemPunch.vocals, 0.16)
+    );
+    this.stemPunch.other = Math.max(
+      Math.max(0, this.stemEnv.other - prevOther) * 3.0,
+      decay(this.stemPunch.other, 0.30)
+    );
+    this.mixPunch = Math.max(
+      Math.max(0, this.mixEnv - prevMix) * 4.0,
+      decay(this.mixPunch, 0.18)
+    );
+
+    // 'other' timbre: pad/chord brightness shifts the heart from warm gold
+    // toward cool magenta/violet without changing its candy identity.
+    const otherBrightness = this.stemEnv.other > 0.035
+      ? this.waveformBrightness(otherWaveform)
+      : this.otherTone;
+    this.otherTone = this.smoothEnvelope(this.otherTone, otherBrightness, dt, 0.18, 0.65);
+  }
+
   public update(
     meta: GrooveboxMeta | null,
     audioNow: number,
@@ -282,19 +387,36 @@ export class TamagotchiAvatar {
     drumLevel?: number,
     bassLevel?: number,
     otherWaveform?: Uint8Array | null,
-    otherLevel?: number
+    otherLevel?: number,
+    masterWaveform?: Uint8Array | null
   ): void {
     const dt = this.lastRenderSec > 0 ? Math.max(0.001, audioNow - this.lastRenderSec) : 0.016;
     this.lastRenderSec = audioNow;
 
+    this.updateAudioEnvelopes(
+      dt,
+      drumLevel ?? 0,
+      bassLevel ?? 0,
+      vocalsLevel ?? 0,
+      otherLevel ?? 0,
+      rmsLevel,
+      otherWaveform
+    );
+
     // Real-time Audio and Vocal Reactivity for Electric Rave Glow
     if (this.asciiEl) {
-      this.asciiEl.style.setProperty("--audio-lvl", rmsLevel.toFixed(3));
-      this.asciiEl.style.setProperty("--vocal-lvl", (vocalsLevel ?? 0).toFixed(3));
+      this.asciiEl.style.setProperty("--audio-lvl", this.mixEnv.toFixed(3));
+      this.asciiEl.style.setProperty("--vocal-lvl", this.stemEnv.vocals.toFixed(3));
+      this.asciiEl.style.setProperty("--drum-lvl", this.stemEnv.drums.toFixed(3));
+      this.asciiEl.style.setProperty("--bass-lvl", this.stemEnv.bass.toFixed(3));
+      this.asciiEl.style.setProperty("--other-lvl", this.stemEnv.other.toFixed(3));
       const screenEl = this.asciiEl.parentElement;
       if (screenEl) {
-        screenEl.style.setProperty("--audio-lvl", rmsLevel.toFixed(3));
-        screenEl.style.setProperty("--vocal-lvl", (vocalsLevel ?? 0).toFixed(3));
+        screenEl.style.setProperty("--audio-lvl", this.mixEnv.toFixed(3));
+        screenEl.style.setProperty("--vocal-lvl", this.stemEnv.vocals.toFixed(3));
+        screenEl.style.setProperty("--drum-lvl", this.stemEnv.drums.toFixed(3));
+        screenEl.style.setProperty("--bass-lvl", this.stemEnv.bass.toFixed(3));
+        screenEl.style.setProperty("--other-lvl", this.stemEnv.other.toFixed(3));
       }
     }
 
@@ -390,16 +512,12 @@ export class TamagotchiAvatar {
       waveform,
       dt,
       bpm,
-      vocalsLevel ?? 0,
-      rmsLevel,
       drumWaveform,
       bassWaveform,
-      drumLevel ?? 0,
-      bassLevel ?? 0,
       otherWaveform,
-      otherLevel ?? 0
+      masterWaveform
     );
-    this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel ?? 0);
+    this.renderASCII(meta, isDropGap, waveform, dt, bpm);
     this.updateDashboard();
   }
 
@@ -518,22 +636,27 @@ export class TamagotchiAvatar {
   // ---------------------------------------------------------------------------
   // ASCII Rendering Engine
   // ---------------------------------------------------------------------------
+  /** Tiny ASCII eye glyph driven only by one stem's envelope/punch. */
+  private stemEyeGlyph(level: number, punch: number): string {
+    if (punch > 0.55 || level > 0.72) return "◉";
+    if (level > 0.40) return "◕";
+    if (punch > 0.18) return "✦";
+    if (level < 0.08) return "◔";
+    return "◕";
+  }
+
   private renderASCII(
     meta: GrooveboxMeta | null,
     isDropGap: boolean,
     waveform?: Uint8Array | null,
     dt: number = 0.016,
-    bpm: number = 126,
-    vocalsLevel?: number,
-    drumLevel: number = 0,
-    bassLevel: number = 0,
-    rmsLevel: number = 0
+    bpm: number = 126
   ): void {
     if (!this.asciiEl) return;
 
     const sec = meta?.section ?? "GROOVE_A";
     const vowel = meta?.vocalVowel ?? "";
-    const isSinging = Boolean(meta?.vocalSyllable);
+    const isSinging = Boolean(meta?.vocalSyllable) || this.stemEnv.vocals >= 0.02;
     const bob = this.isHeadBobbed;
 
     // Toggle glowing psychedelic singing shimmer
@@ -543,27 +666,34 @@ export class TamagotchiAvatar {
       this.asciiEl.classList.remove("singing");
     }
 
-    // Determine Big Expressive Anime Eyes
-    let eyes = "◕   ◕";
+    // Determine Big Expressive Anime Eyes. Left=drums, right=bass; mood states
+    // still override both, but the default pair breathes with its own stem.
+    let leftEye = this.stemEyeGlyph(this.stemEnv.drums, this.stemPunch.drums);
+    let rightEye = this.stemEyeGlyph(this.stemEnv.bass, this.stemPunch.bass);
     if (this.isBlinking) {
-      eyes = "◡   ◡";
+      leftEye = "◡";
+      rightEye = "◡";
     } else if (isDropGap) {
-      eyes = "⊙   ⊙";
+      leftEye = "⊙";
+      rightEye = "⊙";
     } else if (this.temporaryAction === "PET") {
-      eyes = "♥   ♥";
+      leftEye = "♥";
+      rightEye = "♥";
     } else if (sec === "DROP" || this.temporaryAction === "HYPE") {
-      eyes = "★   ★";
+      leftEye = "★";
+      rightEye = "★";
     } else if (sec === "BUILDUP") {
-      eyes = "✧   ✧";
+      leftEye = "✧";
+      rightEye = "✧";
     } else if (sec === "BREAKDOWN") {
-      eyes = "˘   ˘";
-    } else if (this.stage >= 3) {
-      eyes = "◕   ◕";
+      leftEye = "˘";
+      rightEye = "˘";
     }
+    const eyes = `<span class="rave-eye-drums">${leftEye}</span>   <span class="rave-eye-bass">${rightEye}</span>`;
 
     // Audio reactive dynamic "X" shaped nose in the middle of the face
     let nose = "  ><  ";
-    if (drumLevel > 0.45 || rmsLevel > 0.40) {
+    if (this.stemEnv.drums > 0.45 || this.mixEnv > 0.40) {
       nose = " ⚔X⚔ ";
     } else if (isSinging) {
       nose = " ✧X✧ ";
@@ -576,7 +706,7 @@ export class TamagotchiAvatar {
     }
 
     // Determine Live Animated Waveform Singing Mouth (Moved Down)
-    const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap, dt, bpm, vocalsLevel);
+    const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap, dt, bpm, this.stemEnv.vocals);
 
     // Render Round Orb Stages with big anime eyes, dynamic "X" nose, and pregenerated sound shape singing mouth
     let faceLines: string[] = [];
@@ -683,14 +813,10 @@ export class TamagotchiAvatar {
     waveform?: Uint8Array | null,
     dt: number = 0.016,
     bpm: number = 126,
-    vocalsLevel: number = 0,
-    rmsLevel: number = 0,
     drumWaveform?: Uint8Array | null,
     bassWaveform?: Uint8Array | null,
-    drumLevel: number = 0,
-    bassLevel: number = 0,
     otherWaveform?: Uint8Array | null,
-    otherLevel: number = 0
+    masterWaveform?: Uint8Array | null
   ): void {
     if (!this.canvasEl) return;
     if (!this.ctx2d) {
@@ -705,14 +831,22 @@ export class TamagotchiAvatar {
 
     const sec = meta?.section ?? "GROOVE_A";
     const vowel = meta?.vocalVowel ?? "";
-    const isSinging = Boolean(meta?.vocalSyllable) || (vocalsLevel >= 0.008);
+    const isSinging = Boolean(meta?.vocalSyllable) || (this.stemEnv.vocals >= 0.02);
     const bob = this.isHeadBobbed;
     const t = performance.now() / 1000;
-    this.heartBeatPhase = (this.heartBeatPhase + dt * (0.55 + Math.min(2.2, drumLevel * 3.0) + Math.min(0.8, bassLevel * 1.5))) % 1;
+    const env = this.stemEnv;
+    const punch = this.stemPunch;
+    const mixEnv = this.mixEnv;
+    const mixPunch = this.mixPunch;
+
+    // The heart belongs to 'other': pads and chords make it breathe and swell.
+    this.heartBeatPhase = (this.heartBeatPhase + dt * (
+      0.40 + env.other * 1.55 + punch.other * 2.0 + mixPunch * 0.35
+    )) % 1;
 
     // Center coordinates with beat bobbing
     const cx = w * 0.5;
-    const bobOffset = bob ? 3.0 : 0.0;
+    const bobOffset = (bob ? 3.0 : 0.0) + 2.0 * mixPunch;
     const cy = h * 0.46 + bobOffset;
 
     // Stage-based color palette
@@ -742,21 +876,23 @@ export class TamagotchiAvatar {
     // -------------------------------------------------------------------------
     // 1. KAWAII GUMMI BEAR DYNAMICS (SQUISH & STRETCH BOUNCE)
     // -------------------------------------------------------------------------
-    const squishY = 1.0 - 0.06 * Math.min(1.2, drumLevel * 1.5) + (bob ? -0.02 : 0.015);
-    const squishX = 1.0 + 0.06 * Math.min(1.2, drumLevel * 1.5) - (bob ? -0.02 : 0.015);
-    const baseScale = 0.86 + 0.02 * this.stage;
+    const drumSquish = Math.min(1.2, env.drums * 1.15);
+    const squishY = 1.0 - 0.06 * drumSquish - 0.025 * mixPunch + (bob ? -0.02 : 0.015);
+    const squishX = 1.0 + 0.06 * drumSquish + 0.025 * mixPunch - (bob ? -0.02 : 0.015);
+    const baseScale = (0.86 + 0.02 * this.stage) * (1.0 + 0.025 * mixEnv);
     const scaleX = baseScale * squishX;
     const scaleY = baseScale * squishY;
 
-    // Rave halo behind the creature: stage-coloured bloom that breathes with RMS.
+    // Rave halo behind the creature: stage-coloured bloom that breathes with
+    // the true full mix, so all four stems add up to the body glow.
     ctx.save();
-    const haloR = 104 * (1 + 0.12 * Math.min(1.5, bassLevel * 2.0));
+    const haloR = 104 * (1 + 0.11 * mixEnv + 0.05 * mixPunch);
     const halo = ctx.createRadialGradient(cx, cy + 4 * scaleY, 8, cx, cy + 4 * scaleY, haloR);
     halo.addColorStop(0.0, glowColor);
     halo.addColorStop(0.55, glowColor);
     halo.addColorStop(1.0, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = halo;
-    ctx.globalAlpha = 0.07 + 0.20 * Math.min(1, rmsLevel);
+    ctx.globalAlpha = 0.07 + 0.24 * mixEnv + 0.08 * mixPunch;
     ctx.beginPath();
     ctx.arc(cx, cy + 4 * scaleY, haloR, 0, Math.PI * 2);
     ctx.fill();
@@ -771,13 +907,32 @@ export class TamagotchiAvatar {
 
     for (let i = 0; i < N; i++) {
       const pt = GUMMI_BEAR_LOOP_POINTS[i];
+
+      // Full-mix body shaping: a short smoothed window of the master waveform
+      // literally pushes the silhouette in and out with the summed four stems.
+      let mixSample = 0;
+      if (masterWaveform && masterWaveform.length > 8) {
+        const center = Math.floor(pt.u * (masterWaveform.length - 1));
+        let sum = 0;
+        let count = 0;
+        for (let k = -5; k <= 5; k++) {
+          const idx = Math.max(0, Math.min(masterWaveform.length - 1, center + k));
+          sum += (masterWaveform[idx] - 128) / 128;
+          count++;
+        }
+        mixSample = sum / count;
+      }
+
       const waveRipple = (
         Math.sin(6 * Math.PI * 2 * pt.u - t * 4.2) * 2.8 +
         Math.cos(9 * Math.PI * 2 * pt.u + t * 6.5) * 1.8 +
-        Math.sin(3 * Math.PI * 2 * pt.u + t * 2.2) * (drumLevel * 4.2) +
-        Math.cos(12 * Math.PI * 2 * pt.u - t * 7.5) * (vocalsLevel * 2.6) +
-        Math.sin(2 * Math.PI * 2 * pt.u + t * 3.0) * (bassLevel * 3.5)
-      ) * Math.min(1.2, rmsLevel * 1.6 + 0.25);
+        Math.sin(3 * Math.PI * 2 * pt.u + t * 2.2) * (env.drums * 4.2) +
+        Math.cos(12 * Math.PI * 2 * pt.u - t * 7.5) * (env.vocals * 3.0) +
+        Math.sin(2 * Math.PI * 2 * pt.u + t * 3.0) * (env.bass * 3.8) +
+        Math.cos(5 * Math.PI * 2 * pt.u + t * 1.7) * (env.other * 2.4) +
+        Math.sin(8 * Math.PI * 2 * pt.u + t * 12.0) * (punch.drums * 2.4) +
+        mixSample * (2.0 + 5.5 * mixEnv)
+      ) * Math.min(1.25, 0.24 + mixEnv * 0.85 + mixPunch * 0.35);
 
       const px = cx + (pt.x * scaleX) + pt.nx * waveRipple;
       const py = cy + (pt.y * scaleY) + pt.ny * waveRipple;
@@ -843,7 +998,7 @@ export class TamagotchiAvatar {
     ctx.shadowBlur = 6;
     ctx.shadowColor = "#ffb300";
     ctx.lineWidth = 1.8;
-    ctx.globalAlpha = 0.35 + 0.40 * Math.min(1.0, rmsLevel);
+    ctx.globalAlpha = 0.30 + 0.45 * mixEnv + 0.10 * mixPunch;
     ctx.stroke();
 
     // 2C. Main Radiant Gummi Bear Perimeter (Neon Bloom Pass)
@@ -855,7 +1010,7 @@ export class TamagotchiAvatar {
     }
     ctx.closePath();
     // Golden neon bloom (the beloved yellow outline).
-    ctx.shadowBlur = 20 + 26 * rmsLevel;
+    ctx.shadowBlur = 20 + 30 * mixEnv + 12 * mixPunch;
     ctx.shadowColor = "#ffae00";
     ctx.strokeStyle = "#ffcf2e";
     ctx.lineWidth = 4.6;
@@ -875,10 +1030,10 @@ export class TamagotchiAvatar {
     // 3. CUTE INNER EAR CUSHIONS (AUDIO REACTIVE WIGGLE)
     // -------------------------------------------------------------------------
     ctx.save();
-    const vocalPulse = 1 + 0.20 * Math.min(1.4, vocalsLevel * 2.4);
+    const vocalPulse = 1 + 0.20 * Math.min(1.4, env.vocals * 1.5) + 0.10 * punch.vocals;
     const earPadW = 6.8 * baseScale * vocalPulse;
     const earPadH = 8.0 * baseScale * vocalPulse;
-    const earWiggle = Math.sin(t * 14.0) * (vocalsLevel * 2.8);
+    const earWiggle = Math.sin(t * 14.0) * (env.vocals * 2.8 + punch.vocals * 1.5);
 
     // Left Inner Ear Pad
     ctx.save();
@@ -912,19 +1067,22 @@ export class TamagotchiAvatar {
     ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 4. RAVE HEART (the audio-reactive centrepiece)
+    // 4. RAVE HEART — the 'other' instrument (pads, chords, atmosphere)
     // -------------------------------------------------------------------------
     ctx.save();
     const bellyY = cy + 42 * scaleY - 10;
-    const bassPump = Math.min(1.8, bassLevel * 2.6);
+    const otherEnv = env.other;
+    const otherPunch = punch.other;
     const beatPhase = this.heartBeatPhase;
-    const beatPulse = 1.0 + 0.15 * bassPump + 0.05 * Math.sin(beatPhase * Math.PI * 2);
-    const heartW = 21 * scaleX * beatPulse;
-    const heartH = 19 * scaleY * beatPulse;
-    const heartWave = otherWaveform ?? waveform ?? null;
-    const heartGlow = "#ffae00";
-    const heartLine = "#ffcf2e";
-    const heartCore = "#ffe45c";
+    const beatPulse = 1.0 + 0.18 * otherEnv + 0.18 * otherPunch + 0.035 * Math.sin(beatPhase * Math.PI * 2);
+    const heartW = 23 * scaleX * beatPulse;
+    const heartH = 21 * scaleY * beatPulse;
+    const heartWave = otherWaveform ?? null;
+    // Warm gold pads -> pink -> cool violet as 'other' gets brighter.
+    const otherHue = (45 - 135 * this.otherTone + 360) % 360;
+    const heartGlow = `hsl(${otherHue.toFixed(0)}, 100%, 60%)`;
+    const heartLine = `hsl(${otherHue.toFixed(0)}, 100%, 72%)`;
+    const heartCore = `hsl(${otherHue.toFixed(0)}, 100%, 89%)`;
 
     const heartPathAt = (cw: number, ch: number): void => {
       const top = bellyY - ch * 0.55;
@@ -937,16 +1095,16 @@ export class TamagotchiAvatar {
       ctx.closePath();
     };
 
-    // Expanding heartbeat ripples on every kick, in the stage palette.
+    // Expanding heartbeat ripples on every 'other' swell, not on the kick.
     for (let i = 2; i >= 0; i--) {
       const ph = (beatPhase + i / 3) % 1;
       const rippleScale = 1 + ph * 0.72;
       ctx.save();
       heartPathAt(heartW * rippleScale, heartH * rippleScale);
       ctx.strokeStyle = i === 0 ? heartCore : heartLine;
-      ctx.globalAlpha = (1 - ph) * (0.16 + 0.62 * Math.min(1, drumLevel * 1.7));
+      ctx.globalAlpha = (1 - ph) * (0.12 + 0.58 * otherEnv + 0.35 * otherPunch);
       ctx.lineWidth = 1.1 + (1 - ph) * 1.8;
-      ctx.shadowBlur = 10 + 16 * (1 - ph);
+      ctx.shadowBlur = 10 + 16 * (1 - ph) * (0.5 + otherEnv);
       ctx.shadowColor = heartGlow;
       ctx.stroke();
       ctx.restore();
@@ -976,7 +1134,7 @@ export class TamagotchiAvatar {
       bellyGrad.addColorStop(1.0, "rgba(255, 150, 215, 0.20)");
     }
     ctx.fillStyle = bellyGrad;
-    ctx.shadowBlur = 14 + 20 * bassPump;
+    ctx.shadowBlur = 14 + 20 * otherEnv + 12 * otherPunch;
     ctx.shadowColor = heartGlow;
     ctx.fill();
 
@@ -992,14 +1150,14 @@ export class TamagotchiAvatar {
         const x = cx + (u - 0.5) * heartW * 2.0;
         const idx = Math.floor(u * (heartWave.length - 1));
         const amp = (heartWave[idx] - 128) / 128;
-        const y = bellyY + 1.2 + amp * heartH * 0.62;
+        const y = bellyY + 1.2 + amp * heartH * 0.62 * (0.45 + 0.85 * otherEnv);
         if (j === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.strokeStyle = heartCore;
-      ctx.globalAlpha = 0.65 + 0.35 * Math.min(1, rmsLevel);
+      ctx.globalAlpha = 0.50 + 0.50 * otherEnv;
       ctx.lineWidth = 1.3;
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 10 + 8 * otherPunch;
       ctx.shadowColor = heartGlow;
       ctx.stroke();
     }
@@ -1010,9 +1168,9 @@ export class TamagotchiAvatar {
       const sy = bellyY + Math.sin(a * 1.3 + k) * heartH * rr;
       const tw = 0.3 + 0.7 * Math.pow(Math.abs(Math.sin(t * 2.7 + k * 1.9)), 2);
       ctx.beginPath();
-      ctx.arc(sx, sy, (0.8 + 1.5 * tw) * (0.8 + 0.35 * rmsLevel), 0, Math.PI * 2);
+      ctx.arc(sx, sy, (0.8 + 1.5 * tw) * (0.7 + 0.55 * otherEnv + 0.25 * otherPunch), 0, Math.PI * 2);
       ctx.fillStyle = k % 3 === 0 ? "#ffffff" : (k % 3 === 1 ? heartCore : heartLine);
-      ctx.globalAlpha = tw * (0.45 + 0.55 * rmsLevel);
+      ctx.globalAlpha = tw * (0.30 + 0.70 * otherEnv);
       ctx.shadowBlur = 8;
       ctx.shadowColor = heartGlow;
       ctx.fill();
@@ -1035,8 +1193,8 @@ export class TamagotchiAvatar {
     heartPathAt(heartW, heartH);
     ctx.strokeStyle = heartLine;
     ctx.lineWidth = 3.4;
-    ctx.globalAlpha = 0.55 + 0.30 * Math.min(1, rmsLevel);
-    ctx.shadowBlur = 20 + 20 * Math.min(1, rmsLevel) + 10 * drumLevel;
+    ctx.globalAlpha = 0.50 + 0.38 * otherEnv + 0.12 * otherPunch;
+    ctx.shadowBlur = 18 + 24 * otherEnv + 14 * otherPunch;
     ctx.shadowColor = heartGlow;
     ctx.stroke();
     heartPathAt(heartW, heartH);
@@ -1061,7 +1219,7 @@ export class TamagotchiAvatar {
       ctx.shadowColor = "#ff77e9";
 
       // Main palm/foot pad
-      const padR = (isHand ? 3.5 : 4.2) * baseScale * (1 + 0.18 * Math.min(1.4, bassLevel * 2.2));
+      const padR = (isHand ? 3.5 : 4.2) * baseScale * (1 + 0.18 * Math.min(1.4, env.bass * 1.5 + punch.bass));
       ctx.beginPath();
       ctx.arc(0, 0, padR, 0, Math.PI * 2);
       ctx.fill();
@@ -1089,7 +1247,7 @@ export class TamagotchiAvatar {
     drawPaw(cx + 18 * scaleX, cy + 70 * scaleY, -0.15, false);
     ctx.restore();
 
-    // 5B. Floating rave motes orbiting the creature (outside the silhouette).
+    // 5B. Floating rave motes orbiting the creature (full-mix shimmer).
     ctx.save();
     for (let k = 0; k < 7; k++) {
       const a = t * (0.32 + k * 0.035) + k * (Math.PI * 2 / 7);
@@ -1097,13 +1255,45 @@ export class TamagotchiAvatar {
       const mx = cx + Math.cos(a) * 64 * scaleX * rr;
       const my = cy + Math.sin(a) * 78 * scaleY * rr;
       const tw = 0.35 + 0.65 * Math.pow(Math.abs(Math.sin(t * 2.4 + k * 1.7)), 2);
-      const rad = (0.9 + 1.6 * tw) * (0.8 + 0.5 * Math.min(1, rmsLevel));
+      const rad = (0.9 + 1.6 * tw) * (0.75 + 0.55 * mixEnv + 0.25 * mixPunch);
       ctx.beginPath();
       ctx.arc(mx, my, rad, 0, Math.PI * 2);
       ctx.fillStyle = k % 3 === 0 ? "#ffffff" : (k % 3 === 1 ? accentColor : glowColor);
-      ctx.globalAlpha = tw * (0.35 + 0.55 * Math.min(1, rmsLevel));
-      ctx.shadowBlur = 10;
+      ctx.globalAlpha = tw * (0.30 + 0.62 * mixEnv);
+      ctx.shadowBlur = 10 + 8 * mixPunch;
       ctx.shadowColor = accentColor;
+      ctx.fill();
+    }
+
+    // 5C. One orbiting band-mote per instrument. Each mote's size, distance
+    // and brightness tracks only its own stem, so all four are legible at once.
+    const stemMotes = [
+      { angle: -2.35, color: "#ffd24a", glow: "#ff9d00", level: env.drums, hit: punch.drums },
+      { angle: 2.35, color: "#4de8ff", glow: "#009dff", level: env.bass, hit: punch.bass },
+      { angle: -0.78, color: "#fff6ff", glow: "#ff8ae8", level: env.vocals, hit: punch.vocals },
+      { angle: 0.78, color: "#ff6be8", glow: "#b15cff", level: env.other, hit: punch.other },
+    ];
+    for (let s = 0; s < stemMotes.length; s++) {
+      const mote = stemMotes[s];
+      const a = mote.angle + Math.sin(t * 0.45 + s * 1.7) * 0.09;
+      const orbit = 0.94 + 0.12 * mote.level + 0.05 * mote.hit;
+      const mx = cx + Math.cos(a) * 66 * scaleX * orbit;
+      const my = cy + Math.sin(a) * 80 * scaleY * orbit;
+      const shimmer = 0.70 + 0.30 * Math.sin(t * 3.1 + s * 1.3);
+      const rad = (1.2 + 2.4 * mote.level + 2.8 * mote.hit) * (0.85 + 0.25 * shimmer);
+      ctx.beginPath();
+      ctx.arc(mx, my, rad * 2.3, 0, Math.PI * 2);
+      ctx.fillStyle = mote.glow;
+      ctx.globalAlpha = 0.10 + 0.25 * mote.level + 0.18 * mote.hit;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = mote.glow;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(mx, my, rad, 0, Math.PI * 2);
+      ctx.fillStyle = mote.color;
+      ctx.globalAlpha = 0.45 + 0.50 * mote.level + 0.20 * mote.hit;
+      ctx.shadowBlur = 10 + 12 * mote.level + 10 * mote.hit;
+      ctx.shadowColor = mote.glow;
       ctx.fill();
     }
     ctx.restore();
@@ -1145,7 +1335,7 @@ export class TamagotchiAvatar {
     const rCheekX = cx + cheekSpacing;
 
     ctx.save();
-    ctx.fillStyle = `rgba(255, 90, 180, ${0.40 + 0.30 * Math.min(1.0, rmsLevel)})`;
+    ctx.fillStyle = `rgba(255, 90, 180, ${0.34 + 0.38 * mixEnv + 0.10 * mixPunch})`;
     ctx.shadowBlur = 10;
     ctx.shadowColor = "#ff0077";
     ctx.beginPath();
@@ -1197,8 +1387,14 @@ export class TamagotchiAvatar {
       this.drawHeart(ctx, leftEyeX, eyeY, 11);
       this.drawHeart(ctx, rightEyeX, eyeY, 11);
     } else {
-      this.drawWaveformEye(ctx, leftEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap, accentColor, cx);
-      this.drawWaveformEye(ctx, rightEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel, sec === "DROP", isDropGap, accentColor, cx);
+      this.drawWaveformEye(
+        ctx, leftEyeX, eyeY, drumWaveform, env.drums, punch.drums,
+        sec === "DROP", isDropGap, accentColor, cx, "drums"
+      );
+      this.drawWaveformEye(
+        ctx, rightEyeX, eyeY, bassWaveform, env.bass, punch.bass,
+        sec === "DROP", isDropGap, accentColor, cx, "bass"
+      );
     }
     ctx.restore();
 
@@ -1222,13 +1418,18 @@ export class TamagotchiAvatar {
     // 11. KAWAII BEAR BUTTON NOSE
     // -------------------------------------------------------------------------
     const noseY = cy - 7 * scaleY;
-    this.drawKawaiiBearNose(ctx, cx, noseY, drumLevel, bassLevel, vocalsLevel, rmsLevel, isSinging, waveform, accentColor, baseScale);
+    this.drawKawaiiBearNose(
+      ctx, cx, noseY,
+      env.drums, env.bass, env.vocals, mixEnv,
+      isSinging, waveform, accentColor, baseScale
+    );
 
     // -------------------------------------------------------------------------
     // 12. THE LIVE VOCAL WAVEFORM AUDIO REACTIVE MOUTH
     // -------------------------------------------------------------------------
     const mouthY = cy + 1 * scaleY;
-    const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
+    const mouthAperture = Math.max(0, Math.min(1,
+      Math.max(this.smoothedVocalAmp, this.stemEnv.vocals) * 2.1 + punch.vocals * 0.35));
 
     ctx.save();
     ctx.lineCap = "round";
@@ -1242,10 +1443,10 @@ export class TamagotchiAvatar {
     ctx.shadowColor = mouthGlow;
     ctx.strokeStyle = mouthColor;
     ctx.fillStyle = isSinging ? "rgba(255, 234, 0, 0.22)" : "rgba(255, 105, 180, 0.15)";
-    ctx.lineWidth = 2.4;
+    ctx.lineWidth = 2.4 + 1.4 * mouthAperture + 1.2 * punch.vocals;
 
     ctx.beginPath();
-    if (!isSinging && vocalsLevel < 0.006) {
+    if (!isSinging && this.stemEnv.vocals < 0.02) {
       // Resting cute kawaii bear smile ( ᵕ ‿ ᵕ ) / w-shape
       const breathe = Math.sin(t * 2.5) * 1.0;
       const rx = 6.5 + breathe;
@@ -1282,7 +1483,7 @@ export class TamagotchiAvatar {
         }
 
         const rad = Math.sqrt(Math.pow(curW * Math.cos(phi), 2) + Math.pow(curH * Math.sin(phi), 2));
-        const waveDisp = sampleNorm * (5.5 * mouthAperture + 1.2);
+        const waveDisp = sampleNorm * (5.5 * mouthAperture + 1.2 + 2.5 * punch.vocals);
         const mx = cx + (rad + waveDisp * 0.7) * Math.cos(phi);
         const my = mouthY + (rad + waveDisp) * Math.sin(phi);
 
@@ -1373,29 +1574,38 @@ export class TamagotchiAvatar {
     ctx.restore();
   }
 
+  /**
+   * One eye = one instrument. Left eye follows drums, right eye follows bass;
+   * the iris ripple, pupil size, glow and internal sparkle all use only that
+   * stem's waveform/envelope, so the two eyes visibly disagree with the music.
+   */
   private drawWaveformEye(
     ctx: CanvasRenderingContext2D,
     eyeX: number,
     eyeY: number,
-    drumWaveform?: Uint8Array | null,
-    bassWaveform?: Uint8Array | null,
-    drumLevel: number = 0,
-    bassLevel: number = 0,
+    waveform?: Uint8Array | null,
+    level: number = 0,
+    punch: number = 0,
     isDrop: boolean = false,
     isDropGap: boolean = false,
     accentColor: string = "#00ffff",
-    faceCenterX: number = 100
+    faceCenterX: number = 100,
+    stem: "drums" | "bass" = "drums"
   ): void {
     const eyeSteps = 36;
     const t = performance.now() / 1000;
+    const isDrums = stem === "drums";
 
-    // Anime Eye Dimensions: Big expressive vertical oval
-    const baseIrisRx = (isDropGap ? 13.5 : (isDrop ? 12.5 : 11.0)) + Math.min(3.5, bassLevel * 3.8);
-    const baseIrisRy = (isDropGap ? 19.5 : (isDrop ? 18.0 : 16.0)) + Math.min(4.5, bassLevel * 5.0);
+    // Anime Eye Dimensions: Big expressive vertical oval.
+    const irisBoost = Math.min(3.8, level * 3.6 + punch * 1.6);
+    const baseIrisRx = (isDropGap ? 13.5 : (isDrop ? 12.5 : 11.0)) + irisBoost;
+    const baseIrisRy = (isDropGap ? 19.5 : (isDrop ? 18.0 : 16.0)) + irisBoost * 1.3;
 
-    const bassWaveLen = bassWaveform ? bassWaveform.length : 0;
-    const irisStroke = isDrop ? "#00ffff" : "#00ffcc";
-    const irisGlow = isDrop ? "#00e5ff" : "#00ffaa";
+    const waveLen = waveform ? waveform.length : 0;
+    const irisStroke = isDrop ? "#ffffff" : (isDrums ? "#ffcf2e" : "#00ffff");
+    const irisGlow = isDrums ? "#ff9d00" : "#00aaff";
+    const pupilStroke = isDrop ? "#ffffff" : (isDrums ? "#fff3b0" : "#b9fbff");
+    const pupilGlow = isDrums ? "#ffae00" : "#00e5ff";
 
     // 1. Sclera / Eye White backing for crisp anime pop
     ctx.save();
@@ -1405,38 +1615,38 @@ export class TamagotchiAvatar {
     ctx.fill();
     ctx.restore();
 
-    // 2. Iris: Rich Anime Multi-Color Gradient with Audio-Reactive Bass Waveform Ripple
+    // 2. Iris: stem-coloured gradient rippled by that stem's waveform.
     ctx.save();
-    ctx.shadowBlur = isDrop ? 14 : 9;
+    ctx.shadowBlur = (isDrop ? 14 : 9) + 10 * punch;
     ctx.shadowColor = irisGlow;
     ctx.strokeStyle = irisStroke;
     ctx.lineWidth = 2.2;
 
     const grad = ctx.createLinearGradient(eyeX, eyeY - baseIrisRy, eyeX, eyeY + baseIrisRy);
-    if (isDrop) {
-      grad.addColorStop(0.0, "rgba(20, 0, 50, 0.98)");
-      grad.addColorStop(0.35, "rgba(0, 180, 255, 0.88)");
-      grad.addColorStop(0.80, "rgba(0, 255, 230, 0.95)");
-      grad.addColorStop(1.0, "rgba(255, 255, 255, 0.9)");
+    if (isDrums) {
+      grad.addColorStop(0.0, "rgba(42, 12, 2, 0.98)");
+      grad.addColorStop(0.38, "rgba(176, 68, 0, 0.88)");
+      grad.addColorStop(0.82, "rgba(255, 196, 32, 0.95)");
+      grad.addColorStop(1.0, "rgba(255, 250, 208, 0.92)");
     } else {
-      grad.addColorStop(0.0, "rgba(10, 15, 40, 0.96)");
-      grad.addColorStop(0.45, "rgba(0, 120, 215, 0.85)");
-      grad.addColorStop(0.85, "rgba(0, 255, 170, 0.92)");
-      grad.addColorStop(1.0, "rgba(180, 255, 235, 0.9)");
+      grad.addColorStop(0.0, "rgba(4, 16, 44, 0.98)");
+      grad.addColorStop(0.38, "rgba(0, 96, 200, 0.88)");
+      grad.addColorStop(0.82, "rgba(0, 240, 255, 0.95)");
+      grad.addColorStop(1.0, "rgba(196, 252, 255, 0.92)");
     }
     ctx.fillStyle = grad;
 
     ctx.beginPath();
     for (let j = 0; j <= eyeSteps; j++) {
       const phi = (j / eyeSteps) * Math.PI * 2;
-      let bSample = 0;
-      if (bassWaveform && bassWaveLen > 0) {
-        const idx = Math.floor((j / eyeSteps) * (bassWaveLen - 1));
-        bSample = (bassWaveform[idx] - 128) / 128.0;
+      let sample = 0;
+      if (waveform && waveLen > 0) {
+        const idx = Math.floor((j / eyeSteps) * (waveLen - 1));
+        sample = (waveform[idx] - 128) / 128.0;
       } else {
-        bSample = Math.sin(phi * 2.0 + t * 7.0) * 0.22;
+        sample = Math.sin(phi * 2.0 + t * 7.0) * 0.22;
       }
-      const disp = bSample * (3.0 * Math.min(1.5, bassLevel * 2.5) + (isDropGap ? 1.6 : 0.7));
+      const disp = sample * (3.2 * Math.min(1.6, level * 1.5 + punch * 0.9) + (isDropGap ? 1.6 : 0.7));
       const rx = Math.max(2.0, baseIrisRx + disp * 0.7);
       const ry = Math.max(3.0, baseIrisRy + disp);
       const x = eyeX + rx * Math.cos(phi);
@@ -1449,15 +1659,12 @@ export class TamagotchiAvatar {
     ctx.stroke();
     ctx.restore();
 
-    // 3. Inner Pupil: Dark Anime Core pulsing to Drum Waveform
-    const basePupilRx = (isDropGap ? 7.2 : (isDrop ? 6.5 : 5.5)) + Math.min(2.5, drumLevel * 3.5);
-    const basePupilRy = (isDropGap ? 11.0 : (isDrop ? 9.8 : 8.5)) + Math.min(3.5, drumLevel * 4.5);
-    const drumWaveLen = drumWaveform ? drumWaveform.length : 0;
-    const pupilStroke = isDrop ? "#ffffff" : "#ffe600";
-    const pupilGlow = isDrop ? "#ffffff" : "#ffbb00";
+    // 3. Inner Pupil: same stem waveform, tighter and punchier.
+    const basePupilRx = (isDropGap ? 7.2 : (isDrop ? 6.5 : 5.5)) + Math.min(2.8, level * 3.2 + punch * 1.3);
+    const basePupilRy = (isDropGap ? 11.0 : (isDrop ? 9.8 : 8.5)) + Math.min(3.8, level * 4.0 + punch * 1.8);
 
     ctx.save();
-    ctx.shadowBlur = 8;
+    ctx.shadowBlur = 8 + 8 * punch;
     ctx.shadowColor = pupilGlow;
     ctx.strokeStyle = pupilStroke;
     ctx.fillStyle = "rgba(10, 5, 24, 0.92)";
@@ -1467,13 +1674,13 @@ export class TamagotchiAvatar {
     for (let j = 0; j <= eyeSteps; j++) {
       const phi = (j / eyeSteps) * Math.PI * 2;
       let dSample = 0;
-      if (drumWaveform && drumWaveLen > 0) {
-        const idx = Math.floor((j / eyeSteps) * (drumWaveLen - 1));
-        dSample = (drumWaveform[idx] - 128) / 128.0;
+      if (waveform && waveLen > 0) {
+        const idx = Math.floor((j / eyeSteps) * (waveLen - 1));
+        dSample = (waveform[idx] - 128) / 128.0;
       } else {
         dSample = Math.sin(phi * 3.0 + t * 11.0) * 0.22;
       }
-      const disp = dSample * (2.4 * Math.min(1.5, drumLevel * 2.5) + (isDropGap ? 1.4 : 0.5));
+      const disp = dSample * (2.6 * Math.min(1.6, level * 1.7 + punch * 0.8) + (isDropGap ? 1.4 : 0.5));
       const rx = Math.max(1.5, basePupilRx + disp * 0.6);
       const ry = Math.max(2.0, basePupilRy + disp);
       const x = eyeX + rx * Math.cos(phi);

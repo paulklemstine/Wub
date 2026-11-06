@@ -1,17 +1,19 @@
 // Joint four-stem transition ranker, distilled from the mix-level audio judge.
 //
-// The player assembles a 400-d state for any stem combination:
-//   4 stems x (52 phrase features + 32 timbre embedding) + 64-d mix embedding
+// The player assembles a 424-d state for any stem combination:
+//   4 interleaved stems x 90-d phrase features + 64-d mix embedding
 // and scores a candidate transition with the last two states, deltas, and the
 // current/next block length (4/8/16 bars).  The weights and per-phrase
-// features are produced by scripts/build_joint_ranker.py.
+// features are produced by scripts/build_joint_ranker.py.  Older 400-d models
+// (stemDim 84) still load: the per-stem width is derived from feature_dim.
 import type { StemName } from "./types";
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
-const STEM_DIM = 84;
+const STEM_DIM = 90;
 const STATE_DIM = 4 * STEM_DIM + 64;
 // prev/current/candidate + two deltas, change mask, target, current/next bars.
 const INPUT_DIM = STATE_DIM * 5 + 5 + 6 + 6;
+const MIX_DIM = 64;
 const BLOCK_INDEX: Record<number, number> = { 4: 0, 8: 1, 16: 2 };
 const SEC_IDX: Record<string, number> = {
   INTRO: 0, GROOVE_A: 1, BUILDUP: 2, DROP: 3, BREAKDOWN: 4,
@@ -35,6 +37,7 @@ interface JointManifest {
   block_auc?: Record<string, { auc: number; teacher_auc: number; threshold: number; n: number }>;
   input_dim: number;
   state_dim: number;
+  stem_dim?: number;
   feature_dim: number;
   phrase_ids: string[];
   feature_file: string;
@@ -56,6 +59,7 @@ export class JointRanker {
   private std: Float32Array | null = null;
   private inputDimValue = INPUT_DIM;
   private stateDimValue = STATE_DIM;
+  private stemDimValue = STEM_DIM;
   private inputScratch = new Float32Array(INPUT_DIM);
   private readonly h1Scratch = new Float32Array(256);
   private readonly h2Scratch = new Float32Array(128);
@@ -82,6 +86,11 @@ export class JointRanker {
     return this.stateDimValue;
   }
 
+  /** Per-stem chunk width: 90 for the 424-d model, 84 for the old 400-d one. */
+  get stemDim(): number {
+    return this.stemDimValue;
+  }
+
   async load(baseUrl: string): Promise<boolean> {
     const base = baseUrl.replace(/\/+$/, "");
     try {
@@ -90,6 +99,21 @@ export class JointRanker {
       const manifest = (await response.json()) as JointManifest;
       if (!Array.isArray(manifest.phrase_ids) || !manifest.weights) return false;
       const stateDim = manifest.state_dim ?? STATE_DIM;
+      const featureDim = manifest.feature_dim ?? stateDim;
+      const stemDim = (featureDim - MIX_DIM) / 4;
+      if (!Number.isInteger(stemDim) || stemDim < 58 || stemDim * 4 + MIX_DIM !== stateDim) {
+        console.warn(
+          `[JointRanker] feature_dim ${featureDim} / state_dim ${stateDim} do not ` +
+          "describe four equal stem chunks; retrain the arc model"
+        );
+        return false;
+      }
+      if (typeof manifest.stem_dim === "number" && manifest.stem_dim !== stemDim) {
+        console.warn(
+          `[JointRanker] stem_dim ${manifest.stem_dim} disagrees with feature_dim; ` +
+          `using ${stemDim}`
+        );
+      }
       const expectedInput = stateDim * 5 + 5 + 6 + 6;
       if (manifest.input_dim !== expectedInput) {
         console.warn(
@@ -109,6 +133,7 @@ export class JointRanker {
       this.manifest = manifest;
       this.features = features;
       this.stateDimValue = stateDim;
+      this.stemDimValue = stemDim;
       this.inputDimValue = manifest.input_dim;
       this.inputScratch = new Float32Array(manifest.input_dim);
       this.rowOf.clear();
@@ -138,7 +163,7 @@ export class JointRanker {
     }
   }
 
-  /** A phrase's 400-d state, with the session key/tempo overrides applied. */
+  /** A phrase's state, with the session key/tempo overrides applied. */
   stateFor(phraseId: string, keyShiftSemitones: number, rate: number): Float32Array | null {
     if (this.features === null || this.manifest === null) return null;
     const row = this.rowOf.get(phraseId);
@@ -147,9 +172,10 @@ export class JointRanker {
       row * this.manifest.feature_dim,
       (row + 1) * this.manifest.feature_dim,
     );
+    const stemDim = this.stemDimValue;
     for (let stem = 0; stem < 4; stem++) {
-      out[stem * STEM_DIM + 50] = keyShiftSemitones / 5;
-      out[stem * STEM_DIM + 51] = (rate - 1) * 10;
+      out[stem * stemDim + 50] = keyShiftSemitones / 5;
+      out[stem * stemDim + 51] = (rate - 1) * 10;
     }
     return out;
   }
