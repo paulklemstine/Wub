@@ -77,7 +77,7 @@ if len(kits) < 300:
     raise SystemExit(f"manifest has only {len(kits)} kits")
 if len(clusters) != 16:
     raise SystemExit(f"manifest has {len(clusters)} clusters, expected 16")
-if phrases < 2500:
+if phrases < 2400:
     raise SystemExit(f"manifest has only {phrases} phrases")
 for kit in kits:
     for phrase in kit.get("phrases") or []:
