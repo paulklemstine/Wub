@@ -1264,38 +1264,6 @@ export class TamagotchiAvatar {
       ctx.shadowColor = accentColor;
       ctx.fill();
     }
-
-    // 5C. One orbiting band-mote per instrument. Each mote's size, distance
-    // and brightness tracks only its own stem, so all four are legible at once.
-    const stemMotes = [
-      { angle: -2.35, color: "#ffd24a", glow: "#ff9d00", level: env.drums, hit: punch.drums },
-      { angle: 2.35, color: "#4de8ff", glow: "#009dff", level: env.bass, hit: punch.bass },
-      { angle: -0.78, color: "#fff6ff", glow: "#ff8ae8", level: env.vocals, hit: punch.vocals },
-      { angle: 0.78, color: "#ff6be8", glow: "#b15cff", level: env.other, hit: punch.other },
-    ];
-    for (let s = 0; s < stemMotes.length; s++) {
-      const mote = stemMotes[s];
-      const a = mote.angle + Math.sin(t * 0.45 + s * 1.7) * 0.09;
-      const orbit = 0.94 + 0.12 * mote.level + 0.05 * mote.hit;
-      const mx = cx + Math.cos(a) * 66 * scaleX * orbit;
-      const my = cy + Math.sin(a) * 80 * scaleY * orbit;
-      const shimmer = 0.70 + 0.30 * Math.sin(t * 3.1 + s * 1.3);
-      const rad = (1.2 + 2.4 * mote.level + 2.8 * mote.hit) * (0.85 + 0.25 * shimmer);
-      ctx.beginPath();
-      ctx.arc(mx, my, rad * 2.3, 0, Math.PI * 2);
-      ctx.fillStyle = mote.glow;
-      ctx.globalAlpha = 0.10 + 0.25 * mote.level + 0.18 * mote.hit;
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = mote.glow;
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(mx, my, rad, 0, Math.PI * 2);
-      ctx.fillStyle = mote.color;
-      ctx.globalAlpha = 0.45 + 0.50 * mote.level + 0.20 * mote.hit;
-      ctx.shadowBlur = 10 + 12 * mote.level + 10 * mote.hit;
-      ctx.shadowColor = mote.glow;
-      ctx.fill();
-    }
     ctx.restore();
 
     // -------------------------------------------------------------------------

@@ -63,8 +63,6 @@ The bear is now a four-stem meter, not a single master bounce:
   hue shift; no longer driven by the kick).
 - **Body, halo, cheeks and ambient motes = full mix** (true post-glue,
   post-limiter master level plus a smoothed master-waveform body contour).
-- Four orbiting instrument motes give each stem its own colour and pulse:
-  drums gold, bass cyan, vocals white, other magenta.
 
 All sources are smoothed with fast attack / musical release envelopes; the
 full mix is read from the master analyser rather than a max of the four stems.
