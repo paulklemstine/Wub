@@ -372,7 +372,19 @@ clusters with a full 4-phrase (16-bar) run per stem:
 
 ## 4. Size budget
 
-Measured reference bank:
+Final shipping result for this pass:
+
+```
+358 kits / 2,487 phrases / 16 clusters / 659 MiB
+```
+
+The 402-kit candidate union produced 2,798 phrases. Full reconstruction QC
+(0.90 correlation / 10 dB SNR) found 73 failures across 44 tracks; those
+tracks were removed, leaving 358 kits. Every cluster still has a full
+4-phrase (16-bar) run for all four stems (100% cluster coverage), and the new
+joint ranker scores 0.784 / 0.775 / 0.722 AUC on 4/8/16-bar validation.
+
+Measured older reference bank:
 
 ```
 kits_flow: 390 kits, 2,203 phrases, 5.65 phrases/kit, 570 MiB on disk
@@ -412,11 +424,11 @@ A run is shippable only when all of these pass:
 
 1. **Manifest integrity** — every phrase has four Opus files; the cluster
    selection drops nothing silently.
-2. **Kit count** — exactly `KITS` (390) kits in the 16-cluster union.
+2. **Kit count** — exactly `KITS` (402 candidate; 358 after QC filtering) kits in the 16-cluster union.
 3. **Metadata join** — ≥99% of phrases receive `chroma`/`bass_root`/`once`;
    expected 100% because the dataset is built from the same manifest.
 4. **Reconstruction** — `kit_reconstruct.py --mode compare --fail-on-error`
-   passes all correlation/SNR/lag/duration gates for all 390 kits.
+   passes all correlation/SNR/lag/duration gates for all candidate kits; isolated failed tracks are removed by `filter_failed_kits.py`.
 5. **Run coverage** — **at least 80% of the 16 clusters must have a full
    4-phrase (16-bar) run for each of drums, bass, other, and vocals.**
    The reference `kits_flow` bank is already at 16/16 (100%) for all four
@@ -469,7 +481,7 @@ The script is safe to re-run:
   downstream bars/scores/QC are not rebuilt spuriously;
 * `FORCE=1` is the explicit “redo everything” switch.
 
-If the cluster union is not 390:
+If the cluster union is not `KITS`:
 
 ```bash
 grep -E "skip|union|selected" /tmp/wubtrain/arc8_select.log

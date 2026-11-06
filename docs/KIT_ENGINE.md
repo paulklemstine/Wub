@@ -474,10 +474,11 @@ top-1 / 96.3% top-3**; the 48-d control is 72.0% on the same split.
 ## 10. Per-stem remix engine (cluster bank, 2026-11)
 
 The shipped cluster bank in `frontend/public/data/kits/` is the per-stem mode:
-**390 kits / 2,203 phrases / 16 clusters / ~567 MB**. Each kit is re-cut as a
-continuous 24-bar passage where the source allows it: **100 kits have a full
-six-phrase consecutive run**, 71 a four/five-phrase run, and the rest fall back
-to the best available windows.
+**358 kits / 2,487 phrases / 16 clusters / ~659 MB**. This is the 8-phrase
+candidate union (402 kits) after full reconstruction QC removed 44 tracks /
+73 failing phrases; the extra score/feature entries are harmless. Every
+cluster keeps a full 4-phrase (16-bar) run for all four stems, and the average
+is **6.95 phrases/kit**.
 
 ### 10.1 Why clusters
 
@@ -520,9 +521,9 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   0.951) is the teacher; the student ranker sees per-stem timbre, onset,
   chroma, roots, energy, section, run position, key/tempo fit and the
   **current/next block length** (4/8/16 bars). Held-out real-vs-donor AUC is
-  **0.784 (4-bar), 0.783 (8-bar), 0.699 (16-bar)**; the teacher scores
-  **0.676 / 0.694 / 0.712** on the same split. Hold thresholds are calibrated
-  per block length.
+  **0.784 (4-bar), 0.775 (8-bar), 0.722 (16-bar)**; the teacher scores
+  **0.710 / 0.723 / 0.729** on the same split. Hold thresholds are
+  **0.049 / 0.041 / 0.019** per block length.
 * **Drag commit is at the next bar.** The reticle snaps to the nearest legal
   phrase, then the stem starts at the bar offset that matches the global 4-bar
   phase. It schedules one long run across block boundaries, so an 8/16-bar
@@ -598,7 +599,7 @@ and pinned stems get a dashed ghost ring at the region centre.
 ### 10.5 Per-stem judge
 
 `scripts/build_stem_bars.py` cuts 64x128 log-mel windows for every phrase/stem
-of the full corpus. `scripts/filter_stem_dataset.py` keeps the 390 shipping
+of the full corpus. `scripts/filter_stem_dataset.py` keeps the 358 shipping
 tracks. `scripts/train_stem_judge.py` trains one two-tower CNN per stem on
 same-song phrase pairs vs matched cross-song, cross-key and cross-style
 negatives; the mix-level judge (AUC 0.951) already covers bar-to-bar
@@ -609,10 +610,10 @@ Held-out AUC on the shipping tracks (same-song vs cross-song):
 
 | stem | AUC | top-K entries |
 | --- | --- | --- |
-| drums | 0.825 | 52,872 |
-| bass | 0.801 | 52,872 |
-| other | 0.696 | 52,872 |
-| vocals | 0.669 | 52,872 |
+| drums | 0.891 | 67,152 |
+| bass | 0.835 | 67,152 |
+| other | 0.720 | 67,152 |
+| vocals | 0.706 | 67,152 |
 
 The weaker other/vocals scores reflect their sparse, sectional source stems;
 the symbolic ranker and theory rules remain hard filters, and a failed judge
@@ -629,16 +630,18 @@ is optional (playback never depends on it).
 
 ### 10.7 Transition telemetry baseline
 
-The hidden probe is the seam gate for future changes. A 240 s local session
-(24 boundaries) produced:
+The hidden probe is the seam gate for future changes. Two reference runs:
 
-| Metric | Value |
-| --- | --- |
-| boundaries captured | 24 / 24 |
-| sample-jump seam events (>0.85) | 0 |
-| RMS-dip events (>1.5 dB, excluding planned low-energy drops) | 3 |
-| p50 / p95 max sample jump | 0.171 / 0.401 |
-| max hold | 8 bars |
+| Metric | Reference bank (240 s) | New 8-phrase bank (live smoke) |
+| --- | ---: | ---: |
+| boundaries captured | 24 / 24 | 8 / 8 |
+| sample-jump seam events (>0.85) | 0 | 0 |
+| RMS-dip events (>1.5 dB, excluding planned low-energy drops) | 3 | 1 |
+| p50 / p95 max sample jump | 0.171 / 0.401 | 0.054 / 0.096 |
+| max hold | 8 bars | 4 bars |
+
+The new-bank smoke is short (8 boundaries); use a longer session when
+comparing future builds. The no-seam result is consistent across both.
 
 Use `window.__wubTransitionSummary()` after a session and inspect
 `window.__wubTransitionLog` for the per-boundary rows. `window.__wubMovementSummary()`
