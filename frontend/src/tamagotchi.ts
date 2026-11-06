@@ -515,7 +515,9 @@ export class TamagotchiAvatar {
       drumWaveform,
       bassWaveform,
       otherWaveform,
-      masterWaveform
+      masterWaveform,
+      drumLevel ?? 0,
+      bassLevel ?? 0
     );
     this.renderASCII(meta, isDropGap, waveform, dt, bpm);
     this.updateDashboard();
@@ -689,7 +691,7 @@ export class TamagotchiAvatar {
       leftEye = "˘";
       rightEye = "˘";
     }
-    const eyes = `<span class="rave-eye-drums">${leftEye}</span>   <span class="rave-eye-bass">${rightEye}</span>`;
+    const eyes = `${leftEye}   ${rightEye}`;
 
     // Audio reactive dynamic "X" shaped nose in the middle of the face
     let nose = "  ><  ";
@@ -816,7 +818,9 @@ export class TamagotchiAvatar {
     drumWaveform?: Uint8Array | null,
     bassWaveform?: Uint8Array | null,
     otherWaveform?: Uint8Array | null,
-    masterWaveform?: Uint8Array | null
+    masterWaveform?: Uint8Array | null,
+    drumLevel: number = 0,
+    bassLevel: number = 0
   ): void {
     if (!this.canvasEl) return;
     if (!this.ctx2d) {
@@ -1356,12 +1360,12 @@ export class TamagotchiAvatar {
       this.drawHeart(ctx, rightEyeX, eyeY, 11);
     } else {
       this.drawWaveformEye(
-        ctx, leftEyeX, eyeY, drumWaveform, env.drums, punch.drums,
-        sec === "DROP", isDropGap, accentColor, cx, "drums"
+        ctx, leftEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel,
+        sec === "DROP", isDropGap, accentColor, cx
       );
       this.drawWaveformEye(
-        ctx, rightEyeX, eyeY, bassWaveform, env.bass, punch.bass,
-        sec === "DROP", isDropGap, accentColor, cx, "bass"
+        ctx, rightEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel,
+        sec === "DROP", isDropGap, accentColor, cx
       );
     }
     ctx.restore();
@@ -1544,36 +1548,32 @@ export class TamagotchiAvatar {
 
   /**
    * One eye = one instrument. Left eye follows drums, right eye follows bass;
-   * the iris ripple, pupil size, glow and internal sparkle all use only that
-   * stem's waveform/envelope, so the two eyes visibly disagree with the music.
+   * the iris ripple, pupil size and internal sparkle use only that stem's
+   * waveform/envelope, while both eyes keep the original cyan/gold palette.
    */
   private drawWaveformEye(
     ctx: CanvasRenderingContext2D,
     eyeX: number,
     eyeY: number,
-    waveform?: Uint8Array | null,
-    level: number = 0,
-    punch: number = 0,
+    drumWaveform?: Uint8Array | null,
+    bassWaveform?: Uint8Array | null,
+    drumLevel: number = 0,
+    bassLevel: number = 0,
     isDrop: boolean = false,
     isDropGap: boolean = false,
     accentColor: string = "#00ffff",
-    faceCenterX: number = 100,
-    stem: "drums" | "bass" = "drums"
+    faceCenterX: number = 100
   ): void {
     const eyeSteps = 36;
     const t = performance.now() / 1000;
-    const isDrums = stem === "drums";
 
-    // Anime Eye Dimensions: Big expressive vertical oval.
-    const irisBoost = Math.min(3.8, level * 3.6 + punch * 1.6);
-    const baseIrisRx = (isDropGap ? 13.5 : (isDrop ? 12.5 : 11.0)) + irisBoost;
-    const baseIrisRy = (isDropGap ? 19.5 : (isDrop ? 18.0 : 16.0)) + irisBoost * 1.3;
+    // Anime Eye Dimensions: Big expressive vertical oval
+    const baseIrisRx = (isDropGap ? 13.5 : (isDrop ? 12.5 : 11.0)) + Math.min(3.5, bassLevel * 3.8);
+    const baseIrisRy = (isDropGap ? 19.5 : (isDrop ? 18.0 : 16.0)) + Math.min(4.5, bassLevel * 5.0);
 
-    const waveLen = waveform ? waveform.length : 0;
-    const irisStroke = isDrop ? "#ffffff" : (isDrums ? "#ffcf2e" : "#00ffff");
-    const irisGlow = isDrums ? "#ff9d00" : "#00aaff";
-    const pupilStroke = isDrop ? "#ffffff" : (isDrums ? "#fff3b0" : "#b9fbff");
-    const pupilGlow = isDrums ? "#ffae00" : "#00e5ff";
+    const bassWaveLen = bassWaveform ? bassWaveform.length : 0;
+    const irisStroke = isDrop ? "#00ffff" : "#00ffcc";
+    const irisGlow = isDrop ? "#00e5ff" : "#00ffaa";
 
     // 1. Sclera / Eye White backing for crisp anime pop
     ctx.save();
@@ -1583,38 +1583,38 @@ export class TamagotchiAvatar {
     ctx.fill();
     ctx.restore();
 
-    // 2. Iris: stem-coloured gradient rippled by that stem's waveform.
+    // 2. Iris: Rich Anime Multi-Color Gradient with Audio-Reactive Bass Waveform Ripple
     ctx.save();
-    ctx.shadowBlur = (isDrop ? 14 : 9) + 10 * punch;
+    ctx.shadowBlur = isDrop ? 14 : 9;
     ctx.shadowColor = irisGlow;
     ctx.strokeStyle = irisStroke;
     ctx.lineWidth = 2.2;
 
     const grad = ctx.createLinearGradient(eyeX, eyeY - baseIrisRy, eyeX, eyeY + baseIrisRy);
-    if (isDrums) {
-      grad.addColorStop(0.0, "rgba(42, 12, 2, 0.98)");
-      grad.addColorStop(0.38, "rgba(176, 68, 0, 0.88)");
-      grad.addColorStop(0.82, "rgba(255, 196, 32, 0.95)");
-      grad.addColorStop(1.0, "rgba(255, 250, 208, 0.92)");
+    if (isDrop) {
+      grad.addColorStop(0.0, "rgba(20, 0, 50, 0.98)");
+      grad.addColorStop(0.35, "rgba(0, 180, 255, 0.88)");
+      grad.addColorStop(0.80, "rgba(0, 255, 230, 0.95)");
+      grad.addColorStop(1.0, "rgba(255, 255, 255, 0.9)");
     } else {
-      grad.addColorStop(0.0, "rgba(4, 16, 44, 0.98)");
-      grad.addColorStop(0.38, "rgba(0, 96, 200, 0.88)");
-      grad.addColorStop(0.82, "rgba(0, 240, 255, 0.95)");
-      grad.addColorStop(1.0, "rgba(196, 252, 255, 0.92)");
+      grad.addColorStop(0.0, "rgba(10, 15, 40, 0.96)");
+      grad.addColorStop(0.45, "rgba(0, 120, 215, 0.85)");
+      grad.addColorStop(0.85, "rgba(0, 255, 170, 0.92)");
+      grad.addColorStop(1.0, "rgba(180, 255, 235, 0.9)");
     }
     ctx.fillStyle = grad;
 
     ctx.beginPath();
     for (let j = 0; j <= eyeSteps; j++) {
       const phi = (j / eyeSteps) * Math.PI * 2;
-      let sample = 0;
-      if (waveform && waveLen > 0) {
-        const idx = Math.floor((j / eyeSteps) * (waveLen - 1));
-        sample = (waveform[idx] - 128) / 128.0;
+      let bSample = 0;
+      if (bassWaveform && bassWaveLen > 0) {
+        const idx = Math.floor((j / eyeSteps) * (bassWaveLen - 1));
+        bSample = (bassWaveform[idx] - 128) / 128.0;
       } else {
-        sample = Math.sin(phi * 2.0 + t * 7.0) * 0.22;
+        bSample = Math.sin(phi * 2.0 + t * 7.0) * 0.22;
       }
-      const disp = sample * (3.2 * Math.min(1.6, level * 1.5 + punch * 0.9) + (isDropGap ? 1.6 : 0.7));
+      const disp = bSample * (3.0 * Math.min(1.5, bassLevel * 2.5) + (isDropGap ? 1.6 : 0.7));
       const rx = Math.max(2.0, baseIrisRx + disp * 0.7);
       const ry = Math.max(3.0, baseIrisRy + disp);
       const x = eyeX + rx * Math.cos(phi);
@@ -1627,12 +1627,15 @@ export class TamagotchiAvatar {
     ctx.stroke();
     ctx.restore();
 
-    // 3. Inner Pupil: same stem waveform, tighter and punchier.
-    const basePupilRx = (isDropGap ? 7.2 : (isDrop ? 6.5 : 5.5)) + Math.min(2.8, level * 3.2 + punch * 1.3);
-    const basePupilRy = (isDropGap ? 11.0 : (isDrop ? 9.8 : 8.5)) + Math.min(3.8, level * 4.0 + punch * 1.8);
+    // 3. Inner Pupil: Dark Anime Core pulsing to Drum Waveform
+    const basePupilRx = (isDropGap ? 7.2 : (isDrop ? 6.5 : 5.5)) + Math.min(2.5, drumLevel * 3.5);
+    const basePupilRy = (isDropGap ? 11.0 : (isDrop ? 9.8 : 8.5)) + Math.min(3.5, drumLevel * 4.5);
+    const drumWaveLen = drumWaveform ? drumWaveform.length : 0;
+    const pupilStroke = isDrop ? "#ffffff" : "#ffe600";
+    const pupilGlow = isDrop ? "#ffffff" : "#ffbb00";
 
     ctx.save();
-    ctx.shadowBlur = 8 + 8 * punch;
+    ctx.shadowBlur = 8;
     ctx.shadowColor = pupilGlow;
     ctx.strokeStyle = pupilStroke;
     ctx.fillStyle = "rgba(10, 5, 24, 0.92)";
@@ -1642,13 +1645,13 @@ export class TamagotchiAvatar {
     for (let j = 0; j <= eyeSteps; j++) {
       const phi = (j / eyeSteps) * Math.PI * 2;
       let dSample = 0;
-      if (waveform && waveLen > 0) {
-        const idx = Math.floor((j / eyeSteps) * (waveLen - 1));
-        dSample = (waveform[idx] - 128) / 128.0;
+      if (drumWaveform && drumWaveLen > 0) {
+        const idx = Math.floor((j / eyeSteps) * (drumWaveLen - 1));
+        dSample = (drumWaveform[idx] - 128) / 128.0;
       } else {
         dSample = Math.sin(phi * 3.0 + t * 11.0) * 0.22;
       }
-      const disp = dSample * (2.6 * Math.min(1.6, level * 1.7 + punch * 0.8) + (isDropGap ? 1.4 : 0.5));
+      const disp = dSample * (2.4 * Math.min(1.5, drumLevel * 2.5) + (isDropGap ? 1.4 : 0.5));
       const rx = Math.max(1.5, basePupilRx + disp * 0.6);
       const ry = Math.max(2.0, basePupilRy + disp);
       const x = eyeX + rx * Math.cos(phi);

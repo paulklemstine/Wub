@@ -163,7 +163,7 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | [`audio_engine.ts`](file:///home/raver1975/Wub/frontend/src/audio_engine.ts) | Core Web Audio context wrapper, 4-stem gain buses, analysers, `scheduleSlice` (rate/fades), and AudioBuffer decode for Opus/WAV kit assets. |
 | [`main.ts`](file:///home/raver1975/Wub/frontend/src/main.ts) | Main application coordinator, UI event queue, transport controls, kit set-change status, reticle-to-phrase steering, and WebSocket listener. |
 | [`visualizer.ts`](file:///home/raver1975/Wub/frontend/src/visualizer.ts) | 4-stem oscilloscope waveforms, FFT spectral density, peak/RMS meters, concentric radar rings, and the kit phrase nebula (PCA cloud, active-kit highlight, reticles). |
-| [`tamagotchi.ts`](file:///home/raver1975/Wub/frontend/src/tamagotchi.ts) | WubGotchi neural music pet avatar: four-stem reactivity (left eye drums, right eye bass, mouth vocals, heart other, body/halo full mix), learning ASCII face expressions, vowel mouth shapes, beat head-bobbing, and XP evolution. |
+| [`tamagotchi.ts`](file:///home/raver1975/Wub/frontend/src/tamagotchi.ts) | WubGotchi neural music pet avatar: four-stem reactivity (both eyes drums+bass, mouth vocals, heart other, body/halo full mix), learning ASCII face expressions, vowel mouth shapes, beat head-bobbing, and XP evolution. |
 | [`psychedelic_bg.ts`](file:///home/raver1975/Wub/frontend/src/psychedelic_bg.ts) | WebGL full-screen real-time raymarching shader with DMT / LSD kaleidoscopic folding, borderless polar wrapping, and RMS reactivity. |
 | [`version.ts`](file:///home/raver1975/Wub/frontend/src/version.ts) | Git-hook synchronized build numbers and release timestamps. |
 

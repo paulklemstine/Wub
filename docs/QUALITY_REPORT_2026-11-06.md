@@ -56,8 +56,9 @@ phrase changes. It is a level-match/phrase-energy issue, not a click.
 
 The bear is now a four-stem meter, not a single master bounce:
 
-- **Left eye = drums** (gold iris, kick-driven squish and pupil punch).
-- **Right eye = bass** (cyan iris, bass-waveform ripple and pupil size).
+- **Eyes = drums + bass** (both eyes share the same bass-waveform iris and
+  drum-waveform pupil, exactly as in the earlier builds, plus the kick-driven
+  squish and pupil punch).
 - **Mouth = vocals** (waveform aperture, syllable punch, vowel geometry).
 - **Heart = other** (pad/chord envelope, heartbeat rate, ripples, brightness
   hue shift; no longer driven by the kick).
