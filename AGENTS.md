@@ -114,12 +114,18 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   `blockBars`/`blockDurationSec` drive the audio grid while `slotSec` keeps the
   displayed BPM at the 4-bar value.
 - **Movement budget.** 4-bar blocks hold for at least 8 bars between track
-  changes unless the arc changes section or the 16-bar max-hold forces a move;
-  8/16-bar blocks may change 1–2 stems. The joint policy is a soft blend of the
-  learned score, energy match, novelty, repetition and harmony — not a hard
-  filter. Vocals are sticky (section change or 16 bars); bass is strict but
-  soft; other/pads carry most of the movement. Drums get a refresh after 24
-  bars when a near-best drum candidate exists, so the groove does not plateau.
+  changes **per stem** unless the arc changes section or the 16-bar max-hold
+  forces a move; 8/16-bar blocks may change 1–2 stems. The joint policy is a
+  soft blend of the learned score, energy match, play-count novelty/
+  repetition and harmony — not a hard filter. Per-stem play counts and a
+  16-phrase per-stem history rotate the whole cluster pool through; near-best
+  gated candidates are explored instead of always taking the argmax. Vocals
+  are sticky (section change or 16 bars); bass is strict but soft; other/pads
+  carry most of the movement. Drums get a refresh after 24 bars when a
+  near-best drum candidate exists, so the groove does not plateau. A missing
+  ranker (or a stale stem with no gated joint move) falls back to a heuristic
+  cross-song pick under the same cooldown rules; a held stem that cannot fill
+  an 8/16-bar block without looping is offered a fresh full-length run.
 - **Glue bus.** A real-time per-stem glue gain after the analyser adds vocal
   ducking on other/bass and kick/bass sidechain. A short generated reverb send
   on other/vocals, a high-passed return, and equal-power boundary fades glue

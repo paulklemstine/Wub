@@ -546,12 +546,24 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
   The table is aligned to the block grid, so a target never changes inside a
   16-bar block.
 * **Movement and stem policy.** 4-bar blocks hold for at least 8 bars between
-  track changes unless the arc changes section or a 16-bar max-hold forces a
-  move; 8/16-bar blocks may change 1–2 stems. The joint score is blended with
-  energy match, novelty, repetition and a soft harmony penalty. Vocals are
-  sticky (section change or 16 bars); bass is strict but soft; other/pads carry
-  most of the movement. After 24 bars without a drum change, a near-best
-  drum-inclusive candidate is preferred so the groove does not plateau.
+  track changes **per stem** unless the arc changes section or a 16-bar
+  max-hold forces a move; 8/16-bar blocks may change 1–2 stems. The joint
+  score is blended with energy match, actual play-count novelty/repetition
+  (never-played phrases score higher; the weights are strong enough to beat
+  a slightly higher-ranked repeat) and a soft harmony penalty. Each stem
+  keeps its own 16-phrase recent history and play counts, candidates are
+  presented from a 12-track shortlist per stem with block-seeded tie-breaking,
+  and the joint pick explores among near-best gated candidates instead of
+  always taking the argmax, so the whole cluster pool rotates through rather
+  than cycling a deterministic top-8. A held stem whose source run cannot
+  fill an 8/16-bar block is offered a fresh full-length run instead of
+  looping the same 4 bars inside the block. Vocals are sticky (section change
+  or 16 bars); bass is strict but soft; other/pads carry most of the
+  movement. After 24 bars without a drum change, a near-best drum-inclusive
+  candidate is preferred so the groove does not plateau. If the joint ranker
+  is unavailable (or a stale stem has no gated joint move), a per-stem
+  heuristic fallback picks a fresh cross-song phrase under the same
+  cooldown/vocal rules instead of advancing the anchor run forever.
 * **Glue bus.** Each stem has a real-time glue gain after its analyser. A vocal
   envelope ducks other/bass by up to 1.5 dB; a drum transient detector ducks
   bass by up to 2.5 dB. A generated short stereo impulse feeds a shared reverb

@@ -298,7 +298,10 @@ function signed(value: number, digits = 3): string {
  *
  * The weights are intentionally small: the learned ranker remains the primary
  * signal, while energy, novelty, repetition, harmony and budget act as musical
- * guard rails around it.
+ * guard rails around it.  Novelty/repetition are weighted strongly enough
+ * that a never-played phrase can beat a slightly higher-ranked repeat;
+ * without that, the flat top of the ranker distribution cycles the same
+ * handful of tracks.
  */
 export function scoreTransition(input: TransitionScoreInput): TransitionScore {
   const reasons: string[] = [];
@@ -313,12 +316,12 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
   reasons.push(`energy ${signed(energyBonus)} (match ${energyMatch.toFixed(2)})`);
 
   const novelty = clamp01(finiteOr(input.novelty, 0));
-  const noveltyBonus = 0.04 * novelty;
+  const noveltyBonus = 0.10 * novelty;
   score += noveltyBonus;
   reasons.push(`novelty ${signed(noveltyBonus)}`);
 
   const repetition = clamp01(finiteOr(input.repetition, 0));
-  const repetitionPenalty = 0.06 * repetition;
+  const repetitionPenalty = 0.15 * repetition;
   score -= repetitionPenalty;
   reasons.push(`repetition ${signed(-repetitionPenalty)}`);
 

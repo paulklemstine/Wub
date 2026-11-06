@@ -251,6 +251,17 @@ function hashRoll(input: string): number {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
+/** Candidates presented to the joint ranker per stem (one per track). */
+const JOINT_CANDIDATES_PER_STEM = 12;
+/** Per-stem phrases excluded after they play, so a winner cannot repeat at once. */
+const STEM_HISTORY_AVOID = 16;
+/** Policy-score window for near-best exploration in selectJoint. */
+const EXPLORE_WINDOW = 0.06;
+/** How many near-best joint candidates exploration may choose among. */
+const EXPLORE_TOP_K = 5;
+/** Pair combinations evaluated per stem pair (top of each sorted list). */
+const PAIR_TOP_N = 6;
+
 export class StemRemixPlayer {
   private readonly engine: AudioEngine;
   private manifest: KitManifest | null = null;
@@ -300,6 +311,10 @@ export class StemRemixPlayer {
   private pins: Partial<Record<StemName, StemPin>> = {};
   private blocksSinceChange: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private recent: string[] = [];
+  /** Per-stem phrase history (last 32) so each stem's memory is independent. */
+  private stemHistory: Record<StemName, string[]> = { drums: [], bass: [], other: [], vocals: [] };
+  /** How many times each phrase+stem has been scheduled this set. */
+  private playCount = new Map<string, number>();
   private anchorRecent: string[] = [];
   private playedOnce = new Set<string>();
   private failedKits = new Set<string>();
@@ -311,6 +326,8 @@ export class StemRemixPlayer {
   private blockIndex = 0;
   /** Session bar of the last real stem-track change, vocal and drum change. */
   private lastMoveBar = 0;
+  /** Session bar of the last track change per stem (8-bar cooldown is per stem). */
+  private lastChangeBar: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private lastVocalChangeBar = -1;
   private lastDrumChangeBar = 0;
   /** Scheduled blocks, so a mid-block drag can find the block it is inside. */
@@ -454,6 +471,7 @@ export class StemRemixPlayer {
     this.manualPins = {};
     this.blockGrid = [];
     this.lastMoveBar = 0;
+    this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
     this.lastVocalChangeBar = -1;
     this.lastDrumChangeBar = 0;
 
@@ -515,6 +533,7 @@ export class StemRemixPlayer {
       }
       this.previousEntries = { ...this.lastBlockEntries };
       this.lastMoveBar = 0;
+      this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
       this.lastVocalChangeBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 0 : -1;
       this.lastDrumChangeBar = 0;
       for (const stem of STEMS) {
@@ -581,6 +600,8 @@ export class StemRemixPlayer {
       }
     }
     this.recent = [];
+    this.stemHistory = { drums: [], bass: [], other: [], vocals: [] };
+    this.playCount.clear();
     this.anchorRecent = [];
     this.playedOnce.clear();
     this.lastBlockEntries = {};
@@ -592,6 +613,7 @@ export class StemRemixPlayer {
     this.currentAnchorPhrase = null;
     this.morphIndex = 0;
     this.lastMoveBar = 0;
+    this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
     this.lastVocalChangeBar = -1;
     this.lastDrumChangeBar = 0;
   }
@@ -707,6 +729,22 @@ export class StemRemixPlayer {
     return total;
   }
 
+  private playCountOf(stem: StemName, phraseId: string): number {
+    return this.playCount.get(`${phraseId}:${stem}`) ?? 0;
+  }
+
+  private recordPlayed(stem: StemName, entry: StemPoolEntry): void {
+    const key = `${entry.phrase.id}:${stem}`;
+    this.playCount.set(key, (this.playCount.get(key) ?? 0) + 1);
+    const history = this.stemHistory[stem];
+    history.push(entry.phrase.id);
+    if (history.length > 32) history.splice(0, history.length - 32);
+    if (!this.recent.includes(entry.phrase.id)) {
+      this.recent.push(entry.phrase.id);
+    }
+    if (entry.phrase.once) this.playedOnce.add(entry.phrase.id);
+  }
+
   private chooseAnchor(): Kit | null {
     const cluster = this.cluster;
     if (!cluster) return null;
@@ -803,12 +841,14 @@ export class StemRemixPlayer {
     // Begin the next block early enough to fetch 1-4 phrases per stem, but
     // late enough that a reticle drag has already set its pin.  The lead is a
     // fraction of the upcoming block, capped so the reticle never jumps too
-    // far ahead of the audio.
+    // far ahead of the audio.  A longer lead keeps a cache-miss fetch+decode
+    // from finishing after the downbeat, which would otherwise leave a brief
+    // all-stem silence while the already-faded old voices cannot be revived.
     const upcomingBars = this.sessionBar >= SET_BARS
       ? 4
       : this.blockBarsAt(this.sessionBar);
     const upcomingSec = upcomingBars * this.barSec;
-    const lead = Math.min(8, Math.max(1.5, upcomingSec * 0.4));
+    const lead = Math.min(8, Math.max(2.0, upcomingSec * 0.6));
     if (
       !this.preparing &&
       this.nextBlockAt > 0 &&
@@ -976,11 +1016,29 @@ export class StemRemixPlayer {
     const priorEntries = { ...this.lastBlockEntries };
     const forceMove = !opening && !bridge && !rotation
       && startBar - this.lastMoveBar >= budget.maxHoldBars;
-    const joint = !opening && !bridge && !rotation && this.jointRanker?.ready
+    // A stem that has not changed track for maxHoldBars is stale and must be
+    // reconsidered even when the global cooldown would otherwise hold it.
+    const staleStems = new Set<StemName>();
+    if (!opening && !bridge && !rotation) {
+      for (const stem of STEMS) {
+        if (this.pins[stem] !== undefined || this.manualPins[stem]) continue;
+        if (startBar - (this.lastChangeBar[stem] ?? 0) >= budget.maxHoldBars) {
+          staleStems.add(stem);
+        }
+      }
+    }
+    const rankerReady = this.jointRanker?.ready === true;
+    const joint = !opening && !bridge && !rotation && rankerReady
       ? this.selectJoint(
         normalized, targetEnergy, phrasesPerStem, startBar, sectionChanged, forceMove,
       )
       : null;
+    // Fallback heuristic when the learned ranker is unavailable, or when a
+    // stale stem still has no joint move (below the forced threshold).  Without
+    // this, a missing ranker makes the engine advance/loop the anchor run
+    // forever, which is exactly the "same slices over and over" failure.
+    const useFallback = !opening && !bridge && !rotation
+      && (!rankerReady || (joint === null && staleStems.size > 0));
 
     const order: StemName[] = bridge && !rotation
       ? ["other", "vocals"]
@@ -1022,11 +1080,35 @@ export class StemRemixPlayer {
         entry = this.anchorEntry(stem, anchorPhrase);
       } else if (joint) {
         entry = joint.entries[stem] ?? this.holdEntry(stem);
+      } else if (useFallback) {
+        const cooldownBars = phrasesPerStem * 4 <= 4 ? 8 : 0;
+        const vocalOk = stem !== "vocals"
+          || vocalChangeAllowed(startBar, this.lastVocalChangeBar, sectionChanged);
+        const cooledDown = cooldownBars === 0 || sectionChanged
+          || staleStems.has(stem)
+          || startBar - (this.lastChangeBar[stem] ?? 0) >= cooldownBars;
+        entry = (vocalOk && cooledDown)
+          ? (this.selectMorph(stem, at, normalized, phrasesPerStem) ?? this.holdEntry(stem))
+          : this.holdEntry(stem);
       } else {
         entry = this.holdEntry(stem);
       }
       if (!entry) entry = this.holdEntry(stem);
       if (!entry) continue;
+
+      // A held entry whose source run cannot fill an 8/16-bar block would loop
+      // the same 4 bars two to four times inside one block.  Prefer a fresh
+      // cross-song run with a real consecutive length instead (at most two
+      // such conversions per block, so the movement budget stays close).
+      if (phrasesPerStem > 1 && !this.pins[stem] && !joint?.changed.includes(stem)
+        && !opening && !bridge && !rotation) {
+        const holdLen = this.runFor(entry, phrasesPerStem, false).length;
+        const conversions = trackChanged.length + changed.length;
+        if (holdLen < phrasesPerStem && conversions < budget.maxChanges * 2) {
+          const alt = this.selectMorph(stem, at, normalized, phrasesPerStem);
+          if (alt && alt.kit.track_id !== entry.kit.track_id) entry = alt;
+        }
+      }
 
       const run = this.runFor(entry, phrasesPerStem);
       chosenRuns[stem] = run;
@@ -1043,10 +1125,7 @@ export class StemRemixPlayer {
       if (!samePhrase) changed.push(stem);
       if (!sameTrack) trackChanged.push(stem);
       for (const runEntry of run) {
-        if (!this.recent.includes(runEntry.phrase.id)) {
-          this.recent.push(runEntry.phrase.id);
-        }
-        if (runEntry.phrase.once) this.playedOnce.add(runEntry.phrase.id);
+        this.recordPlayed(stem, runEntry);
       }
     }
     this.previousEntries = priorEntries;
@@ -1061,6 +1140,7 @@ export class StemRemixPlayer {
     const autoTrackChanged = trackChanged.filter((stem) => this.pins[stem] === undefined);
     if (autoTrackChanged.length > 0) {
       this.lastMoveBar = startBar;
+      for (const stem of autoTrackChanged) this.lastChangeBar[stem] = startBar;
       if (autoTrackChanged.includes("vocals")) this.lastVocalChangeBar = startBar;
       if (autoTrackChanged.includes("drums")) this.lastDrumChangeBar = startBar;
     }
@@ -1147,14 +1227,14 @@ export class StemRemixPlayer {
     section: string,
     targetEnergy: number,
   ): StemPoolEntry[] {
-    // For a 4-bar block, avoid the last couple of blocks to keep the mix
-    // moving.  For 8/16-bar runs, only avoid replaying the exact run we just
-    // heard; otherwise the phrase requirement would exhaust the cluster.
+    // Per-stem memory, not a short global window: a phrase this stem played
+    // in the last STEM_HISTORY_AVOID slots is excluded, so the previous
+    // winner cannot simply win again two blocks later.  For 8/16-bar runs we
+    // also exclude the exact run just heard.
     const avoid = new Set<string>();
+    for (const id of this.stemHistory[stem].slice(-STEM_HISTORY_AVOID)) avoid.add(id);
     if (phrases > 1) {
       for (const runEntry of this.lastBlockRuns[stem] ?? []) avoid.add(runEntry.phrase.id);
-    } else {
-      for (const id of this.recent.slice(-8)) avoid.add(id);
     }
     const outroAllowed = this.blockIndex >= BLOCKS_PER_SET - 2;
     const candidates = this.pools[stem].filter((entry) => {
@@ -1186,11 +1266,19 @@ export class StemRemixPlayer {
       const energy = 0.35 - Math.abs(entry.energy - targetEnergy) * 0.5;
       const sectionScore = entry.section === section ? 0.25 : 0;
       const fallback = style + energy + sectionScore;
+      // The judge scores are nearly flat at the top (all ~0.97+ for drums),
+      // so a deterministic sort would surface the same handful of tracks
+      // every block.  Play-count novelty plus a block-seeded hash breaks
+      // those ties toward material that has not played yet, rotating the
+      // whole pool through over a set instead of cycling a top-8.
+      const plays = this.playCountOf(stem, entry.phrase.id);
+      const novelty = (plays === 0 ? 0.35 : Math.max(-0.30, -0.12 * plays))
+        + hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.20;
       return {
         entry,
         full: legal,
         judge,
-        score: judge > 0 ? judge : fallback,
+        score: (judge > 0 ? judge : fallback) + novelty,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -1202,7 +1290,7 @@ export class StemRemixPlayer {
       return b.score - a.score;
     });
     // One candidate per track, so the joint ranker sees genuinely different
-    // records instead of eight windows from the same song.
+    // records instead of many windows from the same song.
     const seen = new Set<string>();
     const out: StemPoolEntry[] = [];
     for (const item of pool) {
@@ -1210,7 +1298,7 @@ export class StemRemixPlayer {
       if (seen.has(trackId)) continue;
       seen.add(trackId);
       out.push(item.entry);
-      if (out.length >= 8) break;
+      if (out.length >= JOINT_CANDIDATES_PER_STEM) break;
     }
     return out;
   }
@@ -1240,14 +1328,18 @@ export class StemRemixPlayer {
     // After 24 bars, prefer a drum-inclusive candidate when it is nearly as
     // strong as the best policy move; this breaks "same groove" plateaus.
     const drumStale = startBar - this.lastDrumChangeBar >= 24;
-    // 4-bar blocks are the busiest part of the arc; hold for at least two
-    // blocks between track changes unless the arc changes section or the
-    // max-hold budget forces a move.  8/16-bar blocks are already 8+ bars.
+    // 4-bar blocks are the busiest part of the arc; each stem holds for at
+    // least two blocks between track changes unless the arc changes section
+    // or the max-hold budget forces a move.  The cooldown is per stem, not
+    // global: one stem moving no longer blocks the other three for 8 bars,
+    // which is what flattened the mix into one long hold.  8/16-bar blocks
+    // are already 8+ bars, so they have no cooldown.
     const cooldownBars = nextBlockBars <= 4 ? 8 : 0;
-    if (cooldownBars > 0 && !sectionChanged && !forceMove
-      && startBar - this.lastMoveBar < cooldownBars) {
-      return null;
-    }
+    const cooledDown = (stem: StemName): boolean => {
+      if (cooldownBars === 0 || sectionChanged || forceMove) return true;
+      if (startBar - (this.lastChangeBar[stem] ?? 0) >= budget.maxHoldBars) return true;
+      return startBar - (this.lastChangeBar[stem] ?? 0) >= cooldownBars;
+    };
     const current: Partial<Record<StemName, StemPoolEntry>> = {};
     for (const stem of STEMS) {
       const manual = this.manualPins[stem];
@@ -1272,7 +1364,7 @@ export class StemRemixPlayer {
     }
 
     const unpinned = STEMS.filter((stem) =>
-      this.pins[stem] === undefined && (stem !== "vocals" || allowVocals)
+      this.pins[stem] === undefined && (stem !== "vocals" || allowVocals) && cooledDown(stem)
     );
     if (unpinned.length === 0) return null;
     const usedTracks = new Set<string>();
@@ -1326,6 +1418,14 @@ export class StemRemixPlayer {
       } | null;
     } = { value: null };
 
+    const scoredCandidates: Array<{
+      entries: Partial<Record<StemName, StemPoolEntry>>;
+      changed: StemName[];
+      score: number;
+      rawScore: number;
+      reasons: string[];
+    }> = [];
+
     const consider = (subset: StemName[], picks: StemPoolEntry[]) => {
       const changed = new Set(subset);
       const candidate: Partial<Record<StemName, StemPoolEntry>> = { ...heldBase };
@@ -1339,6 +1439,7 @@ export class StemRemixPlayer {
       let candidateEnergy = 0;
       let harmony = 0;
       let repetition = 0;
+      let novelty = 0;
       for (const stem of STEMS) {
         const entry = candidate[stem];
         if (!entry) return;
@@ -1355,17 +1456,20 @@ export class StemRemixPlayer {
               keyShift: entry.keyShift,
             });
           }
-          if (this.recent.includes(entry.phrase.id)) repetition += 0.5;
+          const plays = this.playCountOf(stem, entry.phrase.id);
+          repetition += plays === 0 ? 0 : Math.min(1, 0.3 + 0.2 * plays);
+          novelty += plays === 0 ? 1 : 1 / (1 + plays);
         }
       }
       candidateEnergy /= 4;
       harmony /= Math.max(1, subset.length);
-      repetition = Math.min(1, repetition);
+      repetition = Math.min(1, repetition / Math.max(1, subset.length));
+      novelty = subset.length > 0 ? novelty / subset.length : 0;
       const policy = scoreTransition({
         jointScore: rawScore,
         targetEnergy,
         candidateEnergy,
-        novelty: subset.length / 2,
+        novelty,
         repetition,
         harmony,
         changedCount: subset.length,
@@ -1389,6 +1493,13 @@ export class StemRemixPlayer {
           reasons: policy.reasons,
         };
       }
+      scoredCandidates.push({
+        entries: candidate,
+        changed: subset,
+        score: policy.score,
+        rawScore,
+        reasons: policy.reasons,
+      });
     };
 
     for (const subset of subsets) {
@@ -1398,8 +1509,13 @@ export class StemRemixPlayer {
       if (subset.length === 1) {
         for (const entry of lists[0]) consider(subset, [entry]);
       } else {
-        for (const first of lists[0]) {
-          for (const second of lists[1]) {
+        // Pair scoring is the expensive part (a 2k-d MLP per combo).  Only
+        // combine the top-ranked entries from each stem; jointOptions has
+        // already rotated fresh material into that top set via play counts.
+        const firsts = lists[0].slice(0, PAIR_TOP_N);
+        const seconds = lists[1].slice(0, PAIR_TOP_N);
+        for (const first of firsts) {
+          for (const second of seconds) {
             if (first.kit.track_id === second.kit.track_id) continue;
             if (usedTracks.has(first.kit.track_id) || usedTracks.has(second.kit.track_id)) continue;
             consider(subset, [first, second]);
@@ -1446,6 +1562,38 @@ export class StemRemixPlayer {
         `Joint mix: best raw ${best.rawScore.toFixed(3)} < ${threshold.toFixed(3)}; holding`,
       );
       return null;
+    }
+    // Near-best exploration: the ranker scores are clustered, so always
+    // taking the argmax replays the same winning tracks.  When several
+    // candidates sit within EXPLORE_WINDOW of the best policy score (and
+    // still clear the learned gate), choose among them with a block-seeded
+    // hash so the mix rotates through equally-good material.
+    const gated = scoredCandidates
+      .filter((item) => item.rawScore >= threshold)
+      .sort((a, b) => b.score - a.score);
+    if (gated.length > 1 && gated[0]) {
+      const topScore = gated[0].score;
+      const nearBest = gated
+        .filter((item) => topScore - item.score <= EXPLORE_WINDOW)
+        .slice(0, EXPLORE_TOP_K);
+      if (nearBest.length > 1) {
+        const ids = nearBest
+          .map((item) => item.changed.map((stem) => item.entries[stem]?.phrase.id ?? stem).join("+"))
+          .join("|");
+        const pickIndex = Math.min(
+          nearBest.length - 1,
+          Math.floor(hashRoll(`${this.blockIndex}:${ids}`) * nearBest.length),
+        );
+        const picked = nearBest[pickIndex];
+        if (picked && picked !== best) {
+          const detail = picked.reasons.length > 0 ? ` [${picked.reasons.join(",")}]` : "";
+          this.onStatus?.(
+            `Joint mix: explore ${picked.changed.join("+")} → ${picked.score.toFixed(3)} ` +
+            `(raw ${picked.rawScore.toFixed(3)})${detail}`,
+          );
+          return { entries: picked.entries, changed: picked.changed };
+        }
+      }
     }
     const detail = best.reasons.length > 0 ? ` [${best.reasons.join(",")}]` : "";
     this.onStatus?.(
@@ -1500,7 +1648,7 @@ export class StemRemixPlayer {
     const targetSection = this.lastSection || arc.section;
     const targetEnergy = arc.energy;
     const outroAllowed = this.blockIndex >= BLOCKS_PER_SET - 2;
-    const recent = new Set(this.recent);
+    const recent = new Set(this.stemHistory[stem].slice(-STEM_HISTORY_AVOID));
 
     const eligible = pool.filter((entry) => {
       if (this.failedKits.has(entry.kit.track_id)) return false;
@@ -1571,7 +1719,9 @@ export class StemRemixPlayer {
         && current.kit.track_id === entry.kit.track_id ? 0.5 : 0;
       const styleBonus = entry.kit.style === this.cluster?.style ? 0.22 : 0;
       const trackPenalty = usedTracks.has(entry.kit.track_id) ? PIN_TRACK_PENALTY : 0;
-      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.15;
+      const plays = this.playCountOf(stem, entry.phrase.id);
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.15
+        + (plays === 0 ? 0.3 : Math.max(-0.3, -0.12 * plays));
       const score =
         2.4 * proximity +
         0.9 * energyFit +
@@ -1590,7 +1740,7 @@ export class StemRemixPlayer {
   }
 
   /** Pick a cross-song phrase for one stem, excluding its current track. */
-  private selectMorph(stem: StemName, at: number, section: string): StemPoolEntry | null {
+  private selectMorph(stem: StemName, at: number, section: string, phrases: number = 1): StemPoolEntry | null {
     const pool = this.pools[stem];
     if (pool.length === 0) return null;
     const current = this.current[stem]?.entry ?? null;
@@ -1599,7 +1749,7 @@ export class StemRemixPlayer {
     const target = SECTION_ENERGY[section] ?? 0.65;
     const chord = this.current.bass?.entry.chroma ?? null;
     const anchorRoot = this.current.bass?.entry.bassRoot ?? null;
-    const recentSet = new Set(this.recent);
+    const recentSet = new Set(this.stemHistory[stem].slice(-STEM_HISTORY_AVOID));
     const usedTracks = new Set<string>();
     for (const other of STEMS) {
       if (other === stem) continue;
@@ -1610,6 +1760,8 @@ export class StemRemixPlayer {
 
     // Prefer a track no other stem is using, so after four morphs all four
     // instruments come from different records; fall back if none exists.
+    // Prefer candidates with a real consecutive run long enough for the
+    // block; a short run would loop the same bars inside an 8/16-bar block.
     for (const strict of [true, false]) {
     for (const entry of pool) {
       if (entry.kit.track_id === currentKit) continue;   // force a new track
@@ -1620,6 +1772,8 @@ export class StemRemixPlayer {
       if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) continue;
       if (entry.phrase.is_intro && this.blockIndex > 0) continue;
       if (entry.phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
+      const runLen = phrases > 1 ? this.runFor(entry, phrases, false).length : phrases;
+      const shortRunPenalty = runLen < phrases ? 2.0 : 0;
 
       const energy = Number(entry.energy) || 0.5;
       const sectionScore = (entry.section === section ? 0.6 : 0)
@@ -1640,7 +1794,9 @@ export class StemRemixPlayer {
       const style = entry.kit.style === this.cluster?.style ? 0.25 : 0;
       const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *
         (stem === "vocals" ? 0.25 : 0.6);
-      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.25;
+      const plays = this.playCountOf(stem, entry.phrase.id);
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.35
+        + (plays === 0 ? 0.4 : Math.max(-0.4, -0.15 * plays));
       const score =
         1.0 * sectionScore +
         0.9 * harmonic +
@@ -1648,7 +1804,8 @@ export class StemRemixPlayer {
         presence +
         novelty +
         judgeBonus -
-        jumpPenalty;
+        jumpPenalty -
+        shortRunPenalty;
       if (!best || score > best.score) best = { entry, score };
     }
     if (best) break;
@@ -1753,7 +1910,7 @@ export class StemRemixPlayer {
     const pin = this.pins[stem] ?? null;
     const anchor = this.current.bass?.entry ?? null;
     const chord = anchor?.chroma ?? null;
-    const recentSet = new Set(this.recent);
+    const recentSet = new Set(this.stemHistory[stem].slice(-STEM_HISTORY_AVOID));
     let best: { entry: StemPoolEntry; score: number } | null = null;
 
     for (const entry of pool) {
@@ -2187,10 +2344,7 @@ export class StemRemixPlayer {
         untilBar: pin.untilBar,
       };
       for (const phraseEntry of run) {
-        if (!this.recent.includes(phraseEntry.phrase.id)) {
-          this.recent.push(phraseEntry.phrase.id);
-        }
-        if (phraseEntry.phrase.once) this.playedOnce.add(phraseEntry.phrase.id);
+        this.recordPlayed(stem, phraseEntry);
       }
       this.pinning.delete(stem);
     } catch (err) {
