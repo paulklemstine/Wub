@@ -1262,6 +1262,10 @@ def run_compare(
                 }
             )
         report["kits"].append(kit_row)
+        # A full 400-kit bank has thousands of source stems; keeping every
+        # decoded Opus buffer in this cache exhausts RAM.  The cache is only
+        # useful within one kit (phrases reuse the same four source stems).
+        cache.clear()
 
     report["aggregate"] = _aggregate(all_rows, args)
     report["n_failures"] = len(report["failures"])
