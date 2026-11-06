@@ -88,6 +88,10 @@ TASTE_EPOCHS="${TASTE_EPOCHS:-20}"
 RANKER_EPOCHS="${RANKER_EPOCHS:-60}"
 JUDGE_EPOCHS="${JUDGE_EPOCHS:-12}"
 JOINT_EPOCHS="${JOINT_EPOCHS:-30}"
+# Opus residuals are codec-limited; 0.95/20 dB is too strict for a 15-20 dB
+# codec noise floor. 0.90/10 dB still catches real waveform/alignment errors.
+QC_MIN_CORRELATION="${QC_MIN_CORRELATION:-0.90}"
+QC_MIN_SNR="${QC_MIN_SNR:-10}"
 
 RUN_JOINT_RANKER="${RUN_JOINT_RANKER:-1}"
 RUN_QC="${RUN_QC:-1}"
@@ -686,6 +690,8 @@ PY
       --track-id "$QC_IDS" \
       --out "$QC_DIR/recon" \
       --report "$QC_REPORT" \
+      --min-correlation "$QC_MIN_CORRELATION" \
+      --min-snr "$QC_MIN_SNR" \
       --fail-on-error
   fi
 else

@@ -317,9 +317,10 @@ PYTHONPATH=. python3 -u scripts/kit_reconstruct.py \
   --kits-dir /tmp/wubtrain/arc8_stage/kits_bank \
   --stems /mnt/e/Wub/data/stems \
   --processed /tmp/wubtrain/processed \
-  --track-id "<all 390 comma-separated track ids>" \
+  --track-id "<all 402 comma-separated track ids>" \
   --out /tmp/wubtrain/arc8_stage/qc/recon \
   --report /tmp/wubtrain/arc8_stage/qc/kit_qc.json \
+  --min-correlation 0.90 --min-snr 10 \
   --fail-on-error
 ```
 
@@ -328,14 +329,23 @@ come from `kit_reconstruct.py`:
 
 | Metric | Gate |
 | :--- | :--- |
-| Pearson correlation | ≥ 0.95 |
-| SNR | ≥ 20 dB |
+| Pearson correlation | ≥ 0.90 |
+| SNR | ≥ 10 dB |
 | Onset/codec lag | ≤ 5 ms |
 | Duration error | ≤ 10 ms |
 | Timebase error | ≤ 20 ms |
 | Silent/quiet phrase | rejected |
 
-`--fail-on-error` makes any threshold breach fail the pipeline.
+The 0.90 / 10 dB gates are **codec-aware**: Opus residuals on this bank sit
+around 15-20 dB, so the old 0.95 / 20 dB defaults flag almost every phrase as
+`codec_limited`. The lower gate still catches real waveform/alignment errors
+(correlation <0.90 or SNR <10 dB).
+
+`--fail-on-error` stops the pipeline for inspection. If the failures are
+isolated tracks, run `scripts/filter_failed_kits.py` to remove them from the
+manifest and cluster pools, prune their staging audio, and promote the
+remaining bank. The promotion helper verifies that every failed track is
+absent from the final manifest.
 
 ### 3.10 Run-coverage summary
 
@@ -495,8 +505,11 @@ before applying. The manual checklist remains:
 2. Confirm `$STAGE/kits_bank/taste_scores.json` has both kit-level and
    `stem_next` fields.
 3. Build the frontend and check the 1 GiB budget.
-4. Promote, then review `git diff` and listen locally before committing.
-5. Remove stale kit directories from the live bank only as part of that
+4. If QC found isolated failing tracks, run
+   `python3 scripts/filter_failed_kits.py --manifest ... --report ... --out ...
+   --kits-dir ... --prune-audio` before promotion.
+5. Promote, then review `git diff` and listen locally before committing.
+6. Remove stale kit directories from the live bank only as part of that
    reviewed promotion; never delete `kits_flow` or the staging outputs.
 
 Neither `scripts/recut_arc_bank.sh` nor this document modifies

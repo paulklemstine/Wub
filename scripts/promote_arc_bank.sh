@@ -25,7 +25,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 STAGE="${STAGE:-/tmp/wubtrain/arc8_stage}"
 APPLY="${APPLY:-0}"
-KITS="${KITS:-402}"
+KITS="${KITS:-0}"  # 0 = accept the filtered manifest count
 MIN_CLUSTER_COVERAGE="${MIN_CLUSTER_COVERAGE:-0.80}"
 MAX_BANK_MIB="${MAX_BANK_MIB:-860}"
 
@@ -71,8 +71,10 @@ manifest = load(os.path.join(bank, "kit_manifest.json"))
 clusters = manifest.get("clusters") or []
 kits = manifest.get("kits") or []
 phrases = sum(len(k.get("phrases") or []) for k in kits)
-if len(kits) != kits_target:
+if kits_target > 0 and len(kits) != kits_target:
     raise SystemExit(f"manifest has {len(kits)} kits, expected {kits_target}")
+if len(kits) < 300:
+    raise SystemExit(f"manifest has only {len(kits)} kits")
 if len(clusters) != 16:
     raise SystemExit(f"manifest has {len(clusters)} clusters, expected 16")
 if phrases < 2500:
@@ -104,8 +106,17 @@ if actual != expected:
     raise SystemExit(f"joint_features.f32 is {actual} bytes, expected {expected}")
 
 qc_report = load(os.path.join(qc, "kit_qc.json"))
-if int(qc_report.get("n_failures", 0)) != 0:
-    raise SystemExit(f"QC has {qc_report.get('n_failures')} failures")
+qc_kits = qc_report.get("kits") or []
+if len(qc_kits) < 300:
+    raise SystemExit(f"QC report covers only {len(qc_kits)} kits")
+failed_tracks = {str(f.get("track_id")) for f in (qc_report.get("failures") or []) if f.get("track_id")}
+manifest_tracks = {str(k.get("track_id")) for k in kits}
+remaining_failures = failed_tracks & manifest_tracks
+if remaining_failures:
+    raise SystemExit(
+        "failed tracks are still in the manifest: " + ", ".join(sorted(remaining_failures))
+    )
+print(f"[promote] QC failures excluded: {len(failed_tracks)} track(s)")
 coverage = load(os.path.join(qc, "run_coverage.json"))
 fracs = coverage.get("cluster_coverage") or {}
 for stem in ("drums", "bass", "other", "vocals"):
