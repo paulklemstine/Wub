@@ -369,6 +369,12 @@ def _pitch_fields(y: np.ndarray, sr: int, path: Optional[Path], stem: str = "oth
     if stem == "drums":
         out["pitch_source"] = "skipped-drums"
         return out
+    # Full-bank runs may disable pitch (Basic Pitch ONNX inference dominates
+    # runtime at ~30 s/stem; harmonic information is already covered by
+    # chroma/bass-root. Workers inherit this via env (fork start method).
+    if os.environ.get("EARS_NO_PITCH") == "1":
+        out["pitch_source"] = "disabled"
+        return out
 
     def _tuning_cents(freqs: np.ndarray) -> Optional[float]:
         f = np.asarray(freqs, dtype=float)
@@ -728,11 +734,15 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0,
                     help="cap phrases scored (0 = all; e.g. 20 for smoke)")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--no-pitch", action="store_true",
+                    help="skip Basic Pitch/CREPE (fast full-bank pass; pitch fields null)")
     ap.add_argument("--stems", default="/mnt/e/Wub/data/stems",
                     help="laptop stem corpus root (metadata only; decode uses manifest files)")
     ap.add_argument("--processed", default=os.environ.get("PROCESSED", "/tmp/wubtrain/processed"),
                     help="processed JSON dir (metadata only)")
     args = ap.parse_args()
+    if args.no_pitch:
+        os.environ["EARS_NO_PITCH"] = "1"
 
     t_start = time.time()
     manifest_path = Path(args.manifest)
