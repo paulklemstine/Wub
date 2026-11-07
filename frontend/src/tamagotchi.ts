@@ -517,9 +517,11 @@ export class TamagotchiAvatar {
       otherWaveform,
       masterWaveform,
       drumLevel ?? 0,
-      bassLevel ?? 0
+      bassLevel ?? 0,
+      vocalsLevel ?? 0,
+      rmsLevel
     );
-    this.renderASCII(meta, isDropGap, waveform, dt, bpm);
+    this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel);
     this.updateDashboard();
   }
 
@@ -638,27 +640,22 @@ export class TamagotchiAvatar {
   // ---------------------------------------------------------------------------
   // ASCII Rendering Engine
   // ---------------------------------------------------------------------------
-  /** Tiny ASCII eye glyph driven only by one stem's envelope/punch. */
-  private stemEyeGlyph(level: number, punch: number): string {
-    if (punch > 0.55 || level > 0.72) return "◉";
-    if (level > 0.40) return "◕";
-    if (punch > 0.18) return "✦";
-    if (level < 0.08) return "◔";
-    return "◕";
-  }
-
   private renderASCII(
     meta: GrooveboxMeta | null,
     isDropGap: boolean,
     waveform?: Uint8Array | null,
     dt: number = 0.016,
-    bpm: number = 126
+    bpm: number = 126,
+    vocalsLevel?: number,
+    drumLevel: number = 0,
+    bassLevel: number = 0,
+    rmsLevel: number = 0
   ): void {
     if (!this.asciiEl) return;
 
     const sec = meta?.section ?? "GROOVE_A";
     const vowel = meta?.vocalVowel ?? "";
-    const isSinging = Boolean(meta?.vocalSyllable) || this.stemEnv.vocals >= 0.02;
+    const isSinging = Boolean(meta?.vocalSyllable);
     const bob = this.isHeadBobbed;
 
     // Toggle glowing psychedelic singing shimmer
@@ -668,30 +665,24 @@ export class TamagotchiAvatar {
       this.asciiEl.classList.remove("singing");
     }
 
-    // Determine Big Expressive Anime Eyes. Left=drums, right=bass; mood states
-    // still override both, but the default pair breathes with its own stem.
-    let leftEye = this.stemEyeGlyph(this.stemEnv.drums, this.stemPunch.drums);
-    let rightEye = this.stemEyeGlyph(this.stemEnv.bass, this.stemPunch.bass);
+    // Determine Big Expressive Anime Eyes (v200: matched pair, both eyes share
+    // the same glyph — mood states override both together).
+    let eyes = "◕   ◕";
     if (this.isBlinking) {
-      leftEye = "◡";
-      rightEye = "◡";
+      eyes = "◡   ◡";
     } else if (isDropGap) {
-      leftEye = "⊙";
-      rightEye = "⊙";
+      eyes = "⊙   ⊙";
     } else if (this.temporaryAction === "PET") {
-      leftEye = "♥";
-      rightEye = "♥";
+      eyes = "♥   ♥";
     } else if (sec === "DROP" || this.temporaryAction === "HYPE") {
-      leftEye = "★";
-      rightEye = "★";
+      eyes = "★   ★";
     } else if (sec === "BUILDUP") {
-      leftEye = "✧";
-      rightEye = "✧";
+      eyes = "✧   ✧";
     } else if (sec === "BREAKDOWN") {
-      leftEye = "˘";
-      rightEye = "˘";
+      eyes = "˘   ˘";
+    } else if (this.stage >= 3) {
+      eyes = "◕   ◕";
     }
-    const eyes = `${leftEye}   ${rightEye}`;
 
     // Audio reactive dynamic "X" shaped nose in the middle of the face
     let nose = "  ><  ";
@@ -708,7 +699,7 @@ export class TamagotchiAvatar {
     }
 
     // Determine Live Animated Waveform Singing Mouth (Moved Down)
-    const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap, dt, bpm, this.stemEnv.vocals);
+    const mouth = this.extractWaveformMouth(waveform, isSinging, vowel, isDropGap, dt, bpm, vocalsLevel);
 
     // Render Round Orb Stages with big anime eyes, dynamic "X" nose, and pregenerated sound shape singing mouth
     let faceLines: string[] = [];
@@ -820,7 +811,9 @@ export class TamagotchiAvatar {
     otherWaveform?: Uint8Array | null,
     masterWaveform?: Uint8Array | null,
     drumLevel: number = 0,
-    bassLevel: number = 0
+    bassLevel: number = 0,
+    vocalsLevel: number = 0,
+    rmsLevel: number = 0
   ): void {
     if (!this.canvasEl) return;
     if (!this.ctx2d) {
@@ -835,7 +828,7 @@ export class TamagotchiAvatar {
 
     const sec = meta?.section ?? "GROOVE_A";
     const vowel = meta?.vocalVowel ?? "";
-    const isSinging = Boolean(meta?.vocalSyllable) || (this.stemEnv.vocals >= 0.02);
+    const isSinging = Boolean(meta?.vocalSyllable) || (vocalsLevel >= 0.008);
     const bob = this.isHeadBobbed;
     const t = performance.now() / 1000;
     const env = this.stemEnv;
@@ -1400,8 +1393,9 @@ export class TamagotchiAvatar {
     // 12. THE LIVE VOCAL WAVEFORM AUDIO REACTIVE MOUTH
     // -------------------------------------------------------------------------
     const mouthY = cy + 1 * scaleY;
-    const mouthAperture = Math.max(0, Math.min(1,
-      Math.max(this.smoothedVocalAmp, this.stemEnv.vocals) * 2.1 + punch.vocals * 0.35));
+    // v200 aperture: raw fast-follower only (slow envelopes damped syllable
+    // attacks and read as a tired mouth).
+    const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
 
     ctx.save();
     ctx.lineCap = "round";
@@ -1415,10 +1409,10 @@ export class TamagotchiAvatar {
     ctx.shadowColor = mouthGlow;
     ctx.strokeStyle = mouthColor;
     ctx.fillStyle = isSinging ? "rgba(255, 234, 0, 0.22)" : "rgba(255, 105, 180, 0.15)";
-    ctx.lineWidth = 2.4 + 1.4 * mouthAperture + 1.2 * punch.vocals;
+    ctx.lineWidth = 2.4;
 
     ctx.beginPath();
-    if (!isSinging && this.stemEnv.vocals < 0.02) {
+    if (!isSinging && vocalsLevel < 0.006) {
       // Resting cute kawaii bear smile ( ᵕ ‿ ᵕ ) / w-shape
       const breathe = Math.sin(t * 2.5) * 1.0;
       const rx = 6.5 + breathe;
@@ -1455,7 +1449,7 @@ export class TamagotchiAvatar {
         }
 
         const rad = Math.sqrt(Math.pow(curW * Math.cos(phi), 2) + Math.pow(curH * Math.sin(phi), 2));
-        const waveDisp = sampleNorm * (5.5 * mouthAperture + 1.2 + 2.5 * punch.vocals);
+        const waveDisp = sampleNorm * (5.5 * mouthAperture + 1.2);
         const mx = cx + (rad + waveDisp * 0.7) * Math.cos(phi);
         const my = mouthY + (rad + waveDisp) * Math.sin(phi);
 
