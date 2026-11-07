@@ -332,7 +332,9 @@ const EAR_W_FALLBACK = 0.30;
  * loader keeps the session running.
  */
 class KitAudioWorkerLoader {
-  /** False once construction, the worker error handler, or a timeout fails. */
+  /** False once construction, the worker error handler, or a timeout fails —
+   *  or after repeated error responses (e.g. OfflineAudioContext missing in
+   *  workers, which disables decode entirely in that browser). */
   ok = false;
   private worker: Worker | null = null;
   private nextId = 1;
@@ -340,9 +342,22 @@ class KitAudioWorkerLoader {
     resolve: (run: LoadedStemRun | null) => void;
     timer: ReturnType<typeof setTimeout>;
   }>();
+  private consecutiveErrors = 0;
+  private lastErrorMessage = "";
 
   start(sampleRate: number): void {
     if (this.ok && this.worker) return;
+    // A previous worker disabled by repeated errors is terminated here so a
+    // fresh session starts with a clean worker (not one orphan).
+    if (this.worker) {
+      try {
+        this.worker.terminate();
+      } catch {
+        // Already terminated.
+      }
+      this.worker = null;
+    }
+    this.consecutiveErrors = 0;
     try {
       const worker = new Worker(new URL("./kit_audio_worker.ts", import.meta.url), { type: "module" });
       worker.onmessage = (ev: MessageEvent) => this.onMessage(ev);
@@ -388,6 +403,7 @@ class KitAudioWorkerLoader {
     this.pending.delete(msg.id);
     clearTimeout(pending.timer);
     if (msg.type === "run" && ArrayBuffer.isView(msg.samples) && Number.isFinite(msg.preDur)) {
+      this.consecutiveErrors = 0;
       pending.resolve({
         samples: msg.samples as Float32Array,
         preDur: msg.preDur ?? 0,
@@ -399,7 +415,19 @@ class KitAudioWorkerLoader {
       // main-thread loader can try; log the cause so decode bugs surface.
       const message = (msg as { message?: unknown }).message;
       if (typeof message === "string" && message.length > 0) {
-        console.warn(`[StemRemix] kit audio worker error: ${message}`);
+        if (message !== this.lastErrorMessage) {
+          console.warn(`[StemRemix] kit audio worker error: ${message}`);
+        }
+        this.lastErrorMessage = message;
+      }
+      // Repeated error responses mean the worker can never decode in this
+      // browser (e.g. no OfflineAudioContext in workers) — disable it so
+      // loads go straight to the main thread instead of paying a wasted
+      // round-trip and a warning per run.
+      this.consecutiveErrors++;
+      if (this.consecutiveErrors >= 2 && this.ok) {
+        this.ok = false;
+        console.warn("[StemRemix] kit audio worker disabled (repeated errors); main-thread decode");
       }
       pending.resolve(null);
     }
