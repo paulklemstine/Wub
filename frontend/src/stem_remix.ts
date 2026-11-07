@@ -37,14 +37,16 @@ const PIN_RADIUS = 0.2;
 const PIN_SIGMA = 0.15;
 const PIN_TRACK_PENALTY = 0.75;
 const RECENT_BLOCKS = 6;
-// Hard stretch limits: Signalsmith phase-vocoder artifacts become obvious past
-// ~±10% (muffled highs, smeared transients). [0.90, 1.10] keeps every run
-// in the transparent band; ladder rotation still brings every tempo group
-// in near-tempo across sets.
-const RATE_MIN = 0.90;
-const RATE_MAX = 1.10;
-const TEMPO_COST_WEIGHT = 1.0;
-const KEY_COST_WEIGHT = 0.05;
+// Hard stretch limits: the phase vocoder smears transients and dulls highs
+// as |rate - 1| grows; past ~±6% the "stretched" quality is clearly audible
+// (listening report: rate 0.92 blocks read as filtered). [0.94, 1.06] keeps
+// every run inside the transparent band; the 104-bar BPM ladder still brings
+// every tempo group in near-tempo across sets, so full-bank traversal does
+// not depend on extreme stretches.
+const RATE_MIN = 0.94;
+const RATE_MAX = 1.06;
+const TEMPO_COST_WEIGHT = 2.0;
+const KEY_COST_WEIGHT = 0.12;
 const CACHE_LIMIT = 24;
 // Phrases whose stem is effectively absent are not useful as independent
 // streams; keep a floor per stem so a "bass" phrase actually has bass.
@@ -255,6 +257,17 @@ function rootPenalty(root: number | null, reference: number | null): number {
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+/** Let the renderer breathe between the heavy synchronous tails of stem
+ *  loads (mixToMono + concat + worklet buffer clone, 100-300 ms for 8/16-bar
+ *  runs).  Four stems scheduled back-to-back in one macrotask measured
+ *  600-1100 ms of main-thread blocking, enough to starve the audio render
+ *  thread into a 639 ms mid-block dropout. */
+function yieldToMain(): Promise<void> {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (scheduler?.yield) return scheduler.yield();
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function hashRoll(input: string): number {
@@ -830,7 +843,14 @@ export class StemRemixPlayer {
       if (!kit || this.failedKits.has(kitId)) continue;
       const sections = new Set(kit.phrases.map((p) => String(p.section).toUpperCase()));
       let score = 0;
-      if (kit.key === this.sessionKey) score += 4;
+      // The anchor song is transposed to the session key for the opening
+      // blocks; a whole-song |shift| >= 4 is the classic "muddy cold open"
+      // (v0.2.233 opened at shift 5).  Prefer anchors already near the key.
+      const shift = keyShift(this.sessionKey, kit.key);
+      if (shift === null) score -= 6;
+      else if (Math.abs(shift) <= 2) score += 6;
+      else if (Math.abs(shift) <= 3) score += 3;
+      else score -= (Math.abs(shift) - 3) * 1.25;
       if (sections.has("GROOVE_A")) score += 2;
       if (sections.has("DROP")) score += 1.5;
       if (sections.has("BUILDUP")) score += 0.5;
@@ -2050,10 +2070,18 @@ export class StemRemixPlayer {
   ): Promise<void> {
     const callMs = performance.now();
     let maxLoadMs = 0;
-    await Promise.all(tasks.map(async (task) => {
+    // Loads stay concurrent (fetch + decode are off-thread), but the
+    // synchronous tail of each stem (mixToMono + concat + worklet clone,
+    // 100-300 ms for 8/16-bar runs) is scheduled one stem at a time with a
+    // main-thread yield between.  Four stems fired back-to-back in one
+    // macrotask measured 600-1100 ms of blocking (v0.2.233 dropout).
+    const audios = await Promise.all(tasks.map(async (task) => {
       const loadT0 = performance.now();
       const audio = await this.loadRunAudio(task.run);
       maxLoadMs = Math.max(maxLoadMs, performance.now() - loadT0);
+      return { task, audio };
+    }));
+    for (const { task, audio } of audios) {
       if (!audio) {
         const current = this.current[task.stem];
         const fallbackRun = current?.run ?? (current ? [current.entry] : null);
@@ -2063,10 +2091,11 @@ export class StemRemixPlayer {
             await this.scheduleRun(task.stem, fallbackRun, fallback, at, this.currentBlockBars, false);
           }
         }
-        return;
+      } else {
+        await this.scheduleRun(task.stem, task.run, audio, at, this.currentBlockBars, false);
       }
-      await this.scheduleRun(task.stem, task.run, audio, at, this.currentBlockBars, false);
-    }));
+      await yieldToMain();
+    }
     // Scheduling diagnostics: a slow fetch/decode that lands near the bar
     // start explains 1 s dropout reports (schedule() clamps late starts).
     const latenessMs = (this.engine.now() - at) * 1000;
