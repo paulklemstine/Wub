@@ -508,7 +508,7 @@ clouds; `scripts/layout_stem_clouds.py` places them in quadrants.
 * The session key/tempo is the cluster's key/tempo. The candidate pool is
   the **whole shipped bank** (all 2,565 phrases; 2,564 audible — one phrase
   is silent on all stems and fails the RMS floors): any phrase whose Stretch
-  `rate` falls in `[0.60, 1.65]` (the full ~88–140 BPM bank range) and whose
+  `rate` falls in `[0.85, 1.18]` (musical range; extreme ratios audibly smear) and whose
   key transposes within ±6 semitones (drums unpitched) is eligible. Scoring
   tiers strongly prefer near-tempo/near-key phrases (tempo cost
   `|rate − 1|`, key cost `|shift|`), so extreme stretches only surface once
@@ -652,7 +652,7 @@ is optional (playback never depends on it).
 * Never resample a phrase with `playbackRate`; use the stretcher's `rate`.
 * Drums are key-agnostic; pitched stems transpose within ±6 semitones to the
   session key (any key, major/minor included); tempo uses Stretch `rate` in
-  [0.60, 1.65] with tiered costs preferring near matches.
+  [0.85, 1.18] with tiered costs preferring near matches.
 * One shared bar grid; a drag commits on a bar, a phrase advance on a block.
 * No pin may outlive 32 bars, and no cluster may outlive the 104-bar arc
   (19 blocks, including the 8-bar bridge).

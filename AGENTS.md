@@ -10,7 +10,7 @@ Welcome to the **Wub KG-505** codebase. This document serves as the primary tech
 - **Domain**: Real-time generative electronic music, audio stem analysis, real 4-bar phrase performance, and web-based audio engineering.
 - **Mission**: Ingest an authentic audio training corpus (1,700+ dance tracks), separate into stems (drums, bass, other, vocals), mine real 4-bar phrases into song kits, learn a taste model for phrase and kit transitions, and play a neverending, highly musical DJ set directly in the browser.
 - **Dual-Engine Execution**:
-  1. **🧠 In-Browser Kit Jukebox (shipped)**: 100% standalone, client-side Web Audio engine. The cluster bank runs four independent stem streams that share one bar grid; each stem can be dragged to a new style region, pinned for 32 bars, and the session follows a 4→8→16-bar arc before walking the BPM ladder every 104 bars. Real 4-bar phrases, no slice resynthesis or `playbackRate` resampling; the pool is the whole shipped bank (all 2,565 phrases) with tiered tempo/key costs — tempo uses Signalsmith Stretch `rate` in [0.60, 1.65] and key uses `semitones` within ±6 (drums 0), strongly preferring near matches while far matches surface as the near pool is played out. Full design: `docs/KIT_ENGINE.md`.
+  1. **🧠 In-Browser Kit Jukebox (shipped)**: 100% standalone, client-side Web Audio engine. The cluster bank runs four independent stem streams that share one bar grid; each stem can be dragged to a new style region, pinned for 32 bars, and the session follows a 4→8→16-bar arc before walking the BPM ladder every 104 bars. Real 4-bar phrases, no slice resynthesis or `playbackRate` resampling; the pool is the whole shipped bank (all 2,565 phrases) with tiered tempo/key costs — tempo uses Signalsmith Stretch `rate` in [0.85, 1.18] and key uses `semitones` within ±6 (drums 0), strongly preferring near matches while far matches surface as the near pool is played out. Full design: `docs/KIT_ENGINE.md`.
   2. **⚡ WebSocket Cloud Sync (legacy/hybrid)**: Client/server mode streaming tatums and slice references from the Python FastAPI server backed by FAISS indices. The deployed site does not need it; the kit bank is the shipped path.
 
 ---
@@ -90,7 +90,7 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   voice, pin and lazy cache entry. Never splice two songs inside one stem's
   phrase; cross-song recombination happens only at block boundaries.
 - **No `playbackRate` resampling.** Tempo fit uses Signalsmith Stretch `rate`
-  in [0.60, 1.65] (the full 88–140 BPM bank range); key fit uses `semitones`
+  in [0.85, 1.18] (musical stretch range; tempo groups rotate near-tempo via the BPM ladder); key fit uses `semitones`
   (drums 0, pitched stems within ±6). Near-tempo/near-key phrases are
   strongly preferred by tiered scoring costs, so extreme stretches only
   surface once the near pool is played out; the joint ranker's shift/rate

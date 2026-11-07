@@ -2,12 +2,13 @@
 // bar grid.  Every stem owns a current phrase, a lazy audio cache, a pinned
 // style region, and its own Signalsmith Stretch voice.  The engine keeps the
 // session key/tempo fixed within a set, transposes any phrase key to the
-// session key (up to a tritone), time-stretches any phrase tempo to the
-// session grid, and rotates to the next BPM-ladder cluster every 104 bars.
-// The candidate pool is the whole shipped bank (all 2,565 phrases) filtered
-// only by the stretch/transpose hard limits below; near-tempo/near-key
-// phrases are strongly preferred by scoring, far ones surface as the near
-// pool is played out, so a long session traverses the full bank.
+// session key (up to a tritone), time-stretches phrase tempo to the session
+// grid within a musical ratio ([0.85, 1.18] — larger ratios sound muffled),
+// and rotates to the next BPM-ladder cluster every 104 bars.  The candidate
+// pool is the whole shipped bank (all 2,565 phrases) filtered by those hard
+// limits; tiered scoring strongly prefers near matches, and ladder rotation
+// brings every tempo group near-tempo in its own sets, so a long session
+// traverses the full bank without extreme stretches.
 import type { AudioEngine } from "./audio_engine";
 import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
@@ -37,15 +38,16 @@ const PIN_RADIUS = 0.2;
 const PIN_SIGMA = 0.15;
 const PIN_TRACK_PENALTY = 0.75;
 const RECENT_BLOCKS = 6;
-// Hard stretch limits: the bank spans ~88–140 BPM, so a fixed grid needs
-// rate 0.63–1.59 to reach every phrase.  The hard gate below is slightly
-// wider ([0.60, 1.65]) so all 2,565 phrases are eligible; scoring tiers
-// (TEMPO_COST_WEIGHT / KEY_COST_WEIGHT) strongly prefer near matches, so
-// extreme stretches only surface once the near pool is played out.
-const RATE_MIN = 0.60;
-const RATE_MAX = 1.65;
-const TEMPO_COST_WEIGHT = 1.0;
-const KEY_COST_WEIGHT = 0.05;
+// Hard stretch limits: Signalsmith artifacts grow steeply past ~±18% —
+// extreme ratios (e.g. a 88 BPM phrase at a 129 BPM grid, rate 1.47) sound
+// underwater/muddy (smeared transients, damped highs) and can underrun.
+// The gate is therefore musical, not bank-wide: [0.85, 1.18]. Every tempo
+// group is still reached near-tempo via BPM-ladder rotation across sets, so
+// the full bank traverses without extreme stretches inside one set.
+const RATE_MIN = 0.85;
+const RATE_MAX = 1.18;
+const TEMPO_COST_WEIGHT = 2.5;
+const KEY_COST_WEIGHT = 0.10;
 const CACHE_LIMIT = 64;
 // Phrases whose stem is effectively absent are not useful as independent
 // streams; keep a floor per stem so a "bass" phrase actually has bass.
@@ -923,7 +925,7 @@ export class StemRemixPlayer {
       ? 4
       : this.blockBarsAt(this.sessionBar);
     const upcomingSec = upcomingBars * this.barSec;
-    const lead = Math.min(8, Math.max(2.0, upcomingSec * 0.6));
+    const lead = Math.min(8, Math.max(2.5, upcomingSec * 0.75));
     if (
       !this.preparing &&
       this.nextBlockAt > 0 &&
