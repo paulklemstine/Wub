@@ -387,16 +387,20 @@ class KitAudioWorkerLoader {
     if (!pending) return;
     this.pending.delete(msg.id);
     clearTimeout(pending.timer);
-    if (msg.type === "run" && msg.samples instanceof Float32Array && Number.isFinite(msg.preDur)) {
+    if (msg.type === "run" && ArrayBuffer.isView(msg.samples) && Number.isFinite(msg.preDur)) {
       pending.resolve({
-        samples: msg.samples,
+        samples: msg.samples as Float32Array,
         preDur: msg.preDur ?? 0,
         mainDurations: Array.isArray(msg.mainDurations) ? msg.mainDurations : [],
         sampleRate: typeof msg.sampleRate === "number" ? msg.sampleRate : ENGINE_SAMPLE_RATE,
       });
     } else {
-      // A real per-file failure (or error message): fail the run, keep the
-      // worker trusted — the block fallback reuses the current phrase.
+      // A real per-file failure (or error message): fail the run so the
+      // main-thread loader can try; log the cause so decode bugs surface.
+      const message = (msg as { message?: unknown }).message;
+      if (typeof message === "string" && message.length > 0) {
+        console.warn(`[StemRemix] kit audio worker error: ${message}`);
+      }
       pending.resolve(null);
     }
   }
@@ -2422,11 +2426,12 @@ export class StemRemixPlayer {
         });
       }
       const loaded = await this.audioWorker.load(items);
-      if (!loaded) {
-        for (const entry of run) this.failedKits.add(entry.kit.track_id);
-        return null;
-      }
-      return loaded;
+      if (loaded) return loaded;
+      // The worker reported a failed run (or glitched silently): the
+      // main-thread loader keeps the session alive from here.  It records
+      // per-phrase failures (failedKits) the same way, so a genuinely
+      // missing file still fails the run.
+      return this.loadRunAudioMain(run);
     }
     return this.loadRunAudioMain(run);
   }
