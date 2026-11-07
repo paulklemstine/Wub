@@ -2221,7 +2221,8 @@ export class StemRemixPlayer {
     const first = run[0];
     if (!first) return;
     try {
-      const voice = await this.getVoice(stem, this.current[stem]?.voice);
+      const previous = this.current[stem];
+      const voice = await this.getVoice(stem, previous?.voice);
       const preDur = await voice.loadRun(audio.mains, audio.pre);
       const rate = Math.max(RATE_MIN, Math.min(RATE_MAX, first.rate));
       const startAt = at - preDur / rate;
@@ -2236,6 +2237,11 @@ export class StemRemixPlayer {
         formantCompensation: stem === "vocals",
         fadeInSec: crossfadeSec,
         gain: first.gain,
+        // Equal-gain hand-off: fade in at the outgoing voice's level so a
+        // quiet/loud phrase splice can't dip, then settle to this gain.
+        handoffGain: previous && previous.voice !== voice
+          ? previous.voice.outputGainTarget
+          : undefined,
       });
       const blockSec = bars * this.barSec;
       const runEndAt = at + blockSec;
@@ -2248,7 +2254,6 @@ export class StemRemixPlayer {
         offset += buffer.duration / rate;
       }
 
-      const previous = this.current[stem];
       if (previous && previous.voice !== voice) {
         previous.voice.fadeOut(startAt, crossfadeSec);
       }
@@ -2383,7 +2388,8 @@ export class StemRemixPlayer {
       return;
     }
     try {
-      const voice = await this.getVoice(stem, this.current[stem]?.voice);
+      const previous = this.current[stem];
+      const voice = await this.getVoice(stem, previous?.voice);
       const rate = Math.max(RATE_MIN, Math.min(RATE_MAX, runEntry.rate));
       const preDur = await voice.loadRun(audio.mains, audio.pre);
       const crossfadeSec = Math.max(0.02, STEM_FADE_IN[stem], preDur / rate);
@@ -2418,12 +2424,14 @@ export class StemRemixPlayer {
         formantCompensation: stem === "vocals",
         fadeInSec: crossfadeSec,
         gain: runEntry.gain,
+        handoffGain: previous && previous.voice !== voice
+          ? previous.voice.outputGainTarget
+          : undefined,
       });
       voice.fadeOut(endAt, STEM_FADE_OUT[stem]);
 
       // Silence the current voice and any block voice already queued inside
       // the partial commit window; this stem is manual until the handoff.
-      const previous = this.current[stem];
       if (previous && previous.voice !== voice) previous.voice.fadeOut(startAt, crossfadeSec);
       const kept: ScheduledRun[] = [];
       for (const scheduled of this.scheduledRuns[stem] ?? []) {

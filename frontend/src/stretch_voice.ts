@@ -64,6 +64,15 @@ export interface StretchScheduleOptions {
   fadeInSec?: number;
   /** Optional gain override for this phrase. */
   gain?: number;
+  /**
+   * Previous voice's target gain at a cross-song boundary.  The incoming
+   * voice fades in to this level (equal power with the outgoing voice, so a
+   * quiet/loud phrase hand-off doesn't dip), then settles to `gain` over
+   * `handoffSec` seconds.  Omit for a plain fade to `gain`.
+   */
+  handoffGain?: number;
+  /** Settle time from handoff gain to target gain (default 0.20s). */
+  handoffSec?: number;
 }
 
 export class StretchVoice {
@@ -150,13 +159,28 @@ export class StretchVoice {
     const target = Math.max(0, Math.min(3.0, options.gain ?? 1));
     this.targetGain = target;
     const gain = this.gain.gain;
+    const handoff = typeof options.handoffGain === "number"
+      && Number.isFinite(options.handoffGain)
+      && options.handoffGain > 0
+      ? Math.min(3.0, options.handoffGain)
+      : null;
+    const startGain = handoff ?? target;
+    const settleSec = Math.max(0.02, options.handoffSec ?? 0.20);
     try {
       gain.cancelScheduledValues(when);
-      gain.setValueCurveAtTime(fadeCurve(target, true), when, fadeIn);
+      gain.setValueCurveAtTime(fadeCurve(startGain, true), when, fadeIn);
+      if (handoff !== null && Math.abs(handoff - target) > 1e-4) {
+        // Settle from the hand-off level to this phrase's own gain without a
+        // level step after the equal-power crossfade.
+        gain.setTargetAtTime(target, when + fadeIn, settleSec / 3);
+      }
     } catch {
       // Older/edge contexts: fall back to a linear fade.
       gain.setValueAtTime(0.0001, when);
-      gain.linearRampToValueAtTime(target, when + fadeIn);
+      gain.linearRampToValueAtTime(startGain, when + fadeIn);
+      if (handoff !== null && Math.abs(handoff - target) > 1e-4) {
+        gain.linearRampToValueAtTime(target, when + fadeIn + settleSec);
+      }
     }
     this.node.schedule({
       outputTime: when,
@@ -249,6 +273,11 @@ export class StretchVoice {
   /** Current gain parameter value (debug). */
   get gainValue(): number {
     return this.gain.gain.value;
+  }
+
+  /** Target gain of the current schedule (for equal-gain hand-offs). */
+  get outputGainTarget(): number {
+    return this.targetGain;
   }
 }
 
