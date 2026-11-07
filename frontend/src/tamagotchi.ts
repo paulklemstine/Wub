@@ -153,6 +153,18 @@ export class TamagotchiAvatar {
   private smoothedVocalAmp: number = 0;
   private singingLoopPhase: number = 0;
 
+  // Vocal acoustics for mouth articulation (pitch + formants, tracked at
+  // 30 Hz from the vocal analyser waveform at the engine's fixed 44100 Hz).
+  // These drive mouth shape/width/height so the bear forms the actual sound.
+  private vocalF0Hz: number = 0;
+  private vocalF0Confidence: number = 0;
+  private vocalF0MedianHz: number = 220;
+  private vocalVibratoSemis: number = 0;
+  private vocalF1: number = 0;
+  private vocalF2: number = 0;
+  private vocalVowelFormant: string = "";
+  private vocalFrame: number = 0;
+
   // Per-stem reactive envelopes. Every visual feature reads one instrument so
   // the bear reads like a four-piece band: eyes=drums/bass, mouth=vocals,
   // heart=other, body/halo/motes=the full mix.
@@ -403,6 +415,13 @@ export class TamagotchiAvatar {
       otherWaveform
     );
 
+    // Mouth articulation: track pitch/formants at 30 Hz from the vocal
+    // waveform before either face renders (they share the result).
+    this.vocalFrame += 1;
+    if (this.vocalFrame % 2 === 0) {
+      this.analyzeVocalAcoustics(waveform, dt);
+    }
+
     // Real-time Audio and Vocal Reactivity for Electric Rave Glow
     if (this.asciiEl) {
       this.asciiEl.style.setProperty("--audio-lvl", this.mixEnv.toFixed(3));
@@ -523,6 +542,178 @@ export class TamagotchiAvatar {
     );
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel);
     this.updateDashboard();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Vocal acoustics: pitch (F0) + formants (F1/F2) for mouth articulation
+  // ---------------------------------------------------------------------------
+  /** Small iterative radix-2 FFT (magnitude only, in place). */
+  private static fftMagnitude(input: Float32Array): Float32Array {
+    const n = input.length;
+    const re = new Float32Array(n);
+    const im = new Float32Array(n);
+    re.set(input);
+    // Bit-reversal permutation.
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        let tmp = re[i]; re[i] = re[j]; re[j] = tmp;
+        tmp = im[i]; im[i] = im[j]; im[j] = tmp;
+      }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = (-2 * Math.PI) / len;
+      const wLenRe = Math.cos(ang);
+      const wLenIm = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let wRe = 1;
+        let wIm = 0;
+        const half = len >> 1;
+        for (let k = 0; k < half; k++) {
+          const uRe = re[i + k];
+          const uIm = im[i + k];
+          const vRe = re[i + k + half] * wRe - im[i + k + half] * wIm;
+          const vIm = re[i + k + half] * wIm + im[i + k + half] * wRe;
+          re[i + k] = uRe + vRe;
+          im[i + k] = uIm + vIm;
+          re[i + k + half] = uRe - vRe;
+          im[i + k + half] = uIm - vIm;
+          const nextWRe = wRe * wLenRe - wIm * wLenIm;
+          wIm = wRe * wLenIm + wIm * wLenRe;
+          wRe = nextWRe;
+        }
+      }
+    }
+    const mag = new Float32Array(n >> 1);
+    for (let i = 0; i < mag.length; i++) {
+      mag[i] = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
+    }
+    return mag;
+  }
+
+  private static nextPow2(value: number): number {
+    let n = 1024;
+    while (n < value) n <<= 1;
+    return n;
+  }
+
+  /**
+   * Track vocal pitch, formants and vowel from the vocal time-domain
+   * waveform (Uint8-ish 0..255, centred 128) at 44100 Hz.  Runs every other
+   * frame (30 Hz) — plenty for articulation.  All state decays safely when
+   * the voice is silent, so the mouth falls back to amplitude + vowel table.
+   */
+  private analyzeVocalAcoustics(
+    waveform: Uint8Array | null | undefined,
+    dt: number
+  ): void {
+    const sr = 44100;
+    if (!waveform || waveform.length < 512) {
+      this.vocalF0Confidence = Math.max(0, this.vocalF0Confidence - dt * 2);
+      return;
+    }
+    // Overall level: unvoiced/silent frames hold formants, drop confidence.
+    let energy = 0;
+    for (let i = 0; i < waveform.length; i++) {
+      const v = (waveform[i] - 128) / 128;
+      energy += v * v;
+    }
+    const rms = Math.sqrt(energy / waveform.length);
+    // ---- pitch via normalised autocorrelation (decimated x2) ----
+    const dec = 2;
+    const srDec = sr / dec;
+    const m = Math.floor(waveform.length / dec);
+    const centered = new Float32Array(m);
+    let mean = 0;
+    for (let i = 0; i < m; i++) mean += (waveform[i * dec] - 128) / 128;
+    mean /= Math.max(1, m);
+    let power = 0;
+    for (let i = 0; i < m; i++) {
+      const v = (waveform[i * dec] - 128) / 128 - mean;
+      centered[i] = v;
+      power += v * v;
+    }
+    let bestLag = 0;
+    let bestVal = 0;
+    if (power > 1e-6) {
+      const minLag = Math.max(8, Math.floor(srDec / 800));
+      const maxLag = Math.min(m - 1, Math.ceil(srDec / 80));
+      for (let lag = minLag; lag <= maxLag; lag++) {
+        const n = m - lag;
+        let sum = 0;
+        for (let i = 0; i < n; i++) sum += centered[i] * centered[i + lag];
+        // Normalised by total power; lag-decay correction keeps long lags honest.
+        const corr = sum / Math.max(1e-9, power);
+        const score = corr / Math.max(0.01, 1 - lag / m);
+        if (score > bestVal) {
+          bestVal = score;
+          bestLag = lag;
+        }
+      }
+    }
+    const confidence = Math.max(0, Math.min(1, bestVal));
+    this.vocalF0Confidence = confidence;
+    if (bestLag > 0 && confidence > 0.35 && rms > 0.015) {
+      const f0 = srDec / bestLag;
+      const prev = this.vocalF0Hz;
+      this.vocalF0Hz = prev > 0 ? prev * 0.55 + f0 * 0.45 : f0;
+      this.vocalF0MedianHz = this.vocalF0MedianHz * 0.995 + this.vocalF0Hz * 0.005;
+      const semis = Math.abs(12 * Math.log2(Math.max(20, this.vocalF0Hz) / Math.max(20, this.vocalF0MedianHz)));
+      this.vocalVibratoSemis = this.vocalVibratoSemis * 0.85 + semis * 0.15;
+    } else {
+      this.vocalF0Hz *= Math.max(0, 1 - dt * 3);
+      this.vocalVibratoSemis *= Math.max(0, 1 - dt * 4);
+    }
+    // ---- formants via FFT magnitude (F1/F2 bands) ----
+    // Only update on voiced frames so consonant noise doesn't drag vowels.
+    if (confidence > 0.25 || rms > 0.06) {
+      const n = TamagotchiAvatar.nextPow2(Math.min(4096, waveform.length));
+      const re = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const idx = Math.min(waveform.length - 1, Math.floor((i / n) * waveform.length));
+        const hann = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / Math.max(1, n - 1));
+        re[i] = ((waveform[idx] - 128) / 128 - mean) * hann;
+      }
+      const mag = TamagotchiAvatar.fftMagnitude(re);
+      const binHz = sr / n;
+      const bandMax = (loHz: number, hiHz: number): number => {
+        const lo = Math.max(1, Math.floor(loHz / binHz));
+        const hi = Math.min(mag.length - 1, Math.ceil(hiHz / binHz));
+        let peak = -Infinity;
+        let peakBin = lo;
+        for (let b = lo; b <= hi; b++) {
+          // 3-bin smoothing rejects single-bin spikes.
+          const sm = (mag[Math.max(0, b - 1)] + 2 * mag[b] + mag[Math.min(mag.length - 1, b + 1)]) / 4;
+          if (sm > peak) {
+            peak = sm;
+            peakBin = b;
+          }
+        }
+        return peakBin * binHz;
+      };
+      const f1 = bandMax(250, 1100);
+      const f2 = bandMax(800, 2800);
+      const k = Math.min(1, dt * 12);
+      this.vocalF1 = this.vocalF1 > 0 ? this.vocalF1 * (1 - k) + f1 * k : f1;
+      this.vocalF2 = this.vocalF2 > 0 ? this.vocalF2 * (1 - k) + f2 * k : f2;
+      // Vowel = nearest reference in normalised (F1, F2) space.
+      const refs: Array<[string, number, number]> = [
+        ["AH", 700, 1200], ["EE", 300, 2300], ["OH", 600, 900],
+        ["OO", 300, 870], ["AY", 650, 1700],
+      ];
+      let best = "";
+      let bestD = Infinity;
+      for (const [name, r1, r2] of refs) {
+        const d = ((this.vocalF1 - r1) / 350) ** 2 + ((this.vocalF2 - r2) / 900) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = name;
+        }
+      }
+      this.vocalVowelFormant = best;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -654,7 +845,7 @@ export class TamagotchiAvatar {
     if (!this.asciiEl) return;
 
     const sec = meta?.section ?? "GROOVE_A";
-    const vowel = meta?.vocalVowel ?? "";
+    const vowel = this.vocalVowelFormant || meta?.vocalVowel || "";
     const isSinging = Boolean(meta?.vocalSyllable);
     const bob = this.isHeadBobbed;
 
@@ -827,7 +1018,7 @@ export class TamagotchiAvatar {
     ctx.clearRect(0, 0, w, h);
 
     const sec = meta?.section ?? "GROOVE_A";
-    const vowel = meta?.vocalVowel ?? "";
+    const vowel = this.vocalVowelFormant || meta?.vocalVowel || "";
     const isSinging = Boolean(meta?.vocalSyllable) || (vocalsLevel >= 0.008);
     const bob = this.isHeadBobbed;
     const t = performance.now() / 1000;
@@ -1392,10 +1583,18 @@ export class TamagotchiAvatar {
     // -------------------------------------------------------------------------
     // 12. THE LIVE VOCAL WAVEFORM AUDIO REACTIVE MOUTH
     // -------------------------------------------------------------------------
-    const mouthY = cy + 1 * scaleY;
+    const mouthY = cy + 1 * scaleY
+      // Pitch lift: higher F0 rides the mouth up a touch (subtle, ±2px).
+      + (this.vocalF0Hz > 0
+        ? Math.max(-0.35, Math.min(0.55, (this.vocalF0Hz - 220) / 700)) * 4 * scaleY
+        : 0);
     // v200 aperture: raw fast-follower only (slow envelopes damped syllable
     // attacks and read as a tired mouth).
     const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
+    // Carried out of the singing branch so teeth can draw after fill/stroke.
+    let mouthCurW = 0;
+    let mouthCurH = 0;
+    let mouthUpVowel = "AH";
 
     ctx.save();
     ctx.lineCap = "round";
@@ -1429,13 +1628,23 @@ export class TamagotchiAvatar {
       let baseW = 12;
       let baseH = 10;
       const upVowel = (vowel || "AH").toUpperCase();
+      mouthUpVowel = upVowel;
       if (upVowel === "EE") { baseW = 15; baseH = 5; }
       else if (upVowel === "OH") { baseW = 9; baseH = 14; }
       else if (upVowel === "OO") { baseW = 7; baseH = 7; }
       else if (upVowel === "AY") { baseW = 14; baseH = 9; }
+      // Front vowels (high F2) open wide; back/round vowels stay narrow.
+      if (this.vocalF2 > 500) {
+        baseW *= Math.max(0.6, Math.min(1.45, 0.78 + (this.vocalF2 - 1200) / 1400));
+      }
 
-      const curW = baseW * (0.6 + 0.9 * mouthAperture);
-      const curH = baseH * (0.6 + 1.1 * mouthAperture);
+      // Vibrato: F0 wobble (~5 Hz) breathes the mouth size.
+      const vibWobble = 1 + Math.sin(t * Math.PI * 2 * 5.0)
+        * Math.min(0.18, this.vocalVibratoSemis * 0.18);
+      const curW = baseW * (0.6 + 0.9 * mouthAperture) * vibWobble;
+      const curH = baseH * (0.6 + 1.1 * mouthAperture) * vibWobble;
+      mouthCurW = curW;
+      mouthCurH = curH;
 
       const waveLen = waveform ? waveform.length : 0;
       for (let j = 0; j <= mouthSteps; j++) {
@@ -1460,6 +1669,19 @@ export class TamagotchiAvatar {
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+    // Teeth flash on wide/front vowels (EE/AY/AH): a bright bar clipped to
+    // the mouth interior reads as "showing teeth mid-phoneme".
+    if (isSinging && mouthAperture > 0.25 && mouthCurW > 0
+      && (mouthUpVowel === "EE" || mouthUpVowel === "AY" || mouthUpVowel === "AH")) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, mouthY, mouthCurW * 0.85, mouthCurH * 0.7, 0, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+      ctx.fillRect(cx - mouthCurW * 0.7, mouthY - mouthCurH * 0.62,
+        mouthCurW * 1.4, Math.max(2, mouthCurH * 0.28));
+      ctx.restore();
+    }
     ctx.restore();
 
     // -------------------------------------------------------------------------
