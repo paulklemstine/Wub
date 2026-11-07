@@ -271,7 +271,9 @@ function hashRoll(input: string): number {
 }
 
 /** Candidates presented to the joint ranker per stem (one per track). */
-const JOINT_CANDIDATES_PER_STEM = 12;
+const JOINT_CANDIDATES_PER_STEM = 8;
+/** Reserve slots for never-played material inside the shortlist. */
+const JOINT_RESERVE = 2;
 /** Per-stem phrases excluded after they play, so a winner cannot repeat at once. */
 const STEM_HISTORY_AVOID = 16;
 /** Policy-score window for near-best exploration in selectJoint. */
@@ -279,7 +281,7 @@ const EXPLORE_WINDOW = 0.06;
 /** How many near-best joint candidates exploration may choose among. */
 const EXPLORE_TOP_K = 5;
 /** Pair combinations evaluated per stem pair (top of each sorted list). */
-const PAIR_TOP_N = 6;
+const PAIR_TOP_N = 4;
 /** Ears soft-prior weight in jointOptions (good phrases win ties only). */
 const EAR_W_JOINT = 0.20;
 /** Ears soft-prior weight in heuristic fallbacks (morph/pin). */
@@ -1120,10 +1122,15 @@ export class StemRemixPlayer {
     const useFallback = !opening && !bridge && !rotation
       && (!rankerReady || (joint === null && staleStems.size > 0));
 
+    // Stale stems get morph priority in fallback mode (they've waited
+    // longest); the budget cap below keeps simultaneous splices to at most
+    // budget.maxChanges stems, matching the joint path's discipline.
     const order: StemName[] = bridge && !rotation
       ? ["other", "vocals"]
-      : [...STEMS];
+      : [...STEMS].sort((a, b) =>
+        (staleStems.has(b) ? 1 : 0) - (staleStems.has(a) ? 1 : 0));
     const chosenRuns: Partial<Record<StemName, StemPoolEntry[]>> = {};
+    let fallbackMorphs = 0;
     for (const stem of order) {
       let manual = this.manualPins[stem];
       if (manual && manual.runEndAt <= at + 0.05) {
@@ -1167,9 +1174,11 @@ export class StemRemixPlayer {
         const cooledDown = cooldownBars === 0 || sectionChanged
           || staleStems.has(stem)
           || startBar - (this.lastChangeBar[stem] ?? 0) >= cooldownBars;
-        entry = (vocalOk && cooledDown)
-          ? (this.selectMorph(stem, at, normalized, phrasesPerStem) ?? this.holdEntry(stem))
-          : this.holdEntry(stem);
+        const morph = (vocalOk && cooledDown && fallbackMorphs < budget.maxChanges)
+          ? this.selectMorph(stem, at, normalized, phrasesPerStem)
+          : null;
+        if (morph) fallbackMorphs++;
+        entry = morph ?? this.holdEntry(stem);
       } else {
         entry = this.holdEntry(stem);
       }
@@ -1401,7 +1410,7 @@ export class StemRemixPlayer {
       });
     let added = 0;
     for (const item of reserve) {
-      if (added >= 3) break;
+      if (added >= JOINT_RESERVE) break;
       const trackId = item.entry.kit.track_id;
       if (seen.has(trackId)) continue;
       if (this.playCountOf(stem, item.entry.phrase.id) !== 0) continue;

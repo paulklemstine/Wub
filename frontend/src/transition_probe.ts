@@ -203,7 +203,7 @@ export class TransitionProbe {
    * (seam dips are the boundary probe's job). Pure measurement, no audio
    * path is touched.
    */
-  private updateDropouts(now: number, analyser: AnalyserNode): void {
+  private updateDropouts(now: number, analyser: AnalyserNode, engine: AudioEngine): void {
     const data = new Float32Array(analyser.fftSize);
     analyser.getFloatTimeDomainData(data);
     const rms = rmsOf(data, 0, data.length);
@@ -243,10 +243,14 @@ export class TransitionProbe {
         log.push(event);
         if (log.length > 200) log.splice(0, log.length - 200);
         this.dropoutCount_++;
+        const ctxState = typeof engine.contextState === "function"
+          ? engine.contextState()
+          : "unknown";
         console.info(
           `[TransitionProbe] mid-block dropout at ${event.at.toFixed(3)}s ` +
             `dur=${durationMs.toFixed(0)}ms ` +
-            `minRms=${event.minRms.toFixed(4)} baseline=${event.baselineRms.toFixed(4)}`,
+            `minRms=${event.minRms.toFixed(4)} baseline=${event.baselineRms.toFixed(4)} ` +
+            `ctx=${ctxState}`,
         );
       }
       this.dropoutStartSec_ = -1;
@@ -280,7 +284,7 @@ export class TransitionProbe {
     const binCount = analyser.frequencyBinCount;
     const sampleRate = ENGINE_SAMPLE_RATE;
 
-    this.updateDropouts(now, analyser);
+    this.updateDropouts(now, analyser, engine);
 
     if (this.pending_.length === 0) return;
 

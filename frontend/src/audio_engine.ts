@@ -230,6 +230,11 @@ export class AudioEngine {
     return this.ctx_ !== null && this.buses_ !== null;
   }
 
+  /** AudioContext state for diagnostics ("running" | "suspended" | ...). */
+  contextState(): string {
+    return this.ctx_ === null ? "no-context" : this.ctx_.state;
+  }
+
   get targetBpm(): number {
     return this.targetBpm_;
   }
