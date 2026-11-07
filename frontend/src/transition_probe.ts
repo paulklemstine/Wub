@@ -56,9 +56,20 @@ export interface TransitionCapture {
   rmsDipDb: number;
   /** Raw L1 distance between pre/post analyser dB spectra (all bins). */
   spectralFlux: number;
+  /** High-band energy change in dB (negative = duller/muffled block). */
+  hfRatioDb?: number;
   seam: boolean;
   dip: boolean;
   suspicious: boolean;
+}
+
+/** A mid-block dropout (silence away from any boundary). */
+export interface DropoutEvent {
+  /** AudioContext seconds when the silence started. */
+  at: number;
+  durationMs: number;
+  minRms: number;
+  baselineRms: number;
 }
 
 export interface TransitionProbeSummary {
@@ -69,6 +80,7 @@ export interface TransitionProbeSummary {
   seamEvents: number;
   dipEvents: number;
   suspiciousEvents: number;
+  dropoutEvents: number;
   p50MaxJump: number;
   p95MaxJump: number;
 }
@@ -80,6 +92,16 @@ interface PendingBoundary {
 
 interface TransitionLogGlobal {
   __wubTransitionLog?: TransitionCapture[];
+  __wubDropoutLog?: DropoutEvent[];
+}
+
+function getDropoutLog(): DropoutEvent[] {
+  const host = globalThis as unknown as TransitionLogGlobal;
+  const existing = host.__wubDropoutLog;
+  if (Array.isArray(existing)) return existing;
+  const log: DropoutEvent[] = [];
+  host.__wubDropoutLog = log;
+  return log;
 }
 
 function getTransitionLog(): TransitionCapture[] {
@@ -129,6 +151,18 @@ function spectralFlux(before: Float32Array | null, after: Float32Array): number 
   return sum;
 }
 
+function hfEnergy(dbBins: Float32Array): number {
+  // Mean linear energy of the top third of bins (brightness proxy).
+  const n = dbBins.length;
+  const from = Math.max(0, Math.floor(n * 0.66));
+  let sum = 0;
+  for (let i = from; i < n; i++) {
+    const db = Number.isFinite(dbBins[i]) ? dbBins[i] : -160;
+    sum += Math.pow(10, Math.max(-160, Math.min(0, db)) / 10);
+  }
+  return sum / Math.max(1, n - from);
+}
+
 function percentile(values: readonly number[], p: number): number {
   if (values.length === 0) return 0;
   const sorted = Array.from(values).sort((a, b) => a - b);
@@ -153,8 +187,71 @@ export class TransitionProbe {
   private seamCount_ = 0;
   private dipCount_ = 0;
   private suspiciousCount_ = 0;
+  private dropoutCount_ = 0;
   private maxJumps_: number[] = [];
   private lastCapturedAt_ = Number.NEGATIVE_INFINITY;
+  /** Rolling master RMS history (~4 s at 60 fps) for dropout detection. */
+  private rmsHistory_: number[] = [];
+  private dropoutStartSec_ = -1;
+  private dropoutMinRms_ = 0;
+  private dropoutBaseline_ = 0;
+  private dropoutFrames_ = 0;
+
+  /**
+   * Mid-block dropout detector: compares short-window master RMS against a
+   * ~4 s rolling median and logs silences far from any queued boundary
+   * (seam dips are the boundary probe's job). Pure measurement, no audio
+   * path is touched.
+   */
+  private updateDropouts(now: number, analyser: AnalyserNode): void {
+    const data = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(data);
+    const rms = rmsOf(data, 0, data.length);
+    this.rmsHistory_.push(rms);
+    if (this.rmsHistory_.length > 240) this.rmsHistory_.shift();
+    if (this.rmsHistory_.length < 120) return; // need ~2 s of baseline
+
+    const baseline = percentile(this.rmsHistory_, 60);
+    if (baseline < 0.01) return; // nothing playing yet (session start)
+
+    const nearBoundary = this.pending_.some(
+      (pending) => Math.abs(pending.info.at - now) < 0.3,
+    ) || now - this.lastCapturedAt_ < 0.3;
+
+    if (this.dropoutStartSec_ < 0) {
+      if (rms < baseline / 4 && !nearBoundary) {
+        this.dropoutStartSec_ = now;
+        this.dropoutMinRms_ = rms;
+        this.dropoutBaseline_ = baseline;
+        this.dropoutFrames_ = 0;
+      }
+      return;
+    }
+
+    this.dropoutFrames_++;
+    this.dropoutMinRms_ = Math.min(this.dropoutMinRms_, rms);
+    if (rms > baseline / 2) {
+      const durationMs = (now - this.dropoutStartSec_) * 1000;
+      if (durationMs >= 100) {
+        const event: DropoutEvent = {
+          at: this.dropoutStartSec_,
+          durationMs,
+          minRms: this.dropoutMinRms_,
+          baselineRms: this.dropoutBaseline_,
+        };
+        const log = getDropoutLog();
+        log.push(event);
+        if (log.length > 200) log.splice(0, log.length - 200);
+        this.dropoutCount_++;
+        console.info(
+          `[TransitionProbe] mid-block dropout at ${event.at.toFixed(3)}s ` +
+            `dur=${durationMs.toFixed(0)}ms ` +
+            `minRms=${event.minRms.toFixed(4)} baseline=${event.baselineRms.toFixed(4)}`,
+        );
+      }
+      this.dropoutStartSec_ = -1;
+    }
+  }
 
   /** Queue an analyser capture around `info.at` (AudioContext seconds). */
   markBoundary(info: TransitionBoundary): void {
@@ -176,12 +273,16 @@ export class TransitionProbe {
    * boundaries do any work; the common case is a few array-length checks.
    */
   update(now: number, engine: AudioEngine): void {
-    if (this.pending_.length === 0 || !Number.isFinite(now) || !engine.ready) return;
+    if (!Number.isFinite(now) || !engine.ready) return;
 
     const analyser = engine.getProbeAnalyser();
     const fftSize = analyser.fftSize;
     const binCount = analyser.frequencyBinCount;
     const sampleRate = ENGINE_SAMPLE_RATE;
+
+    this.updateDropouts(now, analyser);
+
+    if (this.pending_.length === 0) return;
 
     for (let i = this.pending_.length - 1; i >= 0; i--) {
       const pending = this.pending_[i];
@@ -241,6 +342,11 @@ export class TransitionProbe {
             : 0;
 
       const flux = spectralFlux(pending.beforeFreq, afterFreq);
+      const hfBefore = pending.beforeFreq ? hfEnergy(pending.beforeFreq) : 0;
+      const hfAfter = hfEnergy(afterFreq);
+      const hfRatioDb = hfBefore > 1e-12 && hfAfter > 1e-12
+        ? 10 * Math.log10(hfAfter / hfBefore)
+        : 0;
       const targetEnergy = info.targetEnergy ?? 0.65;
       const seam = maxJump > SEAM_JUMP_THRESHOLD;
       // A planned drop to an intro/breakdown is an intentional level change,
@@ -265,6 +371,7 @@ export class TransitionProbe {
         postRms,
         rmsDipDb,
         spectralFlux: flux,
+        hfRatioDb,
         seam,
         dip,
         suspicious,
@@ -293,7 +400,7 @@ export class TransitionProbe {
             `bridge=${info.bridge} rotation=${info.rotation} ` +
             `tracks=${info.tracks ? formatTracks(info.tracks) : "n/a"} ` +
             `maxJump=${maxJump.toFixed(3)} dip=${rmsDipDb.toFixed(2)}dB ` +
-            `flux=${flux.toFixed(1)}`,
+            `flux=${flux.toFixed(1)} hf=${hfRatioDb.toFixed(1)}dB`,
         );
       }
 
@@ -310,6 +417,7 @@ export class TransitionProbe {
       seamEvents: this.seamCount_,
       dipEvents: this.dipCount_,
       suspiciousEvents: this.suspiciousCount_,
+      dropoutEvents: this.dropoutCount_,
       p50MaxJump: percentile(this.maxJumps_, 50),
       p95MaxJump: percentile(this.maxJumps_, 95),
     };

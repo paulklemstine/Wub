@@ -1103,11 +1103,16 @@ export class StemRemixPlayer {
       }
     }
     const rankerReady = this.jointRanker?.ready === true;
+    const jointT0 = performance.now();
     const joint = !opening && !bridge && !rotation && rankerReady
       ? this.selectJoint(
         normalized, targetEnergy, phrasesPerStem, startBar, sectionChanged, forceMove,
       )
       : null;
+    const jointMs = performance.now() - jointT0;
+    if (jointMs > 100) {
+      console.info(`[StemRemix] joint select took ${jointMs.toFixed(0)}ms @ bar ${startBar}`);
+    }
     // Fallback heuristic when the learned ranker is unavailable, or when a
     // stale stem still has no joint move (below the forced threshold).  Without
     // this, a missing ranker makes the engine advance/loop the anchor run
@@ -2006,8 +2011,12 @@ export class StemRemixPlayer {
     tasks: Array<{ stem: StemName; run: StemPoolEntry[] }>,
     at: number,
   ): Promise<void> {
+    const callMs = performance.now();
+    let maxLoadMs = 0;
     await Promise.all(tasks.map(async (task) => {
+      const loadT0 = performance.now();
       const audio = await this.loadRunAudio(task.run);
+      maxLoadMs = Math.max(maxLoadMs, performance.now() - loadT0);
       if (!audio) {
         const current = this.current[task.stem];
         const fallbackRun = current?.run ?? (current ? [current.entry] : null);
@@ -2021,6 +2030,15 @@ export class StemRemixPlayer {
       }
       await this.scheduleRun(task.stem, task.run, audio, at, this.currentBlockBars, false);
     }));
+    // Scheduling diagnostics: a slow fetch/decode that lands near the bar
+    // start explains 1 s dropout reports (schedule() clamps late starts).
+    const latenessMs = (this.engine.now() - at) * 1000;
+    if (maxLoadMs > 600 || latenessMs > -1200) {
+      console.info(
+        `[StemRemix] block load max=${maxLoadMs.toFixed(0)}ms ` +
+        `call=${(performance.now() - callMs).toFixed(0)}ms lateness=${latenessMs.toFixed(0)}ms @ ${at.toFixed(2)}s`,
+      );
+    }
   }
 
   private select(stem: StemName, at: number, section: string, sectionChanged: boolean): StemPoolEntry | null {
