@@ -8,7 +8,8 @@
 // only by the stretch/transpose hard limits below; near-tempo/near-key
 // phrases are strongly preferred by scoring, far ones surface as the near
 // pool is played out, so a long session traverses the full bank.
-import type { AudioEngine } from "./audio_engine";
+import { ENGINE_SAMPLE_RATE, type AudioEngine } from "./audio_engine";
+import { concatRun, mixToMono } from "./kit_pcm";
 import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
@@ -131,11 +132,34 @@ interface LoadedStemAudio {
   preDur: number;
 }
 
-/** A decoded run of consecutive 4-bar phrases for one stem. */
+/** A decoded run of consecutive 4-bar phrases for one stem, as mono PCM.
+ *  Produced off-main-thread by the kit audio worker (or by the main-thread
+ *  fallback when the worker is unavailable); the voice only ever sees this. */
 interface LoadedStemRun {
-  mains: AudioBuffer[];
-  pre: AudioBuffer | null;
+  /** Pre-roll + concatenated mains, ready for StretchVoice.addBuffers. */
+  samples: Float32Array;
+  /** Seconds of pre-roll at the head of `samples`. */
   preDur: number;
+  /** Decoded seconds per main phrase (input timeline). */
+  mainDurations: number[];
+  sampleRate: number;
+}
+
+/** One phrase x stem the kit audio worker must decode for a run. */
+interface WorkerRunItem {
+  key: string;
+  /** Absolute URL of the phrase audio (the worker resolves its own base). */
+  url: string;
+  /** Absolute URL of the pre-roll sidecar, when present. */
+  preUrl: string | null;
+}
+
+/** A watchdog-resume schedule: re-enter a run at the block clock's position. */
+interface ResumeHint {
+  /** The run's original downbeat (audio time). */
+  startedAt: number;
+  /** The run's original end (audio time). */
+  runEndAt: number;
 }
 
 interface CurrentStem {
@@ -299,6 +323,116 @@ const EAR_W_JOINT = 0.20;
 /** Ears soft-prior weight in heuristic fallbacks (morph/pin). */
 const EAR_W_FALLBACK = 0.30;
 
+/**
+ * Kit audio decode+concat on a dedicated thread.  Main-thread PCM work (the
+ * fetch->decode->mixToMono->concat chain) during 8/16-bar prefetches starved
+ * the audio render thread into all-stem dropouts on a loaded box; the worker
+ * carries it instead, returning transferable PCM the voice can addBuffers
+ * directly.  If the worker is unavailable or hangs, the main-thread fallback
+ * loader keeps the session running.
+ */
+class KitAudioWorkerLoader {
+  /** False once construction, the worker error handler, or a timeout fails. */
+  ok = false;
+  private worker: Worker | null = null;
+  private nextId = 1;
+  private pending = new Map<number, {
+    resolve: (run: LoadedStemRun | null) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
+  start(sampleRate: number): void {
+    if (this.ok && this.worker) return;
+    try {
+      const worker = new Worker(new URL("./kit_audio_worker.ts", import.meta.url), { type: "module" });
+      worker.onmessage = (ev: MessageEvent) => this.onMessage(ev);
+      worker.onerror = () => {
+        console.warn("[StemRemix] kit audio worker error; main-thread decode from here");
+        this.ok = false;
+        this.failAll();
+      };
+      worker.postMessage({ type: "init", sampleRate });
+      this.worker = worker;
+      this.ok = true;
+      console.info("[StemRemix] kit audio worker ready");
+    } catch (err) {
+      this.ok = false;
+      this.worker = null;
+      console.warn("[StemRemix] kit audio worker unavailable; main-thread decode", err);
+    }
+  }
+
+  dispose(): void {
+    try {
+      this.worker?.terminate();
+    } catch {
+      // Already terminated.
+    }
+    this.worker = null;
+    this.ok = false;
+    this.failAll();
+  }
+
+  private onMessage(ev: MessageEvent): void {
+    const msg = ev.data as {
+      type?: string;
+      id?: number;
+      samples?: Float32Array;
+      preDur?: number;
+      mainDurations?: number[];
+      sampleRate?: number;
+    } | null | undefined;
+    if (!msg || typeof msg.id !== "number") return;
+    const pending = this.pending.get(msg.id);
+    if (!pending) return;
+    this.pending.delete(msg.id);
+    clearTimeout(pending.timer);
+    if (msg.type === "run" && msg.samples instanceof Float32Array && Number.isFinite(msg.preDur)) {
+      pending.resolve({
+        samples: msg.samples,
+        preDur: msg.preDur ?? 0,
+        mainDurations: Array.isArray(msg.mainDurations) ? msg.mainDurations : [],
+        sampleRate: typeof msg.sampleRate === "number" ? msg.sampleRate : ENGINE_SAMPLE_RATE,
+      });
+    } else {
+      // A real per-file failure (or error message): fail the run, keep the
+      // worker trusted — the block fallback reuses the current phrase.
+      pending.resolve(null);
+    }
+  }
+
+  private failAll(): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+    }
+    this.pending.clear();
+  }
+
+  load(items: WorkerRunItem[]): Promise<LoadedStemRun | null> {
+    if (!this.ok || !this.worker) return Promise.resolve(null);
+    return new Promise<LoadedStemRun | null>((resolve) => {
+      const id = this.nextId++;
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          console.warn("[StemRemix] kit audio worker load timed out; main-thread decode from here");
+          this.ok = false;
+          resolve(null);
+        }
+      }, 5000);
+      this.pending.set(id, { resolve, timer });
+      try {
+        this.worker!.postMessage({ type: "load", id, items });
+      } catch {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        this.ok = false;
+        resolve(null);
+      }
+    });
+  }
+}
+
 export class StemRemixPlayer {
   private readonly engine: AudioEngine;
   private manifest: KitManifest | null = null;
@@ -331,6 +465,8 @@ export class StemRemixPlayer {
   };
   private current: Partial<Record<StemName, CurrentStem>> = {};
   private voicePool: Partial<Record<StemName, StretchVoice[]>> = {};
+  /** Decode+concat thread; loads fall back to the main thread without it. */
+  private readonly audioWorker = new KitAudioWorkerLoader();
   private voiceIndex: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private jointRanker: JointRanker | null = null;
   private lastBlockEntries: Partial<Record<StemName, StemPoolEntry>> = {};
@@ -378,7 +514,7 @@ export class StemRemixPlayer {
   private lastSection = "";
   private started = false;
   private preparing = false;
-  private anchorPrepared: Array<{ stem: StemName; entry: StemPoolEntry; audio: LoadedStemAudio }> = [];
+  private anchorPrepared: Array<{ stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun }> = [];
   private lastResult: StemBlockResult | null = null;
 
   public onBlock?: (result: StemBlockResult) => void;
@@ -545,6 +681,9 @@ export class StemRemixPlayer {
     // Preload one real song: all four stems from the same kit so the first
     // 4 bars sound like a record before the remix starts. Scheduling waits
     // for the transport's first schedule() call.
+    // The kit audio worker carries decode+concat off the main thread; the
+    // anchor preload below is its first real load.
+    this.audioWorker.start(ENGINE_SAMPLE_RATE);
     const anchor = this.anchorKit ?? this.chooseAnchor();
     if (anchor) {
       const allEntries = this.entriesForKit(anchor);
@@ -591,7 +730,7 @@ export class StemRemixPlayer {
         const loaded = await this.prepareEntry(stem, entry);
         return loaded ? { stem, entry: loaded.entry, audio: loaded.audio } : null;
       }));
-      this.anchorPrepared = prepared.filter((entry): entry is { stem: StemName; entry: StemPoolEntry; audio: LoadedStemAudio } => entry !== null);
+      this.anchorPrepared = prepared.filter((entry): entry is { stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun } => entry !== null);
       this.lastBlockEntries = {};
       this.lastBlockRuns = {};
       for (const preparedEntry of this.anchorPrepared) {
@@ -918,16 +1057,25 @@ export class StemRemixPlayer {
    * Silence watchdog: the master bus sat at digital zero for seconds while
    * scheduling kept logging success — the voices themselves went mute
    * (render-path stall) without the scheduler noticing.  Rebuild the voice
-   * pool and re-run the current block's runs immediately instead of sitting
-   * dead until the next boundary.  Cooldown 5 s, one recovery per dropout.
+   * pool and re-enter each playing run at the block clock's current
+   * position, so the block continues instead of restarting — and never
+   * replay the prefetched NEXT block (lastBlockRuns already points at it
+   * during prefetch; replaying it jumped the set ahead and cascaded new
+   * dropouts in v0.2.235).  Cooldown 5 s, one recovery per dropout.
    */
   recoverSilence(at: number): void {
     if (!this.started || this.preparing || this.cluster === null) return;
     if (at - this.lastRecoverySec_ < 5) return;
-    const runs = STEMS
-      .map((stem) => (this.lastBlockRuns[stem]?.length ? { stem, run: this.lastBlockRuns[stem]! } : null))
-      .filter((task): task is { stem: StemName; run: StemPoolEntry[] } => task !== null);
-    if (runs.length === 0) return;
+    const tasks: Array<{ stem: StemName; run: StemPoolEntry[] }> = [];
+    const resumes = new Map<StemName, ResumeHint>();
+    for (const stem of STEMS) {
+      const current = this.current[stem];
+      if (current && current.run.length > 0 && current.runEndAt > at + 0.2) {
+        tasks.push({ stem, run: [...current.run] });
+        resumes.set(stem, { startedAt: current.startedAt, runEndAt: current.runEndAt });
+      }
+    }
+    if (tasks.length === 0) return;
     this.lastRecoverySec_ = at;
     for (const stem of STEMS) {
       for (const voice of this.voicePool[stem] ?? []) voice.dispose();
@@ -935,8 +1083,13 @@ export class StemRemixPlayer {
       this.voiceIndex[stem] = 0;
     }
     this.current = {};
-    console.info(`[StemRemix] silence watchdog: fresh voices, re-running ${runs.length} runs @ ${at.toFixed(2)}s`);
-    void this.finishBlock(runs, at + 0.15);
+    console.info(`[StemRemix] silence watchdog: resuming ${tasks.length} runs @ ${at.toFixed(2)}s`);
+    // Guard the rebuild so schedule() cannot start a rival finishBlock while
+    // voices are being recreated (voice-pool races -> stem dropouts).
+    this.preparing = true;
+    void this.finishBlock(tasks, at + 0.15, resumes).finally(() => {
+      this.preparing = false;
+    });
   }
 
   /** Called by the transport's block clock. Prepares at most one block at a
@@ -1027,11 +1180,7 @@ export class StemRemixPlayer {
     const at = this.sessionStartAt;
     await Promise.all(this.anchorPrepared.map(async (prepared) => {
       console.info(`[StemRemix] anchor ${prepared.stem} ${prepared.entry.phrase.id}`);
-      await this.scheduleRun(prepared.stem, [prepared.entry], {
-        mains: [prepared.audio.main],
-        pre: prepared.audio.pre,
-        preDur: prepared.audio.preDur,
-      }, at, 4, false);
+      await this.scheduleRun(prepared.stem, [prepared.entry], prepared.audio, at, 4, false);
     }));
   }
 
@@ -2067,6 +2216,7 @@ export class StemRemixPlayer {
   private async finishBlock(
     tasks: Array<{ stem: StemName; run: StemPoolEntry[] }>,
     at: number,
+    resumes?: Map<StemName, ResumeHint>,
   ): Promise<void> {
     const callMs = performance.now();
     let maxLoadMs = 0;
@@ -2082,17 +2232,18 @@ export class StemRemixPlayer {
       return { task, audio };
     }));
     for (const { task, audio } of audios) {
+      const resume = resumes?.get(task.stem);
       if (!audio) {
         const current = this.current[task.stem];
         const fallbackRun = current?.run ?? (current ? [current.entry] : null);
         if (fallbackRun) {
           const fallback = await this.loadRunAudio(fallbackRun);
           if (fallback) {
-            await this.scheduleRun(task.stem, fallbackRun, fallback, at, this.currentBlockBars, false);
+            await this.scheduleRun(task.stem, fallbackRun, fallback, at, this.currentBlockBars, false, resume);
           }
         }
       } else {
-        await this.scheduleRun(task.stem, task.run, audio, at, this.currentBlockBars, false);
+        await this.scheduleRun(task.stem, task.run, audio, at, this.currentBlockBars, false, resume);
       }
       await yieldToMain();
     }
@@ -2201,10 +2352,10 @@ export class StemRemixPlayer {
   private async prepareEntry(
     stem: StemName,
     entry: StemPoolEntry,
-  ): Promise<{ entry: StemPoolEntry; audio: LoadedStemAudio } | null> {
+  ): Promise<{ entry: StemPoolEntry; audio: LoadedStemRun } | null> {
     try {
-      const audio = await this.loadAudio(entry);
-      return { entry, audio };
+      const audio = await this.loadRunAudio([entry]);
+      return audio ? { entry, audio } : null;
     } catch (err) {
       console.warn(`[StemRemix] ${stem} load failed for ${entry.phrase.id}`, err);
       return null;
@@ -2250,8 +2401,39 @@ export class StemRemixPlayer {
     return loaded;
   }
 
-  /** Decode every phrase in a run, reusing the per-phrase audio cache. */
+  /** Decode every phrase in a run: worker first, main-thread fallback. */
   private async loadRunAudio(run: readonly StemPoolEntry[]): Promise<LoadedStemRun | null> {
+    if (this.audioWorker.ok) {
+      const items: WorkerRunItem[] = [];
+      for (const entry of run) {
+        const asset = entry.phrase.stems?.[entry.stem];
+        if (!asset?.file) {
+          // Same semantics as the old throw path: a missing asset fails the
+          // run before any worker round-trip.
+          this.failedKits.add(entry.kit.track_id);
+          return null;
+        }
+        items.push({
+          key: this.cacheKey(entry),
+          url: new URL(`${this.baseUrl}/${asset.file}`, document.baseURI).toString(),
+          preUrl: asset.pre_roll?.file
+            ? new URL(`${this.baseUrl}/${asset.pre_roll.file}`, document.baseURI).toString()
+            : null,
+        });
+      }
+      const loaded = await this.audioWorker.load(items);
+      if (!loaded) {
+        for (const entry of run) this.failedKits.add(entry.kit.track_id);
+        return null;
+      }
+      return loaded;
+    }
+    return this.loadRunAudioMain(run);
+  }
+
+  /** Main-thread fallback: fetch + decode through the audio cache, then
+   *  concat into one PCM run (the pre-worker path, kept for coverage). */
+  private async loadRunAudioMain(run: readonly StemPoolEntry[]): Promise<LoadedStemRun | null> {
     const audios = await Promise.all(run.map(async (entry) => {
       try {
         return await this.loadAudio(entry);
@@ -2263,11 +2445,12 @@ export class StemRemixPlayer {
     }));
     if (audios.some((audio) => audio === null)) return null;
     const loaded = audios as LoadedStemAudio[];
-    return {
-      mains: loaded.map((audio) => audio.main),
-      pre: loaded[0].pre,
-      preDur: loaded[0].preDur,
-    };
+    const sampleRate = loaded[0]?.main.sampleRate ?? ENGINE_SAMPLE_RATE;
+    return concatRun(
+      loaded.map((audio) => mixToMono(audio.main)),
+      loaded[0]?.pre ? mixToMono(loaded[0].pre) : null,
+      sampleRate,
+    );
   }
 
   /** Two reusable voices per stem: one playing, one being prepared. */
@@ -2305,21 +2488,40 @@ export class StemRemixPlayer {
     at: number,
     bars: number,
     manual: boolean,
+    resume?: ResumeHint,
   ): Promise<void> {
     const first = run[0];
     if (!first) return;
     try {
       const previous = this.current[stem];
       const voice = await this.getVoice(stem, previous?.voice);
-      const preDur = await voice.loadRun(audio.mains, audio.pre);
+      await voice.loadSamples(audio.samples);
+      const preDur = audio.preDur;
       const rate = Math.max(RATE_MIN, Math.min(RATE_MAX, first.rate));
-      const startAt = at - preDur / rate;
-      const crossfadeSec = preDur > 0
-        ? Math.max(preDur / rate, STEM_FADE_IN[stem])
-        : STEM_FADE_IN[stem];
+      // Normal scheduling: the pre-roll starts preDur/rate before the
+      // downbeat.  A watchdog resume instead re-enters the run at the input
+      // position the block clock has reached, so the block continues where it
+      // stopped instead of restarting (or, as before, jumping to the next
+      // block), and keeps the run's original end.
+      let startAt = at - preDur / rate;
+      let inputSec = 0;
+      let runEndAt = at + bars * this.barSec;
+      let startedAt = at;
+      if (resume) {
+        const elapsed = Math.max(0, at - resume.startedAt);
+        if (resume.runEndAt - at < 0.08) return; // block already over
+        const totalInputDur = audio.mainDurations.reduce((sum, d) => sum + d, 0);
+        startAt = at;
+        inputSec = Math.min(preDur + elapsed * rate, preDur + Math.max(0, totalInputDur - 0.05 / rate));
+        runEndAt = resume.runEndAt;
+        startedAt = resume.startedAt;
+      }
+      const crossfadeSec = resume
+        ? STEM_FADE_IN[stem]
+        : (preDur > 0 ? Math.max(preDur / rate, STEM_FADE_IN[stem]) : STEM_FADE_IN[stem]);
       voice.schedule({
         when: startAt,
-        inputSec: 0,
+        inputSec,
         rate,
         semitones: first.keyShift,
         formantCompensation: stem === "vocals",
@@ -2331,15 +2533,13 @@ export class StemRemixPlayer {
           ? previous.voice.outputGainTarget
           : undefined,
       });
-      const blockSec = bars * this.barSec;
-      const runEndAt = at + blockSec;
       voice.fadeOut(runEndAt, STEM_FADE_OUT[stem]);
 
       const offsets: number[] = [];
       let offset = 0;
-      for (const buffer of audio.mains) {
+      for (const dur of audio.mainDurations) {
         offsets.push(offset);
-        offset += buffer.duration / rate;
+        offset += dur / rate;
       }
 
       if (previous && previous.voice !== voice) {
@@ -2350,7 +2550,7 @@ export class StemRemixPlayer {
         stem,
         run: [...run],
         voice,
-        startedAt: at,
+        startedAt,
         offsets,
         runEndAt,
         blockIndex: this.blockIndex,
@@ -2360,7 +2560,7 @@ export class StemRemixPlayer {
       console.info(
         `[StemRemix] ${stem} ← ${run.map((entry) => entry.phrase.id).join("+")} @ ${at.toFixed(2)}s ` +
         `(${bars} bars, start ${startAt.toFixed(2)}s, rate ${rate.toFixed(4)}, ` +
-        `shift ${first.keyShift}, pre ${preDur.toFixed(3)}s)`
+        `shift ${first.keyShift}, pre ${preDur.toFixed(3)}s)${resume ? " (resumed)" : ""}`
       );
     } catch (err) {
       console.warn(`[StemRemix] ${stem} schedule failed`, err);
@@ -2479,7 +2679,8 @@ export class StemRemixPlayer {
       const previous = this.current[stem];
       const voice = await this.getVoice(stem, previous?.voice);
       const rate = Math.max(RATE_MIN, Math.min(RATE_MAX, runEntry.rate));
-      const preDur = await voice.loadRun(audio.mains, audio.pre);
+      await voice.loadSamples(audio.samples);
+      const preDur = audio.preDur;
       const crossfadeSec = Math.max(0.02, STEM_FADE_IN[stem], preDur / rate);
       let startAt = at;
       let inputBars = partialBar;
@@ -2498,9 +2699,10 @@ export class StemRemixPlayer {
         return;
       }
       let sourceSec = 0;
-      for (const buffer of audio.mains) sourceSec += buffer.duration;
+      for (const dur of audio.mainDurations) sourceSec += dur;
+      const firstDur = audio.mainDurations[0] ?? 0;
       const inputSec = Math.min(
-        preDur + inputBars * (audio.mains[0].duration / 4),
+        preDur + inputBars * (firstDur / 4),
         preDur + sourceSec - 0.05,
       );
       const endAt = handoffAt;
@@ -2531,9 +2733,9 @@ export class StemRemixPlayer {
       }
       const offsets: number[] = [];
       let offset = 0;
-      for (const buffer of audio.mains) {
+      for (const dur of audio.mainDurations) {
         offsets.push(offset);
-        offset += buffer.duration / rate;
+        offset += dur / rate;
       }
       if (this.pinGeneration[stem] !== generation) {
         voice.fadeOut(startAt, 0.02);
@@ -2765,6 +2967,7 @@ export class StemRemixPlayer {
     this.lastBlockRuns = {};
     this.pinning.clear();
     this.pinGeneration = {};
+    this.audioWorker.dispose();
   }
 }
 

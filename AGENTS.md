@@ -148,9 +148,8 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   takes over at bar 104 and releases all pins. The candidate pool is the
   whole bank at every tempo/key, so rotation mainly moves the session
   tempo/key and the anchor song.
-- **Lazy audio only.** 64-entry LRU, one block of prefetch lead, two alternates
-  for drags. A failed load repeats the current phrase and blacklists the kit;
-  it must never stop the transport.
+- **Lazy audio only.** Decode+concat run in the kit audio worker (24-entry LRU, transferable PCM), so the main thread only `addBuffers`+schedules; the main-thread loader stays as the no-worker fallback. One block of prefetch lead, two alternates for drags. A failed load repeats the current phrase and blacklists the kit; it must never stop the transport.
+- **Silence watchdog.** All-stem digital zero >1.0 s rebuilds the voice pool and re-enters each *playing* run at the block clock's input position (replay the current block, never the prefetched next block), guarded by `preparing` so it cannot race a rival `finishBlock`.
 - **Never create a StretchVoice per phrase.** Use the fixed two-voice-per-stem
   pool (8 nodes total), reset and reuse them. A run of 1-4 phrases is
   concatenated into one buffer and one voice; per-phrase nodes leak WASM memory
@@ -174,6 +173,8 @@ When making changes to this codebase, you must adhere strictly to these non-nego
 | [`transition_probe.ts`](file:///home/raver1975/Wub/frontend/src/transition_probe.ts) | Hidden seam telemetry: max sample jump, pre/post RMS dip and spectral flux at block boundaries, stored in `window.__wubTransitionLog`. |
 | [`joint_ranker.ts`](file:///home/raver1975/Wub/frontend/src/joint_ranker.ts) | Browser inference for the arc-conditioned joint four-stem transition ranker: 424-d states, last-two-state context, 1/2-stem scoring, 4/8/16-bar block one-hots, per-block hold thresholds. |
 | [`stretch_voice.ts`](file:///home/raver1975/Wub/frontend/src/stretch_voice.ts) | Signalsmith Stretch voice wrapper: pre-roll + 1-4 phrase run buffer, tempo/key scheduling, gain fades, pooled reuse. |
+| [`kit_audio_worker.ts`](file:///home/raver1975/Wub/frontend/src/kit_audio_worker.ts) | Decode+concat worker: OfflineAudioContext decode, mono mix, run concatenation, 24-entry LRU; posts transferable PCM back to the main thread. |
+| [`kit_pcm.ts`](file:///home/raver1975/Wub/frontend/src/kit_pcm.ts) | Shared mono-mix + run-concat helpers (worker + main-thread fallback). |
 | [`client_ml_sequencer.ts`](file:///home/raver1975/Wub/frontend/src/client_ml_sequencer.ts) | In-browser conductor. Owns the kit block clock and kit tempo/key lock; retains the legacy jukebox/slice/step sequencer as fallback only. Also holds the chord/arranger state that drives kit section selection. |
 | [`audio_engine.ts`](file:///home/raver1975/Wub/frontend/src/audio_engine.ts) | Core Web Audio context wrapper, 4-stem gain buses, analysers, `scheduleSlice` (rate/fades), and AudioBuffer decode for Opus/WAV kit assets. |
 | [`main.ts`](file:///home/raver1975/Wub/frontend/src/main.ts) | Main application coordinator, UI event queue, transport controls, kit set-change status, reticle-to-phrase steering, and WebSocket listener. |

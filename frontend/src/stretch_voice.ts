@@ -7,6 +7,7 @@
 // Signalsmith compensates for its own processing latency when `output` is
 // scheduled ahead of time.
 import type { StretchNode } from "signalsmith-stretch";
+import { concatRun, mixToMono } from "./kit_pcm";
 
 type StretchFactory = (
   ctx: BaseAudioContext,
@@ -132,22 +133,32 @@ export class StretchVoice {
    */
   async loadRun(buffers: readonly AudioBuffer[], preRoll: AudioBuffer | null): Promise<number> {
     if (buffers.length === 0) throw new Error("StretchVoice.loadRun needs at least one buffer");
-    const pre = preRoll ? mixToMono(preRoll) : null;
-    const mains = buffers.map((buffer) => mixToMono(buffer));
-    let total = 0;
-    for (const main of mains) total += main.length;
-    const samples = new Float32Array((pre?.length ?? 0) + total);
-    let offset = 0;
-    if (pre) {
-      samples.set(pre, 0);
-      offset = pre.length;
-    }
-    for (const main of mains) {
-      samples.set(main, offset);
-      offset += main.length;
-    }
+    return this.loadMonoRun(
+      buffers.map((buffer) => mixToMono(buffer)),
+      preRoll ? mixToMono(preRoll) : null,
+      buffers[0]?.sampleRate ?? 48000,
+    );
+  }
+
+  /** Load mono PCM (worker-decoded) concatenated through kit_pcm.concatRun. */
+  async loadMonoRun(
+    mains: readonly Float32Array[],
+    pre: Float32Array | null,
+    sampleRate: number,
+  ): Promise<number> {
+    if (mains.length === 0) throw new Error("StretchVoice.loadMonoRun needs at least one buffer");
+    const { samples, preDur } = concatRun(mains, pre, sampleRate);
     await this.node.addBuffers([samples]);
-    return (pre?.length ?? 0) / (buffers[0]?.sampleRate ?? 48000);
+    return preDur;
+  }
+
+  /**
+   * Load a run already concatenated in the kit audio worker (the transferable
+   * PCM from decode+concat off the main thread).  Only the addBuffers clone
+   * remains on the main thread.
+   */
+  async loadSamples(samples: Float32Array): Promise<void> {
+    await this.node.addBuffers([samples]);
   }
 
   /** Schedule the prepared phrase/run. Must be called after `load`. */
@@ -290,18 +301,4 @@ function fadeCurve(target: number, rising: boolean, points: number = 32): Float3
     curve[i] = Math.max(0.0001, target * shape);
   }
   return curve;
-}
-
-function mixToMono(buffer: AudioBuffer): Float32Array {
-  const channels = buffer.numberOfChannels;
-  if (channels <= 1) return buffer.getChannelData(0);
-  const length = buffer.length;
-  const out = new Float32Array(length);
-  for (let c = 0; c < channels; c++) {
-    const data = buffer.getChannelData(c);
-    for (let i = 0; i < length; i++) out[i] += data[i];
-  }
-  const scale = 1 / channels;
-  for (let i = 0; i < length; i++) out[i] *= scale;
-  return out;
 }
