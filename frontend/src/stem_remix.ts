@@ -2273,7 +2273,11 @@ export class StemRemixPlayer {
   /** Two reusable voices per stem: one playing, one being prepared. */
   private async getVoice(stem: StemName, avoid?: StretchVoice): Promise<StretchVoice> {
     let pool = this.voicePool[stem];
-    if (!pool) {
+    // The silence watchdog empties the pool ([]) when it rebuilds; an empty
+    // array is truthy, so a plain `!pool` check never recreates it and the
+    // index math below reads pool[NaN] = undefined, throwing on reset().
+    // Treat an empty pool as missing so recovery actually rebuilds voices.
+    if (!pool || pool.length === 0) {
       const ctx = this.engine.ensureCtx();
       const destination = this.engine.getStemInput(stem);
       const pan = stemPan(stem, stem);
@@ -2284,7 +2288,7 @@ export class StemRemixPlayer {
       this.voicePool[stem] = pool;
       this.voiceIndex[stem] = 0;
     }
-    let index = this.voiceIndex[stem] % pool.length;
+    let index = (this.voiceIndex[stem] | 0) % pool.length;
     if (pool.length > 1 && pool[index] === avoid) {
       index = (index + 1) % pool.length;
     }
