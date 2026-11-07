@@ -226,7 +226,9 @@ export class TransitionProbe {
     ) || now - this.lastCapturedAt_ < 0.3;
 
     if (this.dropoutStartSec_ < 0) {
-      if (rms < baseline / 4 && !nearBoundary) {
+      // True stall = near-digital silence (historical minRms 0.0000); quiet
+      // musical passages (~-35 dB) must not read as dropouts.
+      if (rms < Math.min(baseline / 6, 0.01) && !nearBoundary) {
         this.dropoutStartSec_ = now;
         this.dropoutMinRms_ = rms;
         this.dropoutBaseline_ = baseline;
