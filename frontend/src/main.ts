@@ -269,6 +269,7 @@ class WubApp {
       footerVersion.textContent = `v${VERSION_INFO.version} (Build #${VERSION_INFO.build} • rev ${VERSION_INFO.commit})`;
     }
     console.info(`[KG-505] Initialized v${VERSION_INFO.version} (Build #${VERSION_INFO.build} • rev ${VERSION_INFO.commit})`);
+    this.installCrashReporter();
 
     const ringsCanvas = el<HTMLCanvasElement>("rings-canvas");
     const rings = ringsCanvas.getContext("2d");
@@ -1417,6 +1418,29 @@ class WubApp {
     } catch {
       return { level: 0, waveform: null };
     }
+  }
+
+  /**
+   * Uncaught-error catcher: turns tab-crashes/rejections into a pasteable
+   * `[Crash]` line instead of a frozen page. Console-only, no UI writes in
+   * the lookahead path (registered once at init, outside the frame loop).
+   */
+  private installCrashReporter(): void {
+    const report = (kind: string, detail: unknown): void => {
+      console.info(`[Crash] ${kind}: ${detail instanceof Error ? detail.stack ?? detail.message : String(detail)}`);
+      try {
+        (window as any).__wubLastCrash = { kind, at: performance.now(), detail: String(detail) };
+      } catch {
+        // best-effort only
+      }
+    };
+    window.onerror = (event, source, lineno, col, error) => {
+      report("window.onerror", error ?? `${String(event)} @${source}:${lineno}:${col}`);
+    };
+    window.onunhandledrejection = (event) => {
+      report("unhandledrejection", event.reason);
+      event.preventDefault();
+    };
   }
 
   private frame(_t: number): void {

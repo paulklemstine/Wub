@@ -45,7 +45,7 @@ const RATE_MIN = 0.90;
 const RATE_MAX = 1.10;
 const TEMPO_COST_WEIGHT = 1.0;
 const KEY_COST_WEIGHT = 0.05;
-const CACHE_LIMIT = 64;
+const CACHE_LIMIT = 24;
 // Phrases whose stem is effectively absent are not useful as independent
 // streams; keep a floor per stem so a "bass" phrase actually has bass.
 const MIN_RMS_DB: Record<StemName, number> = {
