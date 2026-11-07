@@ -56,7 +56,7 @@ import numpy as np
 STEMS = ("drums", "bass", "other", "vocals")
 MERT_SR = 24000  # MERT native sample rate
 MERT_FRAME = 320  # conv-stack total stride (75 Hz frame rate)
-DEFAULT_MERT_ID = "microsoft/mert-v1-95M"
+DEFAULT_MERT_ID = "m-a-p/MERT-v1-95M"  # ungated mirror; microsoft/* is 401-gated
 VERSION = "ears-0.1.0"
 TOP_DIR = Path(__file__).resolve().parents[1]
 
@@ -288,7 +288,9 @@ class MertEncoder:
             raise RuntimeError(self._load_error) from exc
         self._torch = torch
         device = torch.device(self.device_name)
-        kwargs = {"local_files_only": self.local_files_only}
+        # MERT mirror repos ship custom configuration/model code; microsoft/*
+        # is gated (401) so the default mirror needs trust_remote_code.
+        kwargs = {"local_files_only": self.local_files_only, "trust_remote_code": True}
         fe = None
         for loader in ("AutoFeatureExtractor", "Wav2Vec2FeatureExtractor"):
             try:

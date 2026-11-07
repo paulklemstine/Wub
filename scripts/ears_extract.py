@@ -353,7 +353,11 @@ def _groove_fields(
     }
 
 
-def _pitch_fields(y: np.ndarray, sr: int, path: Optional[Path]) -> Dict[str, Any]:
+_BP_MODEL = None  # cached Basic Pitch Model per worker process
+_BP_FAILED = False
+
+
+def _pitch_fields(y: np.ndarray, sr: int, path: Optional[Path], stem: str = "other") -> Dict[str, Any]:
     """Pitch confidence / tuning deviation; nulls when pitch libs absent."""
     out: Dict[str, Any] = {
         "pitch_available": False, "pitch_source": None,
@@ -361,6 +365,10 @@ def _pitch_fields(y: np.ndarray, sr: int, path: Optional[Path]) -> Dict[str, Any
         "pitch_f0_median_hz": None, "pitch_voiced_fraction": None,
         "pitch_error": None,
     }
+    # Drums are unpitched: running Basic Pitch on them is pure waste.
+    if stem == "drums":
+        out["pitch_source"] = "skipped-drums"
+        return out
 
     def _tuning_cents(freqs: np.ndarray) -> Optional[float]:
         f = np.asarray(freqs, dtype=float)
@@ -371,13 +379,20 @@ def _pitch_fields(y: np.ndarray, sr: int, path: Optional[Path]) -> Dict[str, Any
         dev = (midi - np.round(midi)) * 100.0  # cents from nearest semitone
         return float(np.median(np.abs(dev)))
 
-    # 1) Basic Pitch (file-based; may download a model on first call).
+    # 1) Basic Pitch (file-based; model cached once per worker process —
+    #    predict() with no model arg reloads the ONNX weights per call, which
+    #    cost ~30 s/stem. Passing the loaded Model reuses it.)
+    global _BP_MODEL, _BP_FAILED
     try:
         try:
             from basic_pitch.inference import predict as bp_predict  # type: ignore
 
-            if path is not None and path.exists():
-                notes, _model = bp_predict(str(path))
+            if path is not None and path.exists() and not _BP_FAILED:
+                if _BP_MODEL is None:
+                    from basic_pitch.inference import Model as _BPModel  # type: ignore
+                    from basic_pitch import ICASSP_2022_MODEL_PATH as _BP_DEFAULT  # type: ignore
+                    _BP_MODEL = _BPModel(_BP_DEFAULT)
+                notes, _model = bp_predict(str(path), _BP_MODEL)
                 out["pitch_available"] = True
                 out["pitch_source"] = "basic-pitch"
                 try:
@@ -569,7 +584,7 @@ def score_stem(file_path: Path, stem: str, file_field: str,
     rec.update(_groove_fields(mono, int(sr), file_path, onset_times,
                               beat_times_lib, beat_bpm, duration_actual,
                               expected_bpm, stem))
-    rec.update(_pitch_fields(mono, int(sr), file_path))
+    rec.update(_pitch_fields(mono, int(sr), file_path, stem))
     rec.update(_essentia_fields(mono, int(sr), file_path))
 
     # --- quality flags ---
