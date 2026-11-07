@@ -442,6 +442,11 @@ export class KitPlayer {
     this.remix?.tick(now);
   }
 
+  /** Silence watchdog: rebuild voices and re-run the current runs. */
+  recoverSilence(at: number): void {
+    this.remix?.recoverSilence(at);
+  }
+
   /** Fired when a phrase is scheduled, with its nebula coordinate. */
   public onPhraseScheduled?: (p: {
     x: number;

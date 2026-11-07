@@ -5041,6 +5041,11 @@ export class ClientGrooveboxConductor {
     return this.playbackMode;
   }
 
+  /** Silence watchdog: rebuild voices and re-run the current runs. */
+  public recoverSilence(at: number): void {
+    this.kitPlayer?.recoverSilence(at);
+  }
+
   /** Kit set state exposed on __wubConductor for the UI/verification. */
   public get activeKit(): Kit | null {
     return this.kitPlayer?.activeKit ?? null;

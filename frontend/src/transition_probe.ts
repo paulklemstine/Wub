@@ -196,6 +196,13 @@ export class TransitionProbe {
   private dropoutMinRms_ = 0;
   private dropoutBaseline_ = 0;
   private dropoutFrames_ = 0;
+  private lastNowSec_ = 0;
+
+  /** Seconds since the current dropout started (0 = none active). */
+  activeDropoutSecs(nowSec: number): number {
+    if (this.dropoutStartSec_ < 0) return 0;
+    return Math.max(0, nowSec - this.dropoutStartSec_);
+  }
 
   /**
    * Mid-block dropout detector: compares short-window master RMS against a
@@ -287,7 +294,6 @@ export class TransitionProbe {
     this.updateDropouts(now, analyser, engine);
 
     if (this.pending_.length === 0) return;
-
     for (let i = this.pending_.length - 1; i >= 0; i--) {
       const pending = this.pending_[i];
       const info = pending.info;

@@ -1427,6 +1427,13 @@ class WubApp {
     this.engine.updateGlue(audioNow);
     this.transitionProbe.update(audioNow, this.engine);
 
+    // Silence watchdog: master bus at digital zero for >1.5 s mid-block
+    // means the voices went mute (render-path stall). Rebuild + re-run
+    // the current runs now instead of sitting dead until the next block.
+    if (this.playing && this.transitionProbe.activeDropoutSecs(audioNow) > 1.5) {
+      this.clientConductor?.recoverSilence(audioNow);
+    }
+
     // Kit blocks have per-phrase slots; surface the resulting session BPM.
     if (this.playing && this.clientConductor) {
       const liveBpm = this.clientConductor.getBpm();

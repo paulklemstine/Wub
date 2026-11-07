@@ -37,13 +37,12 @@ const PIN_RADIUS = 0.2;
 const PIN_SIGMA = 0.15;
 const PIN_TRACK_PENALTY = 0.75;
 const RECENT_BLOCKS = 6;
-// Hard stretch limits: the bank spans ~88–140 BPM, so a fixed grid needs
-// rate 0.63–1.59 to reach every phrase.  The hard gate below is slightly
-// wider ([0.60, 1.65]) so all 2,565 phrases are eligible; scoring tiers
-// (TEMPO_COST_WEIGHT / KEY_COST_WEIGHT) strongly prefer near matches, so
-// extreme stretches only surface once the near pool is played out.
-const RATE_MIN = 0.60;
-const RATE_MAX = 1.65;
+// Hard stretch limits: Signalsmith phase-vocoder artifacts become obvious past
+// ~±10% (muffled highs, smeared transients). [0.90, 1.10] keeps every run
+// in the transparent band; ladder rotation still brings every tempo group
+// in near-tempo across sets.
+const RATE_MIN = 0.90;
+const RATE_MAX = 1.10;
 const TEMPO_COST_WEIGHT = 1.0;
 const KEY_COST_WEIGHT = 0.05;
 const CACHE_LIMIT = 64;
@@ -889,6 +888,35 @@ export class StemRemixPlayer {
 
   private bestEntryForPhrase(phrase: KitPhrase, stem: StemName): StemPoolEntry | null {
     return this.entryById.get(`${phrase.id}:${stem}`) ?? null;
+  }
+
+  /** Called by the transport's block clock. Prepares at most one block at a
+   *  time so async voice creation cannot reorder the bar grid. */
+  private lastRecoverySec_ = -60;
+
+  /**
+   * Silence watchdog: the master bus sat at digital zero for seconds while
+   * scheduling kept logging success — the voices themselves went mute
+   * (render-path stall) without the scheduler noticing.  Rebuild the voice
+   * pool and re-run the current block's runs immediately instead of sitting
+   * dead until the next boundary.  Cooldown 5 s, one recovery per dropout.
+   */
+  recoverSilence(at: number): void {
+    if (!this.started || this.preparing || this.cluster === null) return;
+    if (at - this.lastRecoverySec_ < 5) return;
+    const runs = STEMS
+      .map((stem) => (this.lastBlockRuns[stem]?.length ? { stem, run: this.lastBlockRuns[stem]! } : null))
+      .filter((task): task is { stem: StemName; run: StemPoolEntry[] } => task !== null);
+    if (runs.length === 0) return;
+    this.lastRecoverySec_ = at;
+    for (const stem of STEMS) {
+      for (const voice of this.voicePool[stem] ?? []) voice.dispose();
+      this.voicePool[stem] = [];
+      this.voiceIndex[stem] = 0;
+    }
+    this.current = {};
+    console.info(`[StemRemix] silence watchdog: fresh voices, re-running ${runs.length} runs @ ${at.toFixed(2)}s`);
+    void this.finishBlock(runs, at + 0.15);
   }
 
   /** Called by the transport's block clock. Prepares at most one block at a
