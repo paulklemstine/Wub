@@ -14,6 +14,10 @@ import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
 import { StretchVoice } from "./stretch_voice";
+import {
+  ARC_SECTIONS, arcPredictNext, isArcModelArtifact,
+  type ArcModelArtifact, type ArcPrediction,
+} from "./arc_inference";
 import { JointRanker } from "./joint_ranker";
 import {
   targetAt, movementBudgetAt, harmonyPenalty, vocalChangeAllowed, scoreTransition,
@@ -471,6 +475,13 @@ export class StemRemixPlayer {
   private baseUrl = "";
   private tasteScores: TasteScoresManifest | null = null;
   private clusters: KitCluster[] = [];
+  /** Learned arc model artifacts (wub-arc-model-v1); null until loaded. */
+  private arcArtifact: ArcModelArtifact | null = null;
+  /** phraseId -> raw 48-d window features for arc context (null until loaded). */
+  private arcFeatures: Map<string, number[]> | null = null;
+  /** Last <=6 played block phrase ids (drums entry), most recent last. */
+  private arcHistory: string[] = [];
+  private arcLoggedUnavailable = false;
   private kitById = new Map<string, Kit>();
   private entryById = new Map<string, StemPoolEntry>();
 
@@ -659,6 +670,74 @@ export class StemRemixPlayer {
     } catch {
       this.jointRanker = null;
     }
+    // Learned arc artifacts load off the first-audio path; a missing or
+    // invalid artifact leaves the planned wave as the only behaviour.
+    void this.loadArcArtifacts(base);
+  }
+
+  /** Load the learned arc model + context sidecar (log once, never throw). */
+  private async loadArcArtifacts(base: string): Promise<void> {
+    try {
+      const [modelRes, sideRes] = await Promise.all([
+        fetch(`${base}/arc_model.json`),
+        fetch(`${base}/arc_context_features.json`),
+      ]);
+      if (!modelRes.ok || !sideRes.ok) {
+        throw new Error(`arc artifact ${modelRes.status}/${sideRes.status}`);
+      }
+      const model = (await modelRes.json()) as unknown;
+      const side = (await sideRes.json()) as {
+        feature_dim?: unknown;
+        byPhraseId?: unknown;
+        version?: unknown;
+      };
+      if (!isArcModelArtifact(model) || model.config.feature_dim !== 48) {
+        throw new Error("invalid arc model artifact");
+      }
+      const featStd = model.feat_std;
+      if (!Array.isArray(featStd) || featStd.length !== 48
+        || featStd.some((v) => !Number.isFinite(v) || v <= 0)) {
+        throw new Error("invalid arc model feat_std");
+      }
+      const by = side.byPhraseId;
+      if (!by || typeof by !== "object") throw new Error("invalid arc sidecar");
+      const map = new Map<string, number[]>();
+      for (const [phraseId, row] of Object.entries(by as Record<string, unknown>)) {
+        if (Array.isArray(row) && row.length === 48
+          && row.every((v) => Number.isFinite(Number(v)))) {
+          map.set(phraseId, row.map(Number));
+        }
+      }
+      if (map.size === 0) throw new Error("empty arc sidecar");
+      this.arcArtifact = model;
+      this.arcFeatures = map;
+      console.info(`[StemRemix] Arc model loaded (${map.size} context features)`);
+    } catch (err) {
+      if (!this.arcLoggedUnavailable) {
+        this.arcLoggedUnavailable = true;
+        console.warn("[StemRemix] arc model unavailable; planned wave only", err);
+      }
+    }
+  }
+
+  /**
+   * Learned next-block arc prediction from the last <=6 heard windows.
+   * Null when the artifact (or usable context) is missing — the caller keeps
+   * the planned wave.  Energy is the primary channel; the section is adopted
+   * upstream only at confident phase boundaries.
+   */
+  private arcPredict(): ArcPrediction | null {
+    const model = this.arcArtifact;
+    const features = this.arcFeatures;
+    if (!model || !features || this.arcHistory.length === 0) return null;
+    const rows: number[][] = [];
+    for (const phraseId of this.arcHistory) {
+      const row = features.get(phraseId);
+      if (row && row.length === 48) rows.push(row);
+    }
+    if (rows.length === 0) return null;
+    const lastEnergy = clamp01(rows[rows.length - 1][32] ?? 0.5);
+    return arcPredictNext(model, rows, lastEnergy);
   }
 
   /** Pick a cluster (optionally by style/id) and preload the opening phrase. */
@@ -704,6 +783,7 @@ export class StemRemixPlayer {
     this.lastBlockRuns = {};
     this.scheduledRuns = {};
     this.manualPins = {};
+    this.arcHistory = [];
     this.blockGrid = [];
     this.lastMoveBar = 0;
     this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
@@ -1258,13 +1338,27 @@ export class StemRemixPlayer {
     const startBar = this.sessionBar;
     // Planned 104-bar arc.  The arranger's live section is no longer the
     // target in remix mode; the arc plans the wave, the ranker fills it in.
+    // A learned arc model (when present) blends in at gated confidence:
+    // energy nudges the plan, section only overrules at confident boundaries.
     const arc = targetAt(startBar);
-    const normalized = arc.section;
+    let normalized = arc.section;
     const displaySection = arc.phase;
+    const bridge = !rotation && this.isBridgeBar(startBar);
+    let targetEnergy = arc.energy;
+    {
+      const learned = this.arcPredict();
+      if (learned) {
+        if (Math.abs(learned.energy - targetEnergy) <= 0.25) {
+          targetEnergy = clamp01(0.5 * targetEnergy + 0.5 * learned.energy);
+        }
+        if (!bridge && arc.barInPhase === 0 && learned.confidence >= 0.55
+          && (ARC_SECTIONS as readonly string[]).includes(learned.section)) {
+          normalized = learned.section;
+        }
+      }
+    }
     const sectionChanged = normalized !== this.lastSection;
     this.lastSection = normalized;
-    const targetEnergy = arc.energy;
-    const bridge = !rotation && this.isBridgeBar(startBar);
     if (bridge && this.nextCluster === null) {
       this.nextCluster = this.chooseNeighbourCluster();
       if (this.nextCluster) {
@@ -1999,7 +2093,14 @@ export class StemRemixPlayer {
     const current = this.current[stem]?.entry ?? this.lastBlockEntries[stem] ?? null;
     const arc = targetAt(this.sessionBar);
     const targetSection = this.lastSection || arc.section;
-    const targetEnergy = arc.energy;
+    let targetEnergy = arc.energy;
+    // Learned-arc energy blend (gated; section comes from the planned arc).
+    {
+      const learned = this.arcPredict();
+      if (learned && Math.abs(learned.energy - targetEnergy) <= 0.25) {
+        targetEnergy = clamp01(0.5 * targetEnergy + 0.5 * learned.energy);
+      }
+    }
     const outroAllowed = this.blockIndex >= BLOCKS_PER_SET - 2;
     const recent = new Set(this.stemHistory[stem].slice(-STEM_HISTORY_AVOID));
 
@@ -2902,6 +3003,17 @@ export class StemRemixPlayer {
           this.lastBlockRuns[stem] = [playing];
         }
         this.onStatus?.(`${stem} released back to auto-mix`);
+      }
+    }
+
+    // Learned-arc context: record each newly-playing drums phrase once, so
+    // beginBlock can offer the last <=6 windows to the arc model.
+    const drumsNow = this.current.drums;
+    if (drumsNow) {
+      const phraseId = drumsNow.entry.phrase.id;
+      if (this.arcHistory[this.arcHistory.length - 1] !== phraseId) {
+        this.arcHistory.push(phraseId);
+        if (this.arcHistory.length > 6) this.arcHistory.shift();
       }
     }
   }
