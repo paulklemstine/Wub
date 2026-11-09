@@ -286,6 +286,16 @@ export interface TransitionScoreInput {
    * weak phrases stay eligible (quality-first soft prior, never a filter).
    */
   earQuality?: number;
+  /**
+   * Pre-gated signature bonus for this candidate (0..~0.28 for two stems).
+   * Computed by `signatureBonus` in the caller; 0/absent disables the term.
+   */
+  signatureBonus?: number;
+  /**
+   * Pre-gated timbre-diversity term for this candidate, roughly
+   * -0.08..+0.08.  Computed by `timbreBonus` in the caller.
+   */
+  timbreBonus?: number;
 }
 
 export interface TransitionScore {
@@ -327,6 +337,9 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
   reasons.push(`novelty ${signed(noveltyBonus)}`);
 
   const repetition = clamp01(finiteOr(input.repetition, 0));
+  // Signature returns intentionally pay a discounted repetition cost (the
+  // caller discounts `repetition` itself for signatures; the discount knob
+  // lives in FLOW_SIGNATURE_REPETITION_DISCOUNT).  Nothing extra to add here.
   const repetitionPenalty = 0.15 * repetition;
   score -= repetitionPenalty;
   reasons.push(`repetition ${signed(-repetitionPenalty)}`);
@@ -340,6 +353,23 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
   const earBonus = 0.20 * (earQuality - 0.5);
   score += earBonus;
   reasons.push(`ears ${signed(earBonus)} (q ${earQuality.toFixed(2)})`);
+
+  // Optional flow terms: both are pre-gated by their pure helpers below, so
+  // scoreTransition only adds them (bounded, never a filter).
+  const signatureBonus = clamp01(finiteOr(input.signatureBonus ?? 0, 0));
+  if (signatureBonus > 0) {
+    score += signatureBonus;
+    reasons.push(`signature ${signed(signatureBonus)}`);
+  }
+  const timbreBonus = finiteOr(input.timbreBonus ?? 0, 0);
+  const timbreClamped = Math.max(
+    -FLOW_TIMBRE_OVERUSE_PENALTY * 2,
+    Math.min(FLOW_TIMBRE_BONUS, timbreBonus),
+  );
+  if (Math.abs(timbreClamped) > 1e-9) {
+    score += timbreClamped;
+    reasons.push(`timbre ${signed(timbreClamped)}`);
+  }
 
   if (input.includesVocals && !input.vocalAllowed) {
     score -= 0.05;
@@ -361,6 +391,258 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
   }
 
   return { score: clamp01(score), reasons };
+}
+
+// ---------------------------------------------------------------------------
+// Flow policy (A) signatures, (C) timbre budget, (B) transition techniques.
+//
+// This block is pure and dependency-free like the rest of arc_planner.ts: no
+// audio, DOM, manifest or timer access.  All knobs are module constants so a
+// listening rollback is a one-line flip.  The Python mirror in
+// wub_core/flow_policy.py implements identical math for `pytest` coverage;
+// keep the constants and formulas in sync when retuning.
+//
+// Every helper returns 0 / no-op when its gate is closed, so a missing signal
+// (no taste_scores.json, no energy target, no reverb bus) always falls back
+// to today's equal-gain hand-off and the pre-existing score.
+// ---------------------------------------------------------------------------
+
+/** Master gate for signature phrase returns.  Flipping restores prior policy. */
+export const FLOW_SIGNATURES_ENABLED = true;
+/** Signature phrases kept per stem (1-2).  One anchor is enough for the ear
+ *  to learn; two gives the ranker a choice so the same window cannot loop. */
+export const FLOW_SIGNATURES_PER_STEM = 2;
+/** Planned energy at which signatures are fully eligible (DROP peak 0.95).
+ *  Below 0.50 the bonus is zero; it ramps linearly up to this threshold. */
+export const FLOW_SIGNATURE_PEAK_ENERGY = 0.90;
+/** Max additive score bonus per changed signature stem at peak energy.
+ *  Small beside the ranker (~1) so signatures win ties, never force a move. */
+export const FLOW_SIGNATURE_BONUS = 0.14;
+/** Bars a signature must rest between returns within a set (rotation resets
+ *  the clock so the new anchor may return immediately).  16 = a half phrase
+ *  of history; it is what keeps the return musical instead of a loop. */
+export const FLOW_SIGNATURE_MIN_GAP_BARS = 16;
+/** While a signature is returning, its repetition cost is multiplied by
+ *  (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) = 0.4 in the caller, so the
+ *  novelty/repetition budget still rotates the rest of the bank. */
+export const FLOW_SIGNATURE_REPETITION_DISCOUNT = 0.6;
+
+/** Timbre-diversity window in session bars (8 blocks).  Style changes are
+ *  musical on this scale; banning repeats longer than this would fight the
+ *  movement budget. */
+export const FLOW_TIMBRE_WINDOW_BARS = 32;
+/** Max soft bonus for a timbre unseen in the window.  An under-used kit drum
+ *  kit gets this, never an exclusion. */
+export const FLOW_TIMBRE_BONUS = 0.08;
+/** Max soft penalty step for an over-used timbre (bounded, not a ban). */
+export const FLOW_TIMBRE_OVERUSE_PENALTY = 0.04;
+
+/** Master gate for DJ transition techniques.  False = equal-gain hand-off. */
+export const FLOW_TRANSITIONS_ENABLED = true;
+/** EQ-OUT tail fires when the incoming stem is at least this much hotter
+ *  than the outgoing stem (mid-frequency masking becomes audible above ~0.15). */
+export const FLOW_EQ_OUT_MIN_GAIN = 0.15;
+/** EQ-OUT low-pass floor in Hz (keeps sub/kick punch, removes 300-3k mask). */
+export const FLOW_EQ_OUT_FLOOR_HZ = 300;
+/** Incoming vocal RMS (dBFS) at which the fade stretches to avoid mid-vowel
+ *  collisions.  Louder than this gets FLOW_VOCAL_FADE_LOUD_SEC. */
+export const FLOW_VOCAL_LOUD_RMS_DB = -18;
+/** Slow incoming-vocal fade in seconds (within the 100-200 ms spec). */
+export const FLOW_VOCAL_FADE_LOUD_SEC = 0.15;
+
+/** Energy at or below which the signature bonus is exactly zero. */
+export const FLOW_SIGNATURE_BONUS_FLOOR = 0.50;
+
+/**
+ * Signature energy scale in 0..1: 0 at INTRO/BREAKDOWN energies, 1 at/above
+ * FLOW_SIGNATURE_PEAK_ENERGY (DROP).  Linear between, so GROOVE (0.72) earns
+ * roughly half credit and BUILDUP (0.82) most of it.
+ * Mirrors wub_core.flow_policy.signature_energy_scale.
+ */
+export function signatureEnergyScale(targetEnergy: number): number {
+  const energy = clamp01(finiteOr(targetEnergy, 0.5));
+  const peak = Math.max(0.51, FLOW_SIGNATURE_PEAK_ENERGY);
+  return clamp01((energy - FLOW_SIGNATURE_BONUS_FLOOR) / (peak - FLOW_SIGNATURE_BONUS_FLOOR));
+}
+
+export interface SignatureCandidate {
+  phraseId: string;
+  trackId: string;
+  /** Taste quality 0..1, or null/NaN when the sidecar is missing. */
+  quality: number | null | undefined;
+  /** Ears quality 0..1 (0.5 neutral when the sidecar is absent). */
+  earQ: number;
+  energy: number;
+  section: string;
+  isIntro?: boolean;
+  isOutro?: boolean;
+  once?: boolean;
+}
+
+/**
+ * Pick 1-2 signature phrase ids from existing shipped signals only
+ * (taste_scores quality + ears + energy/section in the manifest).
+ *_intro/outro/once phrases are excluded: they are single moments, not
+ * returns.  Distinct source tracks are preferred so both signatures do not
+ * collapse onto one song.  Deterministic in (phraseId, trackId, quality);
+ * missing quality falls back to 0.5 so taste-less banks still get anchors.
+ * Mirrors wub_core.flow_policy.pick_signatures.
+ */
+export function pickSignatures(
+  candidates: readonly SignatureCandidate[],
+  perStem: number = FLOW_SIGNATURES_PER_STEM,
+): Set<string> {
+  const picked = new Set<string>();
+  if (!Array.isArray(candidates) || candidates.length === 0) return picked;
+  const count = Math.max(0, Math.floor(finiteOr(perStem, FLOW_SIGNATURES_PER_STEM)));
+  if (count <= 0 || !FLOW_SIGNATURES_ENABLED) return picked;
+  const legal = candidates.filter((candidate) => {
+    if (!candidate || typeof candidate.phraseId !== "string" || candidate.phraseId === "") {
+      return false;
+    }
+    if (candidate.isIntro === true || candidate.isOutro === true || candidate.once === true) {
+      return false;
+    }
+    return true;
+  });
+  const scored = legal.map((candidate) => {
+    const qualityRaw = candidate.quality;
+    const quality = typeof qualityRaw === "number" && Number.isFinite(qualityRaw)
+      ? clamp01(qualityRaw)
+      : 0.5;
+    const earQ = clamp01(finiteOr(candidate.earQ, 0.5));
+    const energy = clamp01(finiteOr(candidate.energy, 0.5));
+    const section = String(candidate.section ?? "").toUpperCase();
+    const sectionBonus = section === "DROP" ? 0.10 : section === "GROOVE_A" ? 0.05 : 0;
+    const score = 0.55 * quality + 0.15 * earQ + 0.20 * energy + sectionBonus;
+    return { id: candidate.phraseId, track: String(candidate.trackId ?? ""), score };
+  });
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const byId = a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    if (byId !== 0) return byId;
+    return a.track < b.track ? -1 : a.track > b.track ? 1 : 0;
+  });
+  const usedTracks = new Set<string>();
+  for (const item of scored) {
+    if (picked.size >= count) break;
+    if (item.track !== "" && usedTracks.has(item.track)) continue;
+    picked.add(item.id);
+    if (item.track !== "") usedTracks.add(item.track);
+  }
+  // If distinct tracks run out (small cluster), fill with the next-best ids.
+  if (picked.size < count) {
+    for (const item of scored) {
+      if (picked.size >= count) break;
+      if (!picked.has(item.id)) picked.add(item.id);
+    }
+  }
+  return picked;
+}
+
+export interface SignatureBonusInput {
+  isSignature: boolean;
+  targetEnergy: number;
+  /** Session bars since this stem's signature last played (<0 = never). */
+  gapBars: number;
+  /** Pinned stems never get the bonus: user intent outranks signatures. */
+  pinned?: boolean;
+}
+
+/**
+ * Additive signature bonus for one candidate stem, 0..FLOW_SIGNATURE_BONUS.
+ * Zero when disabled, not a signature, pinned, still inside the rest gap, or
+ * below the energy floor.  Mirrors wub_core.flow_policy.signature_bonus.
+ */
+export function signatureBonus(input: SignatureBonusInput): number {
+  if (!FLOW_SIGNATURES_ENABLED) return 0;
+  if (!input.isSignature) return 0;
+  if (input.pinned === true) return 0;
+  const gap = Number(input.gapBars);
+  // Unknown gap (never played) counts as rested.
+  const rested = !Number.isFinite(gap) || gap < 0 || gap >= FLOW_SIGNATURE_MIN_GAP_BARS;
+  if (!rested) return 0;
+  return FLOW_SIGNATURE_BONUS * signatureEnergyScale(input.targetEnergy);
+}
+
+/**
+ * Soft timbre-diversity term for one candidate: +FLOW_TIMBRE_BONUS when the
+ * candidate's style has not been used in the window, stepping down linearly
+ * to FLOW_TIMBRE_OVERUSE_PENALTY at three uses.  Never a ban: the worst
+ * candidate still returns a small negative, not a filter.
+ * `recentCount` = uses of this style in the 32-bar window; `windowBlocks` =
+ * blocks elapsed inside the window (unused here beyond the zero guard, kept
+ * for callers that scale by window length).
+ * Mirrors wub_core.flow_policy.timbre_bonus.
+ */
+export function timbreBonus(recentCount: number, windowBlocks: number): number {
+  const count = Math.max(0, Math.floor(finiteOr(recentCount, 0)));
+  const blocks = Math.max(0, Math.floor(finiteOr(windowBlocks, 0)));
+  if (blocks <= 0) return 0;
+  const step = (FLOW_TIMBRE_BONUS + FLOW_TIMBRE_OVERUSE_PENALTY) / 3;
+  const bonus = FLOW_TIMBRE_BONUS - step * count;
+  const floor = -FLOW_TIMBRE_OVERUSE_PENALTY * 2;
+  return Math.max(floor, Math.min(FLOW_TIMBRE_BONUS, bonus));
+}
+
+export interface TransitionTechniqueInput {
+  stem: StemName;
+  outgoingEnergy: number;
+  incomingEnergy: number;
+  incomingRmsDb: number;
+  targetEnergy: number;
+  isBridge: boolean;
+  /** Vocal change performed at this boundary (false = vocal tail unused). */
+  vocalChanged?: boolean;
+}
+
+export interface TransitionTechnique {
+  /** Outgoing stem gets a low-pass sweep to FLOW_EQ_OUT_FLOOR_HZ. */
+  eqOut: boolean;
+  eqOutFloorHz: number;
+  /** Outgoing vocal fades under an extended reverb send. */
+  vocalReverbTail: boolean;
+  /** Incoming-vocal fade override in seconds, or null for the default fade. */
+  vocalFadeInSec: number | null;
+}
+
+/**
+ * Pure DJ-technique selector.  At most two techniques are produced cleanly:
+ * EQ-OUT tail (a pitched stem whose replacement is much hotter) and the
+ * vocal treatment (reverb tail on the outgoing vocal, slow fade on a loud
+ * incoming vocal).  Drums are deliberately never EQ'd to 300 Hz (it would
+ * gut the kick); the drum mask/fill idea needs a separate voice-level click
+ * and is left gated off so two clean techniques ship first.
+ * All thresholds degrade to the plain equal-gain hand-off when disabled.
+ * Mirrors wub_core.flow_policy.select_transition_technique.
+ */
+export function selectTransitionTechnique(
+  input: TransitionTechniqueInput,
+): TransitionTechnique {
+  const off: TransitionTechnique = {
+    eqOut: false,
+    eqOutFloorHz: FLOW_EQ_OUT_FLOOR_HZ,
+    vocalReverbTail: false,
+    vocalFadeInSec: null,
+  };
+  if (!FLOW_TRANSITIONS_ENABLED) return off;
+  if (input.isBridge) return off;
+  const outgoing = clamp01(finiteOr(input.outgoingEnergy, 0.5));
+  const incoming = clamp01(finiteOr(input.incomingEnergy, 0.5));
+  const rmsDb = Number(input.incomingRmsDb);
+  const stem = input.stem;
+  const result: TransitionTechnique = { ...off };
+  if (stem !== "drums" && incoming - outgoing >= FLOW_EQ_OUT_MIN_GAIN) {
+    result.eqOut = true;
+  }
+  if (stem === "vocals") {
+    const changed = input.vocalChanged !== false;
+    if (changed && incoming >= 0.40) result.vocalReverbTail = true;
+    if (Number.isFinite(rmsDb) && rmsDb >= FLOW_VOCAL_LOUD_RMS_DB && incoming >= 0.40) {
+      result.vocalFadeInSec = FLOW_VOCAL_FADE_LOUD_SEC;
+    }
+  }
+  return result;
 }
 
 /** Deterministic smoke test; an empty array means every assertion passed. */
@@ -554,6 +836,82 @@ export function selfTest(): string[] {
     vocalAllowed: false,
   });
   check(clampsHigh.score <= 1 && clampsLow.score >= 0, "scores must clamp to 0..1");
+
+  // Flow policy: signature picking, bonus gating, timbre budget, techniques.
+  check(FLOW_SIGNATURES_PER_STEM === 2, "signatures per stem should be 2");
+  check(FLOW_SIGNATURE_PEAK_ENERGY >= 0.85 && FLOW_SIGNATURE_PEAK_ENERGY <= 0.95, "signature peak near DROP");
+  check(FLOW_SIGNATURE_MIN_GAP_BARS === 16, "signature gap in bars");
+  check(FLOW_TIMBRE_WINDOW_BARS === 32, "timbre window in bars");
+
+  const sigCandidates = [
+    { phraseId: "a", trackId: "t1", quality: 0.9, earQ: 0.9, energy: 0.95, section: "DROP" },
+    { phraseId: "b", trackId: "t2", quality: 0.8, earQ: 0.5, energy: 0.90, section: "DROP" },
+    { phraseId: "c", trackId: "t1", quality: 0.6, earQ: 0.9, energy: 0.95, section: "DROP" },
+    { phraseId: "intro", trackId: "t3", quality: 1, earQ: 1, energy: 0.95, section: "DROP", isIntro: true },
+  ];
+  const picked = pickSignatures(sigCandidates);
+  check(picked.size === 2 && picked.has("a") && picked.has("b") && !picked.has("c") && !picked.has("intro"),
+    "signatures prefer high quality, distinct tracks, no intro/outro/once");
+  check(pickSignatures(sigCandidates, 1).size === 1, "perStem cap should be honoured");
+  check(pickSignatures([]).size === 0, "no candidates -> no signatures");
+  check(pickSignatures(sigCandidates.map((c) => ({ ...c, quality: null }))).size === 2,
+    "missing quality still yields anchors");
+
+  check(signatureBonus({ isSignature: true, targetEnergy: 0.95, gapBars: 20 }) > 0, "signature at peak");
+  check(signatureBonus({ isSignature: true, targetEnergy: 0.20, gapBars: 20 }) === 0, "signature backs off at low energy");
+  check(signatureBonus({ isSignature: true, targetEnergy: 0.95, gapBars: 4 }) === 0, "signature inside gap is zero");
+  check(signatureBonus({ isSignature: false, targetEnergy: 0.95, gapBars: 20 }) === 0, "non-signature is zero");
+  check(signatureBonus({ isSignature: true, targetEnergy: 0.95, gapBars: 20, pinned: true }) === 0, "pinned stem gets no signature bonus");
+  check(signatureBonus({ isSignature: true, targetEnergy: 0.95, gapBars: -1 }) > 0, "never-played signature is rested");
+  check(signatureEnergyScale(0.95) > signatureEnergyScale(0.72) && signatureEnergyScale(0.72) > signatureEnergyScale(0.30),
+    "signature scale should be monotonic in energy");
+
+  const withSig = scoreTransition({ ...base, signatureBonus: 0.1 });
+  check(withSig.score > baseScore.score, "signature term should add");
+  check(withSig.reasons.some((r) => r.includes("signature")), "signature term should explain itself");
+  const withTimbre = scoreTransition({ ...base, timbreBonus: 0.05 });
+  check(withTimbre.score > baseScore.score, "timbre term should add");
+  const withTimbrePenalty = scoreTransition({ ...base, timbreBonus: -0.04 });
+  check(withTimbrePenalty.score < baseScore.score, "over-used timbre should cost");
+
+  check(timbreBonus(0, 8) === FLOW_TIMBRE_BONUS, "unseen timbre earns the full bonus");
+  check(timbreBonus(3, 8) < 0, "thrice-used timbre is penalised");
+  check(timbreBonus(0, 0) === 0, "empty window is neutral");
+  check(timbreBonus(1, 8) < timbreBonus(0, 8) && timbreBonus(2, 8) < timbreBonus(1, 8),
+    "timbre bonus should step down with use");
+
+  const eqOut = selectTransitionTechnique({
+    stem: "other", outgoingEnergy: 0.40, incomingEnergy: 0.80,
+    incomingRmsDb: -20, targetEnergy: 0.95, isBridge: false,
+  });
+  check(eqOut.eqOut === true && eqOut.eqOutFloorHz === 300, "EQ-OUT when incoming is much hotter");
+  const noEq = selectTransitionTechnique({
+    stem: "other", outgoingEnergy: 0.70, incomingEnergy: 0.75,
+    incomingRmsDb: -20, targetEnergy: 0.95, isBridge: false,
+  });
+  check(noEq.eqOut === false, "EQ-OUT needs a real energy gain");
+  const drumEq = selectTransitionTechnique({
+    stem: "drums", outgoingEnergy: 0.40, incomingEnergy: 0.90,
+    incomingRmsDb: -20, targetEnergy: 0.95, isBridge: false,
+  });
+  check(drumEq.eqOut === false, "drums are never EQ'd to 300 Hz");
+  const vocalTech = selectTransitionTechnique({
+    stem: "vocals", outgoingEnergy: 0.60, incomingEnergy: 0.70,
+    incomingRmsDb: -12, targetEnergy: 0.95, isBridge: false, vocalChanged: true,
+  });
+  check(vocalTech.vocalReverbTail === true, "vocal change gets a reverb tail");
+  check(vocalTech.vocalFadeInSec !== null && vocalTech.vocalFadeInSec! >= 0.10 && vocalTech.vocalFadeInSec! <= 0.20,
+    "loud incoming vocal fades in over 100-200 ms");
+  const quietVocalTech = selectTransitionTechnique({
+    stem: "vocals", outgoingEnergy: 0.60, incomingEnergy: 0.70,
+    incomingRmsDb: -30, targetEnergy: 0.95, isBridge: false, vocalChanged: true,
+  });
+  check(quietVocalTech.vocalFadeInSec === null, "quiet vocal keeps the default fade");
+  const bridgeTech = selectTransitionTechnique({
+    stem: "vocals", outgoingEnergy: 0.40, incomingEnergy: 0.80,
+    incomingRmsDb: -12, targetEnergy: 0.20, isBridge: true, vocalChanged: true,
+  });
+  check(bridgeTech.eqOut === false && bridgeTech.vocalReverbTail === false, "bridge stays plain");
 
   return failures;
 }

@@ -21,7 +21,18 @@ import {
 import { JointRanker } from "./joint_ranker";
 import {
   targetAt, movementBudgetAt, harmonyPenalty, vocalChangeAllowed, scoreTransition,
+  pickSignatures, signatureBonus, timbreBonus, selectTransitionTechnique,
+  FLOW_SIGNATURES_ENABLED, FLOW_SIGNATURES_PER_STEM,
+  FLOW_SIGNATURE_REPETITION_DISCOUNT, FLOW_TIMBRE_WINDOW_BARS,
+  type TransitionTechnique,
 } from "./arc_planner";
+
+// Flow policy (audio-side): transition technique is only ever scheduled when
+// FLOW_TRANSITIONS_ENABLED is on (arc_planner gate) — the pure selector
+// already returns the plain hand-off otherwise.  These constants size the
+// *scheduled* automation; all gating lives in arc_planner.selectTransitionTechnique.
+const TRANSITION_VOCAL_REVERB_TAIL = 0.22;
+const TRANSITION_VOCAL_REVERB_TAIL_SEC = 0.35;
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const PITCHED: readonly StemName[] = ["bass", "other", "vocals"];
@@ -540,6 +551,22 @@ export class StemRemixPlayer {
   private stemNext = new Map<string, number>();
   /** Ears quality keyed `${phraseId}:${stem}` (fallback: phrase q). */
   private earQuality = new Map<string, number>();
+  /** Taste quality keyed phraseId, from kits[].phrase_order/quality rows. */
+  private phraseQuality = new Map<string, number>();
+  /** Signature return phrases per stem (1-2 ids), reselected per cluster. */
+  private signatureIds: Record<StemName, Set<string>> = {
+    drums: new Set(), bass: new Set(), other: new Set(), vocals: new Set(),
+  };
+  /** Session bar of each stem's last signature return (-1 = never). */
+  private lastSignatureBar: Record<StemName, number> = {
+    drums: -1, bass: -1, other: -1, vocals: -1,
+  };
+  /** Recent kit styles per stem for the timbre-diversity budget.
+   *  Entries outside FLOW_TIMBRE_WINDOW_BARS are pruned at selection time. */
+  private styleRecent: Array<{ stem: StemName; style: string; bar: number }> = [];
+  /** Technique chosen for the block currently being prepared (stem -> plan),
+   *  handed from beginBlock to finishBlock -> scheduleRun. */
+  private pendingTechniques: Partial<Record<StemName, TransitionTechnique>> = {};
 
   private sessionStartAt = 0;
   private nextBlockAt = 0;
@@ -612,6 +639,24 @@ export class StemRemixPlayer {
     this.tasteScores = scores;
     this.stemNext.clear();
     this.earQuality.clear();
+    this.phraseQuality.clear();
+    if (scores?.kits) {
+      for (const kitScores of Object.values(scores.kits)) {
+        const order = Array.isArray(kitScores?.phrase_order) ? kitScores.phrase_order : [];
+        const quality = Array.isArray(kitScores?.quality) ? kitScores.quality : [];
+        for (let i = 0; i < Math.min(order.length, quality.length); i++) {
+          const phraseId = order[i];
+          const q = Number(quality[i]);
+          if (typeof phraseId === "string" && phraseId !== "" && Number.isFinite(q)) {
+            this.phraseQuality.set(phraseId, Math.max(0, Math.min(1, q)));
+          }
+        }
+      }
+      if (this.phraseQuality.size > 0) {
+        console.info(`[StemRemix] Taste quality loaded: ${this.phraseQuality.size} phrases`);
+        this.reselectSignatures();
+      }
+    }
     if (scores?.ears) {
       for (const [phraseId, entry] of Object.entries(scores.ears)) {
         if (entry === null || typeof entry !== "object") continue;
@@ -789,6 +834,9 @@ export class StemRemixPlayer {
     this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
     this.lastVocalChangeBar = -1;
     this.lastDrumChangeBar = 0;
+    this.styleRecent = [];
+    this.lastSignatureBar = { drums: -1, bass: -1, other: -1, vocals: -1 };
+    this.pendingTechniques = {};
 
     // Preload one real song: all four stems from the same kit so the first
     // 4 bars sound like a record before the remix starts. Scheduling waits
@@ -949,6 +997,12 @@ export class StemRemixPlayer {
     this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
     this.lastVocalChangeBar = -1;
     this.lastDrumChangeBar = 0;
+    this.pendingTechniques = {};
+    // Signatures are per-cluster (session key/tempo): reselect against the
+    // fresh pool so the new set anchors on phrases that are legal *here*.
+    // Rotation anchors may return immediately; the clocks clear here.
+    this.lastSignatureBar = { drums: -1, bass: -1, other: -1, vocals: -1 };
+    this.reselectSignatures();
   }
 
   /** Longest chain of consecutive 4-bar phrases, preferably with all stems. */
@@ -1085,6 +1139,83 @@ export class StemRemixPlayer {
     if (entry.phrase.once) this.playedOnce.add(entry.phrase.id);
   }
 
+  /** (A) True when this phrase+stem is a selected signature return. */
+  private isSignature(stem: StemName, phraseId: string): boolean {
+    return FLOW_SIGNATURES_ENABLED && this.signatureIds[stem].has(phraseId);
+  }
+
+  /** (A) Session bars since this stem's signature last returned (-1 if never). */
+  private signatureGapBars(stem: StemName): number {
+    const last = this.lastSignatureBar[stem];
+    if (last === undefined || last < 0) return -1;
+    // sessionBar is the bar of the block currently being selected; at run
+    // time blockStartBar lags by the previous block, so the gap must read
+    // the selection horizon, not the playing block.
+    return Math.max(0, this.sessionBar - last);
+  }
+
+  /** (A) Energy-gated bonus for one candidate (0 when pinned/inside the gap). */
+  private signatureBonusFor(stem: StemName, entry: StemPoolEntry, targetEnergy: number): number {
+    return signatureBonus({
+      isSignature: this.isSignature(stem, entry.phrase.id),
+      targetEnergy,
+      gapBars: this.signatureGapBars(stem),
+      pinned: this.pins[stem] !== undefined || this.manualPins[stem] !== undefined,
+    });
+  }
+
+  /** (C) Timbre-budget term for one candidate (soft bonus, never a ban). */
+  private timbreBonusFor(stem: StemName, entry: StemPoolEntry, nowBar: number): number {
+    const cutoff = nowBar - FLOW_TIMBRE_WINDOW_BARS;
+    let count = 0;
+    let blocks = 0;
+    for (const item of this.styleRecent) {
+      if (item.stem !== stem || item.bar <= cutoff) continue;
+      blocks += 1;
+      if (item.style === entry.kit.style) count += 1;
+    }
+    if (blocks <= 0) return 0;
+    return timbreBonus(count, blocks);
+  }
+
+  /** (C) Record one scheduled block for the 32-bar timbre window. */
+  private recordStyle(stem: StemName, style: string, bar: number): void {
+    this.styleRecent.push({ stem, style, bar });
+    // Bound the log: keep ~24 blocks of headroom including stale entries.
+    if (this.styleRecent.length > 128) this.styleRecent.splice(0, this.styleRecent.length - 128);
+  }
+
+  /** (A) Reselect 1-2 signatures per stem from shipped signals only.
+   *  Pool-relative (entries already rate/key-legal), so a cluster rotation
+   *  instantly re-anchors on the new key/tempo.  Missing taste quality falls
+   *  back inside pickSignatures (0.5), so this is safe without the sidecar. */
+  private reselectSignatures(): void {
+    if (!FLOW_SIGNATURES_ENABLED || this.pools.drums.length === 0) return;
+    for (const stem of STEMS) {
+      const candidates = this.pools[stem].map((entry) => ({
+        phraseId: entry.phrase.id,
+        trackId: entry.kit.track_id,
+        quality: this.phraseQuality.get(entry.phrase.id) ?? null,
+        earQ: entry.earQ,
+        energy: entry.energy,
+        section: entry.section,
+        isIntro: entry.phrase.is_intro === true,
+        isOutro: entry.phrase.is_outro === true,
+        once: entry.phrase.once === true,
+      }));
+      const picked = pickSignatures(candidates, FLOW_SIGNATURES_PER_STEM);
+      if (picked.size > 0) {
+        this.signatureIds[stem] = picked;
+        if (picked.size === 1) {
+          console.info(`[StemRemix] signature ${stem}: ${[...picked].join(",")}`);
+        }
+      }
+    }
+    // No clock reset here: applyCluster/startSession clear the clocks for
+    // rotation/fresh anchors, while a late setTasteScores() must not erase a
+    // mid-set rest gap (a premature return would loop the motif).
+  }
+
   private chooseAnchor(): Kit | null {
     const cluster = this.cluster;
     if (!cluster) return null;
@@ -1178,7 +1309,7 @@ export class StemRemixPlayer {
   recoverSilence(at: number): void {
     if (!this.started || this.preparing || this.cluster === null) return;
     if (at - this.lastRecoverySec_ < 5) return;
-    const tasks: Array<{ stem: StemName; run: StemPoolEntry[] }> = [];
+    const tasks: Array<{ stem: StemName; run: StemPoolEntry[]; transition?: TransitionTechnique }> = [];
     const resumes = new Map<StemName, ResumeHint>();
     for (const stem of STEMS) {
       const current = this.current[stem];
@@ -1298,7 +1429,7 @@ export class StemRemixPlayer {
 
   private beginBlock(at: number, section: string): {
     result: StemBlockResult;
-    tasks: Array<{ stem: StemName; run: StemPoolEntry[] }>;
+    tasks: Array<{ stem: StemName; run: StemPoolEntry[]; transition?: TransitionTechnique }>;
   } {
     const blocksPlayed = this.blockIndex;
 
@@ -1393,7 +1524,7 @@ export class StemRemixPlayer {
     const phrases: Partial<Record<StemName, KitPhrase>> = {};
     const kits: Partial<Record<StemName, Kit>> = {};
     const stemTracks: Partial<Record<StemName, string>> = {};
-    const tasks: Array<{ stem: StemName; run: StemPoolEntry[] }> = [];
+    const tasks: Array<{ stem: StemName; run: StemPoolEntry[]; transition?: TransitionTechnique }> = [];
 
     if (bridge && !rotation) {
       for (const stem of ["drums", "bass"] as const) {
@@ -1533,7 +1664,33 @@ export class StemRemixPlayer {
       phrases[stem] = run[0].phrase;
       kits[stem] = run[0].kit;
       stemTracks[stem] = run[0].kit.track_id;
-      tasks.push({ stem, run });
+      // (A) + (C) + (B) bookkeeping for this boundary:
+      // signature return clock, timbre window, and the DJ technique plan
+      // (pure selector; all scheduling happens in scheduleRun at audio time).
+      const outgoing = priorEntries[stem] ?? current?.entry;
+      const vocalChangedForTech = !sameTrack && stem === "vocals";
+      const technique = selectTransitionTechnique({
+        stem,
+        outgoingEnergy: outgoing?.energy ?? run[0].energy,
+        incomingEnergy: run[0].energy,
+        incomingRmsDb: run[0].rmsDb,
+        targetEnergy,
+        isBridge: bridge || rotation,
+        vocalChanged: stem === "vocals" ? vocalChangedForTech : undefined,
+      });
+      if (technique.eqOut || technique.vocalReverbTail || technique.vocalFadeInSec !== null) {
+        this.pendingTechniques[stem] = technique;
+      } else {
+        delete this.pendingTechniques[stem];
+      }
+      if (!sameTrack && this.isSignature(stem, run[0].phrase.id)) {
+        this.lastSignatureBar[stem] = startBar;
+        if (targetEnergy >= 0.5) {
+          this.onStatus?.(`signature ${stem} returns at bar ${startBar}`);
+        }
+      }
+      this.recordStyle(stem, run[0].kit.style, startBar);
+      tasks.push({ stem, run, transition: technique });
       if (!samePhrase) changed.push(stem);
       if (!sameTrack) trackChanged.push(stem);
       for (const runEntry of run) {
@@ -1686,17 +1843,24 @@ export class StemRemixPlayer {
       // Tempo/key tiers keep far stretches rare: near matches win while they
       // are fresh, but their play counts grow until a far, never-played
       // phrase's novelty outweighs its stretch cost and it surfaces.
+      // Signature returns pay a discounted novelty decay so they are not
+      // scored out for having played before, and under-used timbres earn a
+      // small nudge (see arc_planner timbreBonus).
       const plays = this.playCountOf(stem, entry.phrase.id);
-      const novelty = (plays === 0 ? 0.35 : Math.max(-0.30, -0.12 * plays))
+      const signatureBonus = this.signatureBonusFor(stem, entry, targetEnergy);
+      const isSig = this.isSignature(stem, entry.phrase.id);
+      const perceptionPlays = isSig ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
+      const novelty = (perceptionPlays === 0 ? 0.35 : Math.max(-0.30, -0.12 * perceptionPlays))
         + hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.20;
       const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
         + entry.keyCost * KEY_COST_WEIGHT;
       const earBonus = EAR_W_JOINT * (entry.earQ - 0.5);
+      const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
       return {
         entry,
         full: legal,
         judge,
-        score: (judge > 0 ? judge : fallback) + novelty - tierCost + earBonus,
+        score: (judge > 0 ? judge : fallback) + novelty - tierCost + earBonus + signatureBonus + timbre,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -1740,6 +1904,26 @@ export class StemRemixPlayer {
       seen.add(trackId);
       out.push(item.entry);
       added += 1;
+    }
+    // One guided slot for a rested signature return: without it the top-8
+    // shortlist (elite-dense by design) would never contain the motif the
+    // brief asks for, and the energy-gated bonus would have nothing to act
+    // on.  One slot, only when the signature is legal + rested, so the
+    // never-played reserve and the ranker keep their room.
+    if (FLOW_SIGNATURES_ENABLED && !out.some((e) => this.isSignature(stem, e.phrase.id))) {
+      const signature = pool.find((item) => {
+        if (!this.isSignature(stem, item.entry.phrase.id)) return false;
+        if (this.pins[stem] !== undefined || this.manualPins[stem]) return false;
+        if (this.signatureBonusFor(stem, item.entry, targetEnergy) <= 0) return false;
+        if (seen.has(item.entry.kit.track_id) && !out.some((e) => e.kit.track_id === item.entry.kit.track_id)) {
+          return false;
+        }
+        return true;
+      });
+      if (signature) {
+        if (out.length >= JOINT_CANDIDATES_PER_STEM) out.pop(); // keep one free
+        if (!out.includes(signature.entry)) out.push(signature.entry);
+      }
     }
     return out;
   }
@@ -1881,6 +2065,8 @@ export class StemRemixPlayer {
       let harmony = 0;
       let repetition = 0;
       let novelty = 0;
+      let signatureTerm = 0;
+      let timbreTerm = 0;
       for (const stem of STEMS) {
         const entry = candidate[stem];
         if (!entry) return;
@@ -1898,14 +2084,24 @@ export class StemRemixPlayer {
             });
           }
           const plays = this.playCountOf(stem, entry.phrase.id);
-          repetition += plays === 0 ? 0 : Math.min(1, 0.3 + 0.2 * plays);
-          novelty += plays === 0 ? 1 : 1 / (1 + plays);
+          // Signature returns cost discounted repetition so the motif can come
+          // back without the novelty loop spinning it every block.  The 16-bar
+          // rest (signatureBonus) is what keeps the discount honest.
+          const isSig = this.isSignature(stem, entry.phrase.id);
+          const discountedPlays = isSig ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
+          repetition += plays === 0 ? 0 : Math.min(1, 0.3 + 0.2 * discountedPlays);
+          novelty += plays === 0 ? 1 : 1 / (1 + discountedPlays);
+          signatureTerm += this.signatureBonusFor(stem, entry, targetEnergy);
+          timbreTerm += this.timbreBonusFor(stem, entry, startBar);
         }
       }
       candidateEnergy /= 4;
       harmony /= Math.max(1, subset.length);
       repetition = Math.min(1, repetition / Math.max(1, subset.length));
       novelty = subset.length > 0 ? novelty / subset.length : 0;
+      // Mean soft terms so a 2-stem candidate is not worth twice a 1-stem one.
+      const meanSignature = subset.length > 0 ? signatureTerm / subset.length : 0;
+      const meanTimbre = subset.length > 0 ? timbreTerm / subset.length : 0;
       let earSum = 0;
       for (let i = 0; i < subset.length; i++) {
         earSum += candidate[subset[i]]!.earQ;
@@ -1923,6 +2119,8 @@ export class StemRemixPlayer {
         includesVocals: subset.includes("vocals"),
         vocalAllowed: allowVocals,
         earQuality,
+        signatureBonus: meanSignature,
+        timbreBonus: meanTimbre,
       });
       if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
         bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
@@ -2254,11 +2452,19 @@ export class StemRemixPlayer {
       const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *
         (stem === "vocals" ? 0.25 : 0.6);
       const plays = this.playCountOf(stem, entry.phrase.id);
+      const isSigMorph = this.isSignature(stem, entry.phrase.id);
+      const morphPlays = isSigMorph ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
       const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.35
-        + (plays === 0 ? 0.4 : Math.max(-0.4, -0.15 * plays));
+        + (morphPlays === 0 ? 0.4 : Math.max(-0.4, -0.15 * morphPlays));
       const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
         + entry.keyCost * KEY_COST_WEIGHT;
       const earBonus = EAR_W_FALLBACK * (entry.earQ - 0.5);
+      // Fallback path honours the same soft policy as the joint path: a rested
+      // signature earns its energy-gated bonus and an under-used timbre earns
+      // its window bonus.  sectionEnergy is the fallback's target proxy since
+      // selectMorph has no arc targetEnergy parameter.
+      const sigBonus = this.signatureBonusFor(stem, entry, target);
+      const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
       const score =
         1.0 * sectionScore +
         0.9 * harmonic +
@@ -2269,7 +2475,9 @@ export class StemRemixPlayer {
         jumpPenalty -
         shortRunPenalty -
         tierCost +
-        earBonus;
+        earBonus +
+        sigBonus +
+        timbre;
       if (!best || score > best.score) best = { entry, score };
     }
     if (best) break;
@@ -2347,7 +2555,7 @@ export class StemRemixPlayer {
   }
 
   private async finishBlock(
-    tasks: Array<{ stem: StemName; run: StemPoolEntry[] }>,
+    tasks: Array<{ stem: StemName; run: StemPoolEntry[]; transition?: TransitionTechnique }>,
     at: number,
     resumes?: Map<StemName, ResumeHint>,
   ): Promise<void> {
@@ -2372,11 +2580,11 @@ export class StemRemixPlayer {
         if (fallbackRun) {
           const fallback = await this.loadRunAudio(fallbackRun);
           if (fallback) {
-            await this.scheduleRun(task.stem, fallbackRun, fallback, at, this.currentBlockBars, false, resume);
+            await this.scheduleRun(task.stem, fallbackRun, fallback, at, this.currentBlockBars, false, resume, task.transition);
           }
         }
       } else {
-        await this.scheduleRun(task.stem, task.run, audio, at, this.currentBlockBars, false, resume);
+        await this.scheduleRun(task.stem, task.run, audio, at, this.currentBlockBars, false, resume, task.transition);
       }
       await yieldToMain();
     }
@@ -2623,6 +2831,7 @@ export class StemRemixPlayer {
     bars: number,
     manual: boolean,
     resume?: ResumeHint,
+    transition?: TransitionTechnique,
   ): Promise<void> {
     const first = run[0];
     if (!first) return;
@@ -2650,9 +2859,17 @@ export class StemRemixPlayer {
         runEndAt = resume.runEndAt;
         startedAt = resume.startedAt;
       }
+      // (B) Incoming-vocal fade: a loud incoming vocal fades from silence over
+      // ~150 ms instead of STEM_FADE_IN (80 ms) to avoid mid-vowel splats.
+      // Only the *fade length* changes; gain stays the equal-gain hand-off.
+      const vocalFade = transition?.vocalFadeInSec;
       const crossfadeSec = resume
         ? STEM_FADE_IN[stem]
-        : (preDur > 0 ? Math.max(preDur / rate, STEM_FADE_IN[stem]) : STEM_FADE_IN[stem]);
+        : Math.max(
+          preDur > 0 ? preDur / rate : 0,
+          stem === "vocals" && vocalFade !== null && vocalFade !== undefined ? vocalFade : 0,
+          STEM_FADE_IN[stem],
+        );
       voice.schedule({
         when: startAt,
         inputSec,
@@ -2678,6 +2895,23 @@ export class StemRemixPlayer {
 
       if (previous && previous.voice !== voice) {
         previous.voice.fadeOut(startAt, crossfadeSec);
+        // (B) EQ-OUT tail: sweep the *outgoing* voice down to 300 Hz across
+        // the same crossfade, so its mids do not mask the hotter incoming
+        // stem.  Per-voice automation (the incoming voice stays bright),
+        // scheduled sample-accurately at the boundary, restored on reuse.
+        if (transition?.eqOut && !resume) {
+          previous.voice.scheduleEqOut(startAt, crossfadeSec, transition.eqOutFloorHz);
+        }
+        // (B) Vocal reverb tail: extend the stem's send over the outgoing
+        // fade so the tail dissolves into the new vocal.  Absolute-time ramp
+        // on the glue bus; falls back to the plain hand-off when the bus
+        // is unreachable.
+        if (transition?.vocalReverbTail && stem === "vocals" && !resume) {
+          this.engine.scheduleReverbTail(stem, startAt, TRANSITION_VOCAL_REVERB_TAIL, TRANSITION_VOCAL_REVERB_TAIL_SEC);
+        }
+      } else if (transition?.vocalReverbTail && stem === "vocals" && !resume) {
+        // Same-voice hand-off (rare): the tail still belongs on the bus.
+        this.engine.scheduleReverbTail(stem, startAt, TRANSITION_VOCAL_REVERB_TAIL, TRANSITION_VOCAL_REVERB_TAIL_SEC);
       }
       const scheduled = this.scheduledRuns[stem] ?? [];
       scheduled.push({

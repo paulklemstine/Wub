@@ -79,14 +79,21 @@ export interface StretchScheduleOptions {
 export class StretchVoice {
   public readonly node: StretchNode;
   private readonly gain: GainNode;
+  private readonly filter: BiquadFilterNode;
   private readonly panner: StereoPannerNode;
   private disposed = false;
   private scheduled = false;
   private targetGain = 1;
 
-  private constructor(node: StretchNode, gain: GainNode, panner: StereoPannerNode) {
+  private constructor(
+    node: StretchNode,
+    gain: GainNode,
+    filter: BiquadFilterNode,
+    panner: StereoPannerNode,
+  ) {
     this.node = node;
     this.gain = gain;
+    this.filter = filter;
     this.panner = panner;
   }
 
@@ -109,12 +116,22 @@ export class StretchVoice {
     }
     const gain = ctx.createGain();
     gain.gain.value = 0;
+    // Per-voice low-pass for the EQ-OUT transition technique.  It is
+    // transparent (20 kHz) unless scheduleEqOut() sweeps it down, so the
+    // default equal-gain hand-off is sample-identical to before.  A stem-bus
+    // filter cannot do this: the incoming phrase shares the bus and would be
+    // muffled by its own outgoing sweep.
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 20000;
+    filter.Q.value = 0.7;
     const panner = ctx.createStereoPanner();
     panner.pan.value = Math.max(-1, Math.min(1, options.pan ?? 0));
     node.connect(gain);
-    gain.connect(panner);
+    gain.connect(filter);
+    filter.connect(panner);
     panner.connect(destination);
-    return new StretchVoice(node, gain, panner);
+    return new StretchVoice(node, gain, filter, panner);
   }
 
   /**
@@ -204,6 +221,33 @@ export class StretchVoice {
     this.scheduled = true;
   }
 
+  /** EQ-OUT tail: sweep this (outgoing) voice's low-pass to `floorHz` across
+   *  the boundary crossfade.  Scheduled with sample-accurate ramps at absolute
+   *  audio time; the incoming voice keeps its own transparent filter, and
+   *  reset() restores 20 kHz for reuse.  No-ops on a disposed/late voice. */
+  scheduleEqOut(at: number, sweepSec: number, floorHz: number = 300): void {
+    if (this.disposed) return;
+    const ctx = this.gain.context;
+    const startAt = Math.max(at, ctx.currentTime + 0.005);
+    const duration = Math.max(0.02, Math.min(0.5, sweepSec));
+    const floor = Math.max(40, Math.min(8000, Number.isFinite(floorHz) ? floorHz : 300));
+    const freq = this.filter.frequency;
+    try {
+      // Start from the transparent 20 kHz so a reused voice with a stale sweep
+      // cannot clip at the boundary; exponential ramps need a positive start.
+      freq.cancelScheduledValues(startAt);
+      freq.setValueAtTime(20000, startAt);
+      freq.exponentialRampToValueAtTime(floor, startAt + duration);
+    } catch {
+      // Best-effort automation; the gain hand-off stays click-free without it.
+      try {
+        freq.setValueAtTime(floor, startAt + duration);
+      } catch {
+        // Context closing.
+      }
+    }
+  }
+
   /** Ramp this voice out and stop it. */
   fadeOut(at: number, durationSec: number = 0.08): void {
     if (this.disposed) return;
@@ -248,6 +292,14 @@ export class StretchVoice {
     } catch {
       // Context may be closing.
     }
+    // Restore the transparent EQ so a swept outgoing voice never muffles its
+    // next reuse (the per-voice analogue of the stem-bus filter default).
+    try {
+      this.filter.frequency.cancelScheduledValues(0);
+      this.filter.frequency.setValueAtTime(20000, ctx.currentTime);
+    } catch {
+      // Context may be closing.
+    }
     try {
       await this.node.dropBuffers();
     } catch {
@@ -266,6 +318,7 @@ export class StretchVoice {
     try {
       this.node.disconnect();
       this.gain.disconnect();
+      this.filter.disconnect();
       this.panner.disconnect();
     } catch {
       // Already disconnected.

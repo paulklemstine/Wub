@@ -45,6 +45,11 @@ const REVERB_SECONDS = 0.55;
 const REVERB_PRE_DELAY_SEC = 0.012;
 const REVERB_RETURN_DB = -20;
 const REVERB_HIGHPASS_HZ = 300;
+// DJ transition technique (B): vocal reverb tail while the outgoing vocal
+// fades.  Boosted send briefly, then back to the user's send.  Conservative
+// on purpose: the tail must read as a hand-off, never as a hall.
+const TRANSITION_REVERB_TAIL = 0.22;
+const TRANSITION_REVERB_TAIL_SEC = 0.35;
 
 const DEFAULT_REVERB_SENDS: Record<StemName, number> = {
   drums: 0,
@@ -566,6 +571,36 @@ export class AudioEngine {
 
   getReverbSend(stem: StemName): number {
     return this.reverbSends_[stem];
+  }
+
+  /** Vocal reverb tail at a block boundary: bump the send for ~0.35 s so the
+   *  outgoing vocal dissolves while the incoming one attacks.  Scheduled with
+   *  sample-accurate ramps at absolute audio time `at` (no setTimeout, no
+   *  DOM); the stored user send never changes.  No-op before the ctx exists. */
+  scheduleReverbTail(
+    stem: StemName,
+    at: number,
+    tailAmount: number = TRANSITION_REVERB_TAIL,
+    tailSec: number = TRANSITION_REVERB_TAIL_SEC,
+  ): void {
+    const ctx = this.ctx_;
+    const buses = this.buses_;
+    if (ctx === null || buses === null) return;
+    const startAt = Math.max(at, ctx.currentTime + 0.005);
+    const endAt = startAt + Math.max(0.05, Math.min(3, tailSec));
+    const baseline = clamp01(this.reverbSends_[stem]);
+    const tail = Math.max(baseline, clamp01(tailAmount));
+    if (tail - baseline < 0.02) return;
+    try {
+      const param = buses[stem].reverbSend.gain;
+      param.cancelScheduledValues(startAt);
+      param.setValueAtTime(baseline, startAt);
+      param.linearRampToValueAtTime(tail, startAt + 0.03);
+      param.setValueAtTime(tail, Math.max(startAt + 0.03, endAt - 0.10));
+      param.linearRampToValueAtTime(baseline, endAt);
+    } catch {
+      // Automation is best-effort; the gain hand-off stands alone.
+    }
   }
 
   /** Create (lazily) and resume the context. Must be called from a gesture. */
