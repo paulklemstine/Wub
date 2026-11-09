@@ -277,10 +277,12 @@ function registerWorkletProcessor(Module, audioNodeKey) {
 				outputList[0].forEach((_, c) => {
 					let channelBuffer = inputs[c%inputs.length];
 					let buffer = new Float32Array(memory, this.buffersIn[c], outputBlockSize);
+					// Buffer must be zeroed first and the input bounded to the
+					// quantum, otherwise set() throws (unbounded source) or
+					// stale tail samples are processed.
+					buffer.fill(0);
 					if (channelBuffer) {
-						buffer.set(channelBuffer);
-					} else {
-						buffer.fill(0);
+						buffer.set(channelBuffer.subarray(0, outputBlockSize));
 					}
 				})
 				wasmModule._process(outputBlockSize, outputBlockSize);
@@ -313,7 +315,7 @@ function registerWorkletProcessor(Module, audioNodeKey) {
 					let startIndex = inputSamples - audioSamples; // start index within the audio buffer
 					let bufferEnd = audioSamples + audioBuffer[0].length;
 					// how many samples to copy: min(how many left in the buffer, how many more we need)
-					let count = Math.min(audioBuffer[0].length - startIndex, inputSamplesEnd - inputSamples);
+					let count = Math.min(audioBuffer[0].length - startIndex, inputSamplesEnd - inputSamples, this.bufferLength - blockSamples);
 					if (count > 0) {
 						buffers.forEach((buffer, c) => {
 							let channelBuffer = audioBuffer[c%audioBuffer.length];
