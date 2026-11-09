@@ -718,6 +718,9 @@ export class StemRemixPlayer {
     // Learned arc artifacts load off the first-audio path; a missing or
     // invalid artifact leaves the planned wave as the only behaviour.
     void this.loadArcArtifacts(base);
+    // Learned phrase-syntax successors (gated bonus, never a filter); a
+    // missing table keeps the syntax term exactly neutral.
+    void this.loadSyntaxSuccessors(base);
   }
 
   /** Load the learned arc model + context sidecar (log once, never throw). */
@@ -763,6 +766,71 @@ export class StemRemixPlayer {
         console.warn("[StemRemix] arc model unavailable; planned wave only", err);
       }
     }
+  }
+
+  /** Learned phrase-syntax successor table (gated bonus source).
+   *  Null when the table is absent or invalid — the syntax term then scores
+   *  exactly neutral at 0.5 so playback never depends on the table. */
+  private syntaxSuccessors: Map<string, Map<string, number>> | null = null;
+  private syntaxLoggedUnavailable = false;
+
+  /**
+   * Load the learned phrase-syntax successor table
+   * (`syntax_successors.json`, `{ anchor phraseId: { same_section_top,
+   * overall_top } }` with per-successor scores from the intra-track syntax
+   * model).  Logs once and stays null on any failure.
+   */
+  private async loadSyntaxSuccessors(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/syntax_successors.json`);
+      if (!res.ok) throw new Error(`syntax successors ${res.status}`);
+      const doc = (await res.json()) as {
+        successors?: Record<string, {
+          same_section_top?: Array<{ to?: unknown; score?: unknown }>;
+          overall_top?: Array<{ to?: unknown; score?: unknown }>;
+        }>;
+      };
+      const table = doc.successors;
+      if (!table || typeof table !== "object") throw new Error("invalid syntax successors");
+      const map = new Map<string, Map<string, number>>();
+      for (const [fromId, entry] of Object.entries(table)) {
+        const inner = new Map<string, number>();
+        for (const list of [entry?.same_section_top, entry?.overall_top]) {
+          if (!Array.isArray(list)) continue;
+          for (const item of list) {
+            const to = typeof item?.to === "string" ? item.to : "";
+            const score = Number(item?.score);
+            if (!to || !Number.isFinite(score)) continue;
+            const prev = inner.get(to);
+            if (prev === undefined || score > prev) inner.set(to, score);
+          }
+        }
+        if (inner.size > 0) map.set(fromId, inner);
+      }
+      if (map.size === 0) throw new Error("empty syntax successors");
+      this.syntaxSuccessors = map;
+      console.info(`[StemRemix] Syntax successors loaded: ${map.size} anchors`);
+    } catch (err) {
+      if (!this.syntaxLoggedUnavailable) {
+        this.syntaxLoggedUnavailable = true;
+        console.warn("[StemRemix] syntax successors unavailable; syntax bonus neutral", err);
+      }
+    }
+  }
+
+  /** Cosine between two 90-d stem chunks, skipping the keyShift/rate stamp
+   *  slots (50/51) the ranker itself writes per entry. */
+  private static stemCosine(a: Float32Array, b: Float32Array, offset: number): number {
+    let dot = 0, na = 0, nb = 0;
+    for (let d = 0; d < 90; d++) {
+      if (d === 50 || d === 51) continue;
+      const x = a[offset + d];
+      const y = b[offset + d];
+      dot += x * y;
+      na += x * x;
+      nb += y * y;
+    }
+    return na > 1e-9 && nb > 1e-9 ? dot / Math.sqrt(na * nb) : 0;
   }
 
   /**
@@ -2067,11 +2135,31 @@ export class StemRemixPlayer {
       let novelty = 0;
       let signatureTerm = 0;
       let timbreTerm = 0;
+      // Coherence (stem-matched cosine, joint space) and syntax (learned
+      // phrase grammar) accumulate over the changed stems only; both are
+      // undefined (exactly neutral) when their artifact/sidecar is absent.
+      let coherenceSum = 0;
+      let coherenceN = 0;
+      let syntaxSum = 0;
+      let syntaxN = 0;
+      const stemDim = ranker.stemDim;
       for (const stem of STEMS) {
         const entry = candidate[stem];
         if (!entry) return;
         candidateEnergy += entry.energy;
         if (changed.has(stem)) {
+          const stemIdx = STEMS.indexOf(stem);
+          const stemOff = stemIdx * stemDim;
+          coherenceSum += StemRemixPlayer.stemCosine(candidateState, currentState, stemOff);
+          coherenceN++;
+          const fromId = current[stem]?.phrase.id ?? "";
+          const toId = entry.phrase.id;
+          const table = this.syntaxSuccessors?.get(fromId);
+          const syntaxHit = table?.get(toId);
+          if (typeof syntaxHit === "number" && Number.isFinite(syntaxHit)) {
+            syntaxSum += syntaxHit;
+            syntaxN++;
+          }
           const from = current[stem];
           if (from) {
             harmony += harmonyPenalty({
@@ -2102,6 +2190,8 @@ export class StemRemixPlayer {
       // Mean soft terms so a 2-stem candidate is not worth twice a 1-stem one.
       const meanSignature = subset.length > 0 ? signatureTerm / subset.length : 0;
       const meanTimbre = subset.length > 0 ? timbreTerm / subset.length : 0;
+      const meanCoherence = coherenceN > 0 ? coherenceSum / coherenceN : undefined;
+      const meanSyntax = syntaxN > 0 ? clamp01(syntaxSum / syntaxN) : undefined;
       let earSum = 0;
       for (let i = 0; i < subset.length; i++) {
         earSum += candidate[subset[i]]!.earQ;
@@ -2121,6 +2211,8 @@ export class StemRemixPlayer {
         earQuality,
         signatureBonus: meanSignature,
         timbreBonus: meanTimbre,
+        coherence: meanCoherence,
+        syntax: meanSyntax,
       });
       if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
         bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };

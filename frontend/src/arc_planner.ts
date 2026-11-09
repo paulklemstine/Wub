@@ -296,6 +296,22 @@ export interface TransitionScoreInput {
    * -0.08..+0.08.  Computed by `timbreBonus` in the caller.
    */
   timbreBonus?: number;
+  /**
+   * Mean stem-matched joint-feature cosine between the candidate mix and
+   * the current mix, 0..1 (candidate vs current, per changed stem, keyShift
+   * stamp slots excluded).  Truthfully near 0.7 for real continuations and
+   * near or below 0 for donor mixes; a small centered weight turns it into a
+   * tie-breaker, never a veto.  Neutral/untouched when undefined.
+   */
+  coherence?: number;
+  /**
+   * Mean learned phrase-syntax score (0..1) for continuity of each changed
+   * stem: how well the incoming phrase continues the outgoing phrase's
+   * learned phrase-grammar from intra-track transitions (present in the
+   * gated successor table; absent entries are exactly neutral at 0.5).
+   * Small weight, only re-orders near-best candidates.
+   */
+  syntax?: number;
 }
 
 export interface TransitionScore {
@@ -349,10 +365,32 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
   score -= harmonyPenalty;
   reasons.push(`harmony ${signed(-harmonyPenalty)}`);
 
+  const changedCount = Math.max(0, Math.floor(finiteOr(input.changedCount, 0)));
+  const minChanges = Math.max(0, Math.floor(finiteOr(input.budget.minChanges, 0)));
+  const maxChanges = Math.max(0, Math.floor(finiteOr(input.budget.maxChanges, 0)));
+
   const earQuality = clamp01(finiteOr(input.earQuality ?? 0.5, 0.5));
   const earBonus = 0.20 * (earQuality - 0.5);
   score += earBonus;
   reasons.push(`ears ${signed(earBonus)} (q ${earQuality.toFixed(2)})`);
+
+  // Coherence gate (bar-level stem fit): the joint features already know
+  // which stem meshes hold together — continuations sit around 0.7 cosine
+  // while donors sit near or below 0. A small centered weight breaks ties
+  // toward mixes whose layers coincide, never vetoes a ranked pick.
+  const coherence = clamp01(finiteOr(input.coherence ?? 0.5, 0.5));
+  const coherenceBonus = 0.15 * (coherence - 0.5);
+  score += coherenceBonus;
+  reasons.push(`coherence ${signed(coherenceBonus)} (${coherence.toFixed(2)})`);
+
+  // Phrase-syntax bonus: continuity the learned phrase grammar assigns to
+  // this transition. Per-change magnitude (0.12 solo, 0.08 pairs) keeps it a
+  // tie-breaker among near-best candidates only, never a rank override.
+  const syntax = clamp01(finiteOr(input.syntax ?? 0.5, 0.5));
+  const syntaxWeight = changedCount > 1 ? 0.08 : 0.12;
+  const syntaxBonus = syntaxWeight * (syntax - 0.5);
+  score += syntaxBonus;
+  reasons.push(`syntax ${signed(syntaxBonus)} (${syntax.toFixed(2)})`);
 
   // Optional flow terms: both are pre-gated by their pure helpers below, so
   // scoreTransition only adds them (bounded, never a filter).
@@ -376,9 +414,6 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
     reasons.push("vocals held -0.050");
   }
 
-  const changedCount = Math.max(0, Math.floor(finiteOr(input.changedCount, 0)));
-  const minChanges = Math.max(0, Math.floor(finiteOr(input.budget.minChanges, 0)));
-  const maxChanges = Math.max(0, Math.floor(finiteOr(input.budget.maxChanges, 0)));
   if (changedCount > maxChanges) {
     const extra = changedCount - maxChanges;
     const penalty = 0.08 * extra;
@@ -824,6 +859,19 @@ export function selfTest(): string[] {
   const badEars = scoreTransition({ ...base, earQuality: 0.1 });
   check(goodEars.score > baseScore.score, "good ears should score above neutral");
   check(badEars.score < baseScore.score, "weak ears should score below neutral");
+
+  const highCoherence = scoreTransition({ ...base, coherence: 0.9 });
+  const donorCoherence = scoreTransition({ ...base, coherence: 0.05 });
+  check(highCoherence.score > baseScore.score, "continuation-matched stems should score above neutral");
+  check(donorCoherence.score < baseScore.score, "donor-like stems should score below neutral");
+  check(highCoherence.score - donorCoherence.score < 0.15, "coherence must not dominate the ranker");
+
+  const goodSyntax = scoreTransition({ ...base, syntax: 0.8 });
+  const badSyntax = scoreTransition({ ...base, syntax: 0.2 });
+  check(goodSyntax.score > baseScore.score, "good syntax should score above neutral");
+  check(badSyntax.score < baseScore.score, "bad syntax should score below neutral");
+  check(goodSyntax.score - badSyntax.score < 0.15, "syntax must not dominate the ranker");
+  check(scoreTransition({ ...base }).score === baseScore.score, "missing coherence/syntax inputs stay neutral");
 
   const clampsHigh = scoreTransition({ ...base, jointScore: 2, novelty: 1 });
   const clampsLow = scoreTransition({
