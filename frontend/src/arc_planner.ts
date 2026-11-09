@@ -312,6 +312,29 @@ export interface TransitionScoreInput {
    * Small weight, only re-orders near-best candidates.
    */
   syntax?: number;
+  /**
+   * Mean rhythm-mesh pair fit (0..1) of the candidate 4-stem mix: the six
+   * learned stem-pair logistic models from `rhythm_inference` score whether
+   * the stems' 64-step onset grids interlock.  Computed by the caller over
+   * the candidate mix; undefined keeps the term exactly neutral.  Small
+   * centered weight — a tie-breaker for rhythmic interlock, never a veto.
+   */
+  rhythmFit?: number;
+  /**
+   * Learned chord-progression fit (0..1) of the candidate next chord given
+   * the recent harmonic context (MLP logprob mapped so uniform = 0.5
+   * neutral).  Computed by the caller from the drums-anchored II-chord
+   * window; undefined keeps the term exactly neutral.
+   */
+  progression?: number;
+  /**
+   * Vocal-edge cleanliness (0..1) of the outgoing/incoming vocal phrases:
+   * mean of the outgoing end-edge and incoming start-edge strengths from
+   * `vocal_mix.json`.  Only meaningful when `includesVocals` is true (the
+   * term is ignored otherwise); undefined keeps the term exactly neutral.
+   * Small centered weight — nudges vocal swaps toward clean phrase edges.
+   */
+  vocalEdge?: number;
 }
 
 export interface TransitionScore {
@@ -391,6 +414,31 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
   const syntaxBonus = syntaxWeight * (syntax - 0.5);
   score += syntaxBonus;
   reasons.push(`syntax ${signed(syntaxBonus)} (${syntax.toFixed(2)})`);
+
+  // Rhythm-mesh bonus (bar-level onset interlock): the six stem-pair logistic
+  // models know which hit patterns mesh; a candidate mix whose grids
+  // coincide/answer across stems breaks ties, never vetoes a ranked pick.
+  const rhythmFit = clamp01(finiteOr(input.rhythmFit ?? 0.5, 0.5));
+  const rhythmBonus = 0.12 * (rhythmFit - 0.5);
+  score += rhythmBonus;
+  reasons.push(`rhythm ${signed(rhythmBonus)} (${rhythmFit.toFixed(2)})`);
+
+  // Chord-progression bonus (4-bar grammar): whether the candidate next
+  // chord follows the recent harmonic context the way the corpus taught it.
+  const progression = clamp01(finiteOr(input.progression ?? 0.5, 0.5));
+  const progressionBonus = 0.10 * (progression - 0.5);
+  score += progressionBonus;
+  reasons.push(`progression ${signed(progressionBonus)} (${progression.toFixed(2)})`);
+
+  // Vocal-edge nudge (clean phrase boundaries): only meaningful when this
+  // boundary actually swaps vocals; mid-phrase vocal splices get a small
+  // soft penalty so swaps drift toward clean edges, never a hard block.
+  if (input.includesVocals) {
+    const vocalEdge = clamp01(finiteOr(input.vocalEdge ?? 0.5, 0.5));
+    const vocalBonus = 0.15 * (vocalEdge - 0.5);
+    score += vocalBonus;
+    reasons.push(`vocal-edge ${signed(vocalBonus)} (${vocalEdge.toFixed(2)})`);
+  }
 
   // Optional flow terms: both are pre-gated by their pure helpers below, so
   // scoreTransition only adds them (bounded, never a filter).
@@ -871,7 +919,28 @@ export function selfTest(): string[] {
   check(goodSyntax.score > baseScore.score, "good syntax should score above neutral");
   check(badSyntax.score < baseScore.score, "bad syntax should score below neutral");
   check(goodSyntax.score - badSyntax.score < 0.15, "syntax must not dominate the ranker");
-  check(scoreTransition({ ...base }).score === baseScore.score, "missing coherence/syntax inputs stay neutral");
+
+  const goodRhythm = scoreTransition({ ...base, rhythmFit: 0.9 });
+  const badRhythm = scoreTransition({ ...base, rhythmFit: 0.1 });
+  check(goodRhythm.score > baseScore.score, "interlocking rhythm should score above neutral");
+  check(badRhythm.score < baseScore.score, "colliding rhythm should score below neutral");
+  check(goodRhythm.score - badRhythm.score < 0.15, "rhythm must not dominate the ranker");
+
+  const goodProg = scoreTransition({ ...base, progression: 0.9 });
+  const badProg = scoreTransition({ ...base, progression: 0.1 });
+  check(goodProg.score > baseScore.score, "tonic-following chords should score above neutral");
+  check(badProg.score < baseScore.score, "ungrammatical chords should score below neutral");
+  check(goodProg.score - badProg.score < 0.15, "progression must not dominate the ranker");
+
+  const cleanVocalEdge = scoreTransition({ ...base, includesVocals: true, vocalEdge: 0.9 });
+  const midVocalEdge = scoreTransition({ ...base, includesVocals: true, vocalEdge: 0.1 });
+  const heldVocals = scoreTransition({ ...base, includesVocals: true, vocalAllowed: true });
+  check(cleanVocalEdge.score > heldVocals.score, "clean vocal edge should score above no-edge baseline");
+  check(midVocalEdge.score < heldVocals.score, "mid-phrase vocal edge should score below baseline");
+  check(cleanVocalEdge.score - midVocalEdge.score < 0.18, "vocal edge must not dominate the ranker");
+  check(scoreTransition({ ...base }).score === baseScore.score, "missing coherence/syntax/rhythm/progression inputs stay neutral");
+  check(scoreTransition({ ...base, includesVocals: false, vocalEdge: 0.1 }).score === baseScore.score,
+    "vocalEdge is ignored when vocals are not changing");
 
   const clampsHigh = scoreTransition({ ...base, jointScore: 2, novelty: 1 });
   const clampsLow = scoreTransition({

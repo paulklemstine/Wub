@@ -20,6 +20,14 @@ import {
 } from "./arc_inference";
 import { JointRanker } from "./joint_ranker";
 import {
+  rhythmMixScore,
+  type RhythmEntry, type RhythmMeshModel,
+} from "./rhythm_inference";
+import {
+  progressionScoreByPhraseId,
+  type ProgressionContextArtifact, type ProgressionModelArtifact,
+} from "./progression_inference";
+import {
   targetAt, movementBudgetAt, harmonyPenalty, vocalChangeAllowed, scoreTransition,
   pickSignatures, signatureBonus, timbreBonus, selectTransitionTechnique,
   FLOW_SIGNATURES_ENABLED, FLOW_SIGNATURES_PER_STEM,
@@ -721,6 +729,12 @@ export class StemRemixPlayer {
     // Learned phrase-syntax successors (gated bonus, never a filter); a
     // missing table keeps the syntax term exactly neutral.
     void this.loadSyntaxSuccessors(base);
+    // Rhythm-mesh (onset interlock), chord-progression (harmonic grammar)
+    // and vocal-edge (clean swap boundaries) sidecars: all optional, all
+    // exactly neutral when absent.  They only re-order near-best mixes.
+    void this.loadRhythmArtifacts(base);
+    void this.loadProgressionArtifacts(base);
+    void this.loadVocalMix(base);
   }
 
   /** Load the learned arc model + context sidecar (log once, never throw). */
@@ -816,6 +830,213 @@ export class StemRemixPlayer {
         console.warn("[StemRemix] syntax successors unavailable; syntax bonus neutral", err);
       }
     }
+  }
+
+  /** Rhythm-mesh pair model (wub-rhythm-mesh-model-v1); null until loaded. */
+  private rhythmModel: RhythmMeshModel | null = null;
+  /** phraseId -> 4-stem onset grids/fluxes for the mix-fitness bonus. */
+  private rhythmEntries: Map<string, Record<StemName, RhythmEntry>> | null = null;
+  private rhythmLoggedUnavailable = false;
+
+  /**
+   * Load the rhythm-mesh artifacts (`rhythm_scores.json` 64-step onset
+   * grids, `rhythm_mesh_model.json` logistic pair models, and
+   * `rhythm_flux.f32` step fluxes in phrase order).  Builds the per-phrase
+   * entry map the candidate mix-fit bonus reads; logs once and stays null on
+   * any failure (the term is then exactly neutral).
+   */
+  private async loadRhythmArtifacts(base: string): Promise<void> {
+    try {
+      const [scoresRes, modelRes, fluxRes] = await Promise.all([
+        fetch(`${base}/rhythm_scores.json`),
+        fetch(`${base}/rhythm_mesh_model.json`),
+        fetch(`${base}/rhythm_flux.f32`),
+      ]);
+      if (!scoresRes.ok || !modelRes.ok || !fluxRes.ok) {
+        throw new Error(`rhythm artifact ${scoresRes.status}/${modelRes.status}/${fluxRes.status}`);
+      }
+      const scores = (await scoresRes.json()) as {
+        format?: unknown;
+        phrases?: Array<Record<string, unknown>>;
+      };
+      const model = (await modelRes.json()) as RhythmMeshModel;
+      if (scores.format !== "wub-rhythm-scores-v1" || !Array.isArray(scores.phrases)) {
+        throw new Error("invalid rhythm scores");
+      }
+      if (!model || typeof model !== "object" || !model.pairs
+        || typeof model.pairs !== "object" || Object.keys(model.pairs).length === 0) {
+        throw new Error("invalid rhythm mesh model");
+      }
+      const fluxBuf = await fluxRes.arrayBuffer();
+      const flux = new Float32Array(fluxBuf);
+      if (flux.length !== scores.phrases.length * 4 * 64) {
+        throw new Error("rhythm flux length mismatch");
+      }
+      const map = new Map<string, Record<StemName, RhythmEntry>>();
+      for (let i = 0; i < scores.phrases.length; i++) {
+        const phrase = scores.phrases[i];
+        const id = typeof phrase?.id === "string" ? phrase.id : "";
+        if (!id) continue;
+        const entry = {} as Record<StemName, RhythmEntry>;
+        let malformed = false;
+        for (let s = 0; s < 4; s++) {
+          const stem = STEMS[s];
+          const gridStr = typeof phrase[stem] === "string" ? (phrase[stem] as string) : "";
+          if (gridStr.length !== 64) { malformed = true; break; }
+          const grid = new Uint8Array(64);
+          for (let k = 0; k < 64; k++) grid[k] = gridStr.charCodeAt(k) === 49 ? 1 : 0;
+          entry[stem] = {
+            id,
+            grid,
+            flux: flux.slice((i * 4 + s) * 64, (i * 4 + s) * 64 + 64),
+          };
+        }
+        if (!malformed && Object.keys(entry).length === 4) map.set(id, entry);
+      }
+      if (map.size === 0) throw new Error("empty rhythm entries");
+      this.rhythmModel = model;
+      this.rhythmEntries = map;
+      console.info(`[StemRemix] Rhythm mesh loaded (${map.size} phrases)`);
+    } catch (err) {
+      if (!this.rhythmLoggedUnavailable) {
+        this.rhythmLoggedUnavailable = true;
+        console.warn("[StemRemix] rhythm mesh unavailable; rhythm bonus neutral", err);
+      }
+    }
+  }
+
+  /** Learned chord-progression model + context; null until loaded. */
+  private progressionModel: ProgressionModelArtifact | null = null;
+  private progressionContext: ProgressionContextArtifact | null = null;
+  private progressionLoggedUnavailable = false;
+
+  /**
+   * Load the chord-progression artifacts (`progression_model.json` MLP +
+   * Markov tables, `progression_context.json` per-phrase rel_chord/chroma).
+   * Logs once and stays null on any failure (the term is then exactly
+   * neutral).
+   */
+  private async loadProgressionArtifacts(base: string): Promise<void> {
+    try {
+      const [modelRes, ctxRes] = await Promise.all([
+        fetch(`${base}/progression_model.json`),
+        fetch(`${base}/progression_context.json`),
+      ]);
+      if (!modelRes.ok || !ctxRes.ok) {
+        throw new Error(`progression artifact ${modelRes.status}/${ctxRes.status}`);
+      }
+      const model = (await modelRes.json()) as ProgressionModelArtifact;
+      const ctx = (await ctxRes.json()) as ProgressionContextArtifact;
+      if (!model || model.format !== "wub-progression-v1" || !model.mlp || !model.markov) {
+        throw new Error("invalid progression model");
+      }
+      if (!ctx || ctx.format !== "wub-progression-context-v1" || !ctx.byPhraseId
+        || typeof ctx.byPhraseId !== "object") {
+        throw new Error("invalid progression context");
+      }
+      if (Object.keys(ctx.byPhraseId).length === 0) throw new Error("empty progression context");
+      this.progressionModel = model;
+      this.progressionContext = ctx;
+      console.info(`[StemRemix] Chord progression loaded (${Object.keys(ctx.byPhraseId).length} phrases)`);
+    } catch (err) {
+      if (!this.progressionLoggedUnavailable) {
+        this.progressionLoggedUnavailable = true;
+        console.warn("[StemRemix] chord progression unavailable; progression bonus neutral", err);
+      }
+    }
+  }
+
+  /** phraseId -> per-phrase vocal edge strengths; null until loaded. */
+  private vocalEdgeStrength: Map<string, number[]> | null = null;
+  private vocalLoggedUnavailable = false;
+
+  /**
+   * Load `vocal_mix.json` (per-phrase mix in/out zones + vocal edge
+   * strengths).  Only the edge-strength arrays are kept (the swap-boundary
+   * bonus reads first = start edge, last = end edge).  Logs once and stays
+   * null on any failure (the term is then exactly neutral).
+   */
+  private async loadVocalMix(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_mix.json`);
+      if (!res.ok) throw new Error(`vocal mix ${res.status}`);
+      const doc = (await res.json()) as Record<string, {
+        vocal_edge_strength?: unknown;
+      }>;
+      if (!doc || typeof doc !== "object") throw new Error("invalid vocal mix");
+      const map = new Map<string, number[]>();
+      for (const [phraseId, entry] of Object.entries(doc)) {
+        const edges = entry?.vocal_edge_strength;
+        if (Array.isArray(edges) && edges.length > 0
+          && edges.every((v) => Number.isFinite(Number(v)))) {
+          map.set(phraseId, edges.map(Number));
+        }
+      }
+      if (map.size === 0) throw new Error("empty vocal mix");
+      this.vocalEdgeStrength = map;
+      console.info(`[StemRemix] Vocal edges loaded (${map.size} phrases)`);
+    } catch (err) {
+      if (!this.vocalLoggedUnavailable) {
+        this.vocalLoggedUnavailable = true;
+        console.warn("[StemRemix] vocal mix unavailable; vocal-edge bonus neutral", err);
+      }
+    }
+  }
+
+  /**
+   * Rhythm-mesh mean pair fit (0..1) of a candidate 4-stem mix, or
+   * undefined when the artifacts/entries are missing (exactly neutral).
+   */
+  private rhythmFitFor(candidate: Partial<Record<StemName, StemPoolEntry>>): number | undefined {
+    const model = this.rhythmModel;
+    const entries = this.rhythmEntries;
+    if (!model || !entries) return undefined;
+    const stems = {} as Record<StemName, RhythmEntry>;
+    for (const stem of STEMS) {
+      const phraseEntries = entries.get(candidate[stem]?.phrase.id ?? "");
+      if (!phraseEntries) return undefined;
+      stems[stem] = phraseEntries[stem];
+    }
+    const fit = rhythmMixScore(model, stems);
+    return Number.isFinite(fit.mean) ? clamp01(fit.mean) : undefined;
+  }
+
+  /**
+   * Chord-progression fit (0..1) of the candidate next chord after the
+   * recent harmonic context, or undefined when unavailable.  Anchored on
+   * the drums phrase (the envelope the arc history already tracks); logprobs
+   * are mapped so the uniform 12-class logprob scores exactly 0.5.
+   */
+  private progressionFor(candidate: Partial<Record<StemName, StemPoolEntry>>): number | undefined {
+    const model = this.progressionModel;
+    const ctx = this.progressionContext;
+    if (!model || !ctx) return undefined;
+    const prevId = this.arcHistory[this.arcHistory.length - 1] ?? "";
+    const prev2Id = this.arcHistory.length >= 2 ? this.arcHistory[this.arcHistory.length - 2] : null;
+    const nextId = candidate.drums?.phrase.id ?? "";
+    if (!prevId || !nextId) return undefined;
+    const { score, source } = progressionScoreByPhraseId(model, ctx, prevId, prev2Id, nextId);
+    if (source === null || !Number.isFinite(score)) return undefined;
+    return clamp01(0.5 + (score + Math.log(12)) * 0.22);
+  }
+
+  /**
+   * Vocal-edge cleanliness (0..1) of a vocal swap: mean of the outgoing
+   * end-edge and incoming start-edge strengths, or undefined when the
+   * sidecar is absent.  Clean boundaries score ~1, mid-phrase splices ~0.
+   */
+  private vocalEdgeFor(
+    current: Partial<Record<StemName, StemPoolEntry>>,
+    candidate: Partial<Record<StemName, StemPoolEntry>>,
+  ): number | undefined {
+    const edges = this.vocalEdgeStrength;
+    if (!edges) return undefined;
+    const outEdges = edges.get(current.vocals?.phrase.id ?? "");
+    const inEdges = edges.get(candidate.vocals?.phrase.id ?? "");
+    if (!outEdges || !inEdges || outEdges.length === 0 || inEdges.length === 0) return undefined;
+    const outEnd = outEdges[outEdges.length - 1] ?? 0.5;
+    const inStart = inEdges[0] ?? 0.5;
+    return clamp01((outEnd + inStart) / 2);
   }
 
   /** Cosine between two 90-d stem chunks, skipping the keyShift/rate stamp
@@ -2192,6 +2413,13 @@ export class StemRemixPlayer {
       const meanTimbre = subset.length > 0 ? timbreTerm / subset.length : 0;
       const meanCoherence = coherenceN > 0 ? coherenceSum / coherenceN : undefined;
       const meanSyntax = syntaxN > 0 ? clamp01(syntaxSum / syntaxN) : undefined;
+      // Rhythm-mesh (candidate mix interlock), chord progression (grammar
+      // fit after the recent harmonic context) and vocal-edge (clean swap
+      // boundary) terms: all undefined (exactly neutral) when their sidecar
+      // is missing, so a partial deploy never changes the ranking.
+      const rhythmFit = this.rhythmFitFor(candidate);
+      const progression = this.progressionFor(candidate);
+      const vocalEdge = subset.includes("vocals") ? this.vocalEdgeFor(current, candidate) : undefined;
       let earSum = 0;
       for (let i = 0; i < subset.length; i++) {
         earSum += candidate[subset[i]]!.earQ;
@@ -2213,6 +2441,9 @@ export class StemRemixPlayer {
         timbreBonus: meanTimbre,
         coherence: meanCoherence,
         syntax: meanSyntax,
+        rhythmFit,
+        progression,
+        vocalEdge,
       });
       if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
         bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
