@@ -7,7 +7,7 @@
 // Signalsmith compensates for its own processing latency when `output` is
 // scheduled ahead of time.
 import type { StretchNode } from "signalsmith-stretch";
-import { concatRun, mixToMono } from "./kit_pcm";
+import { concatStereoRun, splitChannels } from "./kit_pcm";
 
 type StretchFactory = (
   ctx: BaseAudioContext,
@@ -146,36 +146,38 @@ export class StretchVoice {
   /**
    * Concatenate a run of consecutive phrases (and the first phrase's pre-roll)
    * into one voice.  A run is cut from consecutive 4-bar windows of the same
-   * source, so the joins are real bar lines and need no crossfade.
+   * source, so the joins are real bar lines and need no crossfade.  Channel
+   * pairs are concatenated in lockstep, so stereo content from the kit bank
+   * survives end to end (mono assets play as dual-mono).
    */
   async loadRun(buffers: readonly AudioBuffer[], preRoll: AudioBuffer | null): Promise<number> {
     if (buffers.length === 0) throw new Error("StretchVoice.loadRun needs at least one buffer");
-    return this.loadMonoRun(
-      buffers.map((buffer) => mixToMono(buffer)),
-      preRoll ? mixToMono(preRoll) : null,
+    return this.loadStereoRun(
+      buffers.map((buffer) => splitChannels(buffer)),
+      preRoll ? splitChannels(preRoll) : null,
       buffers[0]?.sampleRate ?? 48000,
     );
   }
 
-  /** Load mono PCM (worker-decoded) concatenated through kit_pcm.concatRun. */
-  async loadMonoRun(
-    mains: readonly Float32Array[],
-    pre: Float32Array | null,
+  /** Load stereo channel pairs concatenated through kit_pcm.concatStereoRun. */
+  async loadStereoRun(
+    mains: readonly [Float32Array, Float32Array][],
+    pre: readonly [Float32Array, Float32Array] | null,
     sampleRate: number,
   ): Promise<number> {
-    if (mains.length === 0) throw new Error("StretchVoice.loadMonoRun needs at least one buffer");
-    const { samples, preDur } = concatRun(mains, pre, sampleRate);
-    await this.node.addBuffers([samples]);
+    if (mains.length === 0) throw new Error("StretchVoice.loadStereoRun needs at least one buffer");
+    const { samples, preDur } = concatStereoRun(mains, pre, sampleRate);
+    await this.node.addBuffers(samples);
     return preDur;
   }
 
   /**
    * Load a run already concatenated in the kit audio worker (the transferable
-   * PCM from decode+concat off the main thread).  Only the addBuffers clone
-   * remains on the main thread.
+   * per-channel PCM from decode+concat off the main thread).  Only the
+   * addBuffers clone remains on the main thread.
    */
-  async loadSamples(samples: Float32Array): Promise<void> {
-    await this.node.addBuffers([samples]);
+  async loadSamples(samples: Float32Array | Float32Array[]): Promise<void> {
+    await this.node.addBuffers(Array.isArray(samples) ? samples : [samples]);
   }
 
   /** Schedule the prepared phrase/run. Must be called after `load`. */

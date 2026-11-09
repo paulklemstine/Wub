@@ -9,7 +9,7 @@
 // phrases are strongly preferred by scoring, far ones surface as the near
 // pool is played out, so a long session traverses the full bank.
 import { ENGINE_SAMPLE_RATE, type AudioEngine } from "./audio_engine";
-import { concatRun, mixToMono } from "./kit_pcm";
+import { concatStereoRun, mixToMono, splitChannels } from "./kit_pcm";
 import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
@@ -159,8 +159,8 @@ interface LoadedStemAudio {
  *  Produced off-main-thread by the kit audio worker (or by the main-thread
  *  fallback when the worker is unavailable); the voice only ever sees this. */
 interface LoadedStemRun {
-  /** Pre-roll + concatenated mains, ready for StretchVoice.addBuffers. */
-  samples: Float32Array;
+  /** Pre-roll + concatenated mains, per channel, ready for StretchVoice.addBuffers. */
+  samples: [Float32Array, Float32Array];
   /** Seconds of pre-roll at the head of `samples`. */
   preDur: number;
   /** Decoded seconds per main phrase (input timeline). */
@@ -415,7 +415,7 @@ class KitAudioWorkerLoader {
     const msg = ev.data as {
       type?: string;
       id?: number;
-      samples?: Float32Array;
+      samples?: Float32Array[];
       preDur?: number;
       mainDurations?: number[];
       sampleRate?: number;
@@ -425,10 +425,11 @@ class KitAudioWorkerLoader {
     if (!pending) return;
     this.pending.delete(msg.id);
     clearTimeout(pending.timer);
-    if (msg.type === "run" && ArrayBuffer.isView(msg.samples) && Number.isFinite(msg.preDur)) {
+    const channels = Array.isArray(msg.samples) ? msg.samples.filter((s) => ArrayBuffer.isView(s)) : [];
+    if (msg.type === "run" && channels.length > 0 && Number.isFinite(msg.preDur)) {
       this.consecutiveErrors = 0;
       pending.resolve({
-        samples: msg.samples as Float32Array,
+        samples: channels as [Float32Array, Float32Array],
         preDur: msg.preDur ?? 0,
         mainDurations: Array.isArray(msg.mainDurations) ? msg.mainDurations : [],
         sampleRate: typeof msg.sampleRate === "number" ? msg.sampleRate : ENGINE_SAMPLE_RATE,
@@ -1072,8 +1073,14 @@ export class StemRemixPlayer {
   /**
    * Chord-progression fit (0..1) of the candidate next chord after the
    * recent harmonic context, or undefined when unavailable.  Anchored on
-   * the drums phrase (the envelope the arc history already tracks); logprobs
-   * are mapped so the uniform 12-class logprob scores exactly 0.5.
+   * the drums phrase (the envelope the arc history already tracks).
+   * Scored as pointwise mutual information (MLP logprob minus the
+   * chord's unigram logprob): the corpus is tonic-heavy (77% of real
+   * next chords are tonic), so raw logprob saturates for every
+   * tonic-rooted candidate (AUC ≈ 0.55, half of donors climaxed at 1).
+   * PMI isolates how much the *context* explains this chord: measured
+   * AUC 0.71 for real continuations vs random donors, with continuations
+   * clustering above 0 and random picks straddling 0.
    */
   private progressionFor(candidate: Partial<Record<StemName, StemPoolEntry>>): number | undefined {
     const model = this.progressionModel;
@@ -1085,6 +1092,13 @@ export class StemRemixPlayer {
     if (!prevId || !nextId) return undefined;
     const { score, source } = progressionScoreByPhraseId(model, ctx, prevId, prev2Id, nextId);
     if (source === null || !Number.isFinite(score)) return undefined;
+    if (source === "mlp") {
+      const next = ctx.byPhraseId[nextId];
+      const unigram = model.markov.unigram_log[next?.rel_chord ?? 0];
+      if (Number.isFinite(unigram)) {
+        return clamp01(0.5 + (score - (unigram as number)) * 0.25);
+      }
+    }
     return clamp01(0.5 + (score + Math.log(12)) * 0.22);
   }
 
@@ -3224,9 +3238,9 @@ export class StemRemixPlayer {
     if (audios.some((audio) => audio === null)) return null;
     const loaded = audios as LoadedStemAudio[];
     const sampleRate = loaded[0]?.main.sampleRate ?? ENGINE_SAMPLE_RATE;
-    return concatRun(
-      loaded.map((audio) => mixToMono(audio.main)),
-      loaded[0]?.pre ? mixToMono(loaded[0].pre) : null,
+    return concatStereoRun(
+      loaded.map((audio) => splitChannels(audio.main)),
+      loaded[0]?.pre ? splitChannels(loaded[0].pre) : null,
       sampleRate,
     );
   }

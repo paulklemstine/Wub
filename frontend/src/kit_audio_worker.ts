@@ -23,7 +23,7 @@
  * Any item failure fails the whole run (mirrors the main-thread loader's
  * "a missing phrase fails the run" semantics).
  */
-import { concatRun, mixToMono } from "./kit_pcm";
+import { concatStereoRun, splitChannels } from "./kit_pcm";
 
 interface PoolItem {
   key: string;
@@ -32,8 +32,8 @@ interface PoolItem {
 }
 
 interface CacheEntry {
-  mono: Float32Array;
-  pre: Float32Array | null;
+  stereo: [Float32Array, Float32Array];
+  pre: [Float32Array, Float32Array] | null;
 }
 
 const CACHE_LIMIT = 24;
@@ -65,45 +65,46 @@ function cacheSet(key: string, entry: CacheEntry): void {
   }
 }
 
-async function decodeMono(url: string): Promise<Float32Array> {
+async function decodeStereo(url: string): Promise<[Float32Array, Float32Array]> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`stem ${res.status} ${url}`);
   const bytes = await res.arrayBuffer();
   // Length is ignored by decodeAudioData; it decodes to this context's rate.
   const ctx = new OfflineAudioContext(2, Math.max(1, sampleRate), sampleRate);
   const audio = await ctx.decodeAudioData(bytes);
-  return mixToMono(audio);
+  // Preserve the source's stereo image; mono assets stay dual-mono.
+  return splitChannels(audio);
 }
 
-async function loadItem(item: PoolItem): Promise<{ mono: Float32Array; pre: Float32Array | null }> {
+async function loadItem(item: PoolItem): Promise<{ stereo: [Float32Array, Float32Array]; pre: [Float32Array, Float32Array] | null }> {
   const cached = cacheGet(item.key);
   if (cached) return cached;
-  const mono = await decodeMono(item.url);
-  let pre: Float32Array | null = null;
+  const stereo = await decodeStereo(item.url);
+  let pre: [Float32Array, Float32Array] | null = null;
   if (item.preUrl) {
     try {
-      pre = await decodeMono(item.preUrl);
+      pre = await decodeStereo(item.preUrl);
     } catch {
       // A missing tail must not block the phrase (same rule as the main path).
       pre = null;
     }
   }
-  cacheSet(item.key, { mono, pre });
-  return { mono, pre };
+  cacheSet(item.key, { stereo, pre });
+  return { stereo, pre };
 }
 
 async function handleLoad(id: number, items: PoolItem[]): Promise<void> {
   // Decode this run's phrases concurrently (fetch + decode are async), then
   // concatenate; only the first phrase's pre-roll starts the run.
   const loaded = await Promise.all(items.map((item) => loadItem(item)));
-  const { samples, preDur, mainDurations } = concatRun(
-    loaded.map((entry) => entry.mono),
+  const { samples, preDur, mainDurations } = concatStereoRun(
+    loaded.map((entry) => entry.stereo),
     loaded[0]?.pre ?? null,
     sampleRate,
   );
   host().postMessage(
     { type: "run", id, samples, preDur, mainDurations, sampleRate },
-    [samples.buffer],
+    [samples[0].buffer, samples[1].buffer],
   );
 }
 
