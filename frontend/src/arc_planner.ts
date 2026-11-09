@@ -433,8 +433,10 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
 
   // Chord-progression bonus (4-bar grammar): whether the candidate next
   // chord follows the recent harmonic context the way the corpus taught it.
+  // PMI-mapped: 0.5 is "the prior explains this chord", >0.5 only when the
+  // context makes it more likely.  Weight 0.18 (dial raised for audibility).
   const progression = clamp01(finiteOr(input.progression ?? 0.5, 0.5));
-  const progressionBonus = 0.10 * (progression - 0.5);
+  const progressionBonus = 0.18 * (progression - 0.5);
   score += progressionBonus;
   reasons.push(`progression ${signed(progressionBonus)} (${progression.toFixed(2)})`);
 

@@ -317,7 +317,6 @@ class WubApp {
 
     this.bindTransport();
     this.bindMaster();
-    this.bindGenreSelect();
     for (const stem of STEMS) this.bindStem(stem);
     this.bindFeedbackControls();
     this.bindGrooveboxCycleControls();
@@ -327,6 +326,7 @@ class WubApp {
     // Initialize Autonomous In-Browser ML Sequencer
     try {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
+      this.bindGenreSelect();
       // Play-path diagnostics: __wubStats() in the console shows which brain
       // drove each bar (global planner vs legacy patterns vs studio loops).
       // __wubDebugBar() shows per-stem audio resolution for the current bar.
