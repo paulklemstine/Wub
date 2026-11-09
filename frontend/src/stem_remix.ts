@@ -948,13 +948,68 @@ export class StemRemixPlayer {
 
   /** phraseId -> per-phrase vocal edge strengths; null until loaded. */
   private vocalEdgeStrength: Map<string, number[]> | null = null;
+  /** phraseId -> { starts, ends }: vocal activity at step 0 / step 63 of
+   *  the phrase's 64-step grid (from vocal_activity16). */
+  private vocalActivity: Map<string, { starts: boolean; ends: boolean }> | null = null;
+  /** phraseId -> vocal segment membership { pos, lenBars } where pos is the
+   *  0-based phrase index inside its (same-track, boundary-chained) segment
+   *  and lenBars its total length in bars. */
+  private vocalSegments: Map<string, { pos: number; lenBars: number }> | null = null;
   private vocalLoggedUnavailable = false;
 
   /**
+   * Chain vocal segments from the per-phrase activity grids: consecutive
+   * same-track phrases link when the first ends with activity and the next
+   * starts with activity — one continuous performance.  Records each
+   * phrase's position and total segment length so policy can prefer
+   * entering at a segment start and play the whole segment.
+   */
+  private buildVocalSegments(activity: Map<string, { starts: boolean; ends: boolean }>): void {
+    const manifest = this.manifest;
+    if (!manifest) return;
+    const segments = new Map<string, { pos: number; lenBars: number }>();
+    for (const kit of manifest.kits) {
+      const ordered = [...kit.phrases].sort(
+        (a, b) => (Number(a.start_bar) || 0) - (Number(b.start_bar) || 0),
+      );
+      let i = 0;
+      while (i < ordered.length) {
+        // Start of a segment: a phrase with activity that is not a
+        // continuation of the previous phrase.
+        const start = activity.get(ordered[i].id);
+        if (!start || (!start.starts && !start.ends)) { i++; continue; }
+        let j = i;
+        while (j + 1 < ordered.length) {
+          const cur = activity.get(ordered[j].id);
+          const next = activity.get(ordered[j + 1].id);
+          if (!cur || !next || !cur.ends || !next.starts) break;
+          const curBar = Number(ordered[j].start_bar) || 0;
+          const nextBar = Number(ordered[j + 1].start_bar) || 0;
+          if (nextBar !== curBar + 4) break;
+          j++;
+        }
+        const lenBars = (j - i + 1) * 4;
+        for (let k = i; k <= j; k++) {
+          segments.set(ordered[k].id, { pos: k - i, lenBars });
+        }
+        i = j + 1;
+      }
+    }
+    if (segments.size > 0) this.vocalSegments = segments;
+  }
+
+  /** Vocal segment membership of one phrase, or null when unknown. */
+  private vocalSegmentOf(phraseId: string): { pos: number; lenBars: number } | null {
+    return this.vocalSegments?.get(phraseId) ?? null;
+  }
+
+  /**
    * Load `vocal_mix.json` (per-phrase mix in/out zones + vocal edge
-   * strengths).  Only the edge-strength arrays are kept (the swap-boundary
-   * bonus reads first = start edge, last = end edge).  Logs once and stays
-   * null on any failure (the term is then exactly neutral).
+   * strengths + 64-step activity grids).  Keeps the activity endpoints
+   * (active at step 0 / step 63) alongside the edge strengths so vocal
+   * segments can be chained, and builds those segments immediately.
+   * Logs once and stays null on any failure (the terms are then exactly
+   * neutral).
    */
   private async loadVocalMix(base: string): Promise<void> {
     try {
@@ -962,19 +1017,32 @@ export class StemRemixPlayer {
       if (!res.ok) throw new Error(`vocal mix ${res.status}`);
       const doc = (await res.json()) as Record<string, {
         vocal_edge_strength?: unknown;
+        vocal_activity16?: unknown;
       }>;
       if (!doc || typeof doc !== "object") throw new Error("invalid vocal mix");
       const map = new Map<string, number[]>();
+      const activity = new Map<string, { starts: boolean; ends: boolean }>();
       for (const [phraseId, entry] of Object.entries(doc)) {
         const edges = entry?.vocal_edge_strength;
         if (Array.isArray(edges) && edges.length > 0
           && edges.every((v) => Number.isFinite(Number(v)))) {
           map.set(phraseId, edges.map(Number));
         }
+        const act = entry?.vocal_activity16;
+        if (typeof act === "string" && act.length === 64) {
+          activity.set(phraseId, { starts: act[0] === "1", ends: act[63] === "1" });
+        }
       }
       if (map.size === 0) throw new Error("empty vocal mix");
       this.vocalEdgeStrength = map;
-      console.info(`[StemRemix] Vocal edges loaded (${map.size} phrases)`);
+      this.vocalActivity = activity;
+      this.buildVocalSegments(activity);
+      const longCount = [...(this.vocalSegments?.values() ?? [])]
+        .filter((s) => s.lenBars > 4).length;
+      console.info(
+        `[StemRemix] Vocal edges loaded (${map.size} phrases, ` +
+        `${longCount} phrases inside >4-bar vocal segments)`,
+      );
     } catch (err) {
       if (!this.vocalLoggedUnavailable) {
         this.vocalLoggedUnavailable = true;
@@ -1023,7 +1091,10 @@ export class StemRemixPlayer {
   /**
    * Vocal-edge cleanliness (0..1) of a vocal swap: mean of the outgoing
    * end-edge and incoming start-edge strengths, or undefined when the
-   * sidecar is absent.  Clean boundaries score ~1, mid-phrase splices ~0.
+   * sidecar is absent.  When segment data is available the edges follow
+   * real phrase segments — an outgoing phrase that is mid-segment has no
+   * clean end, and an incoming phrase that is mid-segment has no clean
+   * start — so swaps only land on true segment boundaries.
    */
   private vocalEdgeFor(
     current: Partial<Record<StemName, StemPoolEntry>>,
@@ -1031,12 +1102,34 @@ export class StemRemixPlayer {
   ): number | undefined {
     const edges = this.vocalEdgeStrength;
     if (!edges) return undefined;
-    const outEdges = edges.get(current.vocals?.phrase.id ?? "");
-    const inEdges = edges.get(candidate.vocals?.phrase.id ?? "");
+    const outId = current.vocals?.phrase.id ?? "";
+    const inId = candidate.vocals?.phrase.id ?? "";
+    const outEdges = edges.get(outId);
+    const inEdges = edges.get(inId);
     if (!outEdges || !inEdges || outEdges.length === 0 || inEdges.length === 0) return undefined;
-    const outEnd = outEdges[outEdges.length - 1] ?? 0.5;
-    const inStart = inEdges[0] ?? 0.5;
+    const outSeg = this.vocalSegmentOf(outId);
+    const inSeg = this.vocalSegmentOf(inId);
+    // Segment end = last phrase of its segment; segment start = position 0.
+    const outEnd = outSeg !== null
+      ? (outSeg.pos === outSeg.lenBars / 4 - 1 ? (outEdges[outEdges.length - 1] ?? 0.5) : 0)
+      : (outEdges[outEdges.length - 1] ?? 0.5);
+    const inStart = inSeg !== null
+      ? (inSeg.pos === 0 ? (inEdges[0] ?? 0.5) : 0)
+      : (inEdges[0] ?? 0.5);
     return clamp01((outEnd + inStart) / 2);
+  }
+
+  /**
+   * Length in bars of the incoming vocal segment when a vocal swap begins
+   * a segment (whole performances score more); undefined (neutral) for
+   * mid-segment entries or unavailable data.
+   */
+  private vocalSegmentBarsFor(
+    candidate: Partial<Record<StemName, StemPoolEntry>>,
+  ): number | undefined {
+    const seg = this.vocalSegmentOf(candidate.vocals?.phrase.id ?? "");
+    if (!seg || seg.pos !== 0) return undefined;
+    return seg.lenBars;
   }
 
   /** Cosine between two 90-d stem chunks, skipping the keyShift/rate stamp
@@ -2420,6 +2513,7 @@ export class StemRemixPlayer {
       const rhythmFit = this.rhythmFitFor(candidate);
       const progression = this.progressionFor(candidate);
       const vocalEdge = subset.includes("vocals") ? this.vocalEdgeFor(current, candidate) : undefined;
+      const vocalSegmentBars = subset.includes("vocals") ? this.vocalSegmentBarsFor(candidate) : undefined;
       let earSum = 0;
       for (let i = 0; i < subset.length; i++) {
         earSum += candidate[subset[i]]!.earQ;
@@ -2444,6 +2538,7 @@ export class StemRemixPlayer {
         rhythmFit,
         progression,
         vocalEdge,
+        vocalSegmentBars,
       });
       if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
         bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
@@ -2788,6 +2883,19 @@ export class StemRemixPlayer {
       // selectMorph has no arc targetEnergy parameter.
       const sigBonus = this.signatureBonusFor(stem, entry, target);
       const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
+      // Vocal segments: entering mid-segment means splicing into a vocal
+      // that is already underway (a fragment); starting a long segment
+      // means the whole performance can play.  Same policy as the joint
+      // vocalEdge/vocalSegmentBars terms, as hard-ish heuristics here.
+      let vocalSegmentPenalty = 0;
+      let vocalSegmentBonus = 0;
+      if (stem === "vocals") {
+        const seg = this.vocalSegmentOf(entry.phrase.id);
+        if (seg !== null) {
+          if (seg.pos > 0) vocalSegmentPenalty = 1.0;
+          else vocalSegmentBonus = 0.5 * Math.min(seg.lenBars, 12) / 12;
+        }
+      }
       const score =
         1.0 * sectionScore +
         0.9 * harmonic +
@@ -2800,7 +2908,9 @@ export class StemRemixPlayer {
         tierCost +
         earBonus +
         sigBonus +
-        timbre;
+        timbre -
+        vocalSegmentPenalty +
+        vocalSegmentBonus;
       if (!best || score > best.score) best = { entry, score };
     }
     if (best) break;

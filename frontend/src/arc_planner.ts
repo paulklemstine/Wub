@@ -335,6 +335,14 @@ export interface TransitionScoreInput {
    * Small centered weight — nudges vocal swaps toward clean phrase edges.
    */
   vocalEdge?: number;
+  /**
+   * Length in bars of the incoming vocal segment (the whole song section of
+   * singing this candidate belongs to; 4 bars = a single 4-bar phrase).
+   * Only meaningful when `includesVocals` is true and the candidate starts
+   * a segment; longer segments score better so whole performances play
+   * instead of 4-bar fragments looping.  Undefined is exactly neutral.
+   */
+  vocalSegmentBars?: number;
 }
 
 export interface TransitionScore {
@@ -438,6 +446,18 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
     const vocalBonus = 0.15 * (vocalEdge - 0.5);
     score += vocalBonus;
     reasons.push(`vocal-edge ${signed(vocalBonus)} (${vocalEdge.toFixed(2)})`);
+
+    // Long-segment bonus (play whole performances): a candidate that begins
+    // an 8-12 bar vocal segment is worth more than one that begins a 4-bar
+    // fragment, so long sections of a song play out instead of chopping.
+    const segmentBars = Math.max(0, finiteOr(input.vocalSegmentBars ?? 0, 0));
+    if (segmentBars > 0) {
+      const segmentBonus = 0.15 * Math.max(0, (Math.min(segmentBars, 12) - 4) / 8);
+      if (segmentBonus > 0) {
+        score += segmentBonus;
+        reasons.push(`vocal-segment ${signed(segmentBonus)} (${segmentBars} bars)`);
+      }
+    }
   }
 
   // Optional flow terms: both are pre-gated by their pure helpers below, so
@@ -938,6 +958,12 @@ export function selfTest(): string[] {
   check(cleanVocalEdge.score > heldVocals.score, "clean vocal edge should score above no-edge baseline");
   check(midVocalEdge.score < heldVocals.score, "mid-phrase vocal edge should score below baseline");
   check(cleanVocalEdge.score - midVocalEdge.score < 0.18, "vocal edge must not dominate the ranker");
+  const longSegment = scoreTransition({ ...base, includesVocals: true, vocalSegmentBars: 8 });
+  const shortSegment = scoreTransition({ ...base, includesVocals: true, vocalSegmentBars: 4 });
+  const noSegment = scoreTransition({ ...base, includesVocals: true });
+  check(longSegment.score > shortSegment.score, "a whole vocal segment should beat a fragment");
+  check(shortSegment.score === noSegment.score, "a 4-bar segment earns no bonus");
+  check(longSegment.score - shortSegment.score < 0.18, "segment length must not dominate the ranker");
   check(scoreTransition({ ...base }).score === baseScore.score, "missing coherence/syntax/rhythm/progression inputs stay neutral");
   check(scoreTransition({ ...base, includesVocals: false, vocalEdge: 0.1 }).score === baseScore.score,
     "vocalEdge is ignored when vocals are not changing");
