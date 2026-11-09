@@ -591,6 +591,8 @@ export class StemRemixPlayer {
   private bridgeStep = 0;
   private nextCluster: KitCluster | null = null;
   private lastSection = "";
+  private sessionGen = 0;
+  private sessionPrepped = false;
   private started = false;
   private preparing = false;
   private anchorPrepared: Array<{ stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun }> = [];
@@ -1199,9 +1201,26 @@ export class StemRemixPlayer {
     return this.styleFilter === null ? null : new Set(this.styleFilter);
   }
 
-  /** Pick a cluster at random (optionally a pinned id) and preload the opening phrase. */
+  /** Pick a cluster at random (optionally a pinned id) and preload the opening phrase.
+   *
+   *  Can be called while the previous set is still playing (genre changes):
+   *  the old session's voices keep ringing during the anchor prep below;
+   *  when prep completes, schedule() hands the boundary to the new anchors
+   *  with the usual equal-gain fades.  Each invocation supersedes any
+   *  earlier in-flight start, so rapid switches cannot interleave state.
+   */
   async startSession(): Promise<KitCluster> {
     if (this.manifest === null) throw new Error("StemRemixPlayer.load() first");
+    const gen = ++this.sessionGen;
+    const stale = () => gen !== this.sessionGen;
+    this.sessionPrepped = false;
+    // Graceful hand-off: the old set rings out over its remaining buffers;
+    // the new anchors will fade in via the per-voice hand-off at their
+    // start.  No pool disposal, no silence window.
+    for (const stem of STEMS) {
+      const current = this.current[stem];
+      if (current) current.voice.fadeOut(this.engine.now(), 0.05);
+    }
     const candidates = this.clusters.filter((c) => {
       if (this.styleFilter !== null && !this.styleFilter.has(c.style)) return false;
       return true;
@@ -1303,6 +1322,9 @@ export class StemRemixPlayer {
         const loaded = await this.prepareEntry(stem, entry);
         return loaded ? { stem, entry: loaded.entry, audio: loaded.audio } : null;
       }));
+      // A newer genre switch superseded us while we decoded: do not publish
+      // this anchor.
+      if (stale()) return chosen;
       this.anchorPrepared = prepared.filter((entry): entry is { stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun } => entry !== null);
       this.lastBlockEntries = {};
       this.lastBlockRuns = {};
@@ -1326,6 +1348,7 @@ export class StemRemixPlayer {
       `${this.pools.drums.length} drums / ${this.pools.bass.length} bass / ` +
       `${this.pools.other.length} other / ${this.pools.vocals.length} vocal phrases`
     );
+    this.sessionPrepped = true;
     return chosen;
   }
 
@@ -1754,7 +1777,10 @@ export class StemRemixPlayer {
    *  time so async voice creation cannot reorder the bar grid. */
   schedule(at: number, section: string): StemBlockResult | null {
     if (this.cluster === null) return null;
-    if (!this.started) {
+    // The first schedule only fires once a session finished prepping its
+    // anchors; mid-flight restarts (genre flips) reuse the earlier in-flight
+    // prep instead of consuming anchors before they're decoded.
+    if (!this.started && this.sessionPrepped) {
       this.started = true;
       // The anchor audio is already decoded (startSession awaits it); the
       // cushion below only has to cover voice creation + the WASM clone, so

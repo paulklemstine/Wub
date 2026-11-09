@@ -2719,10 +2719,15 @@ export class ClientGrooveboxConductor {
   }
 
   /** Pick the first kit for the (filtered) pool and start the session. */
+  /** Pick the first kit for the (filtered) pool and start the session.
+   *  Tokenized: when genre flips stack restarts, only the newest one lands —
+   *  stale starts bail before publishing their locks/clocks. */
   private async startKitSession(): Promise<void> {
     const player = this.kitPlayer;
     const manifest = this.kitManifest;
     if (player === null || manifest === null) return;
+    const gen = ++this.kitSessionGen;
+    const stale = () => gen !== this.kitSessionGen;
     // Pick a full-length kit at random so each session starts on a different
     // record instead of always manifest order (which is track-id sorted).
     const filtered = manifest.kits.filter(
@@ -2739,6 +2744,7 @@ export class ClientGrooveboxConductor {
     const choices = strongDrop.length > 0 ? strongDrop : (pool.length > 0 ? pool : manifest.kits);
     const firstKit = choices[Math.floor(Math.random() * choices.length)];
     await player.loadKit(firstKit, this.styleFilter);
+    if (stale()) return;
     this.kitAudioActive = true;
     if (this.playbackMode === "kit") {
       this.applyKitLock();
@@ -2750,31 +2756,37 @@ export class ClientGrooveboxConductor {
     }
   }
 
+  /** Browser timer used to collapse rapid genre flips into one restart. */
+  private genreDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private kitSessionGen = 0;
+
   /**
    * Apply a genre selection (null/empty = all styles) and restart the kit
-   * session in the narrowed pool.  Before the player boots, this only
-   * stores the filter for the upcoming start; a stopped or paused show
-   * keeps its place and applies the filter at the next set change.
+   * session in the narrowed pool.  The old set keeps playing while the new
+   * anchors decode (no transport stop); the switch lands through the per-voice
+   * hand-off.  Before the player boots, this only stores the filter for the
+   * upcoming start.
    */
   public applyGenreSelection(styles: Iterable<string> | null): void {
     const list = styles ? [...new Set(styles)] : [];
     this.styleFilter = list.length > 0 ? new Set(list) : null;
-    if (this.kitPlayer === null || !this.kitAudioActive) return;
-    const wasRunning = this.isRunning;
-    const label = this.styleFilter === null ? "all styles" : [...this.styleFilter].sort().join(" + ");
-    console.info(`[KitPlayer] Genre selection: ${label}`);
-    if (wasRunning) this.stop();
-    void (async () => {
-      try {
-        await this.startKitSession();
-        if (wasRunning) {
-          this.isRunning = true;
-          this.scheduleKitBlocks(this.engine.now());
+    if (this.genreDebounceTimer !== null) clearTimeout(this.genreDebounceTimer);
+    this.genreDebounceTimer = setTimeout(() => {
+      this.genreDebounceTimer = null;
+      if (this.kitPlayer === null || !this.kitAudioActive) return;
+      const gen = ++this.kitSessionGen;
+      const label = this.styleFilter === null ? "all styles" : [...this.styleFilter].sort().join(" + ");
+      console.info(`[KitPlayer] Genre selection: ${label}`);
+      void (async () => {
+        try {
+          await this.startKitSession();
+          // A newer flip superseded us while starting: leave the field to it.
+          if (this.kitSessionGen !== gen) return;          if (this.isRunning) this.scheduleKitBlocks(this.engine.now());
+        } catch (err) {
+          if (this.kitSessionGen === gen) this.handleKitFailure(err);
         }
-      } catch (err) {
-        this.handleKitFailure(err);
-      }
-    })();
+      })();
+    }, 900);
   }
 
   private handleKitFailure(err: unknown): void {
