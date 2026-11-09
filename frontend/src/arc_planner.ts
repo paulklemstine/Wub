@@ -552,6 +552,10 @@ export const FLOW_EQ_OUT_FLOOR_HZ = 300;
 export const FLOW_VOCAL_LOUD_RMS_DB = -18;
 /** Slow incoming-vocal fade in seconds (within the 100-200 ms spec). */
 export const FLOW_VOCAL_FADE_LOUD_SEC = 0.15;
+/** Vocal-change crossfade width in seconds (both sides widened) so a vocal
+ *  splice reads as a mix, not a cut.  Applied whenever the vocal stem
+ *  changes track, regardless of incoming energy. */
+export const FLOW_VOCAL_CROSSFADE_SEC = 0.22;
 
 /** Energy at or below which the signature bonus is exactly zero. */
 export const FLOW_SIGNATURE_BONUS_FLOOR = 0.50;
@@ -707,6 +711,8 @@ export interface TransitionTechnique {
   vocalReverbTail: boolean;
   /** Incoming-vocal fade override in seconds, or null for the default fade. */
   vocalFadeInSec: number | null;
+  /** Vocal-change crossfade width in seconds (both sides widened), or null. */
+  vocalCrossfadeSec: number | null;
 }
 
 /**
@@ -727,6 +733,7 @@ export function selectTransitionTechnique(
     eqOutFloorHz: FLOW_EQ_OUT_FLOOR_HZ,
     vocalReverbTail: false,
     vocalFadeInSec: null,
+    vocalCrossfadeSec: null,
   };
   if (!FLOW_TRANSITIONS_ENABLED) return off;
   if (input.isBridge) return off;
@@ -740,7 +747,13 @@ export function selectTransitionTechnique(
   }
   if (stem === "vocals") {
     const changed = input.vocalChanged !== false;
-    if (changed && incoming >= 0.40) result.vocalReverbTail = true;
+    if (changed) {
+      // A vocal change always gets the tail + widened crossfade: the outgoing
+      // phrase had a voice; its tail blends the splice, and quiet incoming
+      // vocals are exactly where a hard 80 ms cut was flaggable (dips).
+      result.vocalReverbTail = true;
+      result.vocalCrossfadeSec = FLOW_VOCAL_CROSSFADE_SEC;
+    }
     if (Number.isFinite(rmsDb) && rmsDb >= FLOW_VOCAL_LOUD_RMS_DB && incoming >= 0.40) {
       result.vocalFadeInSec = FLOW_VOCAL_FADE_LOUD_SEC;
     }
@@ -1050,6 +1063,20 @@ export function selfTest(): string[] {
     incomingRmsDb: -30, targetEnergy: 0.95, isBridge: false, vocalChanged: true,
   });
   check(quietVocalTech.vocalFadeInSec === null, "quiet vocal keeps the default fade");
+  check(quietVocalTech.vocalReverbTail === true, "quiet vocal change still gets a reverb tail");
+  check(quietVocalTech.vocalCrossfadeSec !== null && quietVocalTech.vocalCrossfadeSec! >= 0.20 && quietVocalTech.vocalCrossfadeSec! <= 0.25,
+    "vocal change gets a 200-250 ms crossfade");
+  const lowIncoming = selectTransitionTechnique({
+    stem: "vocals", outgoingEnergy: 0.60, incomingEnergy: 0.30,
+    incomingRmsDb: -12, targetEnergy: 0.95, isBridge: false, vocalChanged: true,
+  });
+  check(lowIncoming.vocalReverbTail === true && lowIncoming.vocalCrossfadeSec === FLOW_VOCAL_CROSSFADE_SEC,
+    "tail + crossfade regardless of incoming energy");
+  const heldVocalTech = selectTransitionTechnique({
+    stem: "vocals", outgoingEnergy: 0.60, incomingEnergy: 0.70,
+    incomingRmsDb: -12, targetEnergy: 0.95, isBridge: false, vocalChanged: false,
+  });
+  check(heldVocalTech.vocalCrossfadeSec === null, "no crossfade when vocals hold");
   const bridgeTech = selectTransitionTechnique({
     stem: "vocals", outgoingEnergy: 0.40, incomingEnergy: 0.80,
     incomingRmsDb: -12, targetEnergy: 0.20, isBridge: true, vocalChanged: true,

@@ -128,10 +128,22 @@ def test_transition_vocal_treatment():
         "vocals", 0.60, 0.70, -30.0, 0.95, False, True
     )
     assert quiet["vocal_fade_in_sec"] is None
+    assert quiet["vocal_reverb_tail"] is True
+    assert quiet["vocal_crossfade_sec"] == fp.FLOW_VOCAL_CROSSFADE_SEC
+    low = fp.select_transition_technique(
+        "vocals", 0.60, 0.30, -12.0, 0.95, False, True
+    )
+    assert low["vocal_reverb_tail"] is True
+    assert low["vocal_crossfade_sec"] == fp.FLOW_VOCAL_CROSSFADE_SEC
+    held = fp.select_transition_technique(
+        "vocals", 0.60, 0.70, -12.0, 0.95, False, False
+    )
+    assert held["vocal_crossfade_sec"] is None
     bridge = fp.select_transition_technique(
         "vocals", 0.40, 0.80, -12.0, 0.20, True, True
     )
     assert bridge["eq_out"] is False and bridge["vocal_reverb_tail"] is False
+    assert bridge["vocal_crossfade_sec"] is None
 
 
 def test_repetition_discount_factor():

@@ -786,6 +786,24 @@
       border: 1px solid #1f2533;
     }
 
+    /* --- HERO STAGE: Wub creature under transport, nebula below it --- */
+    #hero-stages {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    #hero-stages .tamagotchi-card {
+      max-width: 480px;
+      width: 100%;
+      justify-self: center;
+    }
+    #hero-stages canvas.stage {
+      width: 100%;
+      height: auto;
+      background: #06070a;
+      display: block;
+    }
     /* --- STUDIO RACK VISUALIZERS --- */
     #stages {
       display: grid;
@@ -2148,7 +2166,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.249 <span class="mc-build-num">#249</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.250 <span class="mc-build-num">#250</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -2159,6 +2177,44 @@
         🧠 100% STANDALONE IN-BROWSER ML
       </div>
     </header>
+
+  <!-- HERO STAGE: Wub creature right under transport, nebula below it -->
+  <section id="hero-stages" aria-label="Wub creature and nebula">
+    <!-- Panel 3: Neural ASCII Tamagotchi Avatar ("WubGotchi") -->
+    <div class="stage-card tamagotchi-card">
+      <div class="stage-header">
+        <span style="color: #ff77e9;">Wub • Kawaii Gummi Bear Pet</span>
+        <span id="tamagotchi-stage-badge">LVL 1 • GUMMI CUB</span>
+      </div>
+      <div class="tamagotchi-container">
+        <div class="tamagotchi-screen">
+          <div class="tamagotchi-scanlines"></div>
+          <canvas id="tamagotchi-canvas" class="tamagotchi-canvas" width="280" height="200" aria-label="Wub Kawaii Gummi Bear Audio Reactive Body Loop"></canvas>
+          <div id="tamagotchi-lyric-bar" class="tamagotchi-lyric-bar"></div>
+          <pre id="tamagotchi-ascii" class="tamagotchi-ascii" style="display: none;" aria-label="Tamagotchi ASCII Face"></pre>
+        </div>
+        <div class="tamagotchi-dashboard">
+          <div class="tamagotchi-stat-row">
+            <span>VIBE: <b id="tamagotchi-vibe">85%</b></span>
+            <span>MOOD: <b id="tamagotchi-mood">CHILL</b></span>
+            <span>XP: <b id="tamagotchi-xp">0</b></span>
+          </div>
+          <div class="tamagotchi-actions">
+            <button id="btn-tamagotchi-pet" class="tamagotchi-btn" type="button" title="Praise & Pet Wub Gummi Bear">PET ♥</button>
+            <button id="btn-tamagotchi-feed" class="tamagotchi-btn" type="button" title="Feed Juicy Audio Slice Snack">SNACK 🍕</button>
+            <button id="btn-tamagotchi-hype" class="tamagotchi-btn" type="button" title="Hype up the dance bounce energy">HYPE ⚡</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stage-card">
+      <div class="stage-header">
+        <span>2D Timbre Nebula &amp; Gravity Reticles</span>
+        <span>D-Beam Vector Crosshairs</span>
+      </div>
+      <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
+    </div>
+  </section>
 
     <!-- BACKLIT MC-505 LCD MATRIX SCREEN -->
     <section id="master" aria-label="Master controls">
@@ -2849,40 +2905,6 @@
         </div>
         <canvas id="rings-canvas" class="stage" width="720" height="450"></canvas>
       </div>
-      <div class="stage-card">
-        <div class="stage-header">
-          <span>2D Timbre Nebula &amp; Gravity Reticles</span>
-          <span>D-Beam Vector Crosshairs</span>
-        </div>
-        <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
-      </div>
-      <!-- Panel 3: Neural ASCII Tamagotchi Avatar ("WubGotchi") -->
-      <div class="stage-card tamagotchi-card">
-        <div class="stage-header">
-          <span style="color: #ff77e9;">Wub • Kawaii Gummi Bear Pet</span>
-          <span id="tamagotchi-stage-badge">LVL 1 • GUMMI CUB</span>
-        </div>
-        <div class="tamagotchi-container">
-          <div class="tamagotchi-screen">
-            <div class="tamagotchi-scanlines"></div>
-            <canvas id="tamagotchi-canvas" class="tamagotchi-canvas" width="280" height="200" aria-label="Wub Kawaii Gummi Bear Audio Reactive Body Loop"></canvas>
-            <div id="tamagotchi-lyric-bar" class="tamagotchi-lyric-bar"></div>
-            <pre id="tamagotchi-ascii" class="tamagotchi-ascii" style="display: none;" aria-label="Tamagotchi ASCII Face"></pre>
-          </div>
-          <div class="tamagotchi-dashboard">
-            <div class="tamagotchi-stat-row">
-              <span>VIBE: <b id="tamagotchi-vibe">85%</b></span>
-              <span>MOOD: <b id="tamagotchi-mood">CHILL</b></span>
-              <span>XP: <b id="tamagotchi-xp">0</b></span>
-            </div>
-            <div class="tamagotchi-actions">
-              <button id="btn-tamagotchi-pet" class="tamagotchi-btn" type="button" title="Praise & Pet Wub Gummi Bear">PET ♥</button>
-              <button id="btn-tamagotchi-feed" class="tamagotchi-btn" type="button" title="Feed Juicy Audio Slice Snack">SNACK 🍕</button>
-              <button id="btn-tamagotchi-hype" class="tamagotchi-btn" type="button" title="Hype up the dance bounce energy">HYPE ⚡</button>
-            </div>
-          </div>
-        </div>
-      </div>
       <div class="stage-card master-card">
         <div class="stage-header">
           <span style="color: var(--neon-green);">Master Summed Audio Analysis</span>
@@ -2894,7 +2916,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.249 (Build #249 • rev d117156fb)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.250 (Build #250 • rev bb6a4379a)</span>
     </div>
   </div>
 

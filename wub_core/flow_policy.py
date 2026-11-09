@@ -34,6 +34,7 @@ FLOW_EQ_OUT_MIN_GAIN = 0.15
 FLOW_EQ_OUT_FLOOR_HZ = 300
 FLOW_VOCAL_LOUD_RMS_DB = -18.0
 FLOW_VOCAL_FADE_LOUD_SEC = 0.15
+FLOW_VOCAL_CROSSFADE_SEC = 0.22
 
 STEMS = ("drums", "bass", "other", "vocals")
 
@@ -182,6 +183,7 @@ def select_transition_technique(
         "eq_out_floor_hz": FLOW_EQ_OUT_FLOOR_HZ,
         "vocal_reverb_tail": False,
         "vocal_fade_in_sec": None,
+        "vocal_crossfade_sec": None,
     }
     if not FLOW_TRANSITIONS_ENABLED:
         return dict(plain)
@@ -197,8 +199,9 @@ def select_transition_technique(
     if stem != "drums" and (incoming - outgoing) >= FLOW_EQ_OUT_MIN_GAIN:
         result["eq_out"] = True
     if stem == "vocals":
-        if vocal_changed and incoming >= 0.40:
+        if vocal_changed:
             result["vocal_reverb_tail"] = True
+            result["vocal_crossfade_sec"] = FLOW_VOCAL_CROSSFADE_SEC
         if math.isfinite(rms_db) and rms_db >= FLOW_VOCAL_LOUD_RMS_DB and incoming >= 0.40:
             result["vocal_fade_in_sec"] = FLOW_VOCAL_FADE_LOUD_SEC
     return result

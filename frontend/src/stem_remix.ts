@@ -40,7 +40,7 @@ import {
 // already returns the plain hand-off otherwise.  These constants size the
 // *scheduled* automation; all gating lives in arc_planner.selectTransitionTechnique.
 const TRANSITION_VOCAL_REVERB_TAIL = 0.22;
-const TRANSITION_VOCAL_REVERB_TAIL_SEC = 0.35;
+const TRANSITION_VOCAL_REVERB_TAIL_SEC = 0.5;
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const PITCHED: readonly StemName[] = ["bass", "other", "vocals"];
@@ -1723,7 +1723,10 @@ export class StemRemixPlayer {
     if (this.cluster === null) return null;
     if (!this.started) {
       this.started = true;
-      this.sessionStartAt = Math.max(at, this.engine.now() + 0.9);
+      // The anchor audio is already decoded (startSession awaits it); the
+      // cushion below only has to cover voice creation + the WASM clone, so
+      // the first notes land ~0.25 s after play instead of ~0.9 s.
+      this.sessionStartAt = Math.max(at, this.engine.now() + 0.3);
       this.blockStartBar = 0;
       this.sessionBar = 4;
       this.currentBlockBars = 4;
@@ -3296,11 +3299,15 @@ export class StemRemixPlayer {
       // ~150 ms instead of STEM_FADE_IN (80 ms) to avoid mid-vowel splats.
       // Only the *fade length* changes; gain stays the equal-gain hand-off.
       const vocalFade = transition?.vocalFadeInSec;
+      // Vocal-change seams: widen the boundary crossfade on both sides so the
+      // vocal hand-off reads as a mix, not a cut.
+      const vocalCross = transition?.vocalCrossfadeSec;
       const crossfadeSec = resume
         ? STEM_FADE_IN[stem]
         : Math.max(
           preDur > 0 ? preDur / rate : 0,
           stem === "vocals" && vocalFade !== null && vocalFade !== undefined ? vocalFade : 0,
+          stem === "vocals" && vocalCross !== null && vocalCross !== undefined ? vocalCross : 0,
           STEM_FADE_IN[stem],
         );
       voice.schedule({
