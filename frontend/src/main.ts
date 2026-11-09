@@ -326,7 +326,6 @@ class WubApp {
     // Initialize Autonomous In-Browser ML Sequencer
     try {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
-      this.bindGenreSelect();
       this.bindMbGenreSelect();
       // Play-path diagnostics: __wubStats() in the console shows which brain
       // drove each bar (global planner vs legacy patterns vs studio loops).
@@ -905,42 +904,6 @@ class WubApp {
         this.setStatus("NEXT KIT queued — bridge starts on the next 4-bar boundary.");
       });
     }
-  }
-
-  /** Genre (style) multi-select next to the transport.  Options come from the
-   *  bank's manifest clusters (conductor fires onGenreStyles once loaded);
-   *  all options are preselected (default = all genres).  Ctrl/Cmd+click
-   *  narrows the pool; an empty selection means all genres again. */
-  private bindGenreSelect(): void {
-    const el = document.getElementById("genre-select") as HTMLSelectElement | null;
-    if (el === null) return;
-    const populate = (styles: readonly string[]) => {
-      if (styles.length === 0) return;
-      const prev = new Set([...el.selectedOptions].map((o) => o.value));
-      el.replaceChildren();
-      for (const s of styles) {
-        const opt = document.createElement("option");
-        opt.value = s;
-        opt.textContent = s.toUpperCase().replace(/_/g, " ");
-        opt.selected = prev.size === 0 ? true : prev.has(s);
-        el.appendChild(opt);
-      }
-    };
-    if (this.clientConductor?.genreStyles?.length) populate(this.clientConductor.genreStyles);
-    if (this.clientConductor) {
-      this.clientConductor.onGenreStyles = populate;
-    }
-    el.addEventListener("change", () => {
-      const selected = [...el.selectedOptions].map((o) => o.value);
-      this.clientConductor?.applyGenreSelection(selected.length > 0 ? new Set(selected) : null);
-      this.setStatus(
-        selected.length === 0
-          ? "Genre: all styles (full bank)."
-          : selected.length === el.options.length
-            ? "Genre: all styles (full bank)."
-            : `Genre: ${selected.sort().join(" + ")} (restarts the set here).`,
-      );
-    });
   }
 
   /** MusicBrainz genre multi-select next to the style select.  Options come
