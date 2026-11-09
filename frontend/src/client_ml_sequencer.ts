@@ -2491,9 +2491,13 @@ export class ClientAdversarialRejectionClassifier {
 // -----------------------------------------------------------------------------
 
 export class ClientGrooveboxConductor {
-  // Single switch for the M1 kit asset base. Test build points at kits_test;
-  // change to "data/kits" once the production kit export is in place.
-  private static readonly KIT_BASE_PATH = "data/kits";
+  // Single switch for the M1 kit asset base.  Default is the same-origin
+  // `data/kits` (dev server + local `vite preview`).  CI sets
+  // `VITE_KIT_BASE` to raw.githubusercontent.com at the pinned commit SHA
+  // (`.../frontend/public/data/kits`) so the 708 MB / 20k+ file bank never
+  // goes through the Pages sync — Pages ships only the app shell.
+  private static readonly KIT_BASE_PATH: string =
+    import.meta.env.VITE_KIT_BASE ?? "data/kits";
 
   private engine: AudioEngine;
   private synth: WebAudioSliceSynthesizer;
