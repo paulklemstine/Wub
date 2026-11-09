@@ -165,14 +165,15 @@
     }
     /* Genre (style) multi-select next to the transport.  Compact dropdown;
      * Ctrl/Cmd+click multi-selects, empties to "all styles". */
-    #transport .genre-label {
+    .genre-label {
       font-family: monospace;
       font-size: 0.72rem;
       letter-spacing: 0.08em;
       color: var(--neon-cyan, #22d3ee);
       opacity: 0.9;
     }
-    #transport #genre-select {
+    #transport #genre-select,
+    #transport #mb-genre-select {
       background: #0c1016;
       border: 1px solid var(--mc-bezel, #2b3245);
       border-bottom-width: 3px;
@@ -183,7 +184,12 @@
       font-size: 0.8rem;
       max-width: 150px;
     }
-    #transport #genre-select:focus {
+    #transport #mb-genre-select {
+      max-width: 210px;
+      min-width: 130px;
+    }
+    #transport #genre-select:focus,
+    #transport #mb-genre-select:focus {
       outline: 2px solid var(--neon-cyan, #22d3ee);
       outline-offset: 1px;
     }
@@ -2190,18 +2196,21 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.254 <span class="mc-build-num">#254</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.255 <span class="mc-build-num">#255</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
         <button id="btn-stop" type="button">Stop</button>
-        <label class="genre-label" for="genre-select">GENRE</label>
-        <select id="genre-select" multiple size="1" aria-label="Genre filter: ctrl/cmd+click to multi-select; none = all genres" title="Genres (styles) in the session. Select one, several (Ctrl/Cmd+click), or none for all (default).">
+        <label class="genre-label" for="genre-select">STYLE</label>
+        <select id="genre-select" multiple size="1" aria-label="Style filter: ctrl/cmd+click to multi-select; none = all styles" title="Styles (instrument families) in the session. Select one, several (Ctrl/Cmd+click), or none for all (default).">
           <option value="breaks" selected>BREAKS</option>
           <option value="cyber" selected>CYBER</option>
           <option value="house" selected>HOUSE</option>
           <option value="wave" selected>WAVE</option>
+        </select>
+        <label class="genre-label" for="mb-genre-select">GENRE</label>
+        <select id="mb-genre-select" multiple size="4" aria-label="MusicBrainz genre: ctrl/cmd+click to multi-select; none = all genres" title="MusicBrainz genres. Select one, several (Ctrl/Cmd+click), or none for all (default).">
         </select>
       </div>
       <div class="ml-standalone-badge" title="100% Client-Side In-Browser ML Inference Engine (Zero Server Dependency)">
@@ -2947,7 +2956,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.254 (Build #254 • rev 73af66ed9)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.255 (Build #255 • rev cc1183657)</span>
     </div>
   </div>
 

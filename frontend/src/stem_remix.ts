@@ -1187,6 +1187,9 @@ export class StemRemixPlayer {
    *  (null = full bank).  The cluster pick for the anchor also follows the
    *  filter, so a selected genre is audible in the set, not just the anchor. */
   private styleFilter: Set<string> | null = null;
+  /** MB genre filter (musicbrainz buckets): intersected with the style
+   *  filter at pool build.  Unknown-genre kits never pass an active filter. */
+  private genreFilter: Set<string> | null = null;
 
   /** Restrict the bank pools + session clusters to the selected styles.
    *  Empty selection = all styles (escape hatch, never an empty pool).
@@ -1194,6 +1197,17 @@ export class StemRemixPlayer {
   setStyleFilter(styles: Set<string> | null): void {
     const normalized = styles !== null && styles.size > 0 ? new Set(styles) : null;
     this.styleFilter = normalized;
+  }
+
+  /** Restrict the bank pools to the selected MB genres (empty = all). */
+  setGenreFilter(genres: Set<string> | null): void {
+    const normalized = genres !== null && genres.size > 0 ? new Set(genres) : null;
+    this.genreFilter = normalized;
+  }
+
+  /** Active genre filter (null = full bank). */
+  get activeGenreFilter(): Set<string> | null {
+    return this.genreFilter === null ? null : new Set(this.genreFilter);
   }
 
   /** Active genre filter (null = full bank). */
@@ -1370,6 +1384,7 @@ export class StemRemixPlayer {
     for (const kit of this.kitById.values()) {
       if (this.failedKits.has(kit.track_id)) continue;
       if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) continue;
+      if (this.genreFilter !== null && !(kit.genre && this.genreFilter.has(kit.genre))) continue;
       for (const phrase of kit.phrases) {
         const duration = Number(phrase.duration_sec);
         if (!(duration > 0)) continue;

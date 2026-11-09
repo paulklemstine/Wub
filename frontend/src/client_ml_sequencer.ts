@@ -2569,6 +2569,11 @@ export class ClientGrooveboxConductor {
   private styleFilter: Set<string> | null = null;
   public genreStyles: string[] = [];
   public onGenreStyles?: (styles: string[]) => void;
+  // MusicBrainz genre filter: null = all.  mbGenres lists the buckets
+  // present in the bank, surfaced through onMbGenreStyles.
+  private mbGenreFilter: Set<string> | null = null;
+  public mbGenres: string[] = [];
+  public onMbGenreStyles?: (genres: string[]) => void;
   private staticBundleSkippedForKit: boolean = false;
   private staticBundleLoaded: boolean = false;
   private staticBundleBasePath: string = "data";
@@ -2711,6 +2716,9 @@ export class ClientGrooveboxConductor {
         const styles = [...new Set((manifest.clusters ?? []).map((c) => c.style).filter(Boolean))].sort();
         this.genreStyles = styles;
         this.onGenreStyles?.(styles);
+        const genres = [...new Set(manifest.kits.map((k) => k.genre).filter((g): g is string => Boolean(g) && g !== "unclassified"))].sort();
+        this.mbGenres = genres;
+        this.onMbGenreStyles?.(genres);
         await this.startKitSession();
       } catch (err) {
         this.handleKitFailure(err);
@@ -2731,7 +2739,9 @@ export class ClientGrooveboxConductor {
     // Pick a full-length kit at random so each session starts on a different
     // record instead of always manifest order (which is track-id sorted).
     const filtered = manifest.kits.filter(
-      (k) => k.phrases.length >= 6 && (this.styleFilter === null || this.styleFilter.has(k.style)),
+      (k) => k.phrases.length >= 6
+        && (this.styleFilter === null || this.styleFilter.has(k.style))
+        && (this.mbGenreFilter === null || (k.genre ? this.mbGenreFilter.has(k.genre) : false)),
     );
     const pool = filtered.length > 0 ? filtered : manifest.kits;
     // Prefer kits whose DROP phrase is actually hotter than the groove;
@@ -2743,7 +2753,7 @@ export class ClientGrooveboxConductor {
     );
     const choices = strongDrop.length > 0 ? strongDrop : (pool.length > 0 ? pool : manifest.kits);
     const firstKit = choices[Math.floor(Math.random() * choices.length)];
-    await player.loadKit(firstKit, this.styleFilter);
+    await player.loadKit(firstKit, this.styleFilter, this.mbGenreFilter);
     if (stale()) return;
     this.kitAudioActive = true;
     if (this.playbackMode === "kit") {
@@ -2761,7 +2771,7 @@ export class ClientGrooveboxConductor {
   private kitSessionGen = 0;
 
   /**
-   * Apply a genre selection (null/empty = all styles) and restart the kit
+   * Apply a style selection (null/empty = all styles) and restart the kit
    * session in the narrowed pool.  The old set keeps playing while the new
    * anchors decode (no transport stop); the switch lands through the per-voice
    * hand-off.  Before the player boots, this only stores the filter for the
@@ -2770,18 +2780,37 @@ export class ClientGrooveboxConductor {
   public applyGenreSelection(styles: Iterable<string> | null): void {
     const list = styles ? [...new Set(styles)] : [];
     this.styleFilter = list.length > 0 ? new Set(list) : null;
+    this.restartKitSetDebounced();
+  }
+
+  /** Apply a MusicBrainz-genre selection (null/empty = all) — same restart
+   *  semantics as the style filter, narrowing the pool to matching genres. */
+  public applyMbGenreSelection(genres: Iterable<string> | null): void {
+    const list = genres ? [...new Set(genres)] : [];
+    this.mbGenreFilter = list.length > 0 ? new Set(list) : null;
+    this.restartKitSetDebounced();
+  }
+
+  /**
+   * Debounced restarts: rapid clicks collapse into one restart.  Each restart
+   * supersedes the previous start (tokenized in startKitSession), and the
+   * running session keeps ringing until the new set lands.
+   */
+  private restartKitSetDebounced(): void {
     if (this.genreDebounceTimer !== null) clearTimeout(this.genreDebounceTimer);
     this.genreDebounceTimer = setTimeout(() => {
       this.genreDebounceTimer = null;
       if (this.kitPlayer === null || !this.kitAudioActive) return;
       const gen = ++this.kitSessionGen;
-      const label = this.styleFilter === null ? "all styles" : [...this.styleFilter].sort().join(" + ");
-      console.info(`[KitPlayer] Genre selection: ${label}`);
+      const label = `style=${this.styleFilter === null ? "all" : [...this.styleFilter].sort().join(" + ")}`
+        + ` genre=${this.mbGenreFilter === null ? "all" : [...this.mbGenreFilter].sort().join(" + ")}`;
+      console.info(`[KitPlayer] Filter update: ${label}`);
       void (async () => {
         try {
           await this.startKitSession();
           // A newer flip superseded us while starting: leave the field to it.
-          if (this.kitSessionGen !== gen) return;          if (this.isRunning) this.scheduleKitBlocks(this.engine.now());
+          if (this.kitSessionGen !== gen) return;
+          if (this.isRunning) this.scheduleKitBlocks(this.engine.now());
         } catch (err) {
           if (this.kitSessionGen === gen) this.handleKitFailure(err);
         }

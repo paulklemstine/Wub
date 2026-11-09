@@ -327,6 +327,7 @@ class WubApp {
     try {
       this.clientConductor = new ClientGrooveboxConductor(this.engine);
       this.bindGenreSelect();
+      this.bindMbGenreSelect();
       // Play-path diagnostics: __wubStats() in the console shows which brain
       // drove each bar (global planner vs legacy patterns vs studio loops).
       // __wubDebugBar() shows per-stem audio resolution for the current bar.
@@ -937,6 +938,41 @@ class WubApp {
           ? "Genre: all styles (full bank)."
           : selected.length === el.options.length
             ? "Genre: all styles (full bank)."
+            : `Genre: ${selected.sort().join(" + ")} (restarts the set here).`,
+      );
+    });
+  }
+
+  /** MusicBrainz genre multi-select next to the style select.  Options come
+   *  from the manifest's per-kit genre buckets (dedup, all preselected);
+   *  Ctrl/Cmd+click to narrow, empty to all. */
+  private bindMbGenreSelect(): void {
+    const el = document.getElementById("mb-genre-select") as HTMLSelectElement | null;
+    if (el === null) return;
+    const populate = (styles: readonly string[]) => {
+      if (styles.length === 0) return;
+      const prev = new Set([...el.selectedOptions].map((o) => o.value));
+      el.replaceChildren();
+      for (const s of styles) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s.toUpperCase().replace(/_/g, " ");
+        opt.selected = prev.size === 0 ? true : prev.has(s);
+        el.appendChild(opt);
+      }
+    };
+    if (this.clientConductor?.mbGenres?.length) populate(this.clientConductor.mbGenres);
+    if (this.clientConductor) {
+      this.clientConductor.onMbGenreStyles = populate;
+    }
+    el.addEventListener("change", () => {
+      const selected = [...el.selectedOptions].map((o) => o.value);
+      this.clientConductor?.applyMbGenreSelection(selected.length > 0 ? new Set(selected) : null);
+      this.setStatus(
+        selected.length === 0
+          ? "Genre: all genres (full bank)."
+          : selected.length === el.options.length
+            ? "Genre: all genres (full bank)."
             : `Genre: ${selected.sort().join(" + ")} (restarts the set here).`,
       );
     });

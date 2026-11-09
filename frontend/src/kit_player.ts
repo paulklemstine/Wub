@@ -73,6 +73,9 @@ export interface Kit {
   bpm: number;
   key: string;
   style: string;
+  /** MusicBrainz-derived genre bucket (mb_map) + its confidence band. */
+  genre?: string;
+  genre_confidence?: string;
   source?: string;
   phrases: KitPhrase[];
 }
@@ -725,15 +728,17 @@ export class KitPlayer {
   /** Decode all phrases x 4 stems for one kit and make it active. */
   /**
    * Load a kit for the session.  When the kit bank routes through the remix
-   * engine, this starts (or restarts) a stem-remix session; an optional
-   * explicit `styles` set constrains the bank pools to those genres.
+   * engine, this starts (or restarts) a stem-remix session; optional
+   * `styles`/`genres` sets constrain the bank pools to those
+   * style/MB-genre selections.
    */
-  async loadKit(kit: Kit, styles?: Set<string> | null): Promise<void> {
+  async loadKit(kit: Kit, styles?: Set<string> | null, genres?: Set<string> | null): Promise<void> {
     if (this.manifest === null) {
       throw new Error("KitPlayer.loadKit called before loadManifest");
     }
     if (this.remix) {
       this.remix.setStyleFilter(styles ?? null);
+      this.remix.setGenreFilter(genres ?? null);
       const cluster = await this.remix.startSession();
       const anchor = this.manifest.kits.find((candidate) => candidate.track_id === cluster.kits[0])
         ?? this.manifest.kits[0];
