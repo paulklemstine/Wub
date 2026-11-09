@@ -163,6 +163,30 @@
       gap: 10px;
       align-items: center;
     }
+    /* Genre (style) multi-select next to the transport.  Compact dropdown;
+     * Ctrl/Cmd+click multi-selects, empties to "all styles". */
+    #transport .genre-label {
+      font-family: monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      color: var(--neon-cyan, #22d3ee);
+      opacity: 0.9;
+    }
+    #transport #genre-select {
+      background: #0c1016;
+      border: 1px solid var(--mc-bezel, #2b3245);
+      border-bottom-width: 3px;
+      border-radius: 6px;
+      color: #e2e8f0;
+      padding: 6px 8px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      max-width: 150px;
+    }
+    #transport #genre-select:focus {
+      outline: 2px solid var(--neon-cyan, #22d3ee);
+      outline-offset: 1px;
+    }
     #btn-play {
       background: linear-gradient(180deg, #165338 0%, #0d3322 100%);
       border-color: #22c55e;
@@ -2166,12 +2190,15 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.251 <span class="mc-build-num">#251</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.252 <span class="mc-build-num">#252</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
         <button id="btn-stop" type="button">Stop</button>
+        <label class="genre-label" for="genre-select">GENRE</label>
+        <select id="genre-select" multiple size="1" aria-label="Genre filter: ctrl/cmd+click to multi-select; none = all genres" title="Genres (styles) in the session. Select one, several (Ctrl/Cmd+click), or none for all (default).">
+        </select>
       </div>
       <div class="ml-standalone-badge" title="100% Client-Side In-Browser ML Inference Engine (Zero Server Dependency)">
         🧠 100% STANDALONE IN-BROWSER ML
@@ -2916,7 +2943,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.251 (Build #251 • rev d08da093c)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.252 (Build #252 • rev 79a3c087b)</span>
     </div>
   </div>
 

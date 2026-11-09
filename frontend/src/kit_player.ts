@@ -723,11 +723,17 @@ export class KitPlayer {
   }
 
   /** Decode all phrases x 4 stems for one kit and make it active. */
-  async loadKit(kit: Kit): Promise<void> {
+  /**
+   * Load a kit for the session.  When the kit bank routes through the remix
+   * engine, this starts (or restarts) a stem-remix session; an optional
+   * explicit `styles` set constrains the bank pools to those genres.
+   */
+  async loadKit(kit: Kit, styles?: Set<string> | null): Promise<void> {
     if (this.manifest === null) {
       throw new Error("KitPlayer.loadKit called before loadManifest");
     }
     if (this.remix) {
+      this.remix.setStyleFilter(styles ?? null);
       const cluster = await this.remix.startSession();
       const anchor = this.manifest.kits.find((candidate) => candidate.track_id === cluster.kits[0])
         ?? this.manifest.kits[0];

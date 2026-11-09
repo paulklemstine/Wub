@@ -1181,12 +1181,29 @@ export class StemRemixPlayer {
     return arcPredictNext(model, rows, lastEnergy);
   }
 
-  /** Pick a cluster (optionally by style/id) and preload the opening phrase. */
-  async startSession(clusterId?: string, style?: string): Promise<KitCluster> {
+  /** Session genre filter: restrict candidate phrases to these styles
+   *  (null = full bank).  The cluster pick for the anchor also follows the
+   *  filter, so a selected genre is audible in the set, not just the anchor. */
+  private styleFilter: Set<string> | null = null;
+
+  /** Restrict the bank pools + session clusters to the selected styles.
+   *  Empty selection = all styles (escape hatch, never an empty pool).
+   *  The caller restarts the session after calling this. */
+  setStyleFilter(styles: Set<string> | null): void {
+    const normalized = styles !== null && styles.size > 0 ? new Set(styles) : null;
+    this.styleFilter = normalized;
+  }
+
+  /** Active genre filter (null = full bank). */
+  get activeStyles(): Set<string> | null {
+    return this.styleFilter === null ? null : new Set(this.styleFilter);
+  }
+
+  /** Pick a cluster at random (optionally a pinned id) and preload the opening phrase. */
+  async startSession(): Promise<KitCluster> {
     if (this.manifest === null) throw new Error("StemRemixPlayer.load() first");
     const candidates = this.clusters.filter((c) => {
-      if (clusterId) return c.id === clusterId;
-      if (style) return c.style === style;
+      if (this.styleFilter !== null && !this.styleFilter.has(c.style)) return false;
       return true;
     });
     const pool = candidates.length > 0 ? candidates : this.clusters;
@@ -1325,9 +1342,11 @@ export class StemRemixPlayer {
     // Every phrase whose stretch rate falls in [RATE_MIN, RATE_MAX] and whose
     // key can be transposed within MAX_SHIFT is eligible, so all 2,565
     // phrases are reachable; tiered scoring prefers near matches (see
-    // jointOptions / selectMorph).
+    // jointOptions / selectMorph).  A genre filter narrows the bank to the
+    // selected styles so selections are audible.
     for (const kit of this.kitById.values()) {
       if (this.failedKits.has(kit.track_id)) continue;
+      if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) continue;
       for (const phrase of kit.phrases) {
         const duration = Number(phrase.duration_sec);
         if (!(duration > 0)) continue;
@@ -1777,6 +1796,12 @@ export class StemRemixPlayer {
       const when = this.nextBlockAt;
       const { result, tasks } = this.beginBlock(when, section);
       this.lastResult = result;
+      // One block of prefetch lead is handled by begin/finish above; also
+      // warm the NEXT-next block's most likely phrases (same-track run
+      // continuations) so a cache-miss on a subsequent boundary (parallel
+      // fetch + decode on the main thread) cannot stall the downbeat.
+      // Fire-and-forget; loadAudio failures warm-nothing (run fails later).
+      void this.prefetchAhead(tasks);
       this.preparing = true;
       void this.finishBlock(tasks, when).finally(() => {
         this.preparing = false;
@@ -1784,6 +1809,31 @@ export class StemRemixPlayer {
       return result;
     }
     return null;
+  }
+
+  /**
+   * One-block-ahead cache warming: pull the same-track successor phrases of
+   * the upcoming block's runs into the audio cache so the block after that
+   * decodes from cache hit.  Never throws; errors are ignored.
+   */
+  private async prefetchAhead(tasks: ReadonlyArray<{ run: readonly StemPoolEntry[] }>): Promise<void> {
+    const seen = new Set<string>();
+    for (const task of tasks) {
+      let entry = task.run[task.run.length - 1];
+      // Two successor hops ahead: where a held stem will naturally continue.
+      for (let i = 0; entry && i < 2; i++) {
+        const next = this.nextRunEntry(entry, entry.stem);
+        if (!next) break;
+        const key = `${next.phrase.id}:${next.stem}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          void this.loadAudio(next).catch(() => {
+            // Warming only; a failed warm leaves the normal load path.
+          });
+        }
+        entry = next;
+      }
+    }
   }
 
   private anchorResult(at: number, section: string): StemBlockResult {

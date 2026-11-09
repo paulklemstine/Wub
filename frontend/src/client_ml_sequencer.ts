@@ -11,7 +11,7 @@
 import type { StemName } from "./types";
 import { AudioEngine } from "./audio_engine";
 import { KitPlayer } from "./kit_player";
-import type { Kit, KitBlockResult, KitPhrase, KitSteering } from "./kit_player";
+import type { Kit, KitBlockResult, KitManifest, KitPhrase, KitSteering } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
 
 export interface SerializedPattern {
@@ -2562,6 +2562,13 @@ export class ClientGrooveboxConductor {
   private kitLoadStarted: boolean = false;
   private kitAudioActive: boolean = false;
   private kitFailureLogged: boolean = false;
+  // Genre (style) filter: null = all styles.  genreStyles lists the styles
+  // present in the bank (from the manifest clusters), surfaced to the UI
+  // through onGenreStyles.
+  private kitManifest: KitManifest | null = null;
+  private styleFilter: Set<string> | null = null;
+  public genreStyles: string[] = [];
+  public onGenreStyles?: (styles: string[]) => void;
   private staticBundleSkippedForKit: boolean = false;
   private staticBundleLoaded: boolean = false;
   private staticBundleBasePath: string = "data";
@@ -2700,27 +2707,69 @@ export class ClientGrooveboxConductor {
         const manifest = await player.loadManifest(ClientGrooveboxConductor.KIT_BASE_PATH);
         await player.loadTasteScores(ClientGrooveboxConductor.KIT_BASE_PATH);
         if (manifest.kits.length === 0) throw new Error("Kit manifest contains no kits");
-        // Pick a full-length kit at random so each session starts on a different
-        // record instead of always manifest order (which is track-id sorted).
-        const pool = manifest.kits.filter((k) => k.phrases.length >= 6);
-        // Prefer kits whose DROP phrase is actually hotter than the groove;
-        // a weak "DROP" label is what made builds loop instead of dropping.
-        const strongDrop = pool.filter(
-          (k) =>
-            k.phrases.some((ph) => ph.section === "DROP" && ph.energy >= 0.8) &&
-            k.phrases.some((ph) => ph.section === "GROOVE_A")
-        );
-        const choices = strongDrop.length > 0 ? strongDrop : (pool.length > 0 ? pool : manifest.kits);
-        const firstKit = choices[Math.floor(Math.random() * choices.length)];
-        await player.loadKit(firstKit);
-        this.kitAudioActive = true;
-        if (this.playbackMode === "kit") {
-          this.applyKitLock();
-          this.resetKitBlockClock();
-          if (this.isRunning) {
-            this.scheduleKitBlocks(this.engine.now());
-          }
-          console.info("[KitPlayer] Kit mode active — 4-bar real stem phrases at rate 1.0 (no resampling)");
+        this.kitManifest = manifest;
+        const styles = [...new Set((manifest.clusters ?? []).map((c) => c.style).filter(Boolean))].sort();
+        this.genreStyles = styles;
+        this.onGenreStyles?.(styles);
+        await this.startKitSession();
+      } catch (err) {
+        this.handleKitFailure(err);
+      }
+    })();
+  }
+
+  /** Pick the first kit for the (filtered) pool and start the session. */
+  private async startKitSession(): Promise<void> {
+    const player = this.kitPlayer;
+    const manifest = this.kitManifest;
+    if (player === null || manifest === null) return;
+    // Pick a full-length kit at random so each session starts on a different
+    // record instead of always manifest order (which is track-id sorted).
+    const filtered = manifest.kits.filter(
+      (k) => k.phrases.length >= 6 && (this.styleFilter === null || this.styleFilter.has(k.style)),
+    );
+    const pool = filtered.length > 0 ? filtered : manifest.kits;
+    // Prefer kits whose DROP phrase is actually hotter than the groove;
+    // a weak "DROP" label is what made builds loop instead of dropping.
+    const strongDrop = pool.filter(
+      (k) =>
+        k.phrases.some((ph) => ph.section === "DROP" && ph.energy >= 0.8) &&
+        k.phrases.some((ph) => ph.section === "GROOVE_A")
+    );
+    const choices = strongDrop.length > 0 ? strongDrop : (pool.length > 0 ? pool : manifest.kits);
+    const firstKit = choices[Math.floor(Math.random() * choices.length)];
+    await player.loadKit(firstKit, this.styleFilter);
+    this.kitAudioActive = true;
+    if (this.playbackMode === "kit") {
+      this.applyKitLock();
+      this.resetKitBlockClock();
+      if (this.isRunning) {
+        this.scheduleKitBlocks(this.engine.now());
+      }
+      console.info("[KitPlayer] Kit mode active — 4-bar real stem phrases at rate 1.0 (no resampling)");
+    }
+  }
+
+  /**
+   * Apply a genre selection (null/empty = all styles) and restart the kit
+   * session in the narrowed pool.  Before the player boots, this only
+   * stores the filter for the upcoming start; a stopped or paused show
+   * keeps its place and applies the filter at the next set change.
+   */
+  public applyGenreSelection(styles: Iterable<string> | null): void {
+    const list = styles ? [...new Set(styles)] : [];
+    this.styleFilter = list.length > 0 ? new Set(list) : null;
+    if (this.kitPlayer === null || !this.kitAudioActive) return;
+    const wasRunning = this.isRunning;
+    const label = this.styleFilter === null ? "all styles" : [...this.styleFilter].sort().join(" + ");
+    console.info(`[KitPlayer] Genre selection: ${label}`);
+    if (wasRunning) this.stop();
+    void (async () => {
+      try {
+        await this.startKitSession();
+        if (wasRunning) {
+          this.isRunning = true;
+          this.scheduleKitBlocks(this.engine.now());
         }
       } catch (err) {
         this.handleKitFailure(err);
