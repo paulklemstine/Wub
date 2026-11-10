@@ -360,11 +360,14 @@ export class TransitionProbe {
         ? 10 * Math.log10(hfAfter / hfBefore)
         : 0;
       const targetEnergy = info.targetEnergy ?? 0.65;
-      const seam = maxJump > SEAM_JUMP_THRESHOLD;
+      // A boundary that starts from (near-)silence is an onset (e.g. session
+      // start / first anchor), not a glitch seam between playing audio.
+      const onsetFromSilence = preRms < 0.005;
+      const seam = !onsetFromSilence && maxJump > SEAM_JUMP_THRESHOLD;
       // A planned drop to an intro/breakdown is an intentional level change,
       // not a seam; only flag a dip when the arc is not asking for one.
       const intentionalDrop = targetEnergy < 0.45 && rmsDipDb < 6;
-      const dip = rmsDipDb > DIP_DB_THRESHOLD && !intentionalDrop;
+      const dip = !onsetFromSilence && rmsDipDb > DIP_DB_THRESHOLD && !intentionalDrop;
       const suspicious = seam || dip;
 
       const entry: TransitionCapture = {

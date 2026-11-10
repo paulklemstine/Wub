@@ -439,20 +439,31 @@ class KitAudioWorkerLoader {
       // A real per-file failure (or error message): fail the run so the
       // main-thread loader can try; log the cause so decode bugs surface.
       const message = (msg as { message?: unknown }).message;
-      if (typeof message === "string" && message.length > 0) {
+      if (typeof message === "string" && message.includes("OfflineAudioContext is not defined")) {
+        // Known browser limitation: no OAC in workers — disable once and fall
+        // back to main-thread decode without noisy warnings.
+        if (this.ok) {
+          this.ok = false;
+          console.info("[StemRemix] kit audio worker unavailable in this browser (no OfflineAudioContext); using main-thread decode");
+        }
+      } else if (typeof message === "string" && message.length > 0) {
         if (message !== this.lastErrorMessage) {
           console.warn(`[StemRemix] kit audio worker error: ${message}`);
         }
         this.lastErrorMessage = message;
-      }
-      // Repeated error responses mean the worker can never decode in this
-      // browser (e.g. no OfflineAudioContext in workers) — disable it so
-      // loads go straight to the main thread instead of paying a wasted
-      // round-trip and a warning per run.
-      this.consecutiveErrors++;
-      if (this.consecutiveErrors >= 2 && this.ok) {
-        this.ok = false;
-        console.warn("[StemRemix] kit audio worker disabled (repeated errors); main-thread decode");
+        // Repeated error responses mean the worker can never decode in this
+        // browser — disable it so loads go straight to the main thread.
+        this.consecutiveErrors++;
+        if (this.consecutiveErrors >= 2 && this.ok) {
+          this.ok = false;
+          console.warn("[StemRemix] kit audio worker disabled (repeated errors); main-thread decode");
+        }
+      } else {
+        this.consecutiveErrors++;
+        if (this.consecutiveErrors >= 2 && this.ok) {
+          this.ok = false;
+          console.warn("[StemRemix] kit audio worker disabled (repeated errors); main-thread decode");
+        }
       }
       pending.resolve(null);
     }
