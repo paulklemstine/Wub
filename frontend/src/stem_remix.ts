@@ -740,6 +740,11 @@ export class StemRemixPlayer {
     void this.loadVocalMix(base);
   }
 
+  /** True when a sidecar fetch is simply absent (404/410) — silent skip. */
+  private static isMissingArtifact(err: unknown): boolean {
+    return err instanceof Error && /\b(404|410)\b/.test(err.message);
+  }
+
   /** Load the learned arc model + context sidecar (log once, never throw). */
   private async loadArcArtifacts(base: string): Promise<void> {
     try {
@@ -780,7 +785,11 @@ export class StemRemixPlayer {
     } catch (err) {
       if (!this.arcLoggedUnavailable) {
         this.arcLoggedUnavailable = true;
-        console.warn("[StemRemix] arc model unavailable; planned wave only", err);
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] arc model unavailable; planned wave only", err);
+        }
       }
     }
   }
@@ -830,7 +839,11 @@ export class StemRemixPlayer {
     } catch (err) {
       if (!this.syntaxLoggedUnavailable) {
         this.syntaxLoggedUnavailable = true;
-        console.warn("[StemRemix] syntax successors unavailable; syntax bonus neutral", err);
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] syntax successors unavailable; syntax bonus neutral", err);
+        }
       }
     }
   }
@@ -903,7 +916,11 @@ export class StemRemixPlayer {
     } catch (err) {
       if (!this.rhythmLoggedUnavailable) {
         this.rhythmLoggedUnavailable = true;
-        console.warn("[StemRemix] rhythm mesh unavailable; rhythm bonus neutral", err);
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] rhythm mesh unavailable; rhythm bonus neutral", err);
+        }
       }
     }
   }
@@ -944,7 +961,11 @@ export class StemRemixPlayer {
     } catch (err) {
       if (!this.progressionLoggedUnavailable) {
         this.progressionLoggedUnavailable = true;
-        console.warn("[StemRemix] chord progression unavailable; progression bonus neutral", err);
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] chord progression unavailable; progression bonus neutral", err);
+        }
       }
     }
   }
@@ -1049,7 +1070,11 @@ export class StemRemixPlayer {
     } catch (err) {
       if (!this.vocalLoggedUnavailable) {
         this.vocalLoggedUnavailable = true;
-        console.warn("[StemRemix] vocal mix unavailable; vocal-edge bonus neutral", err);
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] vocal mix unavailable; vocal-edge bonus neutral", err);
+        }
       }
     }
   }
