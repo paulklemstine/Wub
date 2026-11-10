@@ -31,7 +31,7 @@ Scores how well 4 stems (drums/bass/other/vocals) sound together **per bar**, so
 - Samples **real** co-occurring 4-stem phrase windows (positives) and **random cross-song** recombinations (negatives, `source_cap <= 2`), tempo/key-normalized like the engine.
 - Per-bar 54-d features (rhythm-first: pairwise onset corr/downbeat/offbeat/density/joint-pulse/sync-gap + aggregates; harmony; spectral balance; energy).
 - **Render+embed teacher (`--render --embed`, MERT via `--mert --device cuda` on 4050, spectral fallback):** renders summed per-bar mixes from shipped stems (bar-sliced, tempo-normalized), embeds mixes, builds a **real-mix manifold bank**, grades by closeness to k-nearest real mixes (`teacher_manifold`, cosine mapped to 0..1). Label = **0.55·heuristic_rhythm/min-bar + 0.45·manifold** (reals floored ≥0.90). Rhythm stays primary; manifold = “closeness to real songs”.
-- Shipped run: **40k graded** (2884 positives + 37116 negatives), **MERT encoder (cuda)**, bank 2884, k=15.
+- Shipped run (expanded/regraded): **80k graded** (2884 positives + 77116 negatives), **MERT encoder (cuda)**, bank 2884, k=15, then onset-aligned feature refresh + retrain.
 
 ### Feature refresh (runtime alignment) — `scripts/refresh_mix_compat_features.py`
 - Recomputes `features` using the **true shipped-audio onset sidecar** while preserving MERT teacher labels (`label`, `teacher_manifold`, `label_heuristic`), aligning training features with runtime onset grids (phrases carry no onset fields; sidecar is the ground truth). Retrained on the refreshed MERT-graded dataset.
