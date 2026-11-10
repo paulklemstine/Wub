@@ -19,6 +19,7 @@ import {
   type ArcModelArtifact, type ArcPrediction,
 } from "./arc_inference";
 import { JointRanker } from "./joint_ranker";
+import { MixCompatModel, type MixCompatPhrase } from "./mix_compat";
 import {
   rhythmMixScore,
   type RhythmEntry, type RhythmMeshModel,
@@ -532,6 +533,8 @@ export class StemRemixPlayer {
   private readonly audioWorker = new KitAudioWorkerLoader();
   private voiceIndex: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private jointRanker: JointRanker | null = null;
+  /** Per-bar mix-compat critic (rhythm-prioritized); null when unavailable. */
+  private mixCompat: MixCompatModel | null = null;
   private lastBlockEntries: Partial<Record<StemName, StemPoolEntry>> = {};
   private previousEntries: Partial<Record<StemName, StemPoolEntry>> = {};
   /** Run starts of the last scheduled block, for hold/repeat. */
@@ -725,6 +728,14 @@ export class StemRemixPlayer {
       this.jointRanker = ok ? ranker : null;
     } catch {
       this.jointRanker = null;
+    }
+    try {
+      const mc = new MixCompatModel();
+      const ok = await mc.load(base);
+      this.mixCompat = ok ? mc : null;
+      if (ok) console.info("[StemRemix] Mix-compat model loaded (per-bar, rhythm-prioritized)");
+    } catch {
+      this.mixCompat = null;
     }
     // Learned arc artifacts load off the first-audio path; a missing or
     // invalid artifact leaves the planned wave as the only behaviour.
@@ -2570,6 +2581,30 @@ export class StemRemixPlayer {
       const changed = new Set(subset);
       const candidate: Partial<Record<StemName, StemPoolEntry>> = { ...heldBase };
       for (let i = 0; i < subset.length; i++) candidate[subset[i]] = picks[i];
+      // Cap any one source at 2 stems so the mix is a recombination, not a
+      // near-copy; never allow all 4 from the same source.  If the current
+      // mix is already over the cap (e.g. anchor opening), allow only moves
+      // that strictly reduce the worst overlap so it can repair.
+      {
+        const sourceCounts = new Map<string, number>();
+        for (const stem of STEMS) {
+          const tid = candidate[stem]?.kit.track_id;
+          if (!tid) return;
+          sourceCounts.set(tid, (sourceCounts.get(tid) ?? 0) + 1);
+        }
+        let maxCount = 0;
+        for (const count of sourceCounts.values()) if (count > maxCount) maxCount = count;
+        if (maxCount > 2) {
+          let curMax = 0;
+          const curCounts = new Map<string, number>();
+          for (const stem of STEMS) {
+            const tid = heldBase[stem]?.kit.track_id;
+            if (tid) curCounts.set(tid, (curCounts.get(tid) ?? 0) + 1);
+          }
+          for (const count of curCounts.values()) if (count > curMax) curMax = count;
+          if (curMax <= 2 || maxCount >= curMax) return;
+        }
+      }
       const candidateState = this.jointState(candidate);
       if (!candidateState) return;
       const rawScore = ranker.score(
@@ -2652,6 +2687,41 @@ export class StemRemixPlayer {
         earSum += candidate[subset[i]]!.earQ;
       }
       const earQuality = subset.length > 0 ? earSum / subset.length : 0.5;
+      // Per-bar mix compatibility (rhythm-prioritized): penalize mixes whose
+      // worst bar clashes, and reward rhythm-locked combinations. Neutral when
+      // the model/sidecar is unavailable.
+      let mixCompatScore: number | undefined;
+      let mixRhythmScore: number | undefined;
+      let mixMinBar: number | undefined;
+      if (this.mixCompat?.ready) {
+        const mix: Record<StemName, MixCompatPhrase> = {} as any;
+        let ok = true;
+        for (const stem of STEMS) {
+          const e = candidate[stem];
+          if (!e) { ok = false; break; }
+          const rms: Record<StemName, number> = { drums: -24, bass: -24, other: -24, vocals: -24 };
+          rms[stem] = e.rmsDb;
+          // prefer per-stem rms if present on phrase asset
+          const stemsObj = e.phrase.stems as any;
+          for (const s of STEMS) {
+            const v = stemsObj?.[s]?.rms_db;
+            if (typeof v === "number" && Number.isFinite(v)) rms[s] = v;
+          }
+          mix[stem] = {
+            id: e.phrase.id,
+            energy: e.energy,
+            chroma: e.chroma,
+            bassRoot: e.bassRoot,
+            rmsDbByStem: rms,
+          };
+        }
+        if (ok) {
+          const mc = this.mixCompat.score(mix);
+          mixCompatScore = mc.compat;
+          mixRhythmScore = mc.rhythm;
+          mixMinBar = mc.minBar;
+        }
+      }
       const policy = scoreTransition({
         jointScore: rawScore,
         targetEnergy,
@@ -2673,6 +2743,16 @@ export class StemRemixPlayer {
         vocalEdge,
         vocalSegmentBars,
       });
+      // Blend mix-compat (rhythm-first, worst-bar aware) on top of the policy
+      // score.  When unavailable these stay undefined and the score is unchanged.
+      if (mixCompatScore !== undefined && mixRhythmScore !== undefined && mixMinBar !== undefined) {
+        // rhythm is the top priority; a single bad bar is heavily penalized
+        const rhythmBlend = 0.65 * mixRhythmScore + 0.35 * mixCompatScore;
+        const barPenalty = mixMinBar < 0.35 ? (0.35 - mixMinBar) * 0.8 : 0;
+        policy.score = policy.score * 0.75 + rhythmBlend * 0.25 - barPenalty;
+        if (mixMinBar < 0.3) policy.reasons.push("bar-clash");
+        if (mixRhythmScore < 0.35) policy.reasons.push("rhythm-mismatch");
+      }
       if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
         bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
       }
@@ -2703,17 +2783,40 @@ export class StemRemixPlayer {
       const lists = subset.map((stem) => options.get(stem) ?? []);
       if (lists.some((list) => list.length === 0)) continue;
       if (subset.length === 1) {
-        for (const entry of lists[0]) consider(subset, [entry]);
+        const stem = subset[0];
+        const heldCounts = new Map<string, number>();
+        for (const other of STEMS) {
+          if (other === stem) continue;
+          const tid = heldBase[other]?.kit.track_id;
+          if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
+        }
+        for (const entry of lists[0]) {
+          if ((heldCounts.get(entry.kit.track_id) ?? 0) + 1 > 2) continue;
+          consider(subset, [entry]);
+        }
       } else {
         // Pair scoring is the expensive part (a 2k-d MLP per combo).  Only
         // combine the top-ranked entries from each stem; jointOptions has
         // already rotated fresh material into that top set via play counts.
+        const heldCounts = new Map<string, number>();
+        for (const stem of STEMS) {
+          if (subset.includes(stem)) continue;
+          const tid = heldBase[stem]?.kit.track_id;
+          if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
+        }
+        const wouldExceedCap = (tid: string, extra: number): boolean =>
+          (heldCounts.get(tid) ?? 0) + extra > 2;
         const firsts = lists[0].slice(0, PAIR_TOP_N);
         const seconds = lists[1].slice(0, PAIR_TOP_N);
         for (const first of firsts) {
+          if (wouldExceedCap(first.kit.track_id, 1)) continue;
           for (const second of seconds) {
-            if (first.kit.track_id === second.kit.track_id) continue;
-            if (usedTracks.has(first.kit.track_id) || usedTracks.has(second.kit.track_id)) continue;
+            if (first.kit.track_id === second.kit.track_id) {
+              // Two stems from the same source: allowed only if that brings it to 2.
+              if (wouldExceedCap(first.kit.track_id, 2)) continue;
+            } else if (wouldExceedCap(second.kit.track_id, 1)) {
+              continue;
+            }
             consider(subset, [first, second]);
           }
         }
@@ -2970,10 +3073,23 @@ export class StemRemixPlayer {
     // instruments come from different records; fall back if none exists.
     // Prefer candidates with a real consecutive run long enough for the
     // block; a short run would loop the same bars inside an 8/16-bar block.
+    // Held stem counts for source-cap enforcement (<=2 per source).
+    const heldCountsMorph = new Map<string, number>();
+    for (const other of STEMS) {
+      if (other === stem) continue;
+      const tid = (this.current[other]?.entry ?? this.lastBlockEntries[other])?.kit.track_id;
+      if (tid) heldCountsMorph.set(tid, (heldCountsMorph.get(tid) ?? 0) + 1);
+    }
+    const heldMaxMorph = Math.max(0, ...heldCountsMorph.values());
+
     for (const strict of [true, false]) {
     for (const entry of pool) {
       if (entry.kit.track_id === currentKit) continue;   // force a new track
-      if (strict && usedTracks.has(entry.kit.track_id)) continue;
+      {
+        const c = (heldCountsMorph.get(entry.kit.track_id) ?? 0) + 1;
+        if (c > 2 && !(heldMaxMorph > 2 && c < heldMaxMorph)) continue;
+      }
+      if (strict && usedTracks.has(entry.kit.track_id) && (heldCountsMorph.get(entry.kit.track_id) ?? 0) >= 1) continue;
       if (this.failedKits.has(entry.kit.track_id)) continue;
       if (entry.phrase.id === current.phrase.id) continue;
       if (recentSet.has(entry.phrase.id)) continue;
