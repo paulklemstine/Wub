@@ -1,0 +1,3429 @@
+{
+  "format": "wub-section-model-v1",
+  "version": 1,
+  "expanded_sections": [
+    "INTRO",
+    "WARMUP",
+    "GROOVE_LOW",
+    "GROOVE",
+    "GROOVE_HIGH",
+    "BUILDUP",
+    "RISE",
+    "DROP",
+    "PEAK",
+    "BREAKDOWN",
+    "BRIDGE",
+    "OUTRO"
+  ],
+  "base_sections": [
+    "INTRO",
+    "GROOVE_A",
+    "BUILDUP",
+    "DROP",
+    "BREAKDOWN"
+  ],
+  "base_of": {
+    "INTRO": "INTRO",
+    "WARMUP": "GROOVE_A",
+    "GROOVE_LOW": "GROOVE_A",
+    "GROOVE": "GROOVE_A",
+    "GROOVE_HIGH": "GROOVE_A",
+    "BUILDUP": "BUILDUP",
+    "RISE": "BUILDUP",
+    "DROP": "DROP",
+    "PEAK": "DROP",
+    "BREAKDOWN": "BREAKDOWN",
+    "BRIDGE": "BREAKDOWN",
+    "OUTRO": "BREAKDOWN"
+  },
+  "base_index": {
+    "INTRO": 0,
+    "GROOVE_A": 1,
+    "BUILDUP": 2,
+    "DROP": 3,
+    "BREAKDOWN": 4
+  },
+  "expanded_for_base": {
+    "INTRO": [
+      "INTRO"
+    ],
+    "GROOVE_A": [
+      "WARMUP",
+      "GROOVE_LOW",
+      "GROOVE",
+      "GROOVE_HIGH"
+    ],
+    "BUILDUP": [
+      "BUILDUP",
+      "RISE"
+    ],
+    "DROP": [
+      "DROP",
+      "PEAK"
+    ],
+    "BREAKDOWN": [
+      "BREAKDOWN",
+      "BRIDGE",
+      "OUTRO"
+    ]
+  },
+  "target_energy": {
+    "INTRO": 0.267,
+    "WARMUP": 0.407,
+    "GROOVE_LOW": 0.474,
+    "GROOVE": 0.641,
+    "GROOVE_HIGH": 0.769,
+    "BUILDUP": 0.533,
+    "RISE": 0.761,
+    "DROP": 0.92,
+    "PEAK": 0.893,
+    "BREAKDOWN": 0.328,
+    "BRIDGE": 0.479,
+    "OUTRO": 0.264
+  },
+  "durations": {
+    "INTRO": {
+      "mean_bars": 9.73,
+      "std_bars": 4.57,
+      "median_bars": 8,
+      "min_bars": 4,
+      "max_bars": 23
+    },
+    "WARMUP": {
+      "mean_bars": 7.74,
+      "std_bars": 4.21,
+      "median_bars": 8,
+      "min_bars": 4,
+      "max_bars": 16
+    },
+    "GROOVE_LOW": {
+      "mean_bars": 5.69,
+      "std_bars": 2.54,
+      "median_bars": 4,
+      "min_bars": 4,
+      "max_bars": 20
+    },
+    "GROOVE": {
+      "mean_bars": 9.53,
+      "std_bars": 6.29,
+      "median_bars": 8,
+      "min_bars": 4,
+      "max_bars": 32
+    },
+    "GROOVE_HIGH": {
+      "mean_bars": 11.2,
+      "std_bars": 7.32,
+      "median_bars": 8,
+      "min_bars": 4,
+      "max_bars": 32
+    },
+    "BUILDUP": {
+      "mean_bars": 5.21,
+      "std_bars": 2.04,
+      "median_bars": 4,
+      "min_bars": 4,
+      "max_bars": 12
+    },
+    "RISE": {
+      "mean_bars": 6.63,
+      "std_bars": 4.11,
+      "median_bars": 4,
+      "min_bars": 4,
+      "max_bars": 32
+    },
+    "DROP": {
+      "mean_bars": 8,
+      "std_bars": 4,
+      "median_bars": 8,
+      "min_bars": 4,
+      "max_bars": 16
+    },
+    "PEAK": {
+      "mean_bars": 13.3,
+      "std_bars": 10.99,
+      "median_bars": 8,
+      "min_bars": 4,
+      "max_bars": 32
+    },
+    "BREAKDOWN": {
+      "mean_bars": 8.78,
+      "std_bars": 4.5,
+      "median_bars": 8,
+      "min_bars": 4,
+      "max_bars": 30
+    },
+    "BRIDGE": {
+      "mean_bars": 16.17,
+      "std_bars": 10.52,
+      "median_bars": 16,
+      "min_bars": 4,
+      "max_bars": 32
+    },
+    "OUTRO": {
+      "mean_bars": 8.9,
+      "std_bars": 4.02,
+      "median_bars": 8,
+      "min_bars": 4,
+      "max_bars": 23
+    }
+  },
+  "transitions": {
+    "INTRO": [
+      {
+        "to": "GROOVE",
+        "p": 0.29971,
+        "n": 508
+      },
+      {
+        "to": "RISE",
+        "p": 0.20472,
+        "n": 347
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.16637,
+        "n": 282
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.08791,
+        "n": 149
+      },
+      {
+        "to": "PEAK",
+        "p": 0.07552,
+        "n": 128
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.06431,
+        "n": 109
+      },
+      {
+        "to": "WARMUP",
+        "p": 0.04956,
+        "n": 84
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04012,
+        "n": 68
+      },
+      {
+        "to": "BUILDUP",
+        "p": 0.0118,
+        "n": 20
+      }
+    ],
+    "BREAKDOWN": [
+      {
+        "to": "BRIDGE",
+        "p": 0.36705,
+        "n": 254
+      },
+      {
+        "to": "RISE",
+        "p": 0.25,
+        "n": 173
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.13728,
+        "n": 95
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.11272,
+        "n": 78
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.09827,
+        "n": 68
+      },
+      {
+        "to": "PEAK",
+        "p": 0.01879,
+        "n": 13
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.0159,
+        "n": 11
+      }
+    ],
+    "RISE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.34576,
+        "n": 538
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.26478,
+        "n": 412
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.12275,
+        "n": 191
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.0829,
+        "n": 129
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.07455,
+        "n": 116
+      },
+      {
+        "to": "PEAK",
+        "p": 0.06298,
+        "n": 98
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04627,
+        "n": 72
+      }
+    ],
+    "GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.38491,
+        "n": 709
+      },
+      {
+        "to": "RISE",
+        "p": 0.22693,
+        "n": 418
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.18295,
+        "n": 337
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.06895,
+        "n": 127
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.0684,
+        "n": 126
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.03963,
+        "n": 73
+      },
+      {
+        "to": "PEAK",
+        "p": 0.02823,
+        "n": 52
+      }
+    ],
+    "GROOVE_HIGH": [
+      {
+        "to": "GROOVE",
+        "p": 0.28003,
+        "n": 408
+      },
+      {
+        "to": "RISE",
+        "p": 0.25257,
+        "n": 368
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.14756,
+        "n": 215
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.1208,
+        "n": 176
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.08442,
+        "n": 123
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.05834,
+        "n": 85
+      },
+      {
+        "to": "PEAK",
+        "p": 0.05628,
+        "n": 82
+      }
+    ],
+    "BRIDGE": [
+      {
+        "to": "BREAKDOWN",
+        "p": 0.26454,
+        "n": 282
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.21764,
+        "n": 232
+      },
+      {
+        "to": "RISE",
+        "p": 0.17448,
+        "n": 186
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.15291,
+        "n": 163
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.14447,
+        "n": 154
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.03189,
+        "n": 34
+      },
+      {
+        "to": "PEAK",
+        "p": 0.01407,
+        "n": 15
+      }
+    ],
+    "PEAK": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.33626,
+        "n": 115
+      },
+      {
+        "to": "RISE",
+        "p": 0.24854,
+        "n": 85
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.20175,
+        "n": 69
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.06433,
+        "n": 22
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.0614,
+        "n": 21
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.05263,
+        "n": 18
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.03509,
+        "n": 12
+      }
+    ],
+    "GROOVE_LOW": [
+      {
+        "to": "RISE",
+        "p": 0.28919,
+        "n": 107
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.24054,
+        "n": 89
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.18378,
+        "n": 68
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.09459,
+        "n": 35
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.07027,
+        "n": 26
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.07027,
+        "n": 26
+      },
+      {
+        "to": "PEAK",
+        "p": 0.05135,
+        "n": 19
+      }
+    ],
+    "WARMUP": [
+      {
+        "to": "GROOVE",
+        "p": 0.28409,
+        "n": 25
+      },
+      {
+        "to": "RISE",
+        "p": 0.19318,
+        "n": 17
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.15909,
+        "n": 14
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.13636,
+        "n": 12
+      },
+      {
+        "to": "PEAK",
+        "p": 0.09091,
+        "n": 8
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.06818,
+        "n": 6
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.05682,
+        "n": 5
+      },
+      {
+        "to": "BUILDUP",
+        "p": 0.01136,
+        "n": 1
+      }
+    ],
+    "OUTRO": [
+      {
+        "to": "BREAKDOWN",
+        "p": 0.26331,
+        "n": 0
+      },
+      {
+        "to": "RISE",
+        "p": 0.17752,
+        "n": 0
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.15089,
+        "n": 0
+      },
+      {
+        "to": "INTRO",
+        "p": 0.12071,
+        "n": 0
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.10651,
+        "n": 0
+      },
+      {
+        "to": "WARMUP",
+        "p": 0.09053,
+        "n": 0
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.09053,
+        "n": 0
+      }
+    ],
+    "BUILDUP": [
+      {
+        "to": "RISE",
+        "p": 0.625,
+        "n": 15
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.16667,
+        "n": 4
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.08333,
+        "n": 2
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.04167,
+        "n": 1
+      },
+      {
+        "to": "PEAK",
+        "p": 0.04167,
+        "n": 1
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.04167,
+        "n": 1
+      }
+    ],
+    "DROP": [
+      {
+        "to": "PEAK",
+        "p": 1.0,
+        "n": 0
+      }
+    ]
+  },
+  "transitions3": {
+    "<START>|INTRO": [
+      {
+        "to": "GROOVE",
+        "p": 0.30006,
+        "n": 508
+      },
+      {
+        "to": "RISE",
+        "p": 0.20496,
+        "n": 347
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.16657,
+        "n": 282
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.08801,
+        "n": 149
+      },
+      {
+        "to": "PEAK",
+        "p": 0.07501,
+        "n": 127
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.06438,
+        "n": 109
+      },
+      {
+        "to": "WARMUP",
+        "p": 0.04962,
+        "n": 84
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04017,
+        "n": 68
+      },
+      {
+        "to": "BUILDUP",
+        "p": 0.01122,
+        "n": 19
+      }
+    ],
+    "INTRO|BREAKDOWN": [
+      {
+        "to": "BRIDGE",
+        "p": 0.4539,
+        "n": 128
+      },
+      {
+        "to": "RISE",
+        "p": 0.25177,
+        "n": 71
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.17021,
+        "n": 48
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.09574,
+        "n": 27
+      },
+      {
+        "to": "PEAK",
+        "p": 0.01773,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.01064,
+        "n": 3
+      }
+    ],
+    "BREAKDOWN|RISE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.38667,
+        "n": 58
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.21333,
+        "n": 32
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.19333,
+        "n": 29
+      },
+      {
+        "to": "PEAK",
+        "p": 0.06,
+        "n": 9
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.06,
+        "n": 9
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.05333,
+        "n": 8
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.03333,
+        "n": 5
+      }
+    ],
+    "RISE|GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.47666,
+        "n": 194
+      },
+      {
+        "to": "RISE",
+        "p": 0.24324,
+        "n": 99
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.16708,
+        "n": 68
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.04668,
+        "n": 19
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.04177,
+        "n": 17
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.02457,
+        "n": 10
+      }
+    ],
+    "GROOVE|GROOVE_HIGH": [
+      {
+        "to": "GROOVE",
+        "p": 0.31882,
+        "n": 183
+      },
+      {
+        "to": "RISE",
+        "p": 0.21777,
+        "n": 125
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.18118,
+        "n": 104
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.11498,
+        "n": 66
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.09756,
+        "n": 56
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04878,
+        "n": 28
+      },
+      {
+        "to": "PEAK",
+        "p": 0.02091,
+        "n": 12
+      }
+    ],
+    "GROOVE_HIGH|BRIDGE": [
+      {
+        "to": "OUTRO",
+        "p": 0.24615,
+        "n": 48
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.21538,
+        "n": 42
+      },
+      {
+        "to": "RISE",
+        "p": 0.18974,
+        "n": 37
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.17949,
+        "n": 35
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.12821,
+        "n": 25
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.02051,
+        "n": 4
+      },
+      {
+        "to": "PEAK",
+        "p": 0.02051,
+        "n": 4
+      }
+    ],
+    "INTRO|RISE": [
+      {
+        "to": "GROOVE",
+        "p": 0.36705,
+        "n": 127
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.25145,
+        "n": 87
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.14451,
+        "n": 50
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.10116,
+        "n": 35
+      },
+      {
+        "to": "PEAK",
+        "p": 0.07225,
+        "n": 25
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.06358,
+        "n": 22
+      }
+    ],
+    "GROOVE|RISE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.44792,
+        "n": 172
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.24479,
+        "n": 94
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.13542,
+        "n": 52
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.0651,
+        "n": 25
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.04688,
+        "n": 18
+      },
+      {
+        "to": "PEAK",
+        "p": 0.03385,
+        "n": 13
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.02604,
+        "n": 10
+      }
+    ],
+    "RISE|GROOVE_HIGH": [
+      {
+        "to": "RISE",
+        "p": 0.335,
+        "n": 134
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.2175,
+        "n": 87
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.1525,
+        "n": 61
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.125,
+        "n": 50
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.065,
+        "n": 26
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.0575,
+        "n": 23
+      },
+      {
+        "to": "PEAK",
+        "p": 0.0475,
+        "n": 19
+      }
+    ],
+    "GROOVE_HIGH|RISE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.34314,
+        "n": 105
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.23529,
+        "n": 72
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.15686,
+        "n": 48
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.10458,
+        "n": 32
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.06863,
+        "n": 21
+      },
+      {
+        "to": "PEAK",
+        "p": 0.04902,
+        "n": 15
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.04248,
+        "n": 13
+      }
+    ],
+    "INTRO|GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.35306,
+        "n": 179
+      },
+      {
+        "to": "RISE",
+        "p": 0.28797,
+        "n": 146
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.1854,
+        "n": 94
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.07692,
+        "n": 39
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.0572,
+        "n": 29
+      },
+      {
+        "to": "PEAK",
+        "p": 0.03945,
+        "n": 20
+      }
+    ],
+    "GROOVE|BRIDGE": [
+      {
+        "to": "GROOVE",
+        "p": 0.23256,
+        "n": 70
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.22924,
+        "n": 69
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.19934,
+        "n": 60
+      },
+      {
+        "to": "RISE",
+        "p": 0.16611,
+        "n": 50
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.15615,
+        "n": 47
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.01661,
+        "n": 5
+      }
+    ],
+    "BRIDGE|GROOVE": [
+      {
+        "to": "BRIDGE",
+        "p": 0.27826,
+        "n": 64
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.20435,
+        "n": 47
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.17826,
+        "n": 41
+      },
+      {
+        "to": "RISE",
+        "p": 0.16957,
+        "n": 39
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.13478,
+        "n": 31
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.03478,
+        "n": 8
+      }
+    ],
+    "BRIDGE|BREAKDOWN": [
+      {
+        "to": "OUTRO",
+        "p": 0.41026,
+        "n": 48
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.28205,
+        "n": 33
+      },
+      {
+        "to": "RISE",
+        "p": 0.11966,
+        "n": 14
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.09402,
+        "n": 11
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.07692,
+        "n": 9
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.01709,
+        "n": 2
+      }
+    ],
+    "BREAKDOWN|BRIDGE": [
+      {
+        "to": "BREAKDOWN",
+        "p": 0.37826,
+        "n": 87
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.16522,
+        "n": 38
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.15652,
+        "n": 36
+      },
+      {
+        "to": "RISE",
+        "p": 0.15217,
+        "n": 35
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.10435,
+        "n": 24
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04348,
+        "n": 10
+      }
+    ],
+    "INTRO|PEAK": [
+      {
+        "to": "GROOVE",
+        "p": 0.30508,
+        "n": 36
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.27966,
+        "n": 33
+      },
+      {
+        "to": "RISE",
+        "p": 0.23729,
+        "n": 28
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.07627,
+        "n": 9
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.07627,
+        "n": 9
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.02542,
+        "n": 3
+      }
+    ],
+    "RISE|BRIDGE": [
+      {
+        "to": "BREAKDOWN",
+        "p": 0.28652,
+        "n": 51
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.21348,
+        "n": 38
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.17416,
+        "n": 31
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.13483,
+        "n": 24
+      },
+      {
+        "to": "RISE",
+        "p": 0.1236,
+        "n": 22
+      },
+      {
+        "to": "PEAK",
+        "p": 0.03371,
+        "n": 6
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.03371,
+        "n": 6
+      }
+    ],
+    "GROOVE_HIGH|GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.44444,
+        "n": 180
+      },
+      {
+        "to": "RISE",
+        "p": 0.19012,
+        "n": 77
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.12346,
+        "n": 50
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.11358,
+        "n": 46
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.05432,
+        "n": 22
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04198,
+        "n": 17
+      },
+      {
+        "to": "PEAK",
+        "p": 0.0321,
+        "n": 13
+      }
+    ],
+    "BREAKDOWN|PEAK": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.54545,
+        "n": 6
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.18182,
+        "n": 2
+      },
+      {
+        "to": "RISE",
+        "p": 0.09091,
+        "n": 1
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.09091,
+        "n": 1
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.09091,
+        "n": 1
+      }
+    ],
+    "PEAK|RISE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.33766,
+        "n": 26
+      },
+      {
+        "to": "PEAK",
+        "p": 0.28571,
+        "n": 22
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.16883,
+        "n": 13
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.09091,
+        "n": 7
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.05195,
+        "n": 4
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.05195,
+        "n": 4
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.01299,
+        "n": 1
+      }
+    ],
+    "GROOVE_HIGH|PEAK": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.32759,
+        "n": 19
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.22414,
+        "n": 13
+      },
+      {
+        "to": "RISE",
+        "p": 0.17241,
+        "n": 10
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.12069,
+        "n": 7
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.08621,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.03448,
+        "n": 2
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.03448,
+        "n": 2
+      }
+    ],
+    "PEAK|GROOVE_HIGH": [
+      {
+        "to": "PEAK",
+        "p": 0.36264,
+        "n": 33
+      },
+      {
+        "to": "RISE",
+        "p": 0.23077,
+        "n": 21
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.13187,
+        "n": 12
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.08791,
+        "n": 8
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.07692,
+        "n": 7
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.05495,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.05495,
+        "n": 5
+      }
+    ],
+    "PEAK|GROOVE_LOW": [
+      {
+        "to": "RISE",
+        "p": 0.47619,
+        "n": 10
+      },
+      {
+        "to": "PEAK",
+        "p": 0.28571,
+        "n": 6
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.19048,
+        "n": 4
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.04762,
+        "n": 1
+      }
+    ],
+    "GROOVE_LOW|PEAK": [
+      {
+        "to": "GROOVE",
+        "p": 0.30769,
+        "n": 4
+      },
+      {
+        "to": "RISE",
+        "p": 0.23077,
+        "n": 3
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.23077,
+        "n": 3
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.15385,
+        "n": 2
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.07692,
+        "n": 1
+      }
+    ],
+    "PEAK|GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.37681,
+        "n": 26
+      },
+      {
+        "to": "RISE",
+        "p": 0.18841,
+        "n": 13
+      },
+      {
+        "to": "PEAK",
+        "p": 0.15942,
+        "n": 11
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.13043,
+        "n": 9
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.10145,
+        "n": 7
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.02899,
+        "n": 2
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.01449,
+        "n": 1
+      }
+    ],
+    "INTRO|WARMUP": [
+      {
+        "to": "GROOVE",
+        "p": 0.29762,
+        "n": 25
+      },
+      {
+        "to": "RISE",
+        "p": 0.20238,
+        "n": 17
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.15476,
+        "n": 13
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.14286,
+        "n": 12
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.07143,
+        "n": 6
+      },
+      {
+        "to": "PEAK",
+        "p": 0.07143,
+        "n": 6
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04762,
+        "n": 4
+      },
+      {
+        "to": "BUILDUP",
+        "p": 0.0119,
+        "n": 1
+      }
+    ],
+    "WARMUP|GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.6,
+        "n": 15
+      },
+      {
+        "to": "RISE",
+        "p": 0.2,
+        "n": 5
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.16,
+        "n": 4
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04,
+        "n": 1
+      }
+    ],
+    "BRIDGE|RISE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.26061,
+        "n": 43
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.22424,
+        "n": 37
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.18182,
+        "n": 30
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.1697,
+        "n": 28
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.11515,
+        "n": 19
+      },
+      {
+        "to": "PEAK",
+        "p": 0.02424,
+        "n": 4
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.02424,
+        "n": 4
+      }
+    ],
+    "GROOVE_HIGH|GROOVE_LOW": [
+      {
+        "to": "RISE",
+        "p": 0.29412,
+        "n": 25
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.22353,
+        "n": 19
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.17647,
+        "n": 15
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.14118,
+        "n": 12
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.08235,
+        "n": 7
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.04706,
+        "n": 4
+      },
+      {
+        "to": "PEAK",
+        "p": 0.03529,
+        "n": 3
+      }
+    ],
+    "INTRO|BRIDGE": [
+      {
+        "to": "GROOVE",
+        "p": 0.35294,
+        "n": 36
+      },
+      {
+        "to": "RISE",
+        "p": 0.30392,
+        "n": 31
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.20588,
+        "n": 21
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.05882,
+        "n": 6
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.03922,
+        "n": 4
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.03922,
+        "n": 4
+      }
+    ],
+    "INTRO|GROOVE_LOW": [
+      {
+        "to": "GROOVE",
+        "p": 0.33824,
+        "n": 23
+      },
+      {
+        "to": "RISE",
+        "p": 0.22059,
+        "n": 15
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.20588,
+        "n": 14
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.14706,
+        "n": 10
+      },
+      {
+        "to": "PEAK",
+        "p": 0.04412,
+        "n": 3
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.04412,
+        "n": 3
+      }
+    ],
+    "GROOVE_LOW|BREAKDOWN": [
+      {
+        "to": "BRIDGE",
+        "p": 0.43478,
+        "n": 10
+      },
+      {
+        "to": "RISE",
+        "p": 0.21739,
+        "n": 5
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.13043,
+        "n": 3
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.08696,
+        "n": 2
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.08696,
+        "n": 2
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.04348,
+        "n": 1
+      }
+    ],
+    "INTRO|GROOVE_HIGH": [
+      {
+        "to": "GROOVE",
+        "p": 0.44295,
+        "n": 66
+      },
+      {
+        "to": "RISE",
+        "p": 0.26174,
+        "n": 39
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.10067,
+        "n": 15
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.09396,
+        "n": 14
+      },
+      {
+        "to": "PEAK",
+        "p": 0.0604,
+        "n": 9
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.02013,
+        "n": 3
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.02013,
+        "n": 3
+      }
+    ],
+    "BREAKDOWN|GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.36842,
+        "n": 35
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.29474,
+        "n": 28
+      },
+      {
+        "to": "RISE",
+        "p": 0.17895,
+        "n": 17
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.07368,
+        "n": 7
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.05263,
+        "n": 5
+      },
+      {
+        "to": "PEAK",
+        "p": 0.02105,
+        "n": 2
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.01053,
+        "n": 1
+      }
+    ],
+    "GROOVE_LOW|RISE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.36957,
+        "n": 34
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.22826,
+        "n": 21
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.15217,
+        "n": 14
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.1087,
+        "n": 10
+      },
+      {
+        "to": "PEAK",
+        "p": 0.06522,
+        "n": 6
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.05435,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.02174,
+        "n": 2
+      }
+    ],
+    "RISE|PEAK": [
+      {
+        "to": "RISE",
+        "p": 0.34286,
+        "n": 24
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.32857,
+        "n": 23
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.1,
+        "n": 7
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.07143,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.07143,
+        "n": 5
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.07143,
+        "n": 5
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.01429,
+        "n": 1
+      }
+    ],
+    "PEAK|BREAKDOWN": [
+      {
+        "to": "RISE",
+        "p": 0.63636,
+        "n": 7
+      },
+      {
+        "to": "PEAK",
+        "p": 0.18182,
+        "n": 2
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.09091,
+        "n": 1
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.09091,
+        "n": 1
+      }
+    ],
+    "GROOVE|PEAK": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.58537,
+        "n": 24
+      },
+      {
+        "to": "RISE",
+        "p": 0.19512,
+        "n": 8
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.09756,
+        "n": 4
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.07317,
+        "n": 3
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.02439,
+        "n": 1
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.02439,
+        "n": 1
+      }
+    ],
+    "GROOVE_HIGH|BREAKDOWN": [
+      {
+        "to": "RISE",
+        "p": 0.45588,
+        "n": 31
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.23529,
+        "n": 16
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.13235,
+        "n": 9
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.10294,
+        "n": 7
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.05882,
+        "n": 4
+      },
+      {
+        "to": "PEAK",
+        "p": 0.01471,
+        "n": 1
+      }
+    ],
+    "<START>|PEAK": [
+      {
+        "to": "RISE",
+        "p": 0.38462,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.23077,
+        "n": 3
+      },
+      {
+        "to": "WARMUP",
+        "p": 0.15385,
+        "n": 2
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.07692,
+        "n": 1
+      },
+      {
+        "to": "INTRO",
+        "p": 0.07692,
+        "n": 1
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.07692,
+        "n": 1
+      }
+    ],
+    "<START>|GROOVE": [
+      {
+        "to": "RISE",
+        "p": 0.75,
+        "n": 6
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.125,
+        "n": 1
+      },
+      {
+        "to": "PEAK",
+        "p": 0.125,
+        "n": 1
+      }
+    ],
+    "GROOVE_LOW|GROOVE_HIGH": [
+      {
+        "to": "GROOVE",
+        "p": 0.33929,
+        "n": 19
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.16071,
+        "n": 9
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.14286,
+        "n": 8
+      },
+      {
+        "to": "RISE",
+        "p": 0.14286,
+        "n": 8
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.08929,
+        "n": 5
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.07143,
+        "n": 4
+      },
+      {
+        "to": "PEAK",
+        "p": 0.05357,
+        "n": 3
+      }
+    ],
+    "GROOVE_HIGH|OUTRO": [
+      {
+        "to": "RISE",
+        "p": 0.66667,
+        "n": 12
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.27778,
+        "n": 5
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.05556,
+        "n": 1
+      }
+    ],
+    "GROOVE_LOW|GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.34831,
+        "n": 31
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.22472,
+        "n": 20
+      },
+      {
+        "to": "RISE",
+        "p": 0.17978,
+        "n": 16
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.14607,
+        "n": 13
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.05618,
+        "n": 5
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.04494,
+        "n": 4
+      }
+    ],
+    "GROOVE|GROOVE_LOW": [
+      {
+        "to": "RISE",
+        "p": 0.30137,
+        "n": 22
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.26027,
+        "n": 19
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.23288,
+        "n": 17
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.08219,
+        "n": 6
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.05479,
+        "n": 4
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.0411,
+        "n": 3
+      },
+      {
+        "to": "PEAK",
+        "p": 0.0274,
+        "n": 2
+      }
+    ],
+    "RISE|GROOVE_LOW": [
+      {
+        "to": "RISE",
+        "p": 0.33333,
+        "n": 24
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.20833,
+        "n": 15
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.19444,
+        "n": 14
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.125,
+        "n": 9
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.05556,
+        "n": 4
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.04167,
+        "n": 3
+      },
+      {
+        "to": "PEAK",
+        "p": 0.04167,
+        "n": 3
+      }
+    ],
+    "BRIDGE|GROOVE_LOW": [
+      {
+        "to": "GROOVE",
+        "p": 0.38235,
+        "n": 13
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.20588,
+        "n": 7
+      },
+      {
+        "to": "RISE",
+        "p": 0.14706,
+        "n": 5
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.14706,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.05882,
+        "n": 2
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.05882,
+        "n": 2
+      }
+    ],
+    "BRIDGE|GROOVE_HIGH": [
+      {
+        "to": "RISE",
+        "p": 0.22034,
+        "n": 26
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.21186,
+        "n": 25
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.20339,
+        "n": 24
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.16102,
+        "n": 19
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.14407,
+        "n": 17
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.0339,
+        "n": 4
+      },
+      {
+        "to": "PEAK",
+        "p": 0.02542,
+        "n": 3
+      }
+    ],
+    "BREAKDOWN|GROOVE_HIGH": [
+      {
+        "to": "GROOVE",
+        "p": 0.26,
+        "n": 13
+      },
+      {
+        "to": "RISE",
+        "p": 0.24,
+        "n": 12
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.16,
+        "n": 8
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.14,
+        "n": 7
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.1,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.06,
+        "n": 3
+      },
+      {
+        "to": "PEAK",
+        "p": 0.04,
+        "n": 2
+      }
+    ],
+    "GROOVE|BREAKDOWN": [
+      {
+        "to": "BRIDGE",
+        "p": 0.40449,
+        "n": 36
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.19101,
+        "n": 17
+      },
+      {
+        "to": "RISE",
+        "p": 0.1573,
+        "n": 14
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.14607,
+        "n": 13
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.07865,
+        "n": 7
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.02247,
+        "n": 2
+      }
+    ],
+    "WARMUP|BREAKDOWN": [
+      {
+        "to": "BRIDGE",
+        "p": 0.41667,
+        "n": 5
+      },
+      {
+        "to": "RISE",
+        "p": 0.33333,
+        "n": 4
+      },
+      {
+        "to": "PEAK",
+        "p": 0.16667,
+        "n": 2
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.08333,
+        "n": 1
+      }
+    ],
+    "RISE|BREAKDOWN": [
+      {
+        "to": "BRIDGE",
+        "p": 0.42045,
+        "n": 37
+      },
+      {
+        "to": "RISE",
+        "p": 0.29545,
+        "n": 26
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.09091,
+        "n": 8
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.09091,
+        "n": 8
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.04545,
+        "n": 4
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.03409,
+        "n": 3
+      },
+      {
+        "to": "PEAK",
+        "p": 0.02273,
+        "n": 2
+      }
+    ],
+    "BREAKDOWN|OUTRO": [
+      {
+        "to": "RISE",
+        "p": 0.57143,
+        "n": 4
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.28571,
+        "n": 2
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.14286,
+        "n": 1
+      }
+    ],
+    "RISE|OUTRO": [
+      {
+        "to": "RISE",
+        "p": 0.44444,
+        "n": 4
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.33333,
+        "n": 3
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.22222,
+        "n": 2
+      }
+    ],
+    "BRIDGE|OUTRO": [
+      {
+        "to": "BREAKDOWN",
+        "p": 0.54545,
+        "n": 12
+      },
+      {
+        "to": "RISE",
+        "p": 0.22727,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.22727,
+        "n": 5
+      }
+    ],
+    "WARMUP|GROOVE_HIGH": [
+      {
+        "to": "GROOVE",
+        "p": 0.35714,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.21429,
+        "n": 3
+      },
+      {
+        "to": "RISE",
+        "p": 0.21429,
+        "n": 3
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.07143,
+        "n": 1
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.07143,
+        "n": 1
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.07143,
+        "n": 1
+      }
+    ],
+    "PEAK|BRIDGE": [
+      {
+        "to": "RISE",
+        "p": 0.25,
+        "n": 5
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.25,
+        "n": 5
+      },
+      {
+        "to": "PEAK",
+        "p": 0.15,
+        "n": 3
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.15,
+        "n": 3
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.15,
+        "n": 3
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.05,
+        "n": 1
+      }
+    ],
+    "BRIDGE|PEAK": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.5,
+        "n": 6
+      },
+      {
+        "to": "RISE",
+        "p": 0.25,
+        "n": 3
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.16667,
+        "n": 2
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.08333,
+        "n": 1
+      }
+    ],
+    "WARMUP|GROOVE_LOW": [
+      {
+        "to": "GROOVE",
+        "p": 0.4,
+        "n": 2
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.4,
+        "n": 2
+      },
+      {
+        "to": "RISE",
+        "p": 0.2,
+        "n": 1
+      }
+    ],
+    "WARMUP|BRIDGE": [
+      {
+        "to": "BREAKDOWN",
+        "p": 0.33333,
+        "n": 2
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.33333,
+        "n": 2
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.16667,
+        "n": 1
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.16667,
+        "n": 1
+      }
+    ],
+    "INTRO|BUILDUP": [
+      {
+        "to": "RISE",
+        "p": 0.7,
+        "n": 14
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.1,
+        "n": 2
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.1,
+        "n": 2
+      },
+      {
+        "to": "PEAK",
+        "p": 0.05,
+        "n": 1
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.05,
+        "n": 1
+      }
+    ],
+    "BUILDUP|RISE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.4,
+        "n": 6
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.26667,
+        "n": 4
+      },
+      {
+        "to": "PEAK",
+        "p": 0.2,
+        "n": 3
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.06667,
+        "n": 1
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.06667,
+        "n": 1
+      }
+    ],
+    "WARMUP|RISE": [
+      {
+        "to": "GROOVE",
+        "p": 0.47059,
+        "n": 8
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.41176,
+        "n": 7
+      },
+      {
+        "to": "PEAK",
+        "p": 0.05882,
+        "n": 1
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.05882,
+        "n": 1
+      }
+    ],
+    "GROOVE_LOW|BRIDGE": [
+      {
+        "to": "BREAKDOWN",
+        "p": 0.3871,
+        "n": 12
+      },
+      {
+        "to": "RISE",
+        "p": 0.19355,
+        "n": 6
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.16129,
+        "n": 5
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.12903,
+        "n": 4
+      },
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.09677,
+        "n": 3
+      },
+      {
+        "to": "OUTRO",
+        "p": 0.03226,
+        "n": 1
+      }
+    ],
+    "PEAK|BUILDUP": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "BUILDUP|GROOVE_HIGH": [
+      {
+        "to": "GROOVE",
+        "p": 0.5,
+        "n": 2
+      },
+      {
+        "to": "PEAK",
+        "p": 0.25,
+        "n": 1
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.25,
+        "n": 1
+      }
+    ],
+    "WARMUP|BUILDUP": [
+      {
+        "to": "BREAKDOWN",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "BUILDUP|BREAKDOWN": [
+      {
+        "to": "RISE",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "BREAKDOWN|GROOVE_LOW": [
+      {
+        "to": "RISE",
+        "p": 0.45455,
+        "n": 5
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.27273,
+        "n": 3
+      },
+      {
+        "to": "PEAK",
+        "p": 0.09091,
+        "n": 1
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.09091,
+        "n": 1
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.09091,
+        "n": 1
+      }
+    ],
+    "GROOVE|OUTRO": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.375,
+        "n": 3
+      },
+      {
+        "to": "BREAKDOWN",
+        "p": 0.25,
+        "n": 2
+      },
+      {
+        "to": "RISE",
+        "p": 0.25,
+        "n": 2
+      },
+      {
+        "to": "PEAK",
+        "p": 0.125,
+        "n": 1
+      }
+    ],
+    "BUILDUP|PEAK": [
+      {
+        "to": "RISE",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "<START>|WARMUP": [
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.5,
+        "n": 1
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.5,
+        "n": 1
+      }
+    ],
+    "WARMUP|PEAK": [
+      {
+        "to": "GROOVE_LOW",
+        "p": 0.28571,
+        "n": 2
+      },
+      {
+        "to": "RISE",
+        "p": 0.28571,
+        "n": 2
+      },
+      {
+        "to": "BRIDGE",
+        "p": 0.14286,
+        "n": 1
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.14286,
+        "n": 1
+      },
+      {
+        "to": "GROOVE",
+        "p": 0.14286,
+        "n": 1
+      }
+    ],
+    "<START>|RISE": [
+      {
+        "to": "GROOVE",
+        "p": 0.8,
+        "n": 4
+      },
+      {
+        "to": "INTRO",
+        "p": 0.2,
+        "n": 1
+      }
+    ],
+    "PEAK|INTRO": [
+      {
+        "to": "PEAK",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "GROOVE_LOW|OUTRO": [
+      {
+        "to": "RISE",
+        "p": 0.5,
+        "n": 1
+      },
+      {
+        "to": "GROOVE_HIGH",
+        "p": 0.5,
+        "n": 1
+      }
+    ],
+    "BUILDUP|BRIDGE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "GROOVE|BUILDUP": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "<START>|GROOVE_LOW": [
+      {
+        "to": "PEAK",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "RISE|BUILDUP": [
+      {
+        "to": "RISE",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "PEAK|OUTRO": [
+      {
+        "to": "RISE",
+        "p": 1.0,
+        "n": 2
+      }
+    ],
+    "BUILDUP|GROOVE": [
+      {
+        "to": "GROOVE_HIGH",
+        "p": 1.0,
+        "n": 2
+      }
+    ],
+    "PEAK|WARMUP": [
+      {
+        "to": "PEAK",
+        "p": 1.0,
+        "n": 2
+      }
+    ],
+    "<START>|GROOVE_HIGH": [
+      {
+        "to": "GROOVE",
+        "p": 1.0,
+        "n": 1
+      }
+    ],
+    "RISE|INTRO": [
+      {
+        "to": "BUILDUP",
+        "p": 1.0,
+        "n": 1
+      }
+    ]
+  },
+  "start_probs": [
+    {
+      "to": "INTRO",
+      "p": 0.9918,
+      "n": 1693
+    },
+    {
+      "to": "PEAK",
+      "p": 0.0082,
+      "n": 14
+    }
+  ],
+  "top_arcs": [
+    {
+      "sections": [
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 83
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE"
+      ],
+      "n": 74
+    },
+    {
+      "sections": [
+        "INTRO",
+        "BREAKDOWN",
+        "BRIDGE",
+        "BREAKDOWN"
+      ],
+      "n": 69
+    },
+    {
+      "sections": [
+        "INTRO",
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 68
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "RISE",
+        "GROOVE_HIGH"
+      ],
+      "n": 67
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE",
+        "RISE",
+        "GROOVE_HIGH"
+      ],
+      "n": 50
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "RISE",
+        "GROOVE"
+      ],
+      "n": 49
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 47
+    },
+    {
+      "sections": [
+        "GROOVE_HIGH",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE"
+      ],
+      "n": 43
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "GROOVE_HIGH",
+        "RISE",
+        "GROOVE_HIGH"
+      ],
+      "n": 42
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 42
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "RISE",
+        "GROOVE_HIGH",
+        "RISE"
+      ],
+      "n": 41
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE"
+      ],
+      "n": 41
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "RISE"
+      ],
+      "n": 40
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE_HIGH",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 39
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE_HIGH",
+        "RISE",
+        "GROOVE_HIGH"
+      ],
+      "n": 37
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "RISE"
+      ],
+      "n": 37
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE",
+        "RISE"
+      ],
+      "n": 37
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "BRIDGE"
+      ],
+      "n": 35
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "BRIDGE"
+      ],
+      "n": 34
+    },
+    {
+      "sections": [
+        "INTRO",
+        "RISE",
+        "GROOVE",
+        "BRIDGE"
+      ],
+      "n": 33
+    },
+    {
+      "sections": [
+        "INTRO",
+        "RISE",
+        "GROOVE_HIGH",
+        "RISE"
+      ],
+      "n": 33
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE_HIGH",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 30
+    },
+    {
+      "sections": [
+        "GROOVE_HIGH",
+        "GROOVE",
+        "RISE",
+        "GROOVE_HIGH"
+      ],
+      "n": 29
+    },
+    {
+      "sections": [
+        "INTRO",
+        "RISE",
+        "GROOVE",
+        "RISE"
+      ],
+      "n": 28
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "BRIDGE",
+        "BREAKDOWN"
+      ],
+      "n": 28
+    },
+    {
+      "sections": [
+        "GROOVE_HIGH",
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 28
+    },
+    {
+      "sections": [
+        "INTRO",
+        "RISE",
+        "BREAKDOWN",
+        "BRIDGE"
+      ],
+      "n": 27
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 27
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "BRIDGE",
+        "GROOVE"
+      ],
+      "n": 26
+    },
+    {
+      "sections": [
+        "INTRO",
+        "RISE",
+        "GROOVE_HIGH",
+        "GROOVE"
+      ],
+      "n": 26
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "RISE",
+        "BRIDGE"
+      ],
+      "n": 26
+    },
+    {
+      "sections": [
+        "INTRO",
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE"
+      ],
+      "n": 25
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "RISE",
+        "GROOVE_HIGH",
+        "GROOVE"
+      ],
+      "n": 24
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "BREAKDOWN",
+        "BRIDGE"
+      ],
+      "n": 24
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "BRIDGE",
+        "GROOVE",
+        "BRIDGE"
+      ],
+      "n": 24
+    },
+    {
+      "sections": [
+        "INTRO",
+        "BREAKDOWN",
+        "RISE",
+        "GROOVE"
+      ],
+      "n": 23
+    },
+    {
+      "sections": [
+        "INTRO",
+        "BREAKDOWN",
+        "RISE",
+        "GROOVE_HIGH"
+      ],
+      "n": 23
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "GROOVE_HIGH",
+        "BRIDGE",
+        "OUTRO"
+      ],
+      "n": 23
+    },
+    {
+      "sections": [
+        "INTRO",
+        "BREAKDOWN",
+        "BRIDGE",
+        "OUTRO"
+      ],
+      "n": 23
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "GROOVE_HIGH",
+        "RISE",
+        "GROOVE"
+      ],
+      "n": 22
+    },
+    {
+      "sections": [
+        "INTRO",
+        "BREAKDOWN",
+        "BRIDGE",
+        "RISE"
+      ],
+      "n": 22
+    },
+    {
+      "sections": [
+        "INTRO",
+        "GROOVE",
+        "RISE",
+        "GROOVE_HIGH",
+        "RISE"
+      ],
+      "n": 22
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "RISE",
+        "GROOVE",
+        "RISE"
+      ],
+      "n": 22
+    },
+    {
+      "sections": [
+        "GROOVE_HIGH",
+        "RISE",
+        "GROOVE",
+        "RISE"
+      ],
+      "n": 21
+    },
+    {
+      "sections": [
+        "GROOVE_HIGH",
+        "RISE",
+        "GROOVE_HIGH",
+        "RISE"
+      ],
+      "n": 21
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "BREAKDOWN"
+      ],
+      "n": 21
+    },
+    {
+      "sections": [
+        "GROOVE_HIGH",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "OUTRO"
+      ],
+      "n": 21
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE",
+        "OUTRO"
+      ],
+      "n": 21
+    },
+    {
+      "sections": [
+        "GROOVE_HIGH",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "RISE"
+      ],
+      "n": 21
+    },
+    {
+      "sections": [
+        "BREAKDOWN",
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH"
+      ],
+      "n": 20
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "GROOVE_HIGH",
+        "BRIDGE",
+        "GROOVE"
+      ],
+      "n": 20
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "GROOVE_HIGH",
+        "GROOVE",
+        "BRIDGE"
+      ],
+      "n": 20
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "RISE",
+        "GROOVE_HIGH"
+      ],
+      "n": 20
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE_HIGH",
+        "RISE",
+        "OUTRO"
+      ],
+      "n": 20
+    },
+    {
+      "sections": [
+        "GROOVE",
+        "RISE",
+        "GROOVE_HIGH",
+        "BRIDGE"
+      ],
+      "n": 20
+    },
+    {
+      "sections": [
+        "RISE",
+        "GROOVE",
+        "GROOVE_HIGH",
+        "OUTRO"
+      ],
+      "n": 20
+    },
+    {
+      "sections": [
+        "INTRO",
+        "RISE",
+        "GROOVE",
+        "RISE",
+        "GROOVE_HIGH"
+      ],
+      "n": 19
+    },
+    {
+      "sections": [
+        "GROOVE_HIGH",
+        "RISE",
+        "GROOVE_HIGH",
+        "GROOVE"
+      ],
+      "n": 19
+    },
+    {
+      "sections": [
+        "INTRO",
+        "BREAKDOWN",
+        "BRIDGE",
+        "GROOVE"
+      ],
+      "n": 19
+    }
+  ],
+  "stats": {
+    "tracks": 1724,
+    "total_spans": 10931,
+    "section_counts": {
+      "INTRO": 1695,
+      "BREAKDOWN": 1000,
+      "RISE": 1751,
+      "GROOVE": 1848,
+      "GROOVE_HIGH": 1838,
+      "BRIDGE": 1170,
+      "OUTRO": 716,
+      "PEAK": 431,
+      "GROOVE_LOW": 370,
+      "WARMUP": 88,
+      "BUILDUP": 24
+    }
+  },
+  "thresholds": {
+    "d_p33": 0.040625,
+    "d_p50": 0.0625,
+    "d_p66": 0.090625,
+    "d_p75": 0.1125,
+    "d_p85": 0.147321,
+    "dr_p33": 0.0,
+    "dr_p66": 0.0,
+    "dr_p75": 0.0,
+    "v_p66": 0.0,
+    "slope_rise": 0.245092,
+    "slope_fall": -0.192863,
+    "d_slope_rise": 0.007254
+  }
+}

@@ -658,6 +658,34 @@ is optional (playback never depends on it).
   (19 blocks, including the 8-bar bridge).
 * A failed asset must fall back to a repeat, never a silence or a stall.
 
+
+### 10.8 Learned section navigation (expanded, infinite)
+
+Section/energy targets can be driven by a corpus-mined transition model
+(`frontend/public/data/kits/section_model.json`, `wub-section-model-v1`) built
+from real-song bar features (`wub_core/section_arcs.py`, `wub_core/section_model.py`)
+over `data/processed`:
+
+```bash
+PYTHONPATH=. python3 scripts/build_section_model.py --processed data/processed \
+  --out frontend/public/data/kits/section_model.json
+```
+
+- **Expanded vocabulary:** INTRO, WARMUP, GROOVE_LOW, GROOVE, GROOVE_HIGH,
+  BUILDUP, RISE, DROP, PEAK, BREAKDOWN, BRIDGE, OUTRO (feature-learned;
+  calibrated energy/density/drums/slope/position, within-track ranks).
+- **Transitions & durations:** bigram/trigram probabilities and bar-duration
+  stats mined from 1.7k+ song section sequences; OUTRO re-enters so the
+  progression is infinite.
+- **Compatibility:** expanded kinds map to the 5-class base sections
+  (INTRO/GROOVE_A/BUILDUP/DROP/BREAKDOWN) for the trained joint ranker/arc
+  models; phrase selection prefers the expanded kind and target energy.
+- **Runtime:** `frontend/src/section_navigator.ts` advances a rolling learned
+  progression per block. The 104-bar scaffold (4→8→16 blocks, 96–104 drumless
+  bridge, cluster rotation) remains for timing/tempo-ladder handoff. Missing
+  `section_model.json` falls back to the fixed planned arc.
+
+
 ### 10.7 Transition telemetry baseline
 
 The hidden probe is the seam gate for future changes. Two reference runs:

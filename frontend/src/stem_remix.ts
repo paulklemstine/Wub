@@ -28,6 +28,7 @@ import {
   progressionScoreByPhraseId,
   type ProgressionContextArtifact, type ProgressionModelArtifact,
 } from "./progression_inference";
+import { SectionNavigator, baseOf, expandBaseSection, type SectionModel } from "./section_navigator";
 import {
   targetAt, movementBudgetAt, harmonyPenalty, vocalChangeAllowed, scoreTransition,
   pickSignatures, signatureBonus, timbreBonus, selectTransitionTechnique,
@@ -514,6 +515,11 @@ export class StemRemixPlayer {
   /** Last <=6 played block phrase ids (drums entry), most recent last. */
   private arcHistory: string[] = [];
   private arcLoggedUnavailable = false;
+  /** Learned section vocabulary + transitions for infinite navigation. */
+  private sectionNavigator = new SectionNavigator();
+  private sectionModel: SectionModel | null = null;
+  /** Expanded target kind for the current block (selection hint). */
+  private targetKind = "GROOVE";
   private kitById = new Map<string, Kit>();
   private entryById = new Map<string, StemPoolEntry>();
 
@@ -748,9 +754,10 @@ export class StemRemixPlayer {
     } catch {
       this.mixCompat = null;
     }
-    // Learned arc artifacts load off the first-audio path; a missing or
-    // invalid artifact leaves the planned wave as the only behaviour.
+    // Learned arc/section artifacts load off the first-audio path; missing
+    // or invalid artifacts leave the planned wave as the only behaviour.
     void this.loadArcArtifacts(base);
+    void this.loadSectionModel(base);
     // Learned phrase-syntax successors (gated bonus, never a filter); a
     // missing table keeps the syntax term exactly neutral.
     void this.loadSyntaxSuccessors(base);
@@ -821,6 +828,27 @@ export class StemRemixPlayer {
    *  exactly neutral at 0.5 so playback never depends on the table. */
   private syntaxSuccessors: Map<string, Map<string, number>> | null = null;
   private syntaxLoggedUnavailable = false;
+
+  /** Load the learned section/transition model (optional, never throw). */
+  private async loadSectionModel(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/section_model.json`);
+      if (!res.ok) {
+        if (res.status === 404 || res.status === 410) return; // optional
+        throw new Error(`section model ${res.status}`);
+      }
+      const model = (await res.json()) as SectionModel;
+      if (this.sectionNavigator.load(model)) {
+        this.sectionModel = model;
+      }
+    } catch (err) {
+      if (StemRemixPlayer.isMissingArtifact(err)) {
+        console.debug("[StemRemix] optional sidecar absent; term neutral");
+      } else {
+        console.warn("[StemRemix] section model unavailable; planned arc only", err);
+      }
+    }
+  }
 
   /**
    * Load the learned phrase-syntax successor table
@@ -1685,6 +1713,16 @@ export class StemRemixPlayer {
     if (this.styleRecent.length > 128) this.styleRecent.splice(0, this.styleRecent.length - 128);
   }
 
+  /** Expanded section kind for a pool entry (learned vocabulary hint). */
+  private entryKind(entry: StemPoolEntry): string {
+    return expandBaseSection(
+      String(entry.section || "GROOVE_A"),
+      Number(entry.energy) || 0.5,
+      entry.phrase.is_intro === true,
+      entry.phrase.is_outro === true,
+    );
+  }
+
   /** (A) Reselect 1-2 signatures per stem from shipped signals only.
    *  Pool-relative (entries already rate/key-legal), so a cluster rotation
    *  instantly re-anchors on the new key/tempo.  Missing taste quality falls
@@ -2004,27 +2042,54 @@ export class StemRemixPlayer {
     }
 
     const startBar = this.sessionBar;
-    // Planned 104-bar arc.  The arranger's live section is no longer the
-    // target in remix mode; the arc plans the wave, the ranker fills it in.
-    // A learned arc model (when present) blends in at gated confidence:
-    // energy nudges the plan, section only overrules at confident boundaries.
+    // Section targets: prefer the learned section navigator (corpus-mined
+    // transitions/durations) for infinite navigation; fall back to the fixed
+    // 104-bar arc. The ranker/arc-models remain 5-class (base section).
     const arc = targetAt(startBar);
+    const barsForTarget = rotation ? 4 : this.blockBarsAt(startBar);
     let normalized = arc.section;
-    const displaySection = arc.phase;
+    let displaySection: string = arc.phase;
+    let targetKind = arc.section;
     const bridge = !rotation && this.isBridgeBar(startBar);
     let targetEnergy = arc.energy;
+    if (!bridge && this.sectionNavigator.ready) {
+      // On cluster rotation (new set), nudge to a natural re-entry.
+      if (rotation) {
+        this.sectionNavigator.force("WARMUP", 8);
+      }
+      const nav = this.sectionNavigator.targetAt(startBar, barsForTarget) as any;
+      if (nav && typeof nav.section === "string") {
+        normalized = String(nav.section).toUpperCase();
+        targetKind = String(nav.kind ?? nav.phase ?? normalized).toUpperCase();
+        displaySection = targetKind;
+        if (typeof nav.energy === "number" && Number.isFinite(nav.energy)) {
+          targetEnergy = clamp01(nav.energy);
+        }
+      }
+    } else if (bridge) {
+      // Bridge is a forced drumless handoff; keep navigator aligned on exit.
+      targetKind = "BRIDGE";
+      displaySection = "BRIDGE";
+      normalized = "BREAKDOWN";
+    }
     {
       const learned = this.arcPredict();
-      if (learned) {
+      if (learned && !bridge) {
         if (Math.abs(learned.energy - targetEnergy) <= 0.25) {
-          targetEnergy = clamp01(0.5 * targetEnergy + 0.5 * learned.energy);
+          targetEnergy = clamp01(0.6 * targetEnergy + 0.4 * learned.energy);
         }
-        if (!bridge && arc.barInPhase === 0 && learned.confidence >= 0.55
+        // Only let the 5-class arc model override base section when not using
+        // learned navigation, or at very high confidence on a boundary.
+        if (!this.sectionNavigator.ready && arc.barInPhase === 0 && learned.confidence >= 0.55
           && (ARC_SECTIONS as readonly string[]).includes(learned.section)) {
           normalized = learned.section;
+          targetKind = learned.section;
+          displaySection = learned.section;
         }
       }
     }
+    // Stash for selection helpers (base 5-class stays in `normalized`).
+    this.targetKind = targetKind;
     const sectionChanged = normalized !== this.lastSection;
     this.lastSection = normalized;
     if (bridge && this.nextCluster === null) {
@@ -3111,7 +3176,8 @@ export class StemRemixPlayer {
       const shortRunPenalty = runLen < phrases ? 2.0 : 0;
 
       const energy = Number(entry.energy) || 0.5;
-      const sectionScore = (entry.section === section ? 0.6 : 0)
+      const kindMatch = this.entryKind(entry).toUpperCase() === (this.targetKind || section).toUpperCase();
+      const sectionScore = (kindMatch ? 0.75 : (entry.section === section ? 0.45 : 0))
         - Math.abs(energy - target);
       const jump = Math.abs(energy - current.energy);
       const jumpPenalty = jump > 0.25 ? (jump - 0.25) * 0.8 : 0;
@@ -3310,12 +3376,14 @@ export class StemRemixPlayer {
       if (entry.phrase.is_intro && this.blockIndex > 0) continue;
       if (entry.phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
 
-      // Direction-aware section / energy rules.
+      // Direction-aware section / energy rules (learned expanded kind aware).
       const target = SECTION_ENERGY[section] ?? 0.65;
       const energyDelta = Math.abs(entry.energy - target);
       let sectionScore = 0.5 - energyDelta;
-      if (entry.section === section) sectionScore += 0.6;
-      if (section === "BUILDUP" && current && entry.energy < current.energy - 0.05) sectionScore -= 0.8;
+      const kindMatch = this.entryKind(entry).toUpperCase() === (this.targetKind || section).toUpperCase();
+      if (kindMatch) sectionScore += 0.75;
+      else if (entry.section === section) sectionScore += 0.45;
+      if ((section === "BUILDUP" || this.targetKind === "RISE") && current && entry.energy < current.energy - 0.05) sectionScore -= 0.8;
       if (section === "BREAKDOWN" && current && entry.energy > current.energy + 0.1) sectionScore -= 0.8;
       if (section === "DROP" && entry.energy < 0.6) sectionScore -= 0.5;
 
