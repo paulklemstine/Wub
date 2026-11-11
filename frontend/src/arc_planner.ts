@@ -137,9 +137,11 @@ export function movementBudgetAt(sessionBar: number, blockBars: number): Movemen
     return { minChanges: 0, maxChanges: 0, maxHoldBars: 8 };
   }
   const intro = target.sessionBar < 8;
+  // 4-bar blocks: allow at most 1 stem change per block to avoid jumpy,
+  // rapid feel shifts; 8/16-bar blocks can move up to 2 stems.
   return {
     minChanges: intro || bars < 8 ? 0 : 1,
-    maxChanges: 2,
+    maxChanges: bars < 8 ? 1 : 2,
     maxHoldBars: 16,
   };
 }
@@ -816,7 +818,7 @@ export function selfTest(): string[] {
   );
 
   const introBudget = movementBudgetAt(0, 4);
-  check(introBudget.minChanges === 0, "intro should not force a change");
+  check(introBudget.minChanges === 0 && introBudget.maxChanges === 1, "intro 4-bar budget should be gentle");
   const eightBudget = movementBudgetAt(8, 8);
   check(
     eightBudget.minChanges === 1 && eightBudget.maxChanges === 2 && eightBudget.maxHoldBars === 16,

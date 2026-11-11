@@ -79,13 +79,13 @@ const CACHE_LIMIT = 24;
 const MIN_RMS_DB: Record<StemName, number> = {
   drums: -28, bass: -28, other: -34, vocals: -42,
 };
-// Boundary fade profiles: snap drums, settle bass quickly, let pads/vocals
-// overlap so the cross-song hand-off is felt rather than heard.
+// Boundary fade profiles: snap drums, but give bass/pads/vocals enough
+// overlap to smooth cross-song hand-offs (reduces jumpy feel shifts).
 const STEM_FADE_IN: Record<StemName, number> = {
-  drums: 0.004, bass: 0.014, other: 0.05, vocals: 0.08,
+  drums: 0.006, bass: 0.035, other: 0.09, vocals: 0.12,
 };
 const STEM_FADE_OUT: Record<StemName, number> = {
-  drums: 0.008, bass: 0.025, other: 0.07, vocals: 0.11,
+  drums: 0.012, bass: 0.05, other: 0.12, vocals: 0.16,
 };
 
 export interface StemPin {
@@ -2269,9 +2269,11 @@ export class StemRemixPlayer {
         const cooldownBars = phrasesPerStem * 4 <= 4 ? 8 : 0;
         const vocalOk = stem !== "vocals"
           || vocalChangeAllowed(startBar, this.lastVocalChangeBar, sectionChanged);
-        const cooledDown = cooldownBars === 0 || sectionChanged
+        const sinceChange = startBar - (this.lastChangeBar[stem] ?? 0);
+        const cooledDown = cooldownBars === 0
           || staleStems.has(stem)
-          || startBar - (this.lastChangeBar[stem] ?? 0) >= cooldownBars;
+          || sinceChange >= cooldownBars
+          || (sectionChanged && sinceChange >= 4);
         const morph = (vocalOk && cooledDown && fallbackMorphs < budget.maxChanges)
           ? this.selectMorph(stem, at, normalized, phrasesPerStem)
           : null;
@@ -2605,9 +2607,13 @@ export class StemRemixPlayer {
     // are already 8+ bars, so they have no cooldown.
     const cooldownBars = nextBlockBars <= 4 ? 8 : 0;
     const cooledDown = (stem: StemName): boolean => {
-      if (cooldownBars === 0 || sectionChanged || forceMove) return true;
-      if (startBar - (this.lastChangeBar[stem] ?? 0) >= budget.maxHoldBars) return true;
-      return startBar - (this.lastChangeBar[stem] ?? 0) >= cooldownBars;
+      if (cooldownBars === 0 || forceMove) return true;
+      const since = startBar - (this.lastChangeBar[stem] ?? 0);
+      if (since >= budget.maxHoldBars) return true;
+      if (since >= cooldownBars) return true;
+      // Section changes can encourage movement but don't force instant churn.
+      if (sectionChanged && since >= 4) return true;
+      return false;
     };
     const current: Partial<Record<StemName, StemPoolEntry>> = {};
     for (const stem of STEMS) {

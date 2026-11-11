@@ -63,16 +63,21 @@ function chooseWeighted<T extends { to?: string; section?: string; p: number }>(
 
 function pickDuration(model: SectionModel, kind: string, rng: () => number): number {
   const d = model.durations?.[kind];
-  if (!d) return 8;
-  const med = Math.max(4, Math.round((d.median_bars || 8) / 4) * 4);
-  const lo = Math.max(4, Math.round((d.min_bars || 4) / 4) * 4);
+  // Minimum 8 bars per section so targets/feel don't flip every 4 bars.
+  // Bridge/outro can be shorter at boundaries, but navigator-level hold
+  // keeps the infinite progression legible and less jumpy.
+  const MIN_BARS = 8;
+  if (!d) return MIN_BARS;
+  const medRaw = Math.max(MIN_BARS, Math.round((d.median_bars || 8) / 4) * 4);
+  const med = Math.max(MIN_BARS, medRaw);
+  const lo = Math.max(MIN_BARS, Math.round((d.min_bars || MIN_BARS) / 4) * 4);
   const hi = Math.min(32, Math.max(med, Math.round((d.max_bars || 16) / 4) * 4));
-  // Jitter around median in 4-bar steps for variety.
-  const choices = [med, med, med, med - 4, med + 4, lo, hi].filter(
-    (v) => v >= lo && v <= hi && v >= 4,
+  // Bias toward stable holds (median and longer) for smoother flow.
+  const choices = [med, med, med, med, med + 4, med + 4, hi, lo].filter(
+    (v) => v >= lo && v <= hi && v >= MIN_BARS,
   );
   const pick = choices[Math.floor(rng() * choices.length)] ?? med;
-  return Math.max(4, Math.round(pick / 4) * 4);
+  return Math.max(MIN_BARS, Math.round(pick / 4) * 4);
 }
 
 /** Infinite, learned section progression state. */
