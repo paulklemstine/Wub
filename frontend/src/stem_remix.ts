@@ -520,6 +520,8 @@ export class StemRemixPlayer {
   private sectionModel: SectionModel | null = null;
   /** Expanded target kind for the current block (selection hint). */
   private targetKind = "GROOVE";
+  /** Optional sidecar availability index (avoids 404 fetch noise). */
+  private sidecarsIndex: Record<string, boolean> | null = null;
   private kitById = new Map<string, Kit>();
   private entryById = new Map<string, StemPoolEntry>();
 
@@ -754,19 +756,48 @@ export class StemRemixPlayer {
     } catch {
       this.mixCompat = null;
     }
-    // Learned arc/section artifacts load off the first-audio path; missing
-    // or invalid artifacts leave the planned wave as the only behaviour.
-    void this.loadArcArtifacts(base);
-    void this.loadSectionModel(base);
-    // Learned phrase-syntax successors (gated bonus, never a filter); a
-    // missing table keeps the syntax term exactly neutral.
-    void this.loadSyntaxSuccessors(base);
-    // Rhythm-mesh (onset interlock), chord-progression (harmonic grammar)
-    // and vocal-edge (clean swap boundaries) sidecars: all optional, all
-    // exactly neutral when absent.  They only re-order near-best mixes.
-    void this.loadRhythmArtifacts(base);
-    void this.loadProgressionArtifacts(base);
-    void this.loadVocalMix(base);
+    // Optional sidecars: load availability index first to avoid 404 noise.
+    await this.loadSidecarsIndex(base);
+    // Learned arc/section artifacts: missing/invalid leaves fallbacks.
+    if (this.sidecarEnabled("arc_model") || this.sidecarEnabled("arc_context_features")) {
+      void this.loadArcArtifacts(base);
+    }
+    if (this.sidecarEnabled("section_model")) {
+      void this.loadSectionModel(base);
+    }
+    // Learned phrase-syntax successors (gated bonus, never a filter).
+    if (this.sidecarEnabled("syntax_successors")) {
+      void this.loadSyntaxSuccessors(base);
+    }
+    // Rhythm-mesh, chord-progression, vocal-edge sidecars (optional).
+    if (this.sidecarEnabled("rhythm_scores") || this.sidecarEnabled("rhythm_mesh_model") || this.sidecarEnabled("rhythm_flux")) {
+      void this.loadRhythmArtifacts(base);
+    }
+    if (this.sidecarEnabled("progression_model") || this.sidecarEnabled("progression_context")) {
+      void this.loadProgressionArtifacts(base);
+    }
+    if (this.sidecarEnabled("vocal_mix")) {
+      void this.loadVocalMix(base);
+    }
+  }
+
+  /** Load optional sidecar availability index (silent on absence). */
+  private async loadSidecarsIndex(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/sidecars.json`);
+      if (!res.ok) return;
+      const data = (await res.json()) as Record<string, unknown>;
+      if (data && typeof data === "object") this.sidecarsIndex = data as Record<string, boolean>;
+    } catch {
+      /* no index: fall back to trying sidecars */
+    }
+  }
+
+  /** True if a sidecar is enabled (or index unknown). */
+  private sidecarEnabled(name: string): boolean {
+    if (!this.sidecarsIndex) return true;
+    const v = this.sidecarsIndex[name];
+    return v !== false;
   }
 
   /** True when a sidecar fetch is simply absent (404/410) — silent skip. */
@@ -776,6 +807,9 @@ export class StemRemixPlayer {
 
   /** Load the learned arc model + context sidecar (log once, never throw). */
   private async loadArcArtifacts(base: string): Promise<void> {
+    if (this.sidecarsIndex && (!this.sidecarEnabled("arc_model") || !this.sidecarEnabled("arc_context_features"))) {
+      return;
+    }
     try {
       const [modelRes, sideRes] = await Promise.all([
         fetch(`${base}/arc_model.json`),
@@ -857,6 +891,7 @@ export class StemRemixPlayer {
    * model).  Logs once and stays null on any failure.
    */
   private async loadSyntaxSuccessors(base: string): Promise<void> {
+    if (this.sidecarsIndex && !this.sidecarEnabled("syntax_successors")) return;
     try {
       const res = await fetch(`${base}/syntax_successors.json`);
       if (!res.ok) throw new Error(`syntax successors ${res.status}`);
@@ -912,6 +947,9 @@ export class StemRemixPlayer {
    * any failure (the term is then exactly neutral).
    */
   private async loadRhythmArtifacts(base: string): Promise<void> {
+    if (this.sidecarsIndex && (!this.sidecarEnabled("rhythm_scores") || !this.sidecarEnabled("rhythm_mesh_model") || !this.sidecarEnabled("rhythm_flux"))) {
+      return;
+    }
     try {
       const [scoresRes, modelRes, fluxRes] = await Promise.all([
         fetch(`${base}/rhythm_scores.json`),
@@ -987,6 +1025,9 @@ export class StemRemixPlayer {
    * neutral).
    */
   private async loadProgressionArtifacts(base: string): Promise<void> {
+    if (this.sidecarsIndex && (!this.sidecarEnabled("progression_model") || !this.sidecarEnabled("progression_context"))) {
+      return;
+    }
     try {
       const [modelRes, ctxRes] = await Promise.all([
         fetch(`${base}/progression_model.json`),
@@ -1086,6 +1127,7 @@ export class StemRemixPlayer {
    * neutral).
    */
   private async loadVocalMix(base: string): Promise<void> {
+    if (this.sidecarsIndex && !this.sidecarEnabled("vocal_mix")) return;
     try {
       const res = await fetch(`${base}/vocal_mix.json`);
       if (!res.ok) throw new Error(`vocal mix ${res.status}`);

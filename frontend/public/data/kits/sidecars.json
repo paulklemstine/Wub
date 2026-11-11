@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "arc_model": false,
+  "arc_context_features": false,
+  "syntax_successors": false,
+  "rhythm_scores": false,
+  "rhythm_mesh_model": false,
+  "rhythm_flux": false,
+  "progression_model": false,
+  "progression_context": false,
+  "vocal_mix": false,
+  "section_model": true
+}
