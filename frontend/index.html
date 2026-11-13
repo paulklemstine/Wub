@@ -162,6 +162,7 @@
       display: flex;
       gap: 10px;
       align-items: center;
+      flex-wrap: wrap;
     }
     /* Genre (style) multi-select next to the transport.  Compact dropdown;
      * Ctrl/Cmd+click multi-selects, empties to "all styles". */
@@ -299,10 +300,10 @@
     /* --- MC-505 RETRO BACKLIT LCD MATRIX DISPLAY --- */
     #master {
       display: flex;
-      gap: 20px;
+      gap: 14px;
       align-items: center;
-      margin: 14px 0;
-      padding: 10px 16px;
+      margin: 0;
+      padding: 6px 12px;
       background: var(--mc-lcd-bg);
       border: 2px inset #083325;
       border-radius: 8px;
@@ -311,27 +312,28 @@
     }
     #master label {
       display: flex;
-      gap: 10px;
+      gap: 8px;
       align-items: center;
       font-family: monospace;
       font-weight: 700;
-      font-size: 0.88rem;
+      font-size: 0.82rem;
       color: var(--mc-lcd-text);
       text-transform: uppercase;
       letter-spacing: 0.08em;
       text-shadow: 0 0 6px rgba(0, 255, 170, 0.7);
+      white-space: nowrap;
     }
     #bpm-slider {
-      flex: 1;
-      min-width: 130px;
+      width: 120px;
+      min-width: 90px;
       accent-color: var(--neon-green);
     }
     #bpm-value {
-      font-size: 1.1rem;
+      font-size: 0.95rem;
       font-weight: 900;
       color: #00ffaa;
       text-shadow: 0 0 8px rgba(0, 255, 170, 0.9);
-      min-width: 80px;
+      min-width: 68px;
       letter-spacing: 0.05em;
     }
     #key-select {
@@ -339,10 +341,10 @@
       color: #00ffaa;
       border: 1px solid #145942;
       border-radius: 4px;
-      padding: 4px 8px;
+      padding: 3px 6px;
       font-family: monospace;
       font-weight: 700;
-      font-size: 0.9rem;
+      font-size: 0.82rem;
       cursor: pointer;
       box-shadow: inset 0 1px 3px rgba(0,0,0,0.8), 0 0 6px rgba(0, 255, 170, 0.3);
     }
@@ -2191,12 +2193,36 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.267 <span class="mc-build-num">#267</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.268 <span class="mc-build-num">#268</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
         <button id="btn-stop" type="button">Stop</button>
+        <!-- BACKLIT MC-505 LCD MATRIX SCREEN -->
+        <div id="master" aria-label="Master controls">
+          <label>TEMPO
+            <input id="bpm-slider" type="range" min="80" max="175" step="1" value="96" />
+            <span id="bpm-value">96 BPM</span>
+          </label>
+          <label>KEY
+            <select id="key-select">
+              <option value="C" selected>C MAJOR</option>
+              <option value="G">G MAJOR</option>
+              <option value="D">D MAJOR</option>
+              <option value="A">A MAJOR</option>
+              <option value="E">E MAJOR</option>
+              <option value="B">B MAJOR</option>
+              <option value="F#">F# MAJOR</option>
+              <option value="F">F MAJOR</option>
+              <option value="Bb">Bb MAJOR</option>
+              <option value="Eb">Eb MAJOR</option>
+              <option value="Am">A MINOR</option>
+              <option value="Em">E MINOR</option>
+              <option value="Dm">D MINOR</option>
+            </select>
+          </label>
+        </div>
         <label class="genre-label" for="mb-genre-select">GENRE</label>
         <select id="mb-genre-select" multiple size="4" aria-label="MusicBrainz genre: ctrl/cmd+click to multi-select; none = all genres" title="MusicBrainz genres. Select one, several (Ctrl/Cmd+click), or none for all (default).">
         </select>
@@ -2241,31 +2267,6 @@
       <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
     </div>
   </section>
-
-    <!-- BACKLIT MC-505 LCD MATRIX SCREEN -->
-    <section id="master" aria-label="Master controls">
-      <label>TEMPO
-        <input id="bpm-slider" type="range" min="80" max="175" step="1" value="96" />
-        <span id="bpm-value">96 BPM</span>
-      </label>
-      <label>KEY
-        <select id="key-select">
-          <option value="C" selected>C MAJOR</option>
-          <option value="G">G MAJOR</option>
-          <option value="D">D MAJOR</option>
-          <option value="A">A MAJOR</option>
-          <option value="E">E MAJOR</option>
-          <option value="B">B MAJOR</option>
-          <option value="F#">F# MAJOR</option>
-          <option value="F">F MAJOR</option>
-          <option value="Bb">Bb MAJOR</option>
-          <option value="Eb">Eb MAJOR</option>
-          <option value="Am">A MINOR</option>
-          <option value="Em">E MINOR</option>
-          <option value="Dm">D MINOR</option>
-        </select>
-      </label>
-    </section>
 
     <!-- MC-505 MULTI-PATTERN SEQUENCER PANEL -->
     <section id="groovebox-panel" aria-label="Groovebox Sequencer">
@@ -2942,7 +2943,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.267 (Build #267 • rev 4db49afcba)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.268 (Build #268 • rev 61b5370e27)</span>
     </div>
   </div>
 
