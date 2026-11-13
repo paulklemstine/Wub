@@ -173,13 +173,27 @@ export class JointRanker {
       (row + 1) * this.manifest.feature_dim,
     );
     const stemDim = this.stemDimValue;
+    const rot = ((Math.round(keyShiftSemitones) % 12) + 12) % 12;
+    const chromaTmp = new Float32Array(12);
+    const rootTmp = new Float32Array(12);
     // The ranker was trained on near matches (|rate-1|<=2%, small shifts).
     // Clamp the overrides to the trained regime so far stretches/transposes
     // read as "very far" instead of extrapolating the MLP to absurd scores;
     // the caller's tiered costs differentiate far vs very far.
     for (let stem = 0; stem < 4; stem++) {
-      out[stem * stemDim + 50] = Math.max(-1, Math.min(1, keyShiftSemitones / 5));
-      out[stem * stemDim + 51] = Math.max(-1.5, Math.min(1.5, (rate - 1) * 10));
+      const base = stem * stemDim;
+      out[base + 50] = Math.max(-1, Math.min(1, keyShiftSemitones / 5));
+      out[base + 51] = Math.max(-1.5, Math.min(1.5, (rate - 1) * 10));
+      // Rotate pitched stems' chroma (16..27) and root (28..39) into session-key
+      // space so the ranker & stemCosine see post-transposition harmonic alignment.
+      if (stem > 0 && rot !== 0) {
+        for (let i = 0; i < 12; i++) {
+          chromaTmp[(i + rot) % 12] = out[base + 16 + i];
+          rootTmp[(i + rot) % 12] = out[base + 28 + i];
+        }
+        out.set(chromaTmp, base + 16);
+        out.set(rootTmp, base + 28);
+      }
     }
     return out;
   }

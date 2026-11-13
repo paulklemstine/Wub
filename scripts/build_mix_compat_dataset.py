@@ -33,6 +33,7 @@ import json
 import math
 import random
 import sys
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -155,29 +156,74 @@ def rhythm_pair_features(a: np.ndarray, b: np.ndarray) -> dict:
     }
 
 
-def harmonic_features(phrases_by_stem: dict, kit_by_stem: dict) -> dict:
-    """Coarse harmonic consonance from chroma/bass_root when available."""
-    def chroma(p):
-        c = p.get("chroma")
-        if isinstance(c, list) and len(c) == 12:
-            v = np.array([float(x) for x in c], np.float32)
-            n = np.linalg.norm(v) + 1e-6
-            return v / n
+_NOTE_SEMI = {
+    "C": 0, "C#": 1, "DB": 1, "D": 2, "D#": 3, "EB": 3, "E": 4,
+    "F": 5, "F#": 6, "GB": 6, "G": 7, "G#": 8, "AB": 8, "A": 9,
+    "A#": 10, "BB": 10, "B": 11,
+}
+
+
+def parse_key(k: Any) -> tuple[int, bool] | None:
+    if not isinstance(k, str):
         return None
-    cb = chroma(phrases_by_stem.get("bass", {}))
-    co = chroma(phrases_by_stem.get("other", {}))
-    cv = chroma(phrases_by_stem.get("vocals", {}))
+    s = k.strip()
+    if not s:
+        return None
+    minor = s.endswith("m")
+    name = s[:-1] if minor else s
+    root = _NOTE_SEMI.get(name.upper())
+    if root is None:
+        return None
+    return root, minor
+
+
+def key_shift(session_key: Any, phrase_key: Any) -> int:
+    """Semitones to shift phrase_key TO session_key via relative major, in -5..+6."""
+    a = parse_key(session_key)
+    b = parse_key(phrase_key)
+    if not a or not b:
+        return 0
+    a_eff = (a[0] + 3) % 12 if a[1] else a[0]
+    b_eff = (b[0] + 3) % 12 if b[1] else b[0]
+    d = (a_eff - b_eff) % 12
+    if d > 6:
+        d -= 12
+    return int(d)
+
+
+def _shift_chroma(c: Any, shift: int) -> np.ndarray | None:
+    if isinstance(c, list) and len(c) == 12:
+        v = np.array([float(x) for x in c], np.float32)
+        if shift % 12 != 0:
+            v = np.roll(v, shift % 12)
+        n = np.linalg.norm(v) + 1e-6
+        return v / n
+    return None
+
+
+def _shift_root(r: Any, shift: int) -> int | None:
+    try:
+        return (int(r) + shift) % 12 if r is not None else None
+    except Exception:
+        return None
+
+
+def harmonic_features(phrases_by_stem: dict, kit_by_stem: dict) -> dict:
+    """Harmonic consonance in session-key space (drums kit's key) from chroma/bass_root."""
+    session_key = (kit_by_stem.get("drums") or {}).get("key", "")
+    shifts = {
+        s: (key_shift(session_key, (kit_by_stem.get(s) or {}).get("key", "")) if session_key else 0)
+        for s in ("bass", "other", "vocals")
+    }
+    cb = _shift_chroma(phrases_by_stem.get("bass", {}).get("chroma"), shifts["bass"])
+    co = _shift_chroma(phrases_by_stem.get("other", {}).get("chroma"), shifts["other"])
+    cv = _shift_chroma(phrases_by_stem.get("vocals", {}).get("chroma"), shifts["vocals"])
     def cos(a, b):
         if a is None or b is None:
             return 0.0
         return float(np.dot(a, b))
-    rb = phrases_by_stem.get("bass", {}).get("bass_root")
-    ro = phrases_by_stem.get("other", {}).get("bass_root")
-    try:
-        rb = int(rb) if rb is not None else None
-        ro = int(ro) if ro is not None else None
-    except Exception:
-        rb = ro = None
+    rb = _shift_root(phrases_by_stem.get("bass", {}).get("bass_root"), shifts["bass"])
+    ro = _shift_root(phrases_by_stem.get("other", {}).get("bass_root"), shifts["other"])
     root_interval_penalty = 0.0
     if rb is not None and ro is not None:
         iv = abs((ro - rb) % 12)
@@ -280,6 +326,7 @@ def heuristic_mix_score(per_bar: np.ndarray) -> dict:
         rhythm_scores.append(float(max(0.0, min(1.0, rhythm))))
     return {
         "per_bar": scores,
+        "rhythm_per_bar": rhythm_scores,
         "mean": float(np.mean(scores)),
         "min": float(np.min(scores)),
         "rhythm_mean": float(np.mean(rhythm_scores)),
@@ -422,10 +469,10 @@ def _spectral_embed(x: np.ndarray, sr: int = 24000, dim: int = 128) -> np.ndarra
         else:
             v = spec[:, m]
             bfeats.extend([float(v.mean()), float(v.std())])
-    # onset/flux over time (rhythm)
+    # onset/flux over time (rhythm, per-bin mean keeps magnitude ~0..1)
     flux = np.diff(spec, axis=0)
     flux[flux < 0] = 0
-    flux_t = flux.sum(axis=1)
+    flux_t = flux.mean(axis=1)
     # summarize flux in 16 equal bins (bar rhythm shape)
     bins = 16
     idx = np.linspace(0, len(flux_t), bins + 1).astype(int)
@@ -439,15 +486,37 @@ def _spectral_embed(x: np.ndarray, sr: int = 24000, dim: int = 128) -> np.ndarra
             ac.append(0.0)
         else:
             ac.append(float(np.dot(ft[:-lag], ft[lag:]) / denom))
-    # spectral centroid / flatness stats
+    # spectral centroid (normalized by Nyquist -> 0..1) / flatness stats
+    nyq = max(1.0, float(sr) * 0.5)
     sc_num = (mag * freqs).sum(axis=1)
     sc_den = mag.sum(axis=1) + 1e-6
-    centroid = sc_num / sc_den
+    centroid = (sc_num / sc_den) / nyq
     geo = np.exp(np.mean(np.log(mag + 1e-6), axis=1))
     flat = geo / (mag.mean(axis=1) + 1e-6)
     stats = [float(centroid.mean()), float(centroid.std()), float(flat.mean()), float(flat.std()),
              float(flux_t.mean()), float(flux_t.std())]
-    vec = np.array(bfeats + rshape + ac + stats, dtype=np.float32)  # 12 + 16 + 6 + 6 = 40
+    # 12-bin FFT chroma distribution + tonal peakiness (detects cross-key harmonic clashes)
+    tonal_mask = (freqs >= 60.0) & (freqs <= 4000.0)
+    chroma_vec = np.zeros(12, np.float32)
+    chroma_peak = 0.0
+    chroma_ent = 0.0
+    if np.any(tonal_mask):
+        tf = freqs[tonal_mask]
+        midi = np.round(69.0 + 12.0 * np.log2(tf / 440.0)).astype(np.int32) % 12
+        tm = mag[:, tonal_mask]
+        for pc in range(12):
+            m_pc = midi == pc
+            if np.any(m_pc):
+                chroma_vec[pc] = float(np.sqrt(np.mean(tm[:, m_pc] ** 2)))
+        csum = float(chroma_vec.sum()) + 1e-6
+        cp = chroma_vec / csum
+        chroma_peak = float(cp.max() / (cp.mean() + 1e-6)) / 12.0
+        chroma_ent = float(-np.sum(cp * np.log(cp + 1e-8)) / math.log(12.0))
+        chroma_vec = ((cp - cp.mean()) * 4.0).astype(np.float32)
+    vec = np.array(
+        bfeats + rshape + ac + stats + chroma_vec.tolist() + [chroma_peak, chroma_ent],
+        dtype=np.float32,
+    )  # 40 + 14 = 54
     # project/pad deterministically to dim
     if vec.size >= dim:
         out = vec[:dim].copy()
@@ -465,20 +534,27 @@ def _spectral_embed(x: np.ndarray, sr: int = 24000, dim: int = 128) -> np.ndarra
 class RenderEmbedTeacher:
     """Render summed bars and grade mixes by closeness to the real-mix manifold.
 
-    - Decodes shipped stem audio per phrase (cached).
+    - Decodes shipped stem audio per phrase (LRU cached) and pitch-shifts pitched
+      stems to the session (drums) key before summing, matching browser playback.
     - Renders per-bar mixes with tempo normalization (resample to median bar length).
-    - Embeds bars/mixes with a spectral (rhythm+texture) encoder; optionally uses
-      MERT if ears_embed is importable and --mert is set (best-effort).
-    - Teacher score: similarity to k-nearest real-mix embeddings (0..1), blended
-      with the rhythm-prioritized heuristic (rhythm remains the top signal).
+    - Embeds bars/mixes with a spectral (rhythm+harmony+texture) encoder; optionally
+      uses MERT if ears_embed is importable and --mert is set.
+    - Centers embeddings against the real bank mean and calibrates cosine scores
+      between random cross-song baseline and real-mix k-NN similarity.
     """
-    def __init__(self, kits_dir: Path, phrases: list, sr: int = 24000, device: str = "cpu",
+    def __init__(self, kits_dir: Path, phrases: list, sr: int = 16000, device: str = "cpu",
                  use_mert: bool = False, k: int = 15):
         self.kits_dir = kits_dir
         self.sr = sr
         self.device = device
         self.k = k
-        self.audio_cache = {}  # (pid, stem) -> bar segments
+        self.raw_cache: OrderedDict[tuple[str, str], np.ndarray] = OrderedDict()
+        self.audio_cache: OrderedDict[tuple[str, str, int], list] = OrderedDict()
+        self.max_raw_cache = 3000
+        self.max_audio_cache = 4000
+        self.bank_mean: np.ndarray | None = None
+        self.sim_lo: float = -0.1
+        self.sim_hi: float = 0.85
         self.encoder = None
         self.encoder_kind = "spectral"
         if use_mert:
@@ -494,20 +570,48 @@ class RenderEmbedTeacher:
             except Exception as e:
                 log(f"[mix-compat] MERT unavailable ({e}); using spectral encoder")
         if self.encoder is None:
-            log("[mix-compat] teacher encoder: spectral rhythm+texture fallback")
+            log("[mix-compat] teacher encoder: spectral rhythm+chroma+texture")
 
-    def _bars_for(self, item: dict, stem: str):
+    def _raw_mono(self, item: dict, stem: str) -> np.ndarray | None:
         pid = item["phrase"]["id"]
-        key = (pid, stem)
-        if key in self.audio_cache:
-            return self.audio_cache[key]
+        rkey = (pid, stem)
+        if rkey in self.raw_cache:
+            self.raw_cache.move_to_end(rkey)
+            return self.raw_cache[rkey]
         rel = (item["phrase"].get("stems") or {}).get(stem, {}).get("file")
         if not rel:
+            return None
+        x = _load_mono(self.kits_dir / rel, sr=self.sr)
+        self.raw_cache[rkey] = x
+        if len(self.raw_cache) > self.max_raw_cache:
+            self.raw_cache.popitem(last=False)
+        return x
+
+    def _bars_for(self, item: dict, stem: str, semitones: int = 0):
+        pid = item["phrase"]["id"]
+        shift = 0 if stem == "drums" else int(semitones)
+        key = (pid, stem, shift)
+        if key in self.audio_cache:
+            self.audio_cache.move_to_end(key)
+            return self.audio_cache[key]
+        x = self._raw_mono(item, stem)
+        if x is None:
             segs = [np.zeros(1, np.float32)] * BARS_PER_PHRASE
         else:
-            x = _load_mono(self.kits_dir / rel, sr=self.sr)
+            if shift != 0 and len(x) > 64:
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        import librosa
+                        x = librosa.effects.pitch_shift(
+                            x, sr=self.sr, n_steps=float(shift), res_type="soxr_lq"
+                        ).astype(np.float32)
+                except Exception:
+                    pass
             segs = _bar_segments(x, BARS_PER_PHRASE)
         self.audio_cache[key] = segs
+        if len(self.audio_cache) > self.max_audio_cache:
+            self.audio_cache.popitem(last=False)
         return segs
 
     def embed_mix(self, segs_by_stem: dict, bar: int, target_len: int) -> np.ndarray:
@@ -525,21 +629,22 @@ class RenderEmbedTeacher:
                 return _spectral_embed(mix, sr=self.sr)
         return _spectral_embed(mix, sr=self.sr)
 
-    def _target_len(self, mix_items: dict) -> int:
-        lens = []
-        for s in STEMS:
-            segs = self._bars_for(mix_items[s], s)
-            for seg in segs:
-                if len(seg) > 0:
-                    lens.append(len(seg))
+    def _target_len(self, segs_by_stem: dict) -> int:
+        lens = [len(seg) for segs in segs_by_stem.values() for seg in segs if len(seg) > 0]
         if not lens:
             return self.sr  # ~1s bar fallback
         return int(np.median(lens))
 
     def embed_mix_phrase(self, mix_items: dict) -> np.ndarray:
-        """Mean bar embedding for a 4-stem mix (phrase-level manifold point)."""
-        segs_by_stem = {s: self._bars_for(mix_items[s], s) for s in STEMS}
-        tlen = self._target_len(mix_items)
+        """Mean bar embedding for a 4-stem mix shifted into the drums session key."""
+        session_key = (mix_items["drums"].get("kit") or {}).get("key", "")
+        segs_by_stem = {}
+        for s in STEMS:
+            sh = 0 if (s == "drums" or not session_key) else key_shift(
+                session_key, (mix_items[s].get("kit") or {}).get("key", "")
+            )
+            segs_by_stem[s] = self._bars_for(mix_items[s], s, semitones=sh)
+        tlen = self._target_len(segs_by_stem)
         embs = [self.embed_mix(segs_by_stem, b, tlen) for b in range(BARS_PER_PHRASE)]
         v = np.mean(np.stack(embs, axis=0), axis=0)
         n = float(np.linalg.norm(v) + 1e-8)
@@ -555,22 +660,44 @@ class RenderEmbedTeacher:
                 log(f"[mix-compat] real bank {i+1}/{len(items)}")
         if not bank:
             return np.zeros((0, 128), np.float32)
-        return np.stack(bank, axis=0).astype(np.float32)
+        arr = np.stack(bank, axis=0).astype(np.float32)
+        # Center against bank mean so positive-orthant DC bias does not collapse cosines
+        self.bank_mean = arr.mean(axis=0, keepdims=True)
+        centered = arr - self.bank_mean
+        norms = np.linalg.norm(centered, axis=1, keepdims=True) + 1e-8
+        centered = (centered / norms).astype(np.float32)
+        # Calibrate [sim_lo, sim_hi] from LOO top-k similarities vs cross-track median
+        if centered.shape[0] >= 8:
+            sub = centered[: min(512, centered.shape[0])]
+            sims = sub @ centered.T
+            # mask self-matches along diagonal
+            for ri in range(sub.shape[0]):
+                sims[ri, ri] = -1.0
+            k = min(self.k, max(1, centered.shape[0] - 1))
+            top_k = np.sort(sims, axis=1)[:, -k:].mean(axis=1)
+            self.sim_lo = float(np.percentile(sims[sims > -0.99], 50))
+            self.sim_hi = float(max(self.sim_lo + 0.15, np.percentile(top_k, 85)))
+            log(f"[mix-compat] manifold calibration sim_lo={self.sim_lo:.3f} sim_hi={self.sim_hi:.3f}")
+        return centered
 
     def manifold_score(self, emb: np.ndarray, bank: np.ndarray) -> float:
-        """Closeness to real-mix manifold: mean cosine sim to k nearest real mixes, mapped to 0..1."""
+        """Closeness to centered real-mix manifold, calibrated to [0, 1]."""
         if bank.shape[0] == 0:
             return 0.5
-        e = emb.reshape(1, -1)
-        # cosine sim (bank assumed normalized)
+        e = emb.reshape(1, -1).astype(np.float32)
+        if self.bank_mean is not None and e.shape[1] == self.bank_mean.shape[1]:
+            e = e - self.bank_mean
         bn = bank / (np.linalg.norm(bank, axis=1, keepdims=True) + 1e-8)
         en = e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-8)
         sims = (bn @ en.T).reshape(-1)
-        k = min(self.k, len(sims))
-        top = np.sort(sims)[-k:]
-        # cosine in [-1,1] -> [0,1]
-        score = float(np.mean(top))
-        return float(max(0.0, min(1.0, 0.5 + 0.5 * score)))
+        # Ignore exact self-match when grading real items against real bank
+        non_self = sims[sims < 0.9998]
+        pool = non_self if non_self.size >= self.k else sims
+        k = min(self.k, len(pool))
+        top = np.sort(pool)[-k:]
+        raw = float(np.mean(top))
+        span = max(1e-4, self.sim_hi - self.sim_lo)
+        return float(max(0.0, min(1.0, (raw - self.sim_lo) / span)))
 
 
 
@@ -587,13 +714,34 @@ def build_dataset(args):
         raise SystemExit("not enough complete 4-stem phrases in manifest")
     log(f"[mix-compat] phrases={len(phrases)} kits={len(kits)} feature_dim={FEATURE_DIM}")
 
-    # precompute per-stem 64-step grids where available (from phrase fields)
+    # precompute per-stem 64-step grids (onset sidecar if given, else phrase fields)
+    sidecar_onsets = None
+    onsets_path = getattr(args, "onsets", "") or ""
+    if onsets_path and Path(onsets_path).is_file():
+        meta = json.loads(Path(onsets_path).read_text())
+        f32 = Path(onsets_path).parent / meta.get("feature_file", "mix_compat_onsets.f32")
+        shape = meta.get("shape") or [meta.get("count", 0), 4, meta.get("steps", 64)]
+        n_o, ns_o, st_o = int(shape[0]), int(shape[1]), int(shape[2])
+        raw_o = np.fromfile(f32, dtype=np.float32)[: n_o * ns_o * st_o].reshape(n_o, ns_o, st_o)
+        idx_o = {str(k): int(v) for k, v in (meta.get("index") or {}).items()}
+        stems_o = list(meta.get("stems") or STEMS)
+        sidecar_onsets = (raw_o, idx_o, stems_o)
+        log(f"[mix-compat] loaded onset sidecar ({len(idx_o)} phrases)")
+
     grids_cache = {}
     for item in phrases:
         pid = item["phrase"]["id"]
         g = {}
         for s in STEMS:
-            g[s] = onset_grid_64(item["phrase"], s)
+            grid = None
+            if sidecar_onsets is not None:
+                raw_o, idx_o, stems_o = sidecar_onsets
+                row = idx_o.get(pid)
+                if row is not None and s in stems_o:
+                    grid = np.asarray(raw_o[row, stems_o.index(s)], dtype=np.float32)
+            if grid is None:
+                grid = onset_grid_64(item["phrase"], s)
+            g[s] = grid
         grids_cache[pid] = g
 
     examples = []
@@ -619,6 +767,7 @@ def build_dataset(args):
             "rhythm": max(grade["rhythm_mean"], 0.85),
             "min_bar": max(grade["min"], 0.80),
             "per_bar": grade["per_bar"],
+            "rhythm_per_bar": grade["rhythm_per_bar"],
             "sources": [mix["drums"]["track_id"]],
             "phrases": {s: mix[s]["phrase"]["id"] for s in STEMS},
             "tracks": {s: mix[s]["track_id"] for s in STEMS},
@@ -655,6 +804,7 @@ def build_dataset(args):
             "rhythm": grade["rhythm_mean"],
             "min_bar": grade["min"],
             "per_bar": grade["per_bar"],
+            "rhythm_per_bar": grade["rhythm_per_bar"],
             "overlap": overlap,
             "sources": sorted(set(tracks)),
             "phrases": {s: mix[s]["phrase"]["id"] for s in STEMS},
@@ -672,12 +822,13 @@ def build_dataset(args):
     teacher_info = {"enabled": False}
     if use_teacher:
         kits_dir = Path(args.kits_dir)
+        use_mert = bool(getattr(args, "mert", False))
         teacher = RenderEmbedTeacher(
             kits_dir=kits_dir,
             phrases=phrases,
-            sr=24000,
+            sr=24000 if use_mert else 16000,
             device=getattr(args, "device", "cpu"),
-            use_mert=bool(getattr(args, "mert", False)),
+            use_mert=use_mert,
             k=int(getattr(args, "teacher_k", 15)),
         )
         # build real-mix manifold bank
@@ -707,6 +858,11 @@ def build_dataset(args):
                 ex["label"] = float(max(0.0, min(1.0, 0.55 * h + 0.45 * mscore)))
                 if ex["kind"] == "real":
                     ex["label"] = float(max(ex["label"], 0.90))
+                # Shift per-bar targets to preserve per-bar contrast while matching blended label
+                per = ex.get("per_bar") or [ex["label"]] * BARS_PER_PHRASE
+                per_mean = sum(float(v) for v in per) / max(1, len(per))
+                delta = ex["label"] - per_mean
+                ex["per_bar"] = [float(max(0.0, min(1.0, float(v) + delta))) for v in per]
                 graded += 1
             except Exception as e:
                 if graded < 5:
@@ -748,6 +904,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="frontend/public/data/kits/kit_manifest.json")
     ap.add_argument("--kits-dir", default="frontend/public/data/kits")
+    ap.add_argument("--onsets", default="", help="optional mix_compat_onsets.json sidecar")
     ap.add_argument("--stems", default="", help="source stems root for render+embed (offline)")
     ap.add_argument("--bars", default="", help="per-stem bar features dir (optional)")
     ap.add_argument("--out", default="/tmp/wubtrain/mix_compat_dataset")

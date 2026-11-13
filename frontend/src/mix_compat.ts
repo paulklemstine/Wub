@@ -36,6 +36,7 @@ export interface MixCompatPhrase {
   energy: number;
   chroma: number[] | null;
   bassRoot: number | null;
+  keyShift?: number;
   rmsDbByStem: Record<StemName, number>;
   /** Optional 64-step onset/energy grid per stem (future sidecar). */
   onset?: Partial<Record<StemName, number[]>>;
@@ -55,6 +56,24 @@ function clamp01(x: number): number { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
 function relu(x: number): number { return x > 0 ? x : 0; }
 
+function rotateChroma(c: number[] | null, shift: number | undefined): number[] | null {
+  if (!c || c.length !== 12) return null;
+  const s = Math.round(shift ?? 0);
+  if (s === 0) return c;
+  const out = new Array<number>(12);
+  for (let i = 0; i < 12; i++) {
+    out[i] = c[((i - s) % 12 + 12) % 12];
+  }
+  return out;
+}
+
+function shiftRoot(r: number | null, shift: number | undefined): number | null {
+  if (r === null) return null;
+  const s = Math.round(shift ?? 0);
+  if (s === 0) return r;
+  return ((r + s) % 12 + 12) % 12;
+}
+
 function cosine12(a: number[] | null, b: number[] | null): number {
   if (!a || !b || a.length !== 12 || b.length !== 12) return 0;
   let dot = 0, na = 0, nb = 0;
@@ -68,19 +87,64 @@ function rootPenalty(a: number | null, b: number | null): number {
   return ({ 0: 0, 5: 0.05, 7: 0.05, 3: 0.1, 4: 0.1, 2: 0.2, 1: 0.4, 6: 0.6 } as Record<number, number>)[iv] ?? 0.25;
 }
 
-function onsetCorr(a: number[] | undefined, b: number[] | undefined, bar: number): number | null {
+function rhythmPairFeatures(
+  a: number[] | undefined,
+  b: number[] | undefined,
+  bar: number,
+): [number, number, number, number, number, number] | null {
   if (!a || !b || a.length < 64 || b.length < 64) return null;
-  const s = bar * 16, e = s + 16;
+  const eps = 1e-6;
+  const s = bar * 16;
   let ma = 0, mb = 0;
-  for (let i = s; i < e; i++) { ma += a[i]; mb += b[i]; }
-  ma /= 16; mb /= 16;
-  let num = 0, da = 0, db = 0;
-  for (let i = s; i < e; i++) { const va = a[i] - ma, vb = b[i] - mb; num += va * vb; da += va * va; db += vb * vb; }
-  const den = Math.sqrt(da * db);
-  return den > 1e-6 ? num / den : 0;
+  for (let i = 0; i < 16; i++) {
+    ma += a[s + i];
+    mb += b[s + i];
+  }
+  ma /= 16;
+  mb /= 16;
+
+  let corrNum = 0, corrDa = 0, corrDb = 0;
+  let downNum = 0, downNa = 0, downNb = 0;
+  let offNum = 0, offNa = 0, offNb = 0;
+  let jointSum = 0;
+  let downSumA = 0, downSumB = 0, offSumA = 0, offSumB = 0;
+
+  for (let i = 0; i < 16; i++) {
+    const va = a[s + i];
+    const vb = b[s + i];
+    const da = va - ma;
+    const db = vb - mb;
+    corrNum += da * db;
+    corrDa += da * da;
+    corrDb += db * db;
+    jointSum += va * vb;
+    if (i % 4 === 0) {
+      downNum += va * vb;
+      downNa += va * va;
+      downNb += vb * vb;
+      downSumA += va;
+      downSumB += vb;
+    } else {
+      offNum += va * vb;
+      offNa += va * va;
+      offNb += vb * vb;
+      offSumA += va;
+      offSumB += vb;
+    }
+  }
+
+  const corr = corrNum / (Math.sqrt(corrDa) * Math.sqrt(corrDb) + eps);
+  const downAgree = downNum / (Math.sqrt(downNa) * Math.sqrt(downNb) + eps);
+  const offAgree = offNum / (Math.sqrt(offNa) * Math.sqrt(offNb) + eps);
+  const densityGap = Math.abs(ma - mb);
+  const jointPulse = jointSum / 16;
+  const syncA = offSumA / (downSumA + eps);
+  const syncB = offSumB / (downSumB + eps);
+  const syncGap = Math.abs(syncA - syncB);
+  return [corr, downAgree, offAgree, densityGap, jointPulse, syncGap];
 }
 
-/** Coarse per-bar feature vector (FEATURE_DIM=54), rhythm-first, from phrase signals. */
+/** Per-bar feature vector (FEATURE_DIM=54), rhythm-first (matches refresh_mix_compat_features.py). */
 export function buildBarFeatures(mix: Record<StemName, MixCompatPhrase>, bar: number): number[] {
   const pairs: Array<[StemName, StemName]> = [
     ["drums", "bass"], ["drums", "other"], ["bass", "other"],
@@ -89,26 +153,32 @@ export function buildBarFeatures(mix: Record<StemName, MixCompatPhrase>, bar: nu
   const rfeats: number[] = [];
   const corrs: number[] = [];
   for (const [a, b] of pairs) {
-    const c = onsetCorr(mix[a].onset?.[a], mix[b].onset?.[b], bar);
-    // Without per-bar onset grids fall back to a rhythm prior from stem roles/energy
-    // (drums-bass expected to lock; cross-stem density proxies) — neutral-ish.
-    const corr = c ?? (a === "drums" && b === "bass" ? 0.15 : 0.0);
-    const downAgree = c ?? 0.0;
-    const offAgree = 0.0;
-    const ea = mix[a].energy, eb = mix[b].energy;
-    const densityGap = Math.abs(ea - eb);
-    const jointPulse = Math.min(ea, eb);
-    const syncGap = densityGap * 0.5;
-    corrs.push(corr);
-    rfeats.push(corr, downAgree, offAgree, densityGap, jointPulse, syncGap);
+    const rp = rhythmPairFeatures(mix[a].onset?.[a], mix[b].onset?.[b], bar);
+    if (rp !== null) {
+      corrs.push(rp[0]);
+      rfeats.push(rp[0], rp[1], rp[2], rp[3], rp[4], rp[5]);
+    } else {
+      // Fallback when per-bar onset grids are unavailable.
+      const corr = a === "drums" && b === "bass" ? 0.15 : 0.0;
+      const ea = mix[a].energy, eb = mix[b].energy;
+      const densityGap = Math.abs(ea - eb);
+      const jointPulse = Math.min(ea, eb);
+      const syncGap = densityGap * 0.5;
+      corrs.push(corr);
+      rfeats.push(corr, 0.0, 0.0, densityGap, jointPulse, syncGap);
+    }
   }
   const meanCorr = corrs.reduce((s, x) => s + x, 0) / corrs.length;
   const minCorr = Math.min(...corrs);
   const varCorr = corrs.reduce((s, x) => s + (x - meanCorr) * (x - meanCorr), 0) / corrs.length;
   const stdCorr = Math.sqrt(varCorr);
 
-  const cb = mix.bass.chroma, co = mix.other.chroma, cv = mix.vocals.chroma;
-  const harm = [cosine12(cb, co), cosine12(cb, cv), cosine12(co, cv), rootPenalty(mix.bass.bassRoot, mix.other.bassRoot)];
+  const cb = rotateChroma(mix.bass.chroma, mix.bass.keyShift);
+  const co = rotateChroma(mix.other.chroma, mix.other.keyShift);
+  const cv = rotateChroma(mix.vocals.chroma, mix.vocals.keyShift);
+  const rb = shiftRoot(mix.bass.bassRoot, mix.bass.keyShift);
+  const ro = shiftRoot(mix.other.bassRoot, mix.other.keyShift);
+  const harm = [cosine12(cb, co), cosine12(cb, cv), cosine12(co, cv), rootPenalty(rb, ro)];
 
   const rms = STEMS.map((s) => mix[s].rmsDbByStem[s] ?? -24);
   const lowCrowd = Math.max(0, (rms[0] + 18) / 18) * Math.max(0, (rms[1] + 18) / 18);

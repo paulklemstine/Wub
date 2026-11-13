@@ -267,7 +267,11 @@ export function keyShift(sessionKey: string, phraseKey: string): number | null {
   const a = parseKey(sessionKey);
   const b = parseKey(phraseKey);
   if (!a || !b) return null;
-  let shift = ((b.root - a.root + 12) % 12);
+  // Align via relative major so relative major/minor (e.g. C major <-> A minor)
+  // yield 0 shift, and transpose phraseKey *to* sessionKey (session - phrase).
+  const aEff = a.minor ? (a.root + 3) % 12 : a.root;
+  const bEff = b.minor ? (b.root + 3) % 12 : b.root;
+  let shift = ((aEff - bEff + 12) % 12);
   if (shift > 6) shift -= 12;
   return shift;
 }
@@ -2423,7 +2427,7 @@ export class StemRemixPlayer {
       const stem = STEMS[i];
       const entry = entries[stem];
       if (!entry) return null;
-      const shift = keyShift(this.sessionKey, entry.kit.key) ?? 0;
+      const shift = stem === "drums" ? 0 : (entry.keyShift ?? 0);
       const state = ranker.stateFor(entry.phrase.id, shift, entry.rate);
       if (!state) return null;
       out.set(state.subarray(i * stemDim, (i + 1) * stemDim), i * stemDim);
@@ -2479,8 +2483,17 @@ export class StemRemixPlayer {
       // the joint ranker still sees plausible cross-song candidates.
       const style = entry.kit.style === this.cluster?.style ? 0.15 : 0;
       const energy = 0.35 - Math.abs(entry.energy - targetEnergy) * 0.5;
-      const sectionScore = entry.section === section ? 0.25 : 0;
+      const kindMatch = this.entryKind(entry).toUpperCase() === (this.targetKind || section).toUpperCase();
+      let sectionScore = kindMatch ? 0.32 : (entry.section === section ? 0.20 : 0);
+      if ((section === "BUILDUP" || this.targetKind === "RISE") && entry.energy < current.energy - 0.05) {
+        sectionScore -= 0.15;
+      } else if ((section === "BREAKDOWN" || this.targetKind === "BRIDGE") && entry.energy > current.energy + 0.10) {
+        sectionScore -= 0.15;
+      }
       const fallback = style + energy + sectionScore;
+      // Even when judge > 0, surface expanded-section & energy matches so
+      // SectionNavigator's learned progression shapes the shortlist.
+      const arcPrior = judge > 0 ? (0.35 * (sectionScore + Math.max(0, energy))) : 0;
       // The judge scores are nearly flat at the top (all ~0.97+ for drums),
       // so a deterministic sort would surface the same handful of tracks
       // every block.  Play-count novelty plus a block-seeded hash breaks
@@ -2506,7 +2519,7 @@ export class StemRemixPlayer {
         entry,
         full: legal,
         judge,
-        score: (judge > 0 ? judge : fallback) + novelty - tierCost + earBonus + signatureBonus + timbre,
+        score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus + signatureBonus + timbre,
       };
     });
     const full = scored.filter((item) => item.full);

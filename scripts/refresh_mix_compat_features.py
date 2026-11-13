@@ -24,8 +24,13 @@ from pathlib import Path
 
 import numpy as np
 
-STEMS = ("drums", "bass", "other", "vocals")
-BARS_PER_PHRASE = 4
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.build_mix_compat_dataset import (
+    BARS_PER_PHRASE,
+    STEMS,
+    heuristic_mix_score,
+    per_bar_feature_vector as _canonical_per_bar_feature_vector,
+)
 
 
 def log(msg: str) -> None:
@@ -238,6 +243,7 @@ def main():
     for i, ex in enumerate(examples):
         phr = ex.get("phrases") or {}
         phrases_by_stem = {}
+        kit_by_stem = {}
         grids = {}
         ok = True
         for s in STEMS:
@@ -246,6 +252,7 @@ def main():
                 ok = False
                 break
             phrases_by_stem[s] = by_phrase[pid]["phrase"]
+            kit_by_stem[s] = by_phrase[pid]["kit"]
             g = grid_for(onset_data, onset_index, onset_stems, pid, s)
             grids[s] = g
             if g is None:
@@ -253,10 +260,23 @@ def main():
         if not ok:
             continue
         per_bar = np.stack([
-            per_bar_feature_vector(b, phrases_by_stem, grids)
+            _canonical_per_bar_feature_vector(b, phrases_by_stem, kit_by_stem, grids)
             for b in range(BARS_PER_PHRASE)
         ])
+        grade = heuristic_mix_score(per_bar)
         ex["features"] = per_bar.astype(np.float32).tolist()
+        ex["score"] = grade["mean"] if ex.get("kind") != "real" else max(grade["mean"], 0.85)
+        ex["rhythm"] = grade["rhythm_mean"] if ex.get("kind") != "real" else max(grade["rhythm_mean"], 0.85)
+        ex["min_bar"] = grade["min"] if ex.get("kind") != "real" else max(grade["min"], 0.80)
+        ex["rhythm_per_bar"] = grade["rhythm_per_bar"]
+        base_pb = grade["per_bar"]
+        if "label" in ex:
+            target_mean = float(ex["label"])
+            pb_mean = sum(base_pb) / max(1, len(base_pb))
+            delta = target_mean - pb_mean
+            ex["per_bar"] = [float(max(0.0, min(1.0, v + delta))) for v in base_pb]
+        else:
+            ex["per_bar"] = base_pb
         refreshed += 1
         if (i + 1) % 10000 == 0:
             log(f"[refresh] {i+1}/{len(examples)} refreshed={refreshed}")

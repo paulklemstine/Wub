@@ -40,6 +40,38 @@ class MixCompatNet(nn.Module):
         return torch.sigmoid(self.net(x))
 
 
+def build_training_arrays(examples: list[dict], bars: int, feat_dim: int):
+    """Build per-bar (X, Y, groups) anchoring per-bar contrast to phrase teacher label."""
+    X, Yc, Yr = [], [], []
+    groups = []  # example index per bar sample for min/mean eval
+    for ei, ex in enumerate(examples):
+        f = np.asarray(ex["features"], dtype=np.float32)
+        if f.shape != (bars, feat_dim):
+            continue
+        has_label = "label" in ex
+        label = float(ex.get("label", 0.0))
+        per = ex.get("per_bar")
+        if isinstance(per, list) and len(per) == bars:
+            vals = [float(v) for v in per]
+            if has_label:
+                delta = label - (sum(vals) / bars)
+                vals = [max(0.0, min(1.0, v + delta)) for v in vals]
+        else:
+            vals = [max(0.0, min(1.0, label))] * bars
+        per_r = ex.get("rhythm_per_bar")
+        if isinstance(per_r, list) and len(per_r) == bars:
+            r_vals = [max(0.0, min(1.0, float(v))) for v in per_r]
+        else:
+            r_base = float(ex.get("rhythm", label))
+            r_vals = [max(0.0, min(1.0, r_base))] * bars
+        for b in range(bars):
+            X.append(f[b])
+            Yc.append(vals[b])
+            Yr.append(r_vals[b])
+            groups.append(ei)
+    return np.stack(X), np.stack([Yc, Yr], axis=1).astype(np.float32), np.asarray(groups)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True)
@@ -63,23 +95,7 @@ def main():
     feat_dim = int(data.get("summary", {}).get("feature_dim") or len(examples[0]["features"][0]))
     bars = int(data.get("summary", {}).get("bars_per_phrase") or 4)
 
-    # Per-bar samples: (N*bars, feat_dim), targets (compat, rhythm)
-    X, Yc, Yr = [], [], []
-    groups = []  # example index per bar sample for min/mean eval
-    for ei, ex in enumerate(examples):
-        f = np.asarray(ex["features"], dtype=np.float32)
-        if f.shape != (bars, feat_dim):
-            continue
-        per = ex.get("per_bar") or [ex.get("label", 0.0)] * bars
-        per_r = ex.get("rhythm_per_bar") or [ex.get("rhythm", ex.get("label", 0.0))] * bars
-        for b in range(bars):
-            X.append(f[b])
-            Yc.append(float(per[b]))
-            Yr.append(float(per_r[b]))
-            groups.append(ei)
-    X = np.stack(X)
-    Y = np.stack([Yc, Yr], axis=1).astype(np.float32)
-    groups = np.asarray(groups)
+    X, Y, groups = build_training_arrays(examples, bars, feat_dim)
     n_ex = len(examples)
     print(f"[mix-compat] samples={len(X)} bars={bars} feat_dim={feat_dim} examples~{n_ex}")
 
