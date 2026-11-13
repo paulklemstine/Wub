@@ -71,6 +71,9 @@ const RECENT_BLOCKS = 6;
 // not depend on extreme stretches.
 const RATE_MIN = 0.94;
 const RATE_MAX = 1.06;
+const USER_RATE_MIN = 0.55;
+const USER_RATE_MAX = 1.75;
+const MIN_USER_POOL_PER_STEM = 24;
 const TEMPO_COST_WEIGHT = 2.0;
 const KEY_COST_WEIGHT = 0.12;
 const CACHE_LIMIT = 24;
@@ -197,6 +200,8 @@ interface CurrentStem {
   /** Output time of each phrase's downbeat, relative to `startedAt`. */
   offsets: number[];
   runEndAt: number;
+  preDur?: number;
+  mainDurations?: number[];
 }
 
 /** A voice that has been scheduled but whose downbeat may still be ahead. */
@@ -209,6 +214,9 @@ interface ScheduledRun {
   runEndAt: number;
   blockIndex: number;
   manual: boolean;
+  preDur?: number;
+  mainDurations?: number[];
+  crossfadeSec?: number;
 }
 
 /** The partial manual run that covers a drag until the next block boundary. */
@@ -621,6 +629,9 @@ export class StemRemixPlayer {
   private sessionPrepped = false;
   private started = false;
   private preparing = false;
+  private preparingBlock: { startAt: number; bars: number } | null = null;
+  private userBpmOverride: number | null = null;
+  private lastTempoChangeAt = 0;
   private anchorPrepared: Array<{ stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun }> = [];
   private lastResult: StemBlockResult | null = null;
 
@@ -1360,7 +1371,13 @@ export class StemRemixPlayer {
       if (this.styleFilter !== null && !this.styleFilter.has(c.style)) return false;
       return true;
     });
-    const pool = candidates.length > 0 ? candidates : this.clusters;
+    const basePool = candidates.length > 0 ? candidates : this.clusters;
+    // If the user pinned a target BPM before session start, prefer clusters
+    // closest to that tempo so the anchor needs minimal time-stretching.
+    const overrideBpm = this.userBpmOverride;
+    const pool = overrideBpm !== null
+      ? [...basePool].sort((a, b) => Math.abs(a.bpm - overrideBpm) - Math.abs(b.bpm - overrideBpm)).slice(0, Math.min(4, basePool.length))
+      : basePool;
     // Weight by phrase count so dense clusters are more likely, but keep the
     // smaller wave/house sessions in rotation.
     const total = pool.reduce((sum, c) => sum + Math.max(1, c.pool_phrases), 0);
@@ -1390,6 +1407,7 @@ export class StemRemixPlayer {
     this.nextCluster = null;
     this.started = false;
     this.preparing = false;
+    this.preparingBlock = null;
     this.lastResult = null;
     this.anchorPrepared = [];
     this.lastBlockRuns = {};
@@ -1487,73 +1505,232 @@ export class StemRemixPlayer {
     return chosen;
   }
 
-  private applyCluster(cluster: KitCluster): void {
-    this.cluster = cluster;
-    this.sessionKey = cluster.key;
-    this.sessionBpm = cluster.bpm;
-    this.blockSec = 960 / cluster.bpm;
-    this.barSec = this.blockSec / 4;
+  private effectiveEntryRate(entry: StemPoolEntry): number {
+    const duration = Number(entry.phrase.duration_sec);
+    const raw = duration > 0 && this.blockSec > 0 ? duration / this.blockSec : entry.rate;
+    const minRate = this.userBpmOverride !== null ? USER_RATE_MIN : RATE_MIN;
+    const maxRate = this.userBpmOverride !== null ? USER_RATE_MAX : RATE_MAX;
+    return Math.max(minRate, Math.min(maxRate, raw));
+  }
+
+  private syncEntryTempo(entry: StemPoolEntry): void {
+    const rate = this.effectiveEntryRate(entry);
+    entry.rate = rate;
+    entry.tempoCost = Math.abs(rate - 1);
+  }
+
+  private rebuildPool(): void {
     this.pools = { drums: [], bass: [], other: [], vocals: [] };
     this.entryById.clear();
-    // The pool is the whole shipped bank, not just the session cluster's
-    // kits: the cluster only fixes the session key/tempo and the anchor song.
-    // Every phrase whose stretch rate falls in [RATE_MIN, RATE_MAX] and whose
-    // key can be transposed within MAX_SHIFT is eligible, so all 2,565
-    // phrases are reachable; tiered scoring prefers near matches (see
-    // jointOptions / selectMorph).  A genre filter narrows the bank to the
-    // selected styles so selections are audible.
-    for (const kit of this.kitById.values()) {
-      if (this.failedKits.has(kit.track_id)) continue;
-      if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) continue;
-      if (this.genreFilter !== null && !(kit.genre && this.genreFilter.has(kit.genre))) continue;
-      for (const phrase of kit.phrases) {
-        const duration = Number(phrase.duration_sec);
-        if (!(duration > 0)) continue;
-        const rate = duration / this.blockSec;
-        if (rate < RATE_MIN || rate > RATE_MAX) continue;
-        const tempoCost = Math.abs(rate - 1);
-        for (const stem of STEMS) {
-          const asset = phrase.stems?.[stem];
-          if (!asset || !asset.file) continue;
-          let shift = 0;
-          if (stem !== "drums") {
-            const value = keyShift(this.sessionKey, kit.key);
-            if (value === null || Math.abs(value) > MAX_SHIFT[stem]) continue;
-            shift = value;
+    const rateTiers: Array<[number, number]> = this.userBpmOverride !== null
+      ? [[RATE_MIN, RATE_MAX], [0.85, 1.18], [0.70, 1.40], [USER_RATE_MIN, USER_RATE_MAX]]
+      : [[RATE_MIN, RATE_MAX]];
+    const seen = new Set<string>();
+    for (let tierIdx = 0; tierIdx < rateTiers.length; tierIdx++) {
+      const [minR, maxR] = rateTiers[tierIdx];
+      const needMore = tierIdx === 0
+        ? STEMS
+        : STEMS.filter((stem) => this.pools[stem].length < MIN_USER_POOL_PER_STEM);
+      if (needMore.length === 0) break;
+      const needSet = new Set(needMore);
+      for (const kit of this.kitById.values()) {
+        if (this.failedKits.has(kit.track_id)) continue;
+        if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) continue;
+        if (this.genreFilter !== null && !(kit.genre && this.genreFilter.has(kit.genre))) continue;
+        for (const phrase of kit.phrases) {
+          const duration = Number(phrase.duration_sec);
+          if (!(duration > 0)) continue;
+          const rate = duration / this.blockSec;
+          if (rate < minR || rate > maxR) continue;
+          const tempoCost = Math.abs(rate - 1);
+          for (const stem of STEMS) {
+            if (!needSet.has(stem)) continue;
+            const entryKey = `${phrase.id}:${stem}`;
+            if (seen.has(entryKey)) continue;
+            const asset = phrase.stems?.[stem];
+            if (!asset || !asset.file) continue;
+            let shift = 0;
+            if (stem !== "drums") {
+              const value = keyShift(this.sessionKey, kit.key);
+              if (value === null || Math.abs(value) > MAX_SHIFT[stem]) continue;
+              shift = value;
+            }
+            const rmsDb = Number(asset.rms_db) || -20;
+            if (rmsDb < MIN_RMS_DB[stem]) continue;
+            const xy = phrase.stem_xy?.[stem];
+            // Keep the bass root in session-key space when transposed, so the
+            // harmony scoring can reason about shifted phrases instead of
+            // treating every shifted root as unknown.
+            const rawRoot = phrase.bass_root ?? null;
+            const bassRoot = rawRoot === null
+              ? null
+              : (((rawRoot + shift) % 12) + 12) % 12;
+            const entry: StemPoolEntry = {
+              kit,
+              phrase,
+              stem,
+              keyShift: shift,
+              rate,
+              tempoCost,
+              keyCost: Math.abs(shift),
+              x: xy?.x ?? phrase.x ?? 0.5,
+              y: xy?.y ?? phrase.y ?? 0.5,
+              energy: Number(phrase.energy) || 0.5,
+              section: String(phrase.section ?? "GROOVE_A").toUpperCase(),
+              chroma: rotateChroma(phrase.chroma, shift),
+              bassRoot,
+              rmsDb,
+              gain: stemGain(stem, rmsDb),
+              earQ: this.earQOf(stem, phrase.id),
+            };
+            this.pools[stem].push(entry);
+            this.entryById.set(entryKey, entry);
+            seen.add(entryKey);
           }
-          const rmsDb = Number(asset.rms_db) || -20;
-          if (rmsDb < MIN_RMS_DB[stem]) continue;
-          const xy = phrase.stem_xy?.[stem];
-          // Keep the bass root in session-key space when transposed, so the
-          // harmony scoring can reason about shifted phrases instead of
-          // treating every shifted root as unknown.
-          const rawRoot = phrase.bass_root ?? null;
-          const bassRoot = rawRoot === null
-            ? null
-            : (((rawRoot + shift) % 12) + 12) % 12;
-          const entry: StemPoolEntry = {
-            kit,
-            phrase,
-            stem,
-            keyShift: shift,
-            rate,
-            tempoCost,
-            keyCost: Math.abs(shift),
-            x: xy?.x ?? phrase.x ?? 0.5,
-            y: xy?.y ?? phrase.y ?? 0.5,
-            energy: Number(phrase.energy) || 0.5,
-            section: String(phrase.section ?? "GROOVE_A").toUpperCase(),
-            chroma: rotateChroma(phrase.chroma, shift),
-            bassRoot,
-            rmsDb,
-            gain: stemGain(stem, rmsDb),
-            earQ: this.earQOf(stem, phrase.id),
-          };
-          this.pools[stem].push(entry);
-          this.entryById.set(`${phrase.id}:${stem}`, entry);
         }
       }
     }
+  }
+
+  /**
+   * Adjust playback tempo to `bpm` cleanly: retimes playing and pre-scheduled
+   * StretchVoices, shifts the block grid, and rebuilds the candidate pool for
+   * the new tempo. When `lockUser` is true, future cluster rotations preserve it.
+   */
+  setBpm(bpm: number, lockUser: boolean = true): boolean {
+    if (!Number.isFinite(bpm)) return false;
+    const target = Math.max(60, Math.min(200, bpm));
+    if (lockUser) {
+      this.userBpmOverride = target;
+    }
+    if (this.cluster === null) {
+      this.sessionBpm = target;
+      this.blockSec = 960 / target;
+      this.barSec = this.blockSec / 4;
+      this.currentBlockSec = this.currentBlockBars * this.barSec;
+      return true;
+    }
+    const oldBpm = this.sessionBpm > 0 ? this.sessionBpm : target;
+    if (Math.abs(target - oldBpm) < 0.01) {
+      if (lockUser) this.rebuildPool();
+      return lockUser;
+    }
+    this.sessionBpm = target;
+    this.blockSec = 960 / target;
+    this.barSec = this.blockSec / 4;
+    this.currentBlockSec = this.currentBlockBars * this.barSec;
+    this.rebuildPool();
+
+    for (const prepared of this.anchorPrepared) {
+      this.syncEntryTempo(prepared.entry);
+    }
+    for (const stem of STEMS) {
+      const cur = this.current[stem];
+      if (cur) {
+        this.syncEntryTempo(cur.entry);
+        for (const r of cur.run) this.syncEntryTempo(r);
+      }
+      const last = this.lastBlockEntries[stem];
+      if (last) this.syncEntryTempo(last);
+      const prev = this.previousEntries[stem];
+      if (prev) this.syncEntryTempo(prev);
+      for (const r of this.lastBlockRuns[stem] ?? []) this.syncEntryTempo(r);
+      const manual = this.manualPins[stem];
+      if (manual) {
+        this.syncEntryTempo(manual.entry);
+        for (const r of manual.run) this.syncEntryTempo(r);
+      }
+    }
+
+    if (this.started) {
+      const now = this.engine.now();
+      const changeAt = Math.max(now + 0.025, this.lastTempoChangeAt + 0.001);
+      this.lastTempoChangeAt = changeAt;
+      const ratio = oldBpm / target;
+      const retime = (t: number): number => (t <= changeAt ? t : changeAt + (t - changeAt) * ratio);
+
+      for (const block of this.blockGrid) {
+        block.startAt = retime(block.startAt);
+        block.endAt = retime(block.endAt);
+      }
+      if (this.preparingBlock) {
+        this.preparingBlock.startAt = retime(this.preparingBlock.startAt);
+      }
+      if (this.nextBlockAt > 0) {
+        this.nextBlockAt = retime(this.nextBlockAt);
+      }
+
+      for (const stem of STEMS) {
+        const cur = this.current[stem];
+        if (cur) {
+          const newRate = this.effectiveEntryRate(cur.entry);
+          const newEndAt = retime(cur.runEndAt);
+          cur.runEndAt = newEndAt;
+          cur.offsets = cur.offsets.map((off) => {
+            const absT = cur.startedAt + off;
+            return absT <= changeAt ? off : retime(absT) - cur.startedAt;
+          });
+          cur.voice.updateTempo(changeAt, newRate, newEndAt, STEM_FADE_OUT[stem]);
+        }
+
+        const scheduledList = this.scheduledRuns[stem];
+        if (scheduledList && scheduledList.length > 0) {
+          for (const scheduled of scheduledList) {
+            if (cur && scheduled.voice === cur.voice) {
+              scheduled.runEndAt = cur.runEndAt;
+              scheduled.offsets = cur.offsets;
+              continue;
+            }
+            if (scheduled.startedAt > changeAt) {
+              const first = scheduled.run[0];
+              if (!first) continue;
+              this.syncEntryTempo(first);
+              const preDur = scheduled.preDur ?? 0;
+              const newRate = this.effectiveEntryRate(first);
+              const newDownbeat = retime(scheduled.startedAt);
+              const newStartAt = scheduled.manual ? newDownbeat : newDownbeat - preDur / newRate;
+              const newEndAt = retime(scheduled.runEndAt);
+              scheduled.startedAt = newDownbeat;
+              scheduled.runEndAt = newEndAt;
+              if (scheduled.mainDurations) {
+                const updatedOffsets: number[] = [];
+                let off = 0;
+                for (const dur of scheduled.mainDurations) {
+                  updatedOffsets.push(off);
+                  off += dur / newRate;
+                }
+                scheduled.offsets = updatedOffsets;
+              }
+              scheduled.voice.rescheduleWindow(newStartAt, newRate, newEndAt, STEM_FADE_OUT[stem]);
+              if (cur && cur.voice !== scheduled.voice && scheduled.crossfadeSec !== undefined) {
+                cur.voice.fadeOut(newStartAt, scheduled.crossfadeSec);
+              }
+            }
+          }
+        }
+
+        const manual = this.manualPins[stem];
+        if (manual) {
+          manual.runEndAt = retime(manual.runEndAt);
+        }
+      }
+    }
+
+    if (this.lastResult) {
+      this.lastResult.slotSec = this.blockSec;
+      this.lastResult.blockDurationSec = this.currentBlockSec;
+    }
+    return true;
+  }
+
+  private applyCluster(cluster: KitCluster): void {
+    this.cluster = cluster;
+    this.sessionKey = cluster.key;
+    const targetBpm = this.userBpmOverride ?? cluster.bpm;
+    this.sessionBpm = targetBpm;
+    this.blockSec = 960 / targetBpm;
+    this.barSec = this.blockSec / 4;
+    this.rebuildPool();
     // Play history is session-scoped, not set-scoped: it survives cluster
     // rotation so the full bank keeps rotating across sets instead of
     // resetting to the same near matches every 104 bars.  startSession()
@@ -1975,8 +2152,10 @@ export class StemRemixPlayer {
       // Fire-and-forget; loadAudio failures warm-nothing (run fails later).
       void this.prefetchAhead(tasks);
       this.preparing = true;
+      this.preparingBlock = { startAt: when, bars: result.blockBars };
       void this.finishBlock(tasks, when).finally(() => {
         this.preparing = false;
+        this.preparingBlock = null;
       });
       return result;
     }
@@ -3393,6 +3572,7 @@ export class StemRemixPlayer {
       return { task, audio };
     }));
     for (const { task, audio } of audios) {
+      const targetAt = this.preparingBlock?.startAt ?? at;
       const resume = resumes?.get(task.stem);
       if (!audio) {
         const current = this.current[task.stem];
@@ -3400,21 +3580,22 @@ export class StemRemixPlayer {
         if (fallbackRun) {
           const fallback = await this.loadRunAudio(fallbackRun);
           if (fallback) {
-            await this.scheduleRun(task.stem, fallbackRun, fallback, at, this.currentBlockBars, false, resume, task.transition);
+            await this.scheduleRun(task.stem, fallbackRun, fallback, targetAt, this.currentBlockBars, false, resume, task.transition);
           }
         }
       } else {
-        await this.scheduleRun(task.stem, task.run, audio, at, this.currentBlockBars, false, resume, task.transition);
+        await this.scheduleRun(task.stem, task.run, audio, targetAt, this.currentBlockBars, false, resume, task.transition);
       }
       await yieldToMain();
     }
     // Scheduling diagnostics: a slow fetch/decode that lands near the bar
     // start explains 1 s dropout reports (schedule() clamps late starts).
-    const latenessMs = (this.engine.now() - at) * 1000;
+    const resolvedAt = this.preparingBlock?.startAt ?? at;
+    const latenessMs = (this.engine.now() - resolvedAt) * 1000;
     if (maxLoadMs > 600 || latenessMs > -1200) {
       console.info(
         `[StemRemix] block load max=${maxLoadMs.toFixed(0)}ms ` +
-        `call=${(performance.now() - callMs).toFixed(0)}ms lateness=${latenessMs.toFixed(0)}ms @ ${at.toFixed(2)}s`,
+        `call=${(performance.now() - callMs).toFixed(0)}ms lateness=${latenessMs.toFixed(0)}ms @ ${resolvedAt.toFixed(2)}s`,
       );
     }
   }
@@ -3662,7 +3843,7 @@ export class StemRemixPlayer {
       const voice = await this.getVoice(stem, previous?.voice);
       await voice.loadSamples(audio.samples);
       const preDur = audio.preDur;
-      const rate = Math.max(RATE_MIN, Math.min(RATE_MAX, first.rate));
+      const rate = this.effectiveEntryRate(first);
       // Normal scheduling: the pre-roll starts preDur/rate before the
       // downbeat.  A watchdog resume instead re-enters the run at the input
       // position the block clock has reached, so the block continues where it
@@ -3749,6 +3930,9 @@ export class StemRemixPlayer {
         runEndAt,
         blockIndex: this.blockIndex,
         manual,
+        preDur,
+        mainDurations: [...audio.mainDurations],
+        crossfadeSec,
       });
       this.scheduledRuns[stem] = scheduled;
       console.info(
@@ -3872,19 +4056,20 @@ export class StemRemixPlayer {
     try {
       const previous = this.current[stem];
       const voice = await this.getVoice(stem, previous?.voice);
-      const rate = Math.max(RATE_MIN, Math.min(RATE_MAX, runEntry.rate));
+      const rate = this.effectiveEntryRate(runEntry);
       await voice.loadSamples(audio.samples);
       const preDur = audio.preDur;
       const crossfadeSec = Math.max(0.02, STEM_FADE_IN[stem], preDur / rate);
       let startAt = at;
       let inputBars = partialBar;
       const now = this.engine.now();
+      const liveHandoffAt = this.nextBlockAt > 0 ? this.nextBlockAt : handoffAt;
       if (now > at - 0.05) {
         const lateBars = Math.min(6, Math.ceil((now - at) / this.barSec + 0.1));
         startAt += Math.max(1, lateBars) * this.barSec;
         inputBars += Math.max(1, lateBars);
       }
-      if (startAt >= handoffAt - 0.05) {
+      if (startAt >= liveHandoffAt - 0.05) {
         // The load arrived after the partial window; hand straight over to the
         // block scheduler at the boundary instead of scheduling a dead voice.
         delete this.manualPins[stem];
@@ -3899,7 +4084,7 @@ export class StemRemixPlayer {
         preDur + inputBars * (firstDur / 4),
         preDur + sourceSec - 0.05,
       );
-      const endAt = handoffAt;
+      const endAt = liveHandoffAt;
       voice.schedule({
         when: startAt,
         inputSec: Math.max(preDur, inputSec),
@@ -3945,6 +4130,9 @@ export class StemRemixPlayer {
         runEndAt: endAt,
         blockIndex: this.blockIndex,
         manual: true,
+        preDur,
+        mainDurations: [...audio.mainDurations],
+        crossfadeSec,
       });
       this.scheduledRuns[stem] = kept;
       this.manualPins[stem] = {
@@ -4032,6 +4220,8 @@ export class StemRemixPlayer {
             run: active.run,
             offsets: active.offsets,
             runEndAt: active.runEndAt,
+            preDur: active.preDur,
+            mainDurations: active.mainDurations,
           };
         } else {
           current.entry = entry;

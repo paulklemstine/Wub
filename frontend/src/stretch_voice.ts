@@ -84,6 +84,13 @@ export class StretchVoice {
   private disposed = false;
   private scheduled = false;
   private targetGain = 1;
+  private scheduledStartAt = 0;
+  private scheduledFadeIn = 0.003;
+  private scheduledInputSec = 0;
+  private scheduledSemitones = 0;
+  private scheduledFormant = false;
+  private scheduledHandoffGain: number | null = null;
+  private scheduledHandoffSec = 0.20;
 
   private constructor(
     node: StretchNode,
@@ -212,15 +219,90 @@ export class StretchVoice {
         gain.linearRampToValueAtTime(target, when + fadeIn + settleSec);
       }
     }
+    this.scheduledStartAt = when;
+    this.scheduledFadeIn = fadeIn;
+    this.scheduledInputSec = Math.max(0, options.inputSec ?? 0);
+    this.scheduledSemitones = options.semitones ?? 0;
+    this.scheduledFormant = options.formantCompensation ?? false;
+    this.scheduledHandoffGain = handoff;
+    this.scheduledHandoffSec = settleSec;
     this.node.schedule({
       outputTime: when,
       active: true,
-      input: Math.max(0, options.inputSec ?? 0),
+      input: this.scheduledInputSec,
       rate: options.rate ?? 1,
-      semitones: options.semitones ?? 0,
-      formantCompensation: options.formantCompensation ?? false,
+      semitones: this.scheduledSemitones,
+      formantCompensation: this.scheduledFormant,
     });
     this.scheduled = true;
+  }
+
+  /**
+   * Adjust playback rate smoothly on an active voice without seeking or clicking,
+   * optionally re-anchoring its scheduled end fade-out.
+   */
+  updateTempo(changeAt: number, newRate: number, newEndAt?: number, fadeOutSec: number = 0.05): void {
+    if (this.disposed || !this.scheduled) return;
+    const ctx = this.gain.context;
+    const when = Math.max(changeAt, ctx.currentTime + 0.015, this.scheduledStartAt + 0.002);
+    const clampedRate = Math.max(0.25, Math.min(4.0, newRate));
+    // Omitting `input` tells Signalsmith Stretch to preserve the continuous
+    // input sample position seamlessly across the tempo ramp.
+    this.node.schedule({
+      outputTime: when,
+      rate: clampedRate,
+    });
+    if (typeof newEndAt === "number" && Number.isFinite(newEndAt)) {
+      const minCancelAt = Math.max(when, this.scheduledStartAt + this.scheduledFadeIn + 0.005);
+      try {
+        this.gain.gain.cancelScheduledValues(minCancelAt);
+        this.filter.frequency.cancelScheduledValues(minCancelAt);
+      } catch {
+        // Context closing.
+      }
+      this.fadeOut(Math.max(minCancelAt + 0.01, newEndAt), fadeOutSec);
+    }
+  }
+
+  /**
+   * Retime a future pre-scheduled voice whose downbeat has not started yet.
+   * Clears its pending future activation cleanly so both faster and slower
+   * shifts land at the exact new time.
+   */
+  rescheduleWindow(newStartAt: number, newRate: number, newEndAt: number, fadeOutSec: number = 0.05): void {
+    if (this.disposed || !this.scheduled) return;
+    const ctx = this.gain.context;
+    const safeResetAt = Math.max(ctx.currentTime + 0.002, Math.min(this.scheduledStartAt, newStartAt) - 0.001);
+    if (safeResetAt >= this.scheduledStartAt - 0.005) {
+      this.updateTempo(newStartAt, newRate, newEndAt, fadeOutSec);
+      return;
+    }
+    this.node.schedule({
+      outputTime: safeResetAt,
+      active: false,
+      input: 0,
+    });
+    try {
+      this.gain.gain.cancelScheduledValues(safeResetAt);
+      this.gain.gain.setValueAtTime(0.0001, safeResetAt);
+      this.filter.frequency.cancelScheduledValues(safeResetAt);
+      this.filter.frequency.setValueAtTime(20000, safeResetAt);
+    } catch {
+      // Context closing.
+    }
+    const clampedRate = Math.max(0.25, Math.min(4.0, newRate));
+    this.schedule({
+      when: newStartAt,
+      inputSec: this.scheduledInputSec,
+      rate: clampedRate,
+      semitones: this.scheduledSemitones,
+      formantCompensation: this.scheduledFormant,
+      fadeInSec: this.scheduledFadeIn,
+      gain: this.targetGain,
+      handoffGain: this.scheduledHandoffGain ?? undefined,
+      handoffSec: this.scheduledHandoffSec,
+    });
+    this.fadeOut(Math.max(newStartAt + this.scheduledFadeIn + 0.01, newEndAt), fadeOutSec);
   }
 
   /** EQ-OUT tail: sweep this (outgoing) voice's low-pass to `floorHz` across
@@ -287,6 +369,7 @@ export class StretchVoice {
     const ctx = this.gain.context;
     this.scheduled = false;
     this.targetGain = 0;
+    this.scheduledStartAt = 0;
     const gain = this.gain.gain;
     try {
       gain.cancelScheduledValues(0);

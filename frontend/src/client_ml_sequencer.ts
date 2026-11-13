@@ -2562,6 +2562,7 @@ export class ClientGrooveboxConductor {
   private kitLoadStarted: boolean = false;
   private kitAudioActive: boolean = false;
   private kitFailureLogged: boolean = false;
+  private userBpmOverride: number | null = null;
   // Genre (style) filter: null = all styles.  genreStyles lists the styles
   // present in the bank (from the manifest clusters), surfaced to the UI
   // through onGenreStyles.
@@ -2706,6 +2707,9 @@ export class ClientGrooveboxConductor {
     if (this.kitPlayer !== null || this.kitLoadStarted || !this.engine.ready) return;
     this.kitLoadStarted = true;
     const player = new KitPlayer(this.engine);
+    if (this.userBpmOverride !== null) {
+      player.setBpm(this.userBpmOverride, true);
+    }
     this.kitPlayer = player;
     void (async () => {
       try {
@@ -2847,9 +2851,12 @@ export class ClientGrooveboxConductor {
     const player = this.kitPlayer;
     const kit = player?.currentKit;
     if (!kit) return;
-    // Use the tempo fitted to the actual phrase cut lengths, not the manifest
-    // metadata BPM, so the 4-bar grid matches the audio.
-    const sessionBpm = player?.fitBpm ?? kit.bpm;
+    if (this.userBpmOverride !== null) {
+      player.setBpm(this.userBpmOverride, true);
+    }
+    // Use the user's requested tempo if pinned, else the tempo fitted to the
+    // actual phrase cut lengths so the 4-bar grid matches the audio.
+    const sessionBpm = this.userBpmOverride ?? player?.fitBpm ?? kit.bpm;
     this.currentBpm = Math.max(60, Math.min(200, sessionBpm));
     this.engine.setTargetBpm(this.currentBpm);
     const camelot = this.camelotCodeForKey(kit.key);
@@ -3929,7 +3936,7 @@ export class ClientGrooveboxConductor {
     this.jointHistory = [];
     this.lastComposedSection = "INTRO";
     this.recordTrackPlayed(trackId);
-    if (typeof model.bpm === "number" && model.bpm >= 85 && model.bpm <= 175) {
+    if (this.userBpmOverride === null && typeof model.bpm === "number" && model.bpm >= 85 && model.bpm <= 175) {
       const bpmDelta = Math.max(-3, Math.min(3, Math.round(model.bpm - this.currentBpm)));
       this.currentBpm = Math.max(85, Math.min(175, this.currentBpm + bpmDelta));
     }
@@ -4357,7 +4364,7 @@ export class ClientGrooveboxConductor {
     this.jointHistory = [];
     this.lastComposedSection = "INTRO";
       // Gently glide tempo toward new track's natural groove (max +/- 3 BPM step so rhythm never jerks)
-      if (pick.meta.source_bpm >= 85 && pick.meta.source_bpm <= 170) {
+      if (this.userBpmOverride === null && pick.meta.source_bpm >= 85 && pick.meta.source_bpm <= 170) {
         const bpmDelta = Math.max(-3, Math.min(3, Math.round(pick.meta.source_bpm - this.currentBpm)));
         this.currentBpm = Math.max(85, Math.min(170, this.currentBpm + bpmDelta));
       }
@@ -5273,7 +5280,43 @@ export class ClientGrooveboxConductor {
   }
 
   public setBpm(bpm: number): void {
-    this.currentBpm = Math.max(60, Math.min(200, bpm));
+    if (!Number.isFinite(bpm)) return;
+    const clamped = Math.max(60, Math.min(200, bpm));
+    const prevBpm = this.currentBpm > 0 ? this.currentBpm : clamped;
+    this.userBpmOverride = clamped;
+    this.currentBpm = clamped;
+    this.engine.setTargetBpm(clamped);
+    if (this.playbackMode === "kit" && this.kitPlayer) {
+      const updated = this.kitPlayer.setBpm(clamped, true);
+      if (updated) {
+        this.syncKitClockAfterTempoChange(clamped, prevBpm);
+      }
+    }
+  }
+
+  private syncKitClockAfterTempoChange(newBpm: number, prevBpm: number): void {
+    const player = this.kitPlayer;
+    if (!player) return;
+    const now = this.engine.now();
+    const changeAt = now + 0.025;
+    const ratio = prevBpm > 0 ? prevBpm / newBpm : 1;
+    const newSlotSec = player.currentRemixSlotSec > 0 ? player.currentRemixSlotSec : 960 / newBpm;
+    for (const queued of this.kitBlockLogQueue) {
+      if (queued.at > changeAt) {
+        queued.at = changeAt + (queued.at - changeAt) * ratio;
+      }
+      queued.result.slotSec = newSlotSec;
+      queued.result.fitBpm = newBpm;
+      if (queued.result.blockBars > 0) {
+        queued.result.blockDurationSec = queued.result.blockBars * (newSlotSec / 4);
+      }
+    }
+    if (player.nextRemixBlockTime > 0) {
+      this.nextKitBlockTime = player.nextRemixBlockTime;
+    }
+    if (player.currentRemixBlockDurationSec > 0) {
+      this.lastKitBlockDurationSec = player.currentRemixBlockDurationSec;
+    }
   }
 
   public getBpm(): number {
@@ -5366,7 +5409,9 @@ export class ClientGrooveboxConductor {
   public start(bpm?: number): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    if (bpm) {
+    if (this.userBpmOverride !== null) {
+      this.currentBpm = this.userBpmOverride;
+    } else if (bpm) {
       this.currentBpm = Math.max(60, Math.min(200, bpm));
     }
     this.nextStepTime = this.engine.now() + 0.05;
@@ -5552,6 +5597,7 @@ export class ClientGrooveboxConductor {
 
   /** Session BPM shown to the UI for the current per-phrase block slot. */
   private applySlotBpm(slotDurationSec: number): void {
+    if (this.userBpmOverride !== null) return;
     if (!(slotDurationSec > 0)) return;
     const bpm = Math.max(60, Math.min(200, 960 / slotDurationSec));
     this.currentBpm = bpm;

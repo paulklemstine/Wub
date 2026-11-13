@@ -349,6 +349,7 @@ export class KitPlayer {
   private lastSelectionDelta: number = 0;
   private lastSteerTargetPoint: { x: number; y: number } | null = null;
   private lastSteerDistanceValue: number | null = null;
+  private pendingUserBpm: number | null = null;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -379,6 +380,36 @@ export class KitPlayer {
   /** Tempo fitted to the median phrase duration: 960 / median seconds. */
   get fitBpm(): number | null {
     return this.remix?.bpm ?? this.fittedBpm;
+  }
+
+  get isRemix(): boolean {
+    return this.remix !== null;
+  }
+
+  get nextRemixBlockTime(): number {
+    return this.remix?.nextBlockTime ?? 0;
+  }
+
+  get currentRemixBlockDurationSec(): number {
+    return this.remix?.blockDurationSec ?? 0;
+  }
+
+  get currentRemixSlotSec(): number {
+    return this.remix && this.remix.bpm > 0 ? 960 / this.remix.bpm : 0;
+  }
+
+  public setBpm(bpm: number, lockUser: boolean = true): boolean {
+    if (!Number.isFinite(bpm)) return false;
+    const clamped = Math.max(60, Math.min(200, bpm));
+    if (lockUser) {
+      this.pendingUserBpm = clamped;
+    }
+    if (this.remix) {
+      const changed = this.remix.setBpm(clamped, lockUser);
+      this.fittedBpm = this.remix.bpm;
+      return changed;
+    }
+    return false;
   }
 
   get medianPhraseDuration(): number {
@@ -616,6 +647,9 @@ export class KitPlayer {
       this.remix = new StemRemixPlayer(this.engine);
       this.remix.onStatus = (message) => console.info(`[StemRemix] ${message}`);
       await this.remix.load(base);
+      if (this.pendingUserBpm !== null) {
+        this.remix.setBpm(this.pendingUserBpm, true);
+      }
     }
     console.info(
       `[KitPlayer] Manifest loaded: ${manifest.kits.length} kits from ${base}` +

@@ -249,6 +249,7 @@ class WubApp {
   private statusEl!: HTMLElement;
   private lastGrooveboxMeta: GrooveboxMeta | null = null;
   private clientConductor: ClientGrooveboxConductor | null = null;
+  private bpmSliderDragging = false;
   private tamagotchi: TamagotchiAvatar | null = null;
   private uiEventQueue: UIEvent[] = [];
   private currentStepIndex: number = 0;
@@ -530,10 +531,11 @@ class WubApp {
       if (Number.isFinite(parsed) && parsed >= BPM_MIN && parsed <= BPM_MAX) {
         this.bpm = parsed;
         const slider = document.getElementById("bpm-slider");
-        if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
+        if (slider instanceof HTMLInputElement) slider.value = String(Math.round(this.bpm));
         const label = document.getElementById("bpm-value");
         if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
         this.engine.setTargetBpm(this.bpm);
+        this.clientConductor?.setBpm(this.bpm);
       }
     } else {
       this.bpm = DEFAULT_BPM;
@@ -691,7 +693,7 @@ class WubApp {
     if (this.clientConductor) {
       this.bpm = this.clientConductor.getBpm();
       const slider = document.getElementById("bpm-slider");
-      if (slider instanceof HTMLInputElement) slider.value = String(this.bpm);
+      if (slider instanceof HTMLInputElement) slider.value = String(Math.round(this.bpm));
       const label = document.getElementById("bpm-value");
       if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
       this.engine.setTargetBpm(this.bpm);
@@ -723,18 +725,33 @@ class WubApp {
     const value = el<HTMLElement>("bpm-value");
     slider.min = String(BPM_MIN);
     slider.max = String(BPM_MAX);
-    slider.value = String(this.bpm);
+    slider.value = String(Math.round(this.bpm));
     value.textContent = `${Math.round(this.bpm)} BPM`;
-    slider.addEventListener("input", () => {
+    const startDrag = (): void => {
+      this.bpmSliderDragging = true;
+    };
+    const endDrag = (): void => {
+      this.bpmSliderDragging = false;
+    };
+    slider.addEventListener("pointerdown", startDrag);
+    slider.addEventListener("mousedown", startDrag);
+    slider.addEventListener("touchstart", startDrag, { passive: true });
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("mouseup", endDrag);
+    window.addEventListener("touchend", endDrag, { passive: true });
+    const applyBpmInput = (): void => {
       const next = Math.min(BPM_MAX, Math.max(BPM_MIN, Number(slider.value)));
       if (!Number.isFinite(next)) return;
       this.bpm = next;
       localStorage.setItem("wub_bpm", String(next));
       value.textContent = `${Math.round(next)} BPM`;
       this.engine.setTargetBpm(next);
-      if (this.playing && this.clientConductor) {
-        this.clientConductor.setBpm(next);
-      }
+      this.clientConductor?.setBpm(next);
+    };
+    slider.addEventListener("input", applyBpmInput);
+    slider.addEventListener("change", () => {
+      endDrag();
+      applyBpmInput();
     });
 
     const key = el<HTMLSelectElement>("key-select");
@@ -1495,10 +1512,12 @@ class WubApp {
     }
 
     // Kit blocks have per-phrase slots; surface the resulting session BPM.
-    if (this.playing && this.clientConductor) {
+    if (this.playing && this.clientConductor && !this.bpmSliderDragging) {
       const liveBpm = this.clientConductor.getBpm();
       if (Number.isFinite(liveBpm) && Math.abs(liveBpm - this.bpm) > 0.05) {
         this.bpm = liveBpm;
+        const slider = document.getElementById("bpm-slider");
+        if (slider instanceof HTMLInputElement) slider.value = String(Math.round(liveBpm));
         const label = document.getElementById("bpm-value");
         if (label !== null) label.textContent = `${Math.round(liveBpm)} BPM`;
       }
