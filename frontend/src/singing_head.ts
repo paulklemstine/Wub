@@ -215,6 +215,11 @@ export class SingingHeadPanel {
         const r2Str = typeof physR2 === "number" && physR2 > 0 ? ` • PHYS R² ${physR2.toFixed(2)}` : "";
         this.modelBadgeEl.textContent = `REVERSE-TRAINED • ${stubs} STUBS + ${stems} STEMS${dimTag}${accStr}${r2Str}`;
       }
+      console.info(
+        `[SingingHead] loaded ${json.format} • ${stubs} stubs + ${stems} stems` +
+        `${json.weights.b3.length >= 28 ? " • 14D tract" : ""}` +
+        `${typeof acc === "number" ? ` • vowel acc ${(acc * 100).toFixed(1)}%` : ""}`
+      );
       return true;
     } catch (err) {
       console.warn("SingingHeadPanel: falling back to analytical model:", err);

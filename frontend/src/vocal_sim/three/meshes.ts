@@ -35,11 +35,19 @@ const THICK: Record<SolidId, number> = {
   larynx: 0.6, tongue: 1.8, lowerIncisor: 0, lowerLip: 0.9, floor: 0.8,
 };
 
-/** Colour (linear-ish RGB 0..1) of each structure. */
+/** Cartoon rave gummi colour (linear-ish RGB 0..1) of each structure. */
 export const TISSUE_RGB: Record<SolidId | 'none', [number, number, number]> = {
-  wall: [0.64, 0.31, 0.4], palate: [0.8, 0.75, 0.65], upperIncisor: [0.96, 0.93, 0.87], velum: [0.77, 0.41, 0.49],
-  upperLip: [0.88, 0.48, 0.55], larynx: [0.64, 0.31, 0.4], tongue: [0.87, 0.44, 0.53], lowerIncisor: [0.96, 0.93, 0.87],
-  lowerLip: [0.88, 0.48, 0.55], floor: [0.58, 0.28, 0.36], none: [0.22, 0.18, 0.23],
+  wall: [0.46, 0.22, 0.68],
+  palate: [0.68, 0.52, 0.98],
+  upperIncisor: [1.0, 0.99, 0.98],
+  velum: [0.92, 0.40, 0.80],
+  upperLip: [1.0, 0.46, 0.80],
+  larynx: [0.56, 0.24, 0.74],
+  tongue: [0.98, 0.36, 0.72],
+  lowerIncisor: [1.0, 0.99, 0.98],
+  lowerLip: [1.0, 0.46, 0.80],
+  floor: [0.38, 0.18, 0.56],
+  none: [0.22, 0.12, 0.36],
 };
 
 /** The walls of one section at lateral position z, as offsets along its grid line. */

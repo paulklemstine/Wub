@@ -72,6 +72,18 @@ export class Tract3DView {
   private webglFailed = false;
   private active = false;
   private ro: ResizeObserver | null = null;
+  private bearGroup: THREE.Group | null = null;
+  private bearShellMat: THREE.MeshPhysicalMaterial | THREE.MeshStandardMaterial | null = null;
+  private bearCageMat: THREE.LineBasicMaterial | THREE.MeshBasicMaterial | null = null;
+  private leftEar: THREE.Group | null = null;
+  private rightEar: THREE.Group | null = null;
+  private nearEye: THREE.Group | null = null;
+  private bearNose: THREE.Group | null = null;
+  private haloMesh: THREE.Mesh | null = null;
+  private voiceLight: THREE.PointLight | null = null;
+  private readonly bearDisposables: Array<{ dispose: () => void }> = [];
+  private animPhase = 0;
+  private lastFrameMs = 0;
 
   public cut = true;
   public tissues = true;
@@ -125,15 +137,189 @@ export class Tract3DView {
     const [cx, cy, cz] = this.meshes.center;
     const r = this.meshes.radius;
     const pos: Record<CameraPreset3D, [number, number, number]> = {
-      side: [cx, cy, cz + 2.7 * r],
-      front: [cx + 2.7 * r, cy + 0.15 * r, cz],
-      top: [cx, cy + 2.7 * r, cz + 0.02 * r],
-      three: [cx + 1.3 * r, cy + 0.6 * r, cz + 2.2 * r],
+      side: [cx, cy + 0.12 * r, cz + 3.05 * r],
+      front: [cx + 3.05 * r, cy + 0.24 * r, cz],
+      top: [cx, cy + 3.05 * r, cz + 0.02 * r],
+      three: [cx + 1.55 * r, cy + 0.72 * r, cz + 2.45 * r],
     };
-    const lift = preset === "top" ? 0 : 0.12 * r;
+    const lift = preset === "top" ? 0 : 0.22 * r;
     this.camera.position.set(pos[preset][0], pos[preset][1] + lift, pos[preset][2]);
     this.controls.target.set(cx, cy + lift, cz);
     this.controls.update();
+  }
+
+  private initBearRig(scene: THREE.Scene, meshes: TractMeshes): void {
+    const [cx, cy, cz] = meshes.center;
+    const r = meshes.radius;
+    const group = new THREE.Group();
+    scene.add(group);
+    this.bearGroup = group;
+
+    const track = <T extends { dispose: () => void }>(obj: T): T => {
+      this.bearDisposables.push(obj);
+      return obj;
+    };
+
+    // Internal vocal-tract rave illumination pulsing with voicing
+    const vLight = new THREE.PointLight(0xffcf2e, 0.3, r * 4.5, 1.5);
+    vLight.position.set(cx - 0.1 * r, cy - 0.12 * r, cz);
+    scene.add(vLight);
+    this.voiceLight = vLight;
+
+    // Translucent gummi-bear head dome + cosmic wireframe rave cage
+    const domeGeo = track(new THREE.SphereGeometry(1, 28, 22));
+    const shellMat = track(
+      new THREE.MeshStandardMaterial({
+        color: 0x8f3dff,
+        emissive: 0x450d7a,
+        emissiveIntensity: 0.45,
+        roughness: 0.22,
+        metalness: 0.12,
+        transparent: true,
+        opacity: 0.24,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    const bearDome = new THREE.Mesh(domeGeo, shellMat);
+    bearDome.position.set(cx - 0.06 * r, cy + 0.26 * r, cz);
+    bearDome.scale.set(1.06 * r, 1.02 * r, 0.98 * r);
+    group.add(bearDome);
+    this.bearShellMat = shellMat;
+
+    const cageGeo = track(new THREE.IcosahedronGeometry(1, 1));
+    const cageMat = track(
+      new THREE.MeshBasicMaterial({
+        color: 0xffcf2e,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.18,
+      })
+    );
+    const bearCage = new THREE.Mesh(cageGeo, cageMat);
+    bearCage.position.copy(bearDome.position);
+    bearCage.scale.set(1.07 * r, 1.03 * r, 0.99 * r);
+    group.add(bearCage);
+    this.bearCageMat = cageMat;
+
+    // Shared ear/eye geometries & materials
+    const earGeo = track(new THREE.SphereGeometry(0.32 * r, 20, 16));
+    const earOuterMat = track(
+      new THREE.MeshStandardMaterial({
+        color: 0xa23dff,
+        emissive: 0x4a1075,
+        emissiveIntensity: 0.5,
+        roughness: 0.25,
+        transparent: true,
+        opacity: 0.72,
+      })
+    );
+    const earPadGeo = track(new THREE.SphereGeometry(0.2 * r, 16, 12));
+    const earPadMat = track(
+      new THREE.MeshStandardMaterial({
+        color: 0xff77e9,
+        emissive: 0xff4cd8,
+        emissiveIntensity: 0.7,
+        roughness: 0.3,
+      })
+    );
+    const earRimGeo = track(new THREE.TorusGeometry(0.31 * r, 0.026 * r, 10, 28));
+    const goldMat = track(
+      new THREE.MeshStandardMaterial({
+        color: 0xffcf2e,
+        emissive: 0xffae00,
+        emissiveIntensity: 0.85,
+        roughness: 0.2,
+      })
+    );
+
+    const makeEar = (zSign: number): THREE.Group => {
+      const ear = new THREE.Group();
+      const outer = new THREE.Mesh(earGeo, earOuterMat);
+      outer.scale.set(0.55, 1.0, 0.96);
+      ear.add(outer);
+
+      const pad = new THREE.Mesh(earPadGeo, earPadMat);
+      pad.position.set(0.09 * r, 0, 0);
+      pad.scale.set(0.45, 0.95, 0.92);
+      ear.add(pad);
+
+      const rim = new THREE.Mesh(earRimGeo, goldMat);
+      rim.rotation.y = Math.PI / 2;
+      ear.add(rim);
+
+      ear.position.set(cx - 0.14 * r, cy + 1.18 * r, cz + zSign * 0.68 * r);
+      ear.rotation.x = zSign * -0.42;
+      group.add(ear);
+      return ear;
+    };
+    this.rightEar = makeEar(-1);
+    this.leftEar = makeEar(1);
+
+    // Sparkly kawaii 3D anime eyes
+    const scleraGeo = track(new THREE.SphereGeometry(0.14 * r, 16, 14));
+    const scleraMat = track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.15 }));
+    const irisGeo = track(new THREE.SphereGeometry(0.095 * r, 14, 12));
+    const irisMat = track(
+      new THREE.MeshStandardMaterial({
+        color: 0x2ae8d4,
+        emissive: 0x3a6cff,
+        emissiveIntensity: 0.75,
+        roughness: 0.2,
+      })
+    );
+    const pupilGeo = track(new THREE.SphereGeometry(0.055 * r, 12, 10));
+    const darkMat = track(new THREE.MeshStandardMaterial({ color: 0x160529, roughness: 0.15 }));
+    const sparkGeo = track(new THREE.SphereGeometry(0.032 * r, 10, 8));
+    const sparkMat = track(new THREE.MeshBasicMaterial({ color: 0xffffff }));
+
+    const makeEye = (zSign: number): THREE.Group => {
+      const eye = new THREE.Group();
+      const sclera = new THREE.Mesh(scleraGeo, scleraMat);
+      sclera.scale.set(0.75, 1.05, 0.9);
+      eye.add(sclera);
+
+      const iris = new THREE.Mesh(irisGeo, irisMat);
+      iris.position.set(0.068 * r, 0, 0);
+      iris.scale.set(0.6, 1.0, 0.9);
+      eye.add(iris);
+
+      const pupil = new THREE.Mesh(pupilGeo, darkMat);
+      pupil.position.set(0.096 * r, 0, 0);
+      pupil.scale.set(0.6, 1.0, 0.9);
+      eye.add(pupil);
+
+      const sp = new THREE.Mesh(sparkGeo, sparkMat);
+      sp.position.set(0.11 * r, 0.045 * r, zSign * 0.03 * r);
+      eye.add(sp);
+
+      eye.position.set(cx + 0.74 * r, cy + 0.56 * r, cz + zSign * 0.4 * r);
+      group.add(eye);
+      return eye;
+    };
+    makeEye(-1);
+    this.nearEye = makeEye(1);
+
+    // Glossy 3D button bear nose above upper lip
+    const noseGroup = new THREE.Group();
+    const noseGeo = track(new THREE.SphereGeometry(0.13 * r, 16, 14));
+    const noseMesh = new THREE.Mesh(noseGeo, darkMat);
+    noseMesh.scale.set(0.95, 0.78, 1.15);
+    noseGroup.add(noseMesh);
+    const noseSpark = new THREE.Mesh(sparkGeo, sparkMat);
+    noseSpark.position.set(0.08 * r, 0.055 * r, 0);
+    noseGroup.add(noseSpark);
+    noseGroup.position.set(cx + 0.94 * r, cy + 0.28 * r, cz);
+    group.add(noseGroup);
+    this.bearNose = noseGroup;
+
+    // Floating golden rave halo above the bear crown
+    const haloGeo = track(new THREE.TorusGeometry(0.58 * r, 0.028 * r, 10, 40));
+    const halo = new THREE.Mesh(haloGeo, goldMat);
+    halo.rotation.x = Math.PI / 2 - 0.15;
+    halo.position.set(cx - 0.05 * r, cy + 1.48 * r, cz);
+    group.add(halo);
+    this.haloMesh = halo;
   }
 
   private initWebGL(geom0: TractGeometry): void {
@@ -153,7 +339,7 @@ export class Tract3DView {
     this.renderer = renderer;
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     renderer.localClippingEnabled = true;
-    renderer.setClearColor(0x0b0e14, 1);
+    renderer.setClearColor(0x070314, 1);
 
     const canvas = renderer.domElement;
     canvas.className = "tract3d-canvas";
@@ -167,13 +353,16 @@ export class Tract3DView {
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(35, 1, 0.5, 400);
-    scene.add(new THREE.HemisphereLight(0xdfe7ff, 0x2a1d26, 1.15));
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
+    scene.add(new THREE.HemisphereLight(0xd9b8ff, 0x260c3d, 1.25));
+    const key = new THREE.DirectionalLight(0x8ff7ed, 1.45);
     key.position.set(0.6, 1, 1.2);
     camera.add(key);
-    const rim = new THREE.DirectionalLight(0x9fd8ff, 0.65);
-    rim.position.set(-1, 0.3, -0.8);
+    const rim = new THREE.DirectionalLight(0xff5cd6, 1.15);
+    rim.position.set(-1.1, 0.35, -0.8);
     camera.add(rim);
+    const goldKick = new THREE.DirectionalLight(0xffe45c, 0.7);
+    goldKick.position.set(0.2, 1.4, -0.9);
+    camera.add(goldKick);
     scene.add(camera);
     this.scene = scene;
     this.camera = camera;
@@ -190,17 +379,18 @@ export class Tract3DView {
     airGeo.setIndex(new THREE.BufferAttribute(meshes.air.index, 1));
     const airMat = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.5,
-      metalness: 0,
+      roughness: 0.42,
+      metalness: 0.08,
       side: THREE.DoubleSide,
-      emissive: 0x0a1a20,
+      emissive: 0x160a30,
+      emissiveIntensity: 0.85,
     });
     scene.add(new THREE.Mesh(airGeo, airMat));
     this.airGeo = airGeo;
     this.airCol = airCol;
     this.airMat = airMat;
 
-    // Tissue sheets
+    // Tissue sheets (candy-gummi rave finish)
     const makeSheet = (sh: TractMeshes["upper"]) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.BufferAttribute(sh.positions, 3));
@@ -208,11 +398,13 @@ export class Tract3DView {
       g.setIndex(new THREE.BufferAttribute(sh.index, 1));
       const mat = new THREE.MeshStandardMaterial({
         vertexColors: true,
-        roughness: 0.75,
-        metalness: 0,
+        roughness: 0.55,
+        metalness: 0.05,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.9,
+        opacity: 0.92,
+        emissive: 0x18072b,
+        emissiveIntensity: 0.4,
       });
       const mesh = new THREE.Mesh(g, mat);
       scene.add(mesh);
@@ -224,9 +416,11 @@ export class Tract3DView {
     // Teeth instances
     const toothGeo = new RoundedBoxGeometry(1, 1, 1, 2, 0.18);
     const toothMat = new THREE.MeshStandardMaterial({
-      color: 0xf4eedf,
-      roughness: 0.35,
-      metalness: 0,
+      color: 0xffffff,
+      roughness: 0.25,
+      metalness: 0.05,
+      emissive: 0x201538,
+      emissiveIntensity: 0.35,
     });
     const teethMesh = new THREE.InstancedMesh(toothGeo, toothMat, 64);
     scene.add(teethMesh);
@@ -237,15 +431,17 @@ export class Tract3DView {
     // Piriform fossae pouches
     const pouchMat = new THREE.MeshStandardMaterial({
       vertexColors: false,
-      roughness: 0.5,
+      roughness: 0.4,
       side: THREE.DoubleSide,
       color: 0x2ad4bd,
+      emissive: 0x1a0833,
+      emissiveIntensity: 0.45,
     });
     const waterMat = new THREE.MeshStandardMaterial({
       color: WATER,
       roughness: 0.2,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.78,
     });
     this.pouchMat = pouchMat;
     this.waterMat = waterMat;
@@ -254,6 +450,9 @@ export class Tract3DView {
       scene.add(mesh);
       this.pouchParts.push(mesh);
     }
+
+    // Cartoon Rave Wub-Bear 3D head rig framing the anatomical tract
+    this.initBearRig(scene, meshes);
 
     const controls = new OrbitControls(camera, canvas);
     controls.enableDamping = true;
@@ -398,6 +597,47 @@ export class Tract3DView {
     this.toothMat.clippingPlanes = this.cut ? this.clipOn : null;
     this.teethMesh.visible = this.tissues;
 
+    // Animate Rave Wub-Bear mascot rig & cutaway planes
+    const nowMs = performance.now();
+    const dtSec = this.lastFrameMs > 0 ? Math.min(0.05, (nowMs - this.lastFrameMs) / 1000) : 1 / 60;
+    this.lastFrameMs = nowMs;
+    this.animPhase += dtSec;
+    const voicing = tel ? tel.voicingAmp : 0;
+
+    if (this.voiceLight) {
+      this.voiceLight.intensity = 0.25 + voicing * 3.8;
+      this.voiceLight.color.setHSL((0.12 + voicing * 0.72 + this.animPhase * 0.08) % 1, 0.95, 0.62);
+    }
+    if (this.bearGroup) {
+      this.bearGroup.visible = this.tissues;
+      if (this.bearShellMat) {
+        this.bearShellMat.clippingPlanes = this.cut ? this.clipOn : null;
+        this.bearShellMat.emissiveIntensity = 0.4 + voicing * 0.55;
+      }
+      if (this.bearCageMat) {
+        this.bearCageMat.clippingPlanes = this.cut ? this.clipOn : null;
+      }
+      if (this.nearEye) {
+        this.nearEye.visible = !this.cut;
+      }
+      const wiggle = Math.sin(this.animPhase * 11) * (0.04 + 0.14 * voicing);
+      if (this.leftEar) this.leftEar.rotation.x = -0.42 + wiggle;
+      if (this.rightEar) this.rightEar.rotation.x = 0.42 - wiggle;
+      if (this.haloMesh) {
+        const [, cy] = this.meshes.center;
+        const r = this.meshes.radius;
+        this.haloMesh.position.y = cy + 1.48 * r + Math.sin(this.animPhase * 3.2) * (0.03 * r);
+        this.haloMesh.rotation.z = this.animPhase * 0.9;
+      }
+      if (this.bearNose) {
+        const lips = this.meshes.anchors.lips;
+        const r = this.meshes.radius;
+        if (lips) {
+          this.bearNose.position.set(lips[0] - 0.02 * r, lips[1] + 0.28 * r, this.meshes.center[2]);
+        }
+      }
+    }
+
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
 
@@ -449,6 +689,8 @@ export class Tract3DView {
     for (const m of this.pouchParts) m.geometry.dispose();
     this.pouchMat?.dispose();
     this.waterMat?.dispose();
+    for (const d of this.bearDisposables) d.dispose();
+    this.bearDisposables.length = 0;
     this.renderer?.dispose();
   }
 }
