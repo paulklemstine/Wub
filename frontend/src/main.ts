@@ -18,6 +18,7 @@ import type { TripMode, TripPalette } from "./psychedelic_bg";
 import { VERSION_INFO } from "./version";
 import { ClientGrooveboxConductor } from "./client_ml_sequencer";
 import { TamagotchiAvatar } from "./tamagotchi";
+import { SingingHeadPanel } from "./singing_head";
 import { TransitionProbe } from "./transition_probe";
 
 export interface StemState {
@@ -251,6 +252,8 @@ class WubApp {
   private clientConductor: ClientGrooveboxConductor | null = null;
   private bpmSliderDragging = false;
   private tamagotchi: TamagotchiAvatar | null = null;
+  private singingHead: SingingHeadPanel | null = null;
+  private vocalFloatScratch: Float32Array<ArrayBuffer> | null = null;
   private uiEventQueue: UIEvent[] = [];
   private currentStepIndex: number = 0;
   private currentStepAudioTime: number = 0;
@@ -314,6 +317,13 @@ class WubApp {
       this.tamagotchi.initDOM();
     } catch (e) {
       console.warn("Tamagotchi init failed:", e);
+    }
+
+    try {
+      this.singingHead = new SingingHeadPanel();
+      this.singingHead.initDOM();
+    } catch (e) {
+      console.warn("Singing head init failed:", e);
     }
 
     this.bindTransport();
@@ -1449,6 +1459,23 @@ class WubApp {
     }
   }
 
+  /** Unquantized float32 vocal waveform + sample rate for the Singing Head articulator. */
+  private vocalFloatFrame(): { samples: Float32Array | null; sampleRate: number } {
+    try {
+      const analyser = this.engine.getAnalyser("vocals");
+      if (this.vocalFloatScratch === null || this.vocalFloatScratch.length !== analyser.fftSize) {
+        this.vocalFloatScratch = new Float32Array(analyser.fftSize);
+      }
+      analyser.getFloatTimeDomainData(this.vocalFloatScratch);
+      return {
+        samples: this.vocalFloatScratch,
+        sampleRate: analyser.context.sampleRate,
+      };
+    } catch {
+      return { samples: null, sampleRate: 44100 };
+    }
+  }
+
   /** True post-glue/post-limiter full mix: level plus waveform for the bear. */
   private masterMixFrame(): { level: number; waveform: Uint8Array | null } {
     try {
@@ -1792,6 +1819,19 @@ class WubApp {
         otherWaveform,
         otherLvl,
         mixFrame.waveform
+      );
+    }
+
+    if (this.singingHead !== null) {
+      const vocalFrame = this.vocalFloatFrame();
+      this.singingHead.update(
+        this.lastGrooveboxMeta,
+        audioNow,
+        vocalFrame.samples,
+        vocalFrame.sampleRate,
+        this.analyserLevel("vocals"),
+        this.engine.isMuted("vocals"),
+        this.bpm
       );
     }
 

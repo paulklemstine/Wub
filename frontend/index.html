@@ -878,6 +878,37 @@
     #master-canvas { aspect-ratio: 24 / 7; }
     .master-card { grid-column: 1 / -1; }
 
+    /* --- NEURAL SINGING HEAD PANEL (BOTTOM STAGE) --- */
+    #singing-head-panel {
+      margin-top: 16px;
+      border: 2px solid var(--mc-bezel);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 12px 28px rgba(0, 0, 0, 0.85), 0 0 24px rgba(0, 229, 255, 0.12);
+    }
+    #singing-head-canvas {
+      aspect-ratio: 960 / 340;
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #05070c;
+    }
+    .singing-head-meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 14px;
+      background: rgba(9, 13, 22, 0.92);
+      border-top: 1px solid rgba(100, 116, 139, 0.25);
+      font-family: monospace;
+      font-size: 0.72rem;
+      color: #94a3b8;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    #singing-head-model-badge {
+      color: var(--neon-amber);
+      font-weight: 700;
+    }
+
     /* --- TAMAGOTCHI PET AVATAR PANEL --- */
     .tamagotchi-card {
       display: flex;
@@ -2193,7 +2224,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.271 <span class="mc-build-num">#271</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.272 <span class="mc-build-num">#272</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -2941,9 +2972,22 @@
       </div>
     </section>
 
+    <!-- NEURAL SINGING HEAD (BOTTOM STAGE) -->
+    <section id="singing-head-panel" class="stage-card" aria-label="Singing Head Vocal Articulator">
+      <div class="stage-header">
+        <span style="color: var(--neon-cyan);">🎤 NEURAL SINGING HEAD • VOCAL INSTRUMENT ARTICULATOR</span>
+        <span id="singing-head-status">LISTENING TO VOCAL INSTRUMENT…</span>
+      </div>
+      <canvas id="singing-head-canvas" class="stage" width="960" height="340" aria-label="Reverse-Trained Cyberpunk Singing Head"></canvas>
+      <div class="singing-head-meta-row">
+        <span>INVERSE VOCAL-TRACT MLP • 18 ACOUSTIC FEATURES → 9 ARTICULATORS + 5 VOWELS</span>
+        <span id="singing-head-model-badge">LOADING VOCAL MODEL…</span>
+      </div>
+    </section>
+
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.271 (Build #271 • rev c66cb07285)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.272 (Build #272 • rev 73eeba2387)</span>
     </div>
   </div>
 
