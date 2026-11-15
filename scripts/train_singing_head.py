@@ -1162,11 +1162,761 @@ def export_model_json(
         json.dump(payload, f, separators=(",", ":"))
 
 
+def _compute_env_32_batch(frames: np.ndarray, rms_arr: np.ndarray, sr: int = TARGET_SR) -> np.ndarray:
+    """Extract 32-band L2-normalized timbre envelopes matching generate_tract_soundbank.py."""
+    n = frames.shape[1]
+    win = (0.5 - 0.5 * np.cos((2.0 * np.pi * np.arange(n, dtype=np.float64)) / float(n - 1))).astype(np.float32)
+    centered = frames.astype(np.float32) - np.mean(frames, axis=1, keepdims=True, dtype=np.float32)
+    spec = np.fft.rfft(centered * win[None, :], axis=1)[:, :-1]
+    mag = np.abs(spec) / (float(n) * 0.5)
+    mag_sq = mag * mag
+    bin_hz = float(sr) / float(n)
+    half_n = mag.shape[1]
+    edges = np.geomspace(80.0, 9000.0, 33)
+    env_raw = np.zeros((len(frames), 32), dtype=np.float32)
+    rms_safe = np.maximum(rms_arr.astype(np.float32), 1e-4)
+    for k_b in range(32):
+        lo_k = max(1, int(math.floor(edges[k_b] / bin_hz)))
+        hi_k = max(lo_k, min(half_n - 1, int(math.ceil(edges[k_b + 1] / bin_hz))))
+        b_rms = np.sqrt(np.mean(mag_sq[:, lo_k : hi_k + 1], axis=1) + 1e-18)
+        env_raw[:, k_b] = np.log1p((b_rms / rms_safe) * 4.5)
+    env_centered = env_raw - np.mean(env_raw, axis=1, keepdims=True)
+    norms = np.maximum(np.linalg.norm(env_centered, axis=1, keepdims=True), 1e-6)
+    return (env_centered / norms).astype(np.float32)
+
+
+SEQ_LEN = 96
+
+
+def _extract_contiguous_window(
+    track_id: str,
+    audio: np.ndarray,
+    is_stem: bool,
+    seq_len: int = SEQ_LEN,
+) -> Optional[dict]:
+    """Extract a contiguous 60 Hz feature + spectral envelope sequence from an audio segment."""
+    if len(audio) < FFT_SIZE:
+        return None
+    n_frames = 1 + (len(audio) - FFT_SIZE) // HOP_SIZE
+    if n_frames < 12:
+        return None
+
+    # Find highest-energy window of length seq_len (including slight lead-in for onsets)
+    if n_frames > seq_len:
+        # Compute frame energies quickly to pick an active vocal phrase window
+        hop_samples = np.arange(n_frames) * HOP_SIZE
+        # Fast sliding square sum via cumulative sum
+        sq = audio.astype(np.float64) ** 2
+        cs = np.concatenate(([0.0], np.cumsum(sq)))
+        frame_e = (cs[hop_samples + FFT_SIZE] - cs[hop_samples]) / float(FFT_SIZE)
+        win_cs = np.concatenate(([0.0], np.cumsum(frame_e)))
+        win_e = win_cs[seq_len:] - win_cs[: len(win_cs) - seq_len]
+        best_start_frame = int(np.argmax(win_e))
+        # Shift back ~6 frames so natural onset attack is captured when available
+        start_frame = max(0, best_start_frame - 6)
+        end_frame = start_frame + seq_len
+    else:
+        start_frame = 0
+        end_frame = n_frames
+
+    actual_len = end_frame - start_frame
+    frames = np.zeros((seq_len, FFT_SIZE), dtype=np.float32)
+    feats = np.zeros((seq_len, 18), dtype=np.float32)
+    rms_arr = np.zeros((seq_len,), dtype=np.float32)
+    f0_arr = np.zeros((seq_len,), dtype=np.float32)
+    voicing_arr = np.zeros((seq_len,), dtype=np.float32)
+    vibrato_arr = np.zeros((seq_len,), dtype=np.float32)
+    rms_rise_arr = np.zeros((seq_len,), dtype=np.float32)
+
+    prev_norm_mag: Optional[np.ndarray] = None
+    for t in range(actual_len):
+        s_idx = (start_frame + t) * HOP_SIZE
+        fr = audio[s_idx : s_idx + FFT_SIZE]
+        frames[t] = fr
+        f_vec, r_val, f0_val, v_val, prev_norm_mag = extract_frame_features(fr, TARGET_SR, prev_norm_mag)
+        feats[t] = f_vec
+        rms_arr[t] = r_val
+        f0_arr[t] = f0_val
+        voicing_arr[t] = v_val
+
+    if actual_len < seq_len:
+        # Tail-pad smoothly with silence so batch shapes match while rest posture fades cleanly
+        sil_feat, sil_rms, sil_f0, sil_v, _ = extract_frame_features(np.zeros(FFT_SIZE, dtype=np.float32), TARGET_SR, None)
+        for t in range(actual_len, seq_len):
+            feats[t] = sil_feat
+            rms_arr[t] = sil_rms
+            f0_arr[t] = sil_f0
+            voicing_arr[t] = sil_v
+
+    env_32 = _compute_env_32_batch(frames, rms_arr, TARGET_SR)
+
+    for t in range(actual_len):
+        lo = max(0, t - 8)
+        hi = min(actual_len, t + 9)
+        local_f0s = f0_arr[lo:hi]
+        voiced_f0s = local_f0s[local_f0s > 0.0]
+        if len(voiced_f0s) >= 4 and f0_arr[t] > 0.0:
+            med_f0 = float(np.median(voiced_f0s))
+            semis = 12.0 * np.log2(np.maximum(20.0, voiced_f0s) / max(20.0, med_f0))
+            vib_std = float(np.std(semis))
+            vibrato_arr[t] = clamp(vib_std / 1.1, 0.0, 1.0) if vib_std < 3.0 else 0.35
+        if t > 0:
+            rms_rise_arr[t] = max(0.0, float(rms_arr[t] - rms_arr[t - 1]))
+
+    valid_mask = np.zeros((seq_len,), dtype=np.float32)
+    valid_mask[:actual_len] = 1.0
+    if float(np.max(rms_arr)) < 0.0045 and is_stem:
+        return None
+
+    return {
+        "track_id": track_id,
+        "is_stem": is_stem,
+        "feats": feats,
+        "env": env_32,
+        "rms": rms_arr,
+        "f0": f0_arr,
+        "voicing": voicing_arr,
+        "vibrato": vibrato_arr,
+        "rms_rise": rms_rise_arr,
+        "valid": valid_mask,
+    }
+
+
+def _worker_sequence(args: Tuple[str, str, bool]) -> List[dict]:
+    path_str, track_id, is_stem = args
+    path = Path(path_str)
+    out: List[dict] = []
+    try:
+        if not is_stem:
+            audio = load_audio_44k(path)
+            seg = _extract_contiguous_window(track_id, audio, is_stem=False)
+            if seg is not None:
+                out.append(seg)
+            return out
+
+        info = sf.info(str(path))
+        sr = int(info.samplerate)
+        total_samples = int(info.frames)
+        win_sec = 3.2
+        win_n = int(win_sec * sr)
+        if total_samples <= win_n:
+            audio = load_audio_44k(path)
+            seg = _extract_contiguous_window(track_id, audio, is_stem=True)
+            if seg is not None:
+                out.append(seg)
+            return out
+
+        for frac in (0.16, 0.34, 0.52, 0.70, 0.86):
+            start = max(0, min(total_samples - win_n, int(total_samples * frac)))
+            chunk, chunk_sr = sf.read(str(path), start=start, frames=win_n, dtype="float32")
+            if chunk.ndim > 1:
+                chunk = np.mean(chunk, axis=1)
+            if chunk_sr != TARGET_SR:
+                g = math.gcd(TARGET_SR, int(chunk_sr))
+                chunk = resample_poly(chunk.astype(np.float64), TARGET_SR // g, int(chunk_sr) // g).astype(np.float32)
+            seg = _extract_contiguous_window(track_id, chunk, is_stem=True)
+            if seg is not None:
+                out.append(seg)
+        return out
+    except Exception:
+        return []
+
+
+def _smooth_env_bands(env: np.ndarray) -> np.ndarray:
+    """Remove harmonic-comb ripple: 2x [1,2,1]/4 band smoothing, re-centred and L2-normalised."""
+    out = env.astype(np.float32)
+    for _ in range(2):
+        pd = np.pad(out, [(0, 0)] * (out.ndim - 1) + [(1, 1)], mode="edge")
+        out = 0.25 * pd[..., :-2] + 0.5 * pd[..., 1:-1] + 0.25 * pd[..., 2:]
+    out = out - out.mean(axis=-1, keepdims=True)
+    return (out / np.maximum(np.linalg.norm(out, axis=-1, keepdims=True), 1e-6)).astype(np.float32)
+
+
+def _excitation_from_feats(feats: np.ndarray, breath: np.ndarray, loud: np.ndarray) -> np.ndarray:
+    """10-d source descriptor: zcr, voicing, f0, centroid, rolloff, flatness, flux, tilt, breath, loudness."""
+    return np.concatenate(
+        [feats[..., [2, 3, 4, 5, 6, 7, 8]], np.clip(feats[..., 17:18] / 3.0, -1.5, 1.5), breath[..., None], loud[..., None]],
+        axis=-1,
+    ).astype(np.float32)
+
+
+class SimSpectrumForwardNet(nn.Module):
+    """Differentiable forward vocal-tract + excitation spectral envelope predictor."""
+
+    def __init__(self, in_dim: int = 24, env_dim: int = 32) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, 160),
+            nn.GELU(),
+            nn.Linear(160, 128),
+            nn.GELU(),
+            nn.Linear(128, env_dim),
+        )
+
+    def forward(self, tract_and_exc: torch.Tensor) -> torch.Tensor:
+        return self.net(tract_and_exc)
+
+
+def train_sim_forward_net(
+    sim_art_norm: np.ndarray,
+    sim_exc: np.ndarray,
+    sim_env: np.ndarray,
+    dev: torch.device,
+    epochs: int = 50,
+    batch_size: int = 512,
+    seed: int = 42,
+) -> Tuple[SimSpectrumForwardNet, float]:
+    """Train & freeze a differentiable (14-D tract + 4-D excitation) -> 32-band spectral surrogate."""
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(sim_art_norm))
+    split = int(0.90 * len(perm))
+    tr_idx, va_idx = perm[:split], perm[split:]
+
+    sim_in = np.concatenate([sim_art_norm, sim_exc], axis=1).astype(np.float32)
+    xa = torch.from_numpy(sim_in[tr_idx]).to(dev)
+    ye = torch.from_numpy(sim_env[tr_idx]).to(dev)
+    xva = torch.from_numpy(sim_in[va_idx]).to(dev)
+    yve = torch.from_numpy(sim_env[va_idx]).to(dev)
+
+    fwd = SimSpectrumForwardNet(in_dim=sim_in.shape[1], env_dim=sim_env.shape[1]).to(dev)
+    opt = torch.optim.AdamW(fwd.parameters(), lr=3e-3, weight_decay=1e-5)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
+
+    n_tr = len(xa)
+    for _ in range(epochs):
+        fwd.train()
+        p = torch.randperm(n_tr, device=dev)
+        for s in range(0, n_tr, batch_size):
+            idx = p[s : s + batch_size]
+            pred = fwd(xa[idx])
+            loss = F.smooth_l1_loss(pred, ye[idx])
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        sched.step()
+
+    fwd.eval()
+    with torch.no_grad():
+        vp = fwd(xva)
+        ss_res = float(((vp - yve) ** 2).sum().item())
+        ss_tot = float(((yve - yve.mean(dim=0, keepdim=True)) ** 2).sum().item())
+        r2 = 1.0 - ss_res / max(1e-8, ss_tot)
+    for param in fwd.parameters():
+        param.requires_grad = False
+    return fwd, r2
+
+
+def match_sequences_to_soundbank(
+    seqs: List[dict],
+    soundbank_path: Path,
+    dev: torch.device,
+    top_k: int = 24,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
+    """Match chronological stem/stub sequences to simulated sounds via GPU Top-K + Viterbi DP.
+
+    Returns contiguous tensors (N, T, *):
+      x_seq (N, T, 18), y_seq (N, T, 14), tract_seq (N, T, 14),
+      env_seq (N, T, 32), weights_seq (N, T, 1), valid_seq (N, T, 1),
+      sim_art_norm (M, 14), sim_env (M, 32), stats
+    """
+    sb = np.load(soundbank_path)
+    sim_art_raw = sb["art"].astype(np.float32)      # (M, 14)
+    sim_feats = sb["feats"].astype(np.float32)      # (M, 18)
+    sim_env = sb["env"].astype(np.float32)          # (M, 32)
+    sim_cues = sb["cues"].astype(np.float32)        # (M, 6): [f0_norm, voicing, breath, vibrato, loud, rms]
+
+    sim_art_norm = _norm_tract_np(sim_art_raw)
+    m_sb = len(sim_art_norm)
+    k = min(top_k, m_sb)
+
+    # Corpus empirical loudness/f0 calibration across active frames
+    all_rms = np.concatenate([s["rms"][s["valid"] > 0.5] for s in seqs])
+    all_f0 = np.concatenate([s["f0"][(s["valid"] > 0.5) & (s["f0"] > 0.0)] for s in seqs])
+    active_rms = all_rms[all_rms > 0.004]
+    if len(active_rms) < 32:
+        active_rms = np.maximum(all_rms, 0.004)
+    active_db = 20.0 * np.log10(np.maximum(1e-5, active_rms))
+    db_p10 = float(np.percentile(active_db, 10.0))
+    db_p95 = float(np.percentile(active_db, 95.0))
+    db_span = max(8.0, db_p95 - db_p10)
+    if len(all_f0) >= 32:
+        f0_p10 = float(np.percentile(all_f0, 8.0))
+        f0_p95 = float(np.percentile(all_f0, 94.0))
+    else:
+        f0_p10, f0_p95 = 110.0, 520.0
+    log_f0_lo = math.log2(max(70.0, f0_p10))
+    log_f0_hi = math.log2(max(f0_p10 + 40.0, f0_p95))
+
+    # Pure acoustic comparison between song frames and synthesized vocal simulator audio
+    sim_art_t = torch.from_numpy(sim_art_norm).to(dev)
+    sim_env_t = torch.from_numpy(sim_env).to(dev)
+    sim_feats_t = torch.from_numpy(sim_feats).to(dev)
+    feat_scale = torch.clamp(torch.std(sim_feats_t, dim=0, keepdim=True), min=1e-2)
+    # Feature weights across the 18 browser audio features (loudness, peak, zcr, voicing, f0, spectral shape & 8 bands)
+    feat_w = torch.tensor(
+        [0.45, 0.25, 0.40, 0.55, 0.35, 0.45, 0.35, 0.40, 0.15, 0.40, 0.45, 0.50, 0.50, 0.45, 0.45, 0.40, 0.40, 0.40],
+        device=dev,
+        dtype=torch.float32,
+    ).unsqueeze(0)
+    sim_feats_norm_t = (sim_feats_t / feat_scale) * torch.sqrt(feat_w)
+    sim_feats_sq = (sim_feats_norm_t * sim_feats_norm_t).sum(dim=1).unsqueeze(0)  # (1, M)
+    use_fp16 = dev.type == "cuda"
+    sim_env_mat = sim_env_t.T.contiguous().half() if use_fp16 else sim_env_t.T.contiguous()
+    sim_feats_mat = sim_feats_norm_t.T.contiguous().half() if use_fp16 else sim_feats_norm_t.T.contiguous()
+
+    # Transition stiffness weights per normalized 14-D articulator for Viterbi smoothing
+    # Higher stiffness on jaw, lips, tongue body & velum prevents rapid frame chatter.
+    trans_w = torch.tensor(
+        [2.6, 2.2, 2.2, 1.5, 1.5, 1.4, 1.3, 1.1, 2.4, 2.5, 2.3, 1.3, 1.7, 1.4],
+        device=dev,
+        dtype=torch.float32,
+    )
+    lambda_trans = 1.85
+
+    n_seq = len(seqs)
+    t_len = seqs[0]["feats"].shape[0]
+    x_seq = np.stack([s["feats"] for s in seqs], axis=0).astype(np.float32)        # (N, T, 18)
+    env_seq = np.stack([s["env"] for s in seqs], axis=0).astype(np.float32)          # (N, T, 32)
+    rms_seq = np.stack([s["rms"] for s in seqs], axis=0).astype(np.float32)          # (N, T)
+    f0_seq = np.stack([s["f0"] for s in seqs], axis=0).astype(np.float32)            # (N, T)
+    voic_seq = np.stack([s["voicing"] for s in seqs], axis=0).astype(np.float32)     # (N, T)
+    vib_seq = np.stack([s["vibrato"] for s in seqs], axis=0).astype(np.float32)      # (N, T)
+    rise_seq = np.stack([s["rms_rise"] for s in seqs], axis=0).astype(np.float32)    # (N, T)
+    valid_seq = np.stack([s["valid"] for s in seqs], axis=0).astype(np.float32)      # (N, T)
+
+    matched_tract_seq = np.zeros((n_seq, t_len, 14), dtype=np.float32)
+
+    batch_seqs = 16
+    frame_chunk = 256  # <= 256 * 131072 floats ~ 134 MB peak per matmul
+    print(f"Matching {n_seq} contiguous sequences ({n_seq * t_len} frames) against {m_sb} simulated vocal sounds...", flush=True)
+
+    with torch.no_grad():
+        for b0 in range(0, n_seq, batch_seqs):
+            b1 = min(n_seq, b0 + batch_seqs)
+            bs = b1 - b0
+
+            q_env_b = torch.from_numpy(env_seq[b0:b1]).to(dev)       # (B, T, 32)
+            q_feat_b = torch.from_numpy(x_seq[b0:b1]).to(dev)        # (B, T, 18)
+
+            flat_n = bs * t_len
+            qf_env = q_env_b.reshape(flat_n, 32)
+            qf_feat = q_feat_b.reshape(flat_n, 18)
+
+            cand_idx = torch.zeros((flat_n, k), device=dev, dtype=torch.int64)
+            cand_cost = torch.zeros((flat_n, k), device=dev, dtype=torch.float32)
+
+            for s in range(0, flat_n, frame_chunk):
+                e = min(flat_n, s + frame_chunk)
+                qe = qf_env[s:e]                                    # (C, 32)
+                qf = (qf_feat[s:e] / feat_scale) * torch.sqrt(feat_w)
+
+                cos_sim = torch.matmul(qe.half(), sim_env_mat).float() if use_fp16 else torch.matmul(qe, sim_env_mat)
+                qf_sq = (qf * qf).sum(dim=1, keepdim=True)
+                dot_f = torch.matmul(qf.half(), sim_feats_mat).float() if use_fp16 else torch.matmul(qf, sim_feats_mat)
+                feat_dist = torch.clamp(qf_sq + sim_feats_sq - 2.0 * dot_f, min=0.0) / 18.0
+                cost = (1.0 - cos_sim) + 0.35 * feat_dist
+
+                vals, idxs = torch.topk(cost, k=k, dim=1, largest=False)
+                cand_cost[s:e] = vals
+                cand_idx[s:e] = idxs
+
+            # Reshape back to (B, T, K) and solve vectorized exact Viterbi DP
+            em_cost = cand_cost.reshape(bs, t_len, k)
+            c_ids = cand_idx.reshape(bs, t_len, k)
+            c_art = sim_art_t[c_ids]                                # (B, T, K, 14)
+
+            dp = torch.zeros((bs, k), device=dev, dtype=torch.float32)
+            bp = torch.zeros((bs, t_len, k), device=dev, dtype=torch.int64)
+            dp = em_cost[:, 0, :]
+
+            for t in range(1, t_len):
+                prev_a = c_art[:, t - 1, :, :].unsqueeze(2)         # (B, K_prev, 1, 14)
+                cur_a = c_art[:, t, :, :].unsqueeze(1)              # (B, 1, K_cur, 14)
+                diff = cur_a - prev_a                               # (B, K_prev, K_cur, 14)
+                tr_cost = lambda_trans * (diff * diff * trans_w.view(1, 1, 1, 14)).sum(dim=-1)  # (B, K_prev, K_cur)
+                total = dp.unsqueeze(2) + tr_cost                   # (B, K_prev, K_cur)
+                best_prev_val, best_prev_idx = torch.min(total, dim=1)
+                dp = em_cost[:, t, :] + best_prev_val
+                bp[:, t, :] = best_prev_idx
+
+            best_path = torch.zeros((bs, t_len), device=dev, dtype=torch.int64)
+            best_path[:, t_len - 1] = torch.argmin(dp, dim=1)
+            for t in range(t_len - 2, -1, -1):
+                best_path[:, t] = bp[torch.arange(bs, device=dev), t + 1, best_path[:, t + 1]]
+
+            chosen_art = torch.gather(
+                c_art,
+                2,
+                best_path.unsqueeze(-1).unsqueeze(-1).expand(bs, t_len, 1, 14),
+            ).squeeze(2)                                            # (B, T, 14)
+            matched_tract_seq[b0:b1] = chosen_art.cpu().numpy()
+
+    # Smooth rest-blending on quiet/silent regions & subtle zero-phase Gaussian smoothing along time
+    active_gate = np.clip((rms_seq - 0.003) / 0.025, 0.0, 1.0)[..., None]  # (N, T, 1)
+    rest_norm = TRACT_REST_NORM[None, None, :]
+    tract_blended = active_gate * matched_tract_seq + (1.0 - active_gate) * rest_norm
+
+    # Zero-phase 5-tap symmetric kernel [0.10, 0.22, 0.36, 0.22, 0.10] eliminates candidate quantization jitter
+    kernel = np.array([0.10, 0.22, 0.36, 0.22, 0.10], dtype=np.float32)
+    padded = np.pad(tract_blended, ((0, 0), (2, 2), (0, 0)), mode="edge")
+    tract_smooth = (
+        kernel[0] * padded[:, 0:t_len]
+        + kernel[1] * padded[:, 1 : t_len + 1]
+        + kernel[2] * padded[:, 2 : t_len + 2]
+        + kernel[3] * padded[:, 3 : t_len + 3]
+        + kernel[4] * padded[:, 4 : t_len + 4]
+    ).astype(np.float32)
+
+    # Derive auxiliary HUD display values directly from the matched 14-D vocal simulator parameters
+    db_seq = 20.0 * np.log10(np.maximum(1e-5, rms_seq))
+    loud_norm = np.where(rms_seq > 0.004, np.maximum(0.08, np.clip((db_seq - db_p10) / db_span, 0.0, 1.0)), 0.0)
+    gate = active_gate.squeeze(-1)
+
+    flatness = x_seq[:, :, 7]
+    sib_band = x_seq[:, :, 16]
+    presence_band = x_seq[:, :, 15]
+    breath = np.clip(
+        gate * (1.0 - voic_seq * 0.85) * (0.45 * np.clip(sib_band / 2.2, 0.0, 1.0) + 0.55 * flatness),
+        0.0,
+        1.0,
+    )
+    pitch_norm = np.where(
+        f0_seq > 0.0,
+        np.clip((np.log2(np.maximum(50.0, f0_seq)) - log_f0_lo) / max(0.2, log_f0_hi - log_f0_lo), 0.0, 1.0),
+        0.42,
+    )
+
+    jaw_n = tract_smooth[:, :, 0]
+    tongue_x_n = tract_smooth[:, :, 1]
+    tongue_y_n = tract_smooth[:, :, 2]
+    tip_y_n = tract_smooth[:, :, 5]
+    lip_open_n = tract_smooth[:, :, 8]
+    lip_round_n = tract_smooth[:, :, 9]
+    lip_protrude_n = tract_smooth[:, :, 10]
+
+    onset_boost = np.clip(rise_seq * 10.0, 0.0, 0.22)
+    aperture = np.clip(
+        gate * (0.45 * lip_open_n + 0.35 * jaw_n + 0.20 * loud_norm + 0.5 * onset_boost) * (1.0 - 0.25 * breath),
+        0.0,
+        1.0,
+    )
+    jaw_drop = np.clip(gate * (0.75 * jaw_n + 0.25 * loud_norm), 0.0, 1.0)
+    width = np.clip(0.50 + gate * (0.85 * (tongue_x_n - 0.5) - 0.35 * (lip_round_n - 0.25)), 0.06, 0.96)
+    roundness = np.clip(gate * (0.65 * lip_round_n + 0.35 * lip_protrude_n), 0.0, 1.0)
+    tongue_height = np.clip(0.68 * tongue_y_n + 0.32 * tip_y_n, 0.0, 1.0)
+    tension = np.clip(
+        gate * (0.46 * loud_norm + 0.28 * np.clip(presence_band / 2.6, 0.0, 1.0) + 0.26 * pitch_norm),
+        0.0,
+        1.0,
+    )
+
+    # Derive 5 HUD shape indicators [AH, EE, OH, OO, AY] directly from the 14-D vocal simulator geometry
+    s_ah = 1.8 * jaw_n + 1.2 * lip_open_n - 0.8 * tongue_y_n - 0.8 * lip_round_n
+    s_ee = 1.8 * tongue_x_n + 1.4 * tongue_y_n - 1.2 * lip_round_n - 0.8 * jaw_n
+    s_oh = 1.5 * lip_round_n + 0.8 * jaw_n - 1.0 * tongue_x_n
+    s_oo = 1.7 * lip_round_n + 1.3 * lip_protrude_n + 0.8 * tongue_y_n - 1.1 * jaw_n - 0.8 * tongue_x_n
+    s_ay = 1.3 * tongue_x_n + 0.9 * lip_open_n + 0.5 * jaw_n - 1.0 * lip_round_n
+    v_scores = np.stack([s_ah, s_ee, s_oh, s_oo, s_ay], axis=-1) * 3.0
+    v_scores = v_scores - np.max(v_scores, axis=-1, keepdims=True)
+    v_exp = np.exp(v_scores)
+    geom_v_probs = (v_exp / np.maximum(np.sum(v_exp, axis=-1, keepdims=True), 1e-6)).astype(np.float32)
+    sil_v = np.full((1, 1, 5), 0.20, dtype=np.float32)
+    v_probs = np.where((rms_seq > 0.005)[..., None], geom_v_probs, sil_v).astype(np.float32)
+
+    art9_seq = np.stack(
+        [aperture, width, roundness, jaw_drop, tongue_height, pitch_norm, vib_seq, tension, breath],
+        axis=-1,
+    ).astype(np.float32)
+    y_seq = np.concatenate([art9_seq, v_probs], axis=-1).astype(np.float32)  # (N, T, 14)
+
+    weights_seq = (gate * (0.25 + 0.75 * np.clip(voic_seq, 0.0, 1.0)) * valid_seq).astype(np.float32)[..., None]
+
+    stats = {
+        "db_p10": round(db_p10, 3),
+        "db_p95": round(db_p95, 3),
+        "f0_p10": round(f0_p10, 2),
+        "f0_p95": round(f0_p95, 2),
+    }
+    return x_seq, y_seq, tract_smooth, env_seq, weights_seq, valid_seq[..., None], sim_art_norm, sim_env, stats
+
+
+def train_soundbank_sequence_model(
+    x_seq: np.ndarray,
+    y_seq: np.ndarray,
+    tract_seq: np.ndarray,
+    env_seq: np.ndarray,
+    weights_seq: np.ndarray,
+    valid_seq: np.ndarray,
+    sim_art_norm: np.ndarray,
+    sim_env: np.ndarray,
+    sim_feats: np.ndarray,
+    sim_cues: np.ndarray,
+    track_ids: Sequence[str],
+    epochs: int = 75,
+    batch_seqs: int = 64,
+    seed: int = 42,
+    device: str = "auto",
+) -> Tuple[SingingHeadInverseNet, np.ndarray, np.ndarray, Dict[str, float]]:
+    """Train smooth, simulator-grounded 14-D Singing Head inverse network over 60 Hz sequences."""
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+    dev = _resolve_device(device)
+    if dev.type == "cuda":
+        torch.cuda.manual_seed_all(seed)
+
+    # 1. Train & freeze differentiable simulator forward spectral surrogate ((14 tract + 10 exc) -> 32 env)
+    sim_loud = np.clip(sim_feats[:, 0] / 1.45, 0.0, 1.0).astype(np.float32)
+    sim_exc = _excitation_from_feats(sim_feats, sim_cues[:, 2], sim_loud)
+    sim_env = _smooth_env_bands(sim_env)
+    env_seq = _smooth_env_bands(env_seq)
+    fwd_sim_net, physics_forward_r2 = train_sim_forward_net(sim_art_norm, sim_exc, sim_env, dev=dev, seed=seed)
+
+    # 2. Split by track_id so validation sequences come from unseen songs
+    unique_tids = sorted(set(track_ids))
+    rng.shuffle(unique_tids)
+    n_val_tids = max(1, int(round(0.14 * len(unique_tids))))
+    val_tid_set = set(unique_tids[:n_val_tids])
+    is_val = np.array([tid in val_tid_set for tid in track_ids], dtype=bool)
+    is_train = ~is_val
+    if int(np.sum(is_train)) < 16 or int(np.sum(is_val)) < 4:
+        perm = rng.permutation(len(x_seq))
+        sp = int(0.85 * len(x_seq))
+        is_train = np.zeros(len(x_seq), dtype=bool)
+        is_train[perm[:sp]] = True
+        is_val = ~is_train
+
+    tr_x = x_seq[is_train]
+    tr_valid = valid_seq[is_train, :, 0] > 0.5
+    x_tr_valid = tr_x[tr_valid]
+    feat_mean = np.mean(x_tr_valid, axis=0).astype(np.float32)
+    feat_std = np.maximum(np.std(x_tr_valid, axis=0), 1e-4).astype(np.float32)
+
+    def norm_x(arr: np.ndarray) -> torch.Tensor:
+        return torch.from_numpy(((arr - feat_mean) / feat_std).astype(np.float32))
+
+    # Build matching excitation tensor for stem sequences
+    stem_exc_seq = _excitation_from_feats(
+        x_seq, y_seq[:, :, 8], np.clip(x_seq[:, :, 0] / 1.45, 0.0, 1.0)
+    )
+
+    # Real sequence tensors
+    xt = norm_x(tr_x).to(dev)                                    # (N_tr, T, 18)
+    yt = torch.from_numpy(y_seq[is_train]).to(dev)               # (N_tr, T, 14)
+    tt = torch.from_numpy(tract_seq[is_train]).to(dev)           # (N_tr, T, 14)
+    et = torch.from_numpy(env_seq[is_train]).to(dev)             # (N_tr, T, 32)
+    ext = torch.from_numpy(stem_exc_seq[is_train]).to(dev)       # (N_tr, T, 10)
+    wt = torch.from_numpy(weights_seq[is_train]).to(dev)         # (N_tr, T, 1)
+    vt = torch.from_numpy(valid_seq[is_train]).to(dev)           # (N_tr, T, 1)
+
+    xv = norm_x(x_seq[is_val]).to(dev)
+    yv = torch.from_numpy(y_seq[is_val]).to(dev)
+    tv = torch.from_numpy(tract_seq[is_val]).to(dev)
+    ev = torch.from_numpy(env_seq[is_val]).to(dev)
+    exv = torch.from_numpy(stem_exc_seq[is_val]).to(dev)
+    wv = torch.from_numpy(weights_seq[is_val]).to(dev)
+    vv_m = torch.from_numpy(valid_seq[is_val]).to(dev)
+
+    # Direct vocal simulator audio -> parameter reconstitution pool
+    sb_x_t = norm_x(sim_feats).to(dev)
+    sb_art_t = torch.from_numpy(sim_art_norm).to(dev)
+    sb_exc_t = torch.from_numpy(sim_exc).to(dev)
+    sb_env_t = torch.from_numpy(sim_env).to(dev)
+    sb_n = len(sb_x_t)
+
+    # Derive HUD display targets directly from simulator 14-D parameters
+    with torch.no_grad():
+        s_jaw = sb_art_t[:, 0]
+        s_tx = sb_art_t[:, 1]
+        s_ty = sb_art_t[:, 2]
+        s_tipy = sb_art_t[:, 5]
+        s_lipo = sb_art_t[:, 8]
+        s_lipr = sb_art_t[:, 9]
+        s_lipp = sb_art_t[:, 10]
+        s_cues_t = torch.from_numpy(sim_cues).to(dev)
+        s_loud = torch.clamp(torch.from_numpy(sim_loud).to(dev), 0.0, 1.0)
+        s_breath = torch.clamp(s_cues_t[:, 2], 0.0, 1.0)
+        s_pitch = torch.clamp((s_cues_t[:, 0] + 1.5) / 3.0, 0.0, 1.0)
+        s_vib = torch.clamp(s_cues_t[:, 3], 0.0, 1.0)
+        s_ap = torch.clamp((0.45 * s_lipo + 0.35 * s_jaw + 0.20 * s_loud) * (1.0 - 0.25 * s_breath), 0.0, 1.0)
+        s_jd = torch.clamp(0.75 * s_jaw + 0.25 * s_loud, 0.0, 1.0)
+        s_wi = torch.clamp(0.50 + 0.85 * (s_tx - 0.5) - 0.35 * (s_lipr - 0.25), 0.06, 0.96)
+        s_ro = torch.clamp(0.65 * s_lipr + 0.35 * s_lipp, 0.0, 1.0)
+        s_th = torch.clamp(0.68 * s_ty + 0.32 * s_tipy, 0.0, 1.0)
+        s_tn = torch.clamp(0.50 * s_loud + 0.25 * s_pitch + 0.25 * s_lipo, 0.0, 1.0)
+        sb_art9_t = torch.stack([s_ap, s_wi, s_ro, s_jd, s_th, s_pitch, s_vib, s_tn, s_breath], dim=1)
+        v_ah = 1.8 * s_jaw + 1.2 * s_lipo - 0.8 * s_ty - 0.8 * s_lipr
+        v_ee = 1.8 * s_tx + 1.4 * s_ty - 1.2 * s_lipr - 0.8 * s_jaw
+        v_oh = 1.5 * s_lipr + 0.8 * s_jaw - 1.0 * s_tx
+        v_oo = 1.7 * s_lipr + 1.3 * s_lipp + 0.8 * s_ty - 1.1 * s_jaw - 0.8 * s_tx
+        v_ay = 1.3 * s_tx + 0.9 * s_lipo + 0.5 * s_jaw - 1.0 * s_lipr
+        sb_vtarget = F.softmax(torch.stack([v_ah, v_ee, v_oh, v_oo, v_ay], dim=1) * 3.0, dim=1)
+
+    # Upgraded 18 -> 96 -> 64 -> 28 capacity supported identically by frontend wub_singing_head_mlp_v2 loader
+    inv_net = SingingHeadInverseNet(in_dim=18, h1=96, h2=64, out_dim=28).to(dev)
+    opt = torch.optim.AdamW(inv_net.parameters(), lr=2.5e-3, weight_decay=2e-4)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
+
+    n_tr_seq = len(xt)
+    t_len = xt.shape[1]
+    # Jitter sensitivity mask: focus invariance on noisy spectral features [zcr, centroid, rolloff, flatness, flux, bands, tilt]
+    jit_mask = torch.tensor(
+        [0.15, 0.15, 1.0, 0.35, 0.25, 0.70, 0.70, 1.0, 1.2, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.8, 0.8, 0.7],
+        device=dev,
+        dtype=torch.float32,
+    ).view(1, 1, 18)
+
+    for _ in range(epochs):
+        inv_net.train()
+        perm = torch.randperm(n_tr_seq, device=dev)
+        for s in range(0, n_tr_seq, batch_seqs):
+            idx = perm[s : s + batch_seqs]
+            xb = xt[idx]                                         # (B, T, 18)
+            yb = yt[idx]
+            tb = tt[idx]
+            eb = et[idx]
+            exb = ext[idx]
+            wb = wt[idx]
+            vb = vt[idx]
+
+            bs = xb.shape[0]
+            flat_b = bs * t_len
+            p_art, p_vlog, p_tract = inv_net(xb.reshape(flat_b, 18))
+            p_art = p_art.reshape(bs, t_len, 9)
+            p_vlog = p_vlog.reshape(bs, t_len, 5)
+            p_tract = p_tract.reshape(bs, t_len, 14)
+
+            v_w = vb                                             # (B, T, 1)
+            denom_v = torch.clamp(v_w.sum(), min=1.0)
+
+            loss_art = (((p_art - yb[:, :, :9]) ** 2) * v_w).sum() / (9.0 * denom_v)
+            log_probs = F.log_softmax(p_vlog, dim=-1)
+            loss_vowel = (-(yb[:, :, 9:] * log_probs).sum(dim=-1, keepdim=True) * v_w).sum() / denom_v
+            loss_tract = (F.smooth_l1_loss(p_tract, tb, reduction="none") * v_w).sum() / (14.0 * denom_v)
+
+            # Temporal velocity matching + 2nd-derivative jerk suppression (critical for butter-smooth mouths!)
+            m1 = v_w[:, 1:] * v_w[:, :-1]
+            denom_1 = torch.clamp(m1.sum(), min=1.0)
+            dp_t = p_tract[:, 1:] - p_tract[:, :-1]
+            dt_t = tb[:, 1:] - tb[:, :-1]
+            dp_a = p_art[:, 1:] - p_art[:, :-1]
+            dt_a = yb[:, 1:, :9] - yb[:, :-1, :9]
+            loss_vel = (
+                (F.smooth_l1_loss(dp_t, dt_t, reduction="none") * m1).sum() / (14.0 * denom_1)
+                + 0.45 * ((dp_t * dp_t) * m1).sum() / (14.0 * denom_1)
+                + 0.45 * (F.smooth_l1_loss(dp_a, dt_a, reduction="none") * m1).sum() / (9.0 * denom_1)
+            )
+
+            m2 = v_w[:, 2:] * v_w[:, 1:-1] * v_w[:, :-2]
+            denom_2 = torch.clamp(m2.sum(), min=1.0)
+            acc_t = p_tract[:, 2:] - 2.0 * p_tract[:, 1:-1] + p_tract[:, :-2]
+            acc_a = p_art[:, 2:] - 2.0 * p_art[:, 1:-1] + p_art[:, :-2]
+            loss_accel = (
+                ((acc_t * acc_t) * m2).sum() / (14.0 * denom_2)
+                + 0.70 * ((acc_a * acc_a) * m2).sum() / (9.0 * denom_2)
+            )
+
+            # Input micro-jitter invariance: perturbed noisy frame features shouldn't shake mouth parameters
+            noise = torch.randn_like(xb) * 0.09 * jit_mask
+            j_art, _, j_tract = inv_net((xb + noise).reshape(flat_b, 18))
+            j_art = j_art.reshape(bs, t_len, 9)
+            j_tract = j_tract.reshape(bs, t_len, 14)
+            loss_jitter = (
+                (((j_tract - p_tract) ** 2) * v_w).sum() / (14.0 * denom_v)
+                + 0.5 * (((j_art - p_art) ** 2) * v_w).sum() / (9.0 * denom_v)
+            )
+
+            # Differentiable simulator spectral cycle consistency
+            pred_env = fwd_sim_net(torch.cat([p_tract.reshape(flat_b, 14), exb.reshape(flat_b, 10)], dim=1)).reshape(bs, t_len, 32)
+            w_act = wb * v_w
+            denom_a = torch.clamp(w_act.sum(), min=1.0)
+            loss_sim_cycle = (F.smooth_l1_loss(pred_env, eb, reduction="none") * w_act).sum() / (32.0 * denom_a)
+
+            # Direct vocal simulator audio -> parameter reconstitution supervision
+            sb_idx = torch.randint(0, sb_n, (1024,), device=dev)
+            sb_pred_art, sb_vlog, sb_pred_tract = inv_net(sb_x_t[sb_idx])
+            sb_vprob = sb_vtarget[sb_idx]
+            loss_sb_vowel = -(sb_vprob * F.log_softmax(sb_vlog, dim=-1)).sum(dim=-1).mean()
+            sb_pred_env = fwd_sim_net(torch.cat([sb_pred_tract, sb_exc_t[sb_idx]], dim=1))
+            loss_sb = (
+                F.smooth_l1_loss(sb_pred_tract, sb_art_t[sb_idx])
+                + 0.40 * F.mse_loss(sb_pred_art, sb_art9_t[sb_idx])
+                + 0.25 * F.smooth_l1_loss(sb_pred_env, sb_env_t[sb_idx])
+                + 0.15 * loss_sb_vowel
+            )
+
+            loss = (
+                loss_art
+                + 0.35 * loss_vowel
+                + 3.00 * loss_tract
+                + 1.80 * loss_vel
+                + 3.60 * loss_accel
+                + 1.50 * loss_jitter
+                + 0.60 * loss_sim_cycle
+                + 0.65 * loss_sb
+            )
+
+            opt.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(inv_net.parameters(), 2.0)
+            opt.step()
+        sched.step()
+
+    inv_net.eval()
+    with torch.no_grad():
+        nv = xv.shape[0]
+        va, vv_log, vt_pred = inv_net(xv.reshape(nv * t_len, 18))
+        va = va.reshape(nv, t_len, 9)
+        vv_log = vv_log.reshape(nv, t_len, 5)
+        vt_pred = vt_pred.reshape(nv, t_len, 14)
+
+        mask_v = vv_m[:, :, 0] > 0.5
+        val_mae = float(torch.mean(torch.abs(va[mask_v] - yv[:, :, :9][mask_v])).item())
+        tract_val_mae = float(torch.mean(torch.abs(vt_pred[mask_v] - tv[mask_v])).item())
+
+        dp_val = torch.abs(vt_pred[:, 1:] - vt_pred[:, :-1]).mean()
+        val_vel = float(dp_val.item())
+        acc_val = torch.abs(vt_pred[:, 2:] - 2.0 * vt_pred[:, 1:-1] + vt_pred[:, :-2]).mean()
+        val_accel = float(acc_val.item())
+
+        active_mask = mask_v & (yv[:, :, 0] > 0.12)
+        if int(active_mask.sum().item()) > 10:
+            pred_cls = torch.argmax(vv_log[active_mask], dim=-1)
+            true_cls = torch.argmax(yv[:, :, 9:][active_mask], dim=-1)
+            val_vowel_acc = float((pred_cls == true_cls).float().mean().item())
+        else:
+            val_vowel_acc = 0.0
+
+        voiced_mask = active_mask & (wv[:, :, 0] > 0.45)
+        physics_cycle_r2 = 0.0
+        if int(voiced_mask.sum().item()) > 10:
+            vp_env = fwd_sim_net(torch.cat([vt_pred[voiced_mask], exv[voiced_mask]], dim=1))
+            tp_env = ev[voiced_mask]
+            p_res = float(((vp_env - tp_env) ** 2).sum().item())
+            p_tot = float(((tp_env - tp_env.mean(dim=0, keepdim=True)) ** 2).sum().item())
+            physics_cycle_r2 = 1.0 - p_res / max(1e-8, p_tot)
+
+    inv_net_cpu = inv_net.cpu()
+    metrics = {
+        "train_frames": int(np.sum(valid_seq[is_train] > 0.5)),
+        "val_frames": int(np.sum(valid_seq[is_val] > 0.5)),
+        "val_mae": round(val_mae, 4),
+        "tract_val_mae": round(tract_val_mae, 4),
+        "val_vowel_acc": round(val_vowel_acc, 4),
+        "val_frame_vel": round(val_vel, 5),
+        "val_frame_accel": round(val_accel, 5),
+        "cycle_r2": round(max(0.0, physics_cycle_r2), 4),
+        "physics_forward_r2": round(physics_forward_r2, 4),
+        "physics_cycle_r2": round(physics_cycle_r2, 4),
+    }
+    return inv_net_cpu, feat_mean, feat_std, metrics
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Reverse-train Singing Head on vocal stubs & stems.")
     parser.add_argument("--kits-dir", type=Path, default=Path("frontend/public/data/kits/kits"))
     parser.add_argument("--stems-dir", type=Path, default=Path("data/stems"))
     parser.add_argument("--atlas", type=Path, default=Path("/tmp/tract_physics_atlas.npz"))
+    parser.add_argument("--soundbank", type=Path, default=None, help="Optional simulated tract soundbank (.npz) for sequential Viterbi+smoothness training")
     parser.add_argument("--out", type=Path, default=Path("frontend/public/data/singing_head_model.json"))
     parser.add_argument("--max-kits", type=int, default=0, help="0 = all vocal kit stubs")
     parser.add_argument("--max-stems", type=int, default=0, help="0 = all full vocal stems")
@@ -1175,12 +1925,6 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     args = parser.parse_args()
-
-    if not args.atlas.exists():
-        from scripts.generate_tract_atlas import generate_atlas
-
-        print(f"Generating Voice Workshop physics atlas at {args.atlas}...", flush=True)
-        generate_atlas(args.atlas, count=10000)
 
     stub_paths = sorted(glob.glob(str(args.kits_dir / "*" / "*_vocals.opus")))
     stem_paths = sorted(glob.glob(str(args.stems_dir / "*" / "vocals.wav")))
@@ -1197,6 +1941,74 @@ def main() -> None:
     for p in stem_paths:
         tid = Path(p).parent.name
         jobs.append((p, tid, True))
+
+    if args.soundbank is not None and args.soundbank.exists():
+        print(
+            f"Extracting contiguous 60 Hz sequences from {len(stub_paths)} kit stubs + {len(stem_paths)} full stems "
+            f"({args.workers} workers)...",
+            flush=True,
+        )
+        all_seqs: List[dict] = []
+        with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            futures = [pool.submit(_worker_sequence, j) for j in jobs]
+            done = 0
+            for fut in as_completed(futures):
+                done += 1
+                res = fut.result()
+                if res:
+                    all_seqs.extend(res)
+                if done % 500 == 0 or done == len(jobs):
+                    print(f"  processed {done}/{len(jobs)} sources -> {len(all_seqs)} sequences", flush=True)
+
+        dev = _resolve_device(args.device)
+        sb = np.load(args.soundbank)
+        sim_feats = sb["feats"].astype(np.float32)
+        sim_cues = sb["cues"].astype(np.float32)
+
+        x_seq, y_seq, tract_seq, env_seq, weights_seq, valid_seq, sim_art_norm, sim_env, corpus_stats = (
+            match_sequences_to_soundbank(all_seqs, args.soundbank, dev=dev)
+        )
+        track_ids = [s["track_id"] for s in all_seqs]
+        print(
+            f"Training smooth 14-D sequence inverse network on {dev} ({args.epochs} epochs, {len(all_seqs)} sequences)...",
+            flush=True,
+        )
+        model, feat_mean, feat_std, metrics = train_soundbank_sequence_model(
+            x_seq,
+            y_seq,
+            tract_seq,
+            env_seq,
+            weights_seq,
+            valid_seq,
+            sim_art_norm,
+            sim_env,
+            sim_feats,
+            sim_cues,
+            track_ids,
+            epochs=args.epochs,
+            seed=args.seed,
+            device=args.device,
+        )
+        print(f"Validation metrics: {metrics} | Corpus stats: {corpus_stats}", flush=True)
+        export_model_json(
+            args.out,
+            model,
+            feat_mean,
+            feat_std,
+            corpus_stats,
+            metrics,
+            stubs_used=len(stub_paths),
+            stems_used=len(stem_paths),
+        )
+        size_kb = args.out.stat().st_size / 1024.0
+        print(f"Exported soundbank-matched smooth 14-D Singing Head model to {args.out} ({size_kb:.1f} KB).", flush=True)
+        return
+
+    if not args.atlas.exists():
+        from scripts.generate_tract_atlas import generate_atlas
+
+        print(f"Generating Voice Workshop physics atlas at {args.atlas}...", flush=True)
+        generate_atlas(args.atlas, count=10000)
 
     print(
         f"Extracting vocal frames from {len(stub_paths)} kit stubs + {len(stem_paths)} full stems "

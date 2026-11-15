@@ -1458,21 +1458,30 @@ export class StemRemixPlayer {
         Math.abs(phraseEnergy(a) - introEnergy) - Math.abs(phraseEnergy(b) - introEnergy)
       )[0];
       const run = this.longestRunPhrases(anchor, true);
-      const phrase = introPhrase
+      const phrase: KitPhrase | null = introPhrase
         ?? lowEnergyPhrase
         ?? (run.length >= 2
           ? run[0]
           : (fullEntry?.phrase ?? fullAnySection ?? grooveEntries[0]?.phrase
-            ?? allEntries[0]?.phrase ?? anchor.phrases[0]));
-      const entries = allEntries.filter((entry) => entry.phrase.id === phrase.id);
+            ?? allEntries[0]?.phrase ?? anchor.phrases[0] ?? null));
+      const entries = phrase ? allEntries.filter((entry) => entry.phrase.id === phrase.id) : [];
       const byStem = new Map<StemName, StemPoolEntry>();
       for (const entry of entries) {
         if (!byStem.has(entry.stem)) byStem.set(entry.stem, entry);
       }
       const prepared = await Promise.all(STEMS.map(async (stem) => {
-        const entry = byStem.get(stem) ?? this.anchorEntry(stem, phrase);
-        if (!entry) return null;
-        const loaded = await this.prepareEntry(stem, entry);
+        const primary = byStem.get(stem) ?? this.anchorEntry(stem, phrase);
+        if (primary) {
+          const loaded = await this.prepareEntry(stem, primary);
+          if (loaded) return { stem, entry: loaded.entry, audio: loaded.audio };
+        }
+        // Fallback: pick the closest-tempo/key pooled candidate so an odd stem
+        // never leaves the opening block silent.
+        const fallback = [...this.pools[stem]].sort(
+          (a, b) => (a.tempoCost * 2 + a.keyCost * 0.1) - (b.tempoCost * 2 + b.keyCost * 0.1)
+        )[0];
+        if (!fallback) return null;
+        const loaded = await this.prepareEntry(stem, fallback);
         return loaded ? { stem, entry: loaded.entry, audio: loaded.audio } : null;
       }));
       // A newer genre switch superseded us while we decoded: do not publish
@@ -1495,6 +1504,27 @@ export class StemRemixPlayer {
           console.warn(`[StemRemix] anchor missing ${stem}`);
         }
       }
+    } else {
+      // No single full-kit anchor: still assemble a clean opening quartet from
+      // the active tempo/key pools so playback always starts.
+      const prepared = await Promise.all(STEMS.map(async (stem) => {
+        const fallback = [...this.pools[stem]].sort(
+          (a, b) => (a.tempoCost * 2 + a.keyCost * 0.1) - (b.tempoCost * 2 + b.keyCost * 0.1)
+        )[0];
+        if (!fallback) return null;
+        const loaded = await this.prepareEntry(stem, fallback);
+        return loaded ? { stem, entry: loaded.entry, audio: loaded.audio } : null;
+      }));
+      if (stale()) return chosen;
+      this.anchorPrepared = prepared.filter((entry): entry is { stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun } => entry !== null);
+      this.lastBlockEntries = {};
+      this.lastBlockRuns = {};
+      for (const preparedEntry of this.anchorPrepared) {
+        this.lastBlockEntries[preparedEntry.stem] = preparedEntry.entry;
+        this.lastBlockRuns[preparedEntry.stem] = [preparedEntry.entry];
+      }
+      this.previousEntries = { ...this.lastBlockEntries };
+      this.lastVocalChangeBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 0 : -1;
     }
     console.info(
       `[StemRemix] Session ${chosen.id} • ${this.sessionBpm.toFixed(2)} BPM • ${this.sessionKey} • ` +
@@ -1980,61 +2010,80 @@ export class StemRemixPlayer {
   private chooseAnchor(): Kit | null {
     const cluster = this.cluster;
     if (!cluster) return null;
-    let best: { kit: Kit; score: number } | null = null;
+    const scoreKits = (kits: Iterable<Kit>): Kit | null => {
+      let best: { kit: Kit; score: number } | null = null;
+      for (const kit of kits) {
+        if (this.failedKits.has(kit.track_id)) continue;
+        // Count how many stems of this kit actually entered the active tempo/key pool.
+        // Under a user BPM override, a cluster's nominal kits can fall outside the
+        // first populated tempo tier; skip 0-entry ghost kits cleanly.
+        let poolStemCount = 0;
+        for (const stem of STEMS) {
+          if (kit.phrases.some((p) => this.entryById.has(`${p.id}:${stem}`))) {
+            poolStemCount += 1;
+          }
+        }
+        if (poolStemCount === 0) continue;
+
+        const sections = new Set(kit.phrases.map((p) => String(p.section).toUpperCase()));
+        let score = poolStemCount * 3;
+        // The anchor song is transposed to the session key for the opening
+        // blocks; a whole-song |shift| >= 4 is the classic "muddy cold open"
+        // (v0.2.233 opened at shift 5).  Prefer anchors already near the key.
+        const shift = keyShift(this.sessionKey, kit.key);
+        if (shift === null) score -= 6;
+        else if (Math.abs(shift) <= 2) score += 6;
+        else if (Math.abs(shift) <= 3) score += 3;
+        else score -= (Math.abs(shift) - 3) * 1.25;
+        if (sections.has("GROOVE_A")) score += 2;
+        if (sections.has("DROP")) score += 1.5;
+        if (sections.has("BUILDUP")) score += 0.5;
+        const fullPhraseList = kit.phrases.filter((phrase) =>
+          STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
+        );
+        const fullPhrase = fullPhraseList.length > 0;
+        if (fullPhrase) score += 2;
+        // The planned arc opens on a 0.30 INTRO.  A kit whose quietest
+        // full-stem phrase is near that target makes a much better cold open
+        // than a kit that only contains drops.
+        const energyOf = (phrase: KitPhrase): number => {
+          const value = Number(phrase.energy);
+          return Number.isFinite(value) ? value : 0.5;
+        };
+        const lowEnergy = fullPhraseList.length > 0
+          ? Math.min(...fullPhraseList.map(energyOf))
+          : 0.65;
+        if (lowEnergy <= 0.40) score += 2.5;
+        else if (lowEnergy <= 0.55) score += 1.0;
+        const fullGroove = kit.phrases.some((phrase) =>
+          String(phrase.section).toUpperCase() === "GROOVE_A"
+          && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
+        );
+        if (fullGroove) score += 2.5;
+        // The planned arc opens on INTRO; prefer an anchor that actually has a
+        // full-stem intro phrase instead of starting at a peak-energy drop.
+        const fullIntro = kit.phrases.some((phrase) =>
+          phrase.is_intro === true
+          && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
+        );
+        if (fullIntro) score += 6.0;
+        // Prefer a kit that actually contains the next 4 bars, so the anchor
+        // song can advance every 4 bars instead of looping an isolated window.
+        const run = this.longestRunPhrases(kit, true);
+        if (run.length > 1) score += Math.min(6, run.length) * 0.9;
+        score += Math.min(1, kit.phrases.length / 6);
+        score += hashRoll(kit.track_id) * 0.3;
+        if (best === null || score > best.score) best = { kit, score };
+      }
+      return best?.kit ?? null;
+    };
+
+    const clusterKits: Kit[] = [];
     for (const kitId of cluster.kits) {
       const kit = this.kitById.get(kitId);
-      if (!kit || this.failedKits.has(kitId)) continue;
-      const sections = new Set(kit.phrases.map((p) => String(p.section).toUpperCase()));
-      let score = 0;
-      // The anchor song is transposed to the session key for the opening
-      // blocks; a whole-song |shift| >= 4 is the classic "muddy cold open"
-      // (v0.2.233 opened at shift 5).  Prefer anchors already near the key.
-      const shift = keyShift(this.sessionKey, kit.key);
-      if (shift === null) score -= 6;
-      else if (Math.abs(shift) <= 2) score += 6;
-      else if (Math.abs(shift) <= 3) score += 3;
-      else score -= (Math.abs(shift) - 3) * 1.25;
-      if (sections.has("GROOVE_A")) score += 2;
-      if (sections.has("DROP")) score += 1.5;
-      if (sections.has("BUILDUP")) score += 0.5;
-      const fullPhraseList = kit.phrases.filter((phrase) =>
-        STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
-      );
-      const fullPhrase = fullPhraseList.length > 0;
-      if (fullPhrase) score += 2;
-      // The planned arc opens on a 0.30 INTRO.  A kit whose quietest
-      // full-stem phrase is near that target makes a much better cold open
-      // than a kit that only contains drops.
-      const energyOf = (phrase: KitPhrase): number => {
-        const value = Number(phrase.energy);
-        return Number.isFinite(value) ? value : 0.5;
-      };
-      const lowEnergy = fullPhraseList.length > 0
-        ? Math.min(...fullPhraseList.map(energyOf))
-        : 0.65;
-      if (lowEnergy <= 0.40) score += 2.5;
-      else if (lowEnergy <= 0.55) score += 1.0;
-      const fullGroove = kit.phrases.some((phrase) =>
-        String(phrase.section).toUpperCase() === "GROOVE_A"
-        && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
-      );
-      if (fullGroove) score += 2.5;
-      // The planned arc opens on INTRO; prefer an anchor that actually has a
-      // full-stem intro phrase instead of starting at a peak-energy drop.
-      const fullIntro = kit.phrases.some((phrase) =>
-        phrase.is_intro === true
-        && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
-      );
-      if (fullIntro) score += 6.0;
-      // Prefer a kit that actually contains the next 4 bars, so the anchor
-      // song can advance every 4 bars instead of looping an isolated window.
-      const run = this.longestRunPhrases(kit, true);
-      if (run.length > 1) score += Math.min(6, run.length) * 0.9;
-      score += Math.min(1, kit.phrases.length / 6);
-      score += hashRoll(kit.track_id) * 0.3;
-      if (best === null || score > best.score) best = { kit, score };
+      if (kit) clusterKits.push(kit);
     }
-    return best?.kit ?? null;
+    return scoreKits(clusterKits) ?? scoreKits(this.kitById.values());
   }
 
   private entriesForKit(kit: Kit, section?: string): StemPoolEntry[] {

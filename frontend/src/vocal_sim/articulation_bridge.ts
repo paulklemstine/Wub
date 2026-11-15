@@ -123,7 +123,8 @@ export function articulationToTract(
   timeSec: number,
   out: Articulators
 ): Articulators {
-  const vibratoOsc = Math.sin(timeSec * 36) * 0.08 * art.vibrato;
+  const activeVibGate = Math.min(1, art.voicing * Math.max(0, (art.rms - 0.005) * 40));
+  const vibratoOsc = Math.sin(timeSec * 36) * 0.06 * art.vibrato * activeVibGate;
   if (art.tract) {
     const t = art.tract;
     out.jaw = clampArt("jaw", t.jaw);

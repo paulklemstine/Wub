@@ -33,6 +33,36 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
+interface SpringChannel {
+  pos: number;
+  vel: number;
+}
+
+function makeSpring(initial: number): SpringChannel {
+  return { pos: initial, vel: 0 };
+}
+
+/**
+ * Exact critically-damped 2nd-order spring-damper (zeta = 1.0) with asymmetric
+ * natural frequencies. Attenuates high-frequency frame jitter at O(1/w^2) and
+ * produces smooth, C1-continuous human articulation without overshoot.
+ */
+function stepSpringAsym(
+  ch: SpringChannel,
+  target: number,
+  dt: number,
+  attackOmega: number,
+  releaseOmega: number
+): number {
+  const omega = target > ch.pos ? attackOmega : releaseOmega;
+  const e = Math.exp(-omega * dt);
+  const d = ch.pos - target;
+  const c = ch.vel + omega * d;
+  ch.pos = target + (d + c * dt) * e;
+  ch.vel = (ch.vel - omega * c * dt) * e;
+  return ch.pos;
+}
+
 function smoothAsym(cur: number, target: number, dt: number, attackTau: number, releaseTau: number): number {
   const tau = target > cur ? attackTau : releaseTau;
   const alpha = 1 - Math.exp(-dt / Math.max(0.001, tau));
@@ -93,6 +123,40 @@ export class SingingHeadPanel {
 
   // Reusable smoothed articulation snapshot for tract bridge
   private readonly smoothedTract: Articulators = { ...DEFAULT_ARTICULATORS };
+  private readonly scalarSprings = {
+    aperture: makeSpring(0),
+    width: makeSpring(0.5),
+    roundness: makeSpring(0),
+    jawDrop: makeSpring(0),
+    tongueHeight: makeSpring(0.55),
+    pitchNorm: makeSpring(0.42),
+    vibrato: makeSpring(0),
+    tension: makeSpring(0),
+    breath: makeSpring(0),
+  };
+  private readonly vowelSprings: SpringChannel[] = [
+    makeSpring(0.2),
+    makeSpring(0.2),
+    makeSpring(0.2),
+    makeSpring(0.2),
+    makeSpring(0.2),
+  ];
+  private readonly tractSprings: Record<keyof Articulators, SpringChannel> = {
+    jaw: makeSpring(DEFAULT_ARTICULATORS.jaw),
+    tongueX: makeSpring(DEFAULT_ARTICULATORS.tongueX),
+    tongueY: makeSpring(DEFAULT_ARTICULATORS.tongueY),
+    tongueRoot: makeSpring(DEFAULT_ARTICULATORS.tongueRoot),
+    tipX: makeSpring(DEFAULT_ARTICULATORS.tipX),
+    tipY: makeSpring(DEFAULT_ARTICULATORS.tipY),
+    groove: makeSpring(DEFAULT_ARTICULATORS.groove),
+    tongueSides: makeSpring(DEFAULT_ARTICULATORS.tongueSides),
+    lipOpen: makeSpring(DEFAULT_ARTICULATORS.lipOpen),
+    lipRound: makeSpring(DEFAULT_ARTICULATORS.lipRound),
+    lipProtrude: makeSpring(DEFAULT_ARTICULATORS.lipProtrude),
+    lipTuck: makeSpring(DEFAULT_ARTICULATORS.lipTuck),
+    velum: makeSpring(DEFAULT_ARTICULATORS.velum),
+    larynx: makeSpring(DEFAULT_ARTICULATORS.larynx),
+  };
   private readonly smoothedArt: SingingHeadArticulation = {
     aperture: 0,
     width: 0.5,
@@ -248,20 +312,21 @@ export class SingingHeadPanel {
     const samples = !isMuted && vocalSamples && vocalSamples.length > 0 ? vocalSamples : this.silentFrame;
     const pred: SingingHeadArticulation = this.inference.infer(samples, sampleRate > 0 ? sampleRate : 44100);
 
-    // Smooth articulators: ultra-fast attack (16-24 ms) for consonant/syllable snap,
-    // musical release (90-140 ms) so held notes & vibrato glide cleanly.
-    this.aperture = smoothAsym(this.aperture, pred.aperture, dt, 0.016, 0.095);
-    this.width = smoothAsym(this.width, pred.width, dt, 0.025, 0.11);
-    this.roundness = smoothAsym(this.roundness, pred.roundness, dt, 0.025, 0.11);
-    this.jawDrop = smoothAsym(this.jawDrop, pred.jawDrop, dt, 0.018, 0.10);
-    this.tongueHeight = smoothAsym(this.tongueHeight, pred.tongueHeight, dt, 0.028, 0.12);
-    this.pitchNorm = smoothAsym(this.pitchNorm, pred.pitchNorm, dt, 0.032, 0.16);
-    this.vibrato = smoothAsym(this.vibrato, pred.vibrato, dt, 0.045, 0.18);
-    this.tension = smoothAsym(this.tension, pred.tension, dt, 0.025, 0.14);
-    this.breath = smoothAsym(this.breath, pred.breath, dt, 0.020, 0.09);
+    // Critically-damped 2nd-order spring-damper articulators: natural syllable
+    // glide (omega_attack 24-30 rad/s) and fluid musical co-articulation
+    // (omega_release 12-17 rad/s), rejecting frame-to-frame jitter without overshoot.
+    this.aperture = stepSpringAsym(this.scalarSprings.aperture, pred.aperture, dt, 29, 16);
+    this.width = stepSpringAsym(this.scalarSprings.width, pred.width, dt, 24, 15);
+    this.roundness = stepSpringAsym(this.scalarSprings.roundness, pred.roundness, dt, 24, 15);
+    this.jawDrop = stepSpringAsym(this.scalarSprings.jawDrop, pred.jawDrop, dt, 28, 16);
+    this.tongueHeight = stepSpringAsym(this.scalarSprings.tongueHeight, pred.tongueHeight, dt, 22, 14);
+    this.pitchNorm = stepSpringAsym(this.scalarSprings.pitchNorm, pred.pitchNorm, dt, 20, 12);
+    this.vibrato = stepSpringAsym(this.scalarSprings.vibrato, pred.vibrato, dt, 16, 11);
+    this.tension = stepSpringAsym(this.scalarSprings.tension, pred.tension, dt, 23, 13);
+    this.breath = stepSpringAsym(this.scalarSprings.breath, pred.breath, dt, 26, 17);
 
     for (let k = 0; k < 5; k++) {
-      this.vowelProbs[k] = smoothAsym(this.vowelProbs[k], pred.vowelProbs[k], dt, 0.024, 0.11);
+      this.vowelProbs[k] = stepSpringAsym(this.vowelSprings[k], pred.vowelProbs[k], dt, 24, 15);
     }
     let bestK = 0;
     for (let k = 1; k < 5; k++) {
@@ -269,10 +334,10 @@ export class SingingHeadPanel {
     }
     this.topVowel = SINGING_VOWELS[bestK];
 
-    this.smoothedRms = smoothAsym(this.smoothedRms, pred.rms, dt, 0.02, 0.12);
-    this.smoothedVoicing = smoothAsym(this.smoothedVoicing, pred.voicing, dt, 0.03, 0.14);
+    this.smoothedRms = smoothAsym(this.smoothedRms, pred.rms, dt, 0.025, 0.13);
+    this.smoothedVoicing = smoothAsym(this.smoothedVoicing, pred.voicing, dt, 0.035, 0.15);
     if (pred.f0Hz > 0) {
-      this.lastF0Hz = this.lastF0Hz > 0 ? this.lastF0Hz * 0.6 + pred.f0Hz * 0.4 : pred.f0Hz;
+      this.lastF0Hz = this.lastF0Hz > 0 ? smoothAsym(this.lastF0Hz, pred.f0Hz, dt, 0.045, 0.045) : pred.f0Hz;
     } else if (this.smoothedRms < 0.004) {
       this.lastF0Hz = 0;
     }
@@ -295,7 +360,7 @@ export class SingingHeadPanel {
     if (pred.tract) {
       for (let i = 0; i < ARTICULATOR_KEYS.length; i++) {
         const k = ARTICULATOR_KEYS[i];
-        this.smoothedTract[k] = smoothAsym(this.smoothedTract[k], pred.tract[k], dt, 0.020, 0.090);
+        this.smoothedTract[k] = stepSpringAsym(this.tractSprings[k], pred.tract[k], dt, 25, 15);
       }
       this.smoothedArt.tract = this.smoothedTract;
     } else {
