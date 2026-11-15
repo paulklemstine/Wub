@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// Singing Head: Stylized Neon/Cyberpunk 2D Canvas Vocal Articulator
+// Singing Head: Voice Workshop Mid-Sagittal Side View & Interactive 3D View
 // Placed at the bottom of the KG-505 interface and driven in real time by the
 // reverse-trained acoustic-to-articulatory model on the vocal instrument stem.
 // -----------------------------------------------------------------------------
@@ -13,6 +13,19 @@ import {
   type SingingHeadArticulation,
   type SingingVowel,
 } from "./singing_head_model";
+import {
+  VocalFieldState,
+  articulationToTract,
+  createVocalFieldState,
+  defaultAnatomy,
+  defaultTeeth,
+  updateVocalFieldState,
+} from "./vocal_sim/articulation_bridge";
+import { type FieldMode } from "./vocal_sim/canvas_colors";
+import { SideHeadView } from "./vocal_sim/side_head_view";
+import { type CameraPreset3D, Tract3DView } from "./vocal_sim/tract_3d_view";
+import { computeGeometry, type TractGeometry } from "./vocal_sim/tract/geometry";
+import { type Articulators, ARTICULATOR_KEYS, DEFAULT_ARTICULATORS } from "./vocal_sim/tract/types";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -34,26 +47,32 @@ function hzToNoteName(hz: number): string {
   return `${name}${octave}`;
 }
 
-interface FloatingSpark {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  color: string;
-  size: number;
-}
+export type SingingHeadViewMode = "side" | "3d";
 
 export class SingingHeadPanel {
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
   private statusBadgeEl: HTMLElement | null = null;
   private modelBadgeEl: HTMLElement | null = null;
+  private host3dEl: HTMLElement | null = null;
+  private controls3dEl: HTMLElement | null = null;
 
   private readonly inference = new SingingHeadInference();
   private readonly silentFrame = new Float32Array(SINGING_FFT_SIZE);
 
-  // Smoothed articulatory state
+  // Voice Workshop mid-sagittal & 3D tract state
+  private viewMode: SingingHeadViewMode = "side";
+  private fieldMode: FieldMode = "pressure";
+  private showLabels = true;
+  private readonly anatomy = defaultAnatomy();
+  private readonly teeth = defaultTeeth();
+  private readonly tractArt: Articulators = { ...DEFAULT_ARTICULATORS };
+  private tractGeom: TractGeometry = computeGeometry(this.tractArt, this.anatomy, this.teeth);
+  private readonly fieldState: VocalFieldState = createVocalFieldState();
+  private readonly sideView = new SideHeadView(`${import.meta.env.BASE_URL}anatomy/head.jpg`);
+  private tract3dView: Tract3DView | null = null;
+
+  // Smoothed articulatory state (reverse-trained from vocal stem audio)
   private aperture = 0;
   private width = 0.5;
   private roundness = 0;
@@ -70,14 +89,29 @@ export class SingingHeadPanel {
   private smoothedRms = 0;
   private smoothedVoicing = 0;
   private lastAudioSec = 0;
-
-  // Animation state
-  private blinkTimer = 0;
-  private nextBlinkAt = 3.6;
-  private blinkAmount = 0; // 0 = open, 1 = closed
-  private sparks: FloatingSpark[] = [];
-  private sparkCooldown = 0;
   private modelLoadStarted = false;
+
+  // Reusable smoothed articulation snapshot for tract bridge
+  private readonly smoothedTract: Articulators = { ...DEFAULT_ARTICULATORS };
+  private readonly smoothedArt: SingingHeadArticulation = {
+    aperture: 0,
+    width: 0.5,
+    roundness: 0,
+    jawDrop: 0,
+    tongueHeight: 0.55,
+    pitchNorm: 0.42,
+    vibrato: 0,
+    tension: 0,
+    breath: 0,
+    vowelProbs: this.vowelProbs,
+    topVowel: "AH",
+    tract: undefined,
+    rms: 0,
+    f0Hz: 0,
+    voicing: 0,
+    centroidHz: 0,
+    trained: false,
+  };
 
   public initDOM(
     canvasId: string = "singing-head-canvas",
@@ -90,9 +124,74 @@ export class SingingHeadPanel {
     }
     this.statusBadgeEl = document.getElementById(statusBadgeId);
     this.modelBadgeEl = document.getElementById(modelBadgeId);
+    this.host3dEl = document.getElementById("singing-head-3d-host");
+    this.controls3dEl = document.getElementById("sh-3d-controls");
+    if (this.host3dEl) {
+      this.tract3dView = new Tract3DView(this.host3dEl);
+    }
 
+    this.bindToolbarControls();
     void this.loadModel();
     this.render(null, this.silentFrame, 0, false, 126, 0.016);
+  }
+
+  private bindToolbarControls(): void {
+    const sideBtn = document.getElementById("sh-mode-side");
+    const view3dBtn = document.getElementById("sh-mode-3d");
+    sideBtn?.addEventListener("click", () => this.setViewMode("side"));
+    view3dBtn?.addEventListener("click", () => this.setViewMode("3d"));
+
+    const fieldBtns = document.querySelectorAll<HTMLButtonElement>("[data-sh-field]");
+    fieldBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = btn.dataset.shField as FieldMode | undefined;
+        if (!mode) return;
+        this.fieldMode = mode;
+        if (this.tract3dView) this.tract3dView.mode = mode;
+        fieldBtns.forEach((b) => b.classList.toggle("active", b === btn));
+      });
+    });
+
+    const labelsBtn = document.getElementById("sh-toggle-labels");
+    labelsBtn?.addEventListener("click", () => {
+      this.showLabels = !this.showLabels;
+      if (this.tract3dView) this.tract3dView.showLabels = this.showLabels;
+      labelsBtn.classList.toggle("active", this.showLabels);
+    });
+
+    const presetBtns = document.querySelectorAll<HTMLButtonElement>("[data-sh-preset]");
+    presetBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const preset = btn.dataset.shPreset as CameraPreset3D | undefined;
+        if (!preset || !this.tract3dView) return;
+        this.tract3dView.setPreset(preset);
+        presetBtns.forEach((b) => b.classList.toggle("active", b === btn));
+      });
+    });
+
+    const cutBtn = document.getElementById("sh-toggle-cut");
+    cutBtn?.addEventListener("click", () => {
+      if (!this.tract3dView) return;
+      this.tract3dView.cut = !this.tract3dView.cut;
+      cutBtn.classList.toggle("active", this.tract3dView.cut);
+    });
+
+    const tissuesBtn = document.getElementById("sh-toggle-tissues");
+    tissuesBtn?.addEventListener("click", () => {
+      if (!this.tract3dView) return;
+      this.tract3dView.tissues = !this.tract3dView.tissues;
+      tissuesBtn.classList.toggle("active", this.tract3dView.tissues);
+    });
+  }
+
+  public setViewMode(mode: SingingHeadViewMode): void {
+    this.viewMode = mode;
+    document.getElementById("sh-mode-side")?.classList.toggle("active", mode === "side");
+    document.getElementById("sh-mode-3d")?.classList.toggle("active", mode === "3d");
+    if (this.controls3dEl) {
+      this.controls3dEl.style.display = mode === "3d" ? "inline-flex" : "none";
+    }
+    this.tract3dView?.setActive(mode === "3d", this.tractGeom);
   }
 
   public async loadModel(url: string = `${import.meta.env.BASE_URL}data/singing_head_model.json`): Promise<boolean> {
@@ -109,9 +208,12 @@ export class SingingHeadPanel {
       const stubs = json.corpus_stats?.stubs_used ?? 0;
       const stems = json.corpus_stats?.stems_used ?? 0;
       const acc = json.corpus_stats?.val_vowel_acc;
+      const physR2 = json.corpus_stats?.physics_cycle_r2;
       if (this.modelBadgeEl) {
+        const dimTag = json.weights.b3.length >= 28 ? " • 14D TRACT" : "";
         const accStr = typeof acc === "number" ? ` • ${(acc * 100).toFixed(0)}% VOWEL ACC` : "";
-        this.modelBadgeEl.textContent = `REVERSE-TRAINED • ${stubs} STUBS + ${stems} STEMS${accStr}`;
+        const r2Str = typeof physR2 === "number" && physR2 > 0 ? ` • PHYS R² ${physR2.toFixed(2)}` : "";
+        this.modelBadgeEl.textContent = `REVERSE-TRAINED • ${stubs} STUBS + ${stems} STEMS${dimTag}${accStr}${r2Str}`;
       }
       return true;
     } catch (err) {
@@ -170,44 +272,35 @@ export class SingingHeadPanel {
       this.lastF0Hz = 0;
     }
 
-    // Natural eye blink timer
-    this.blinkTimer += dt;
-    if (this.blinkTimer >= this.nextBlinkAt) {
-      const blinkProgress = (this.blinkTimer - this.nextBlinkAt) / 0.16;
-      if (blinkProgress >= 1) {
-        this.blinkAmount = 0;
-        this.blinkTimer = 0;
-        this.nextBlinkAt = 2.8 + Math.random() * 2.6;
-      } else {
-        this.blinkAmount = Math.sin(blinkProgress * Math.PI);
+    this.smoothedArt.aperture = this.aperture;
+    this.smoothedArt.width = this.width;
+    this.smoothedArt.roundness = this.roundness;
+    this.smoothedArt.jawDrop = this.jawDrop;
+    this.smoothedArt.tongueHeight = this.tongueHeight;
+    this.smoothedArt.pitchNorm = this.pitchNorm;
+    this.smoothedArt.vibrato = this.vibrato;
+    this.smoothedArt.tension = this.tension;
+    this.smoothedArt.breath = this.breath;
+    this.smoothedArt.topVowel = this.topVowel;
+    this.smoothedArt.rms = this.smoothedRms;
+    this.smoothedArt.f0Hz = this.lastF0Hz;
+    this.smoothedArt.voicing = this.smoothedVoicing;
+    this.smoothedArt.centroidHz = pred.centroidHz;
+    this.smoothedArt.trained = pred.trained;
+    if (pred.tract) {
+      for (let i = 0; i < ARTICULATOR_KEYS.length; i++) {
+        const k = ARTICULATOR_KEYS[i];
+        this.smoothedTract[k] = smoothAsym(this.smoothedTract[k], pred.tract[k], dt, 0.020, 0.090);
       }
+      this.smoothedArt.tract = this.smoothedTract;
     } else {
-      this.blinkAmount = 0;
+      this.smoothedArt.tract = undefined;
     }
 
-    // Floating vocal sparks on energetic voiced singing
-    this.sparkCooldown = Math.max(0, this.sparkCooldown - dt);
-    if (!isMuted && this.aperture > 0.28 && this.smoothedVoicing > 0.42 && this.sparkCooldown <= 0) {
-      this.sparkCooldown = 0.09;
-      const side = Math.random() < 0.5 ? -1 : 1;
-      this.sparks.push({
-        x: side * (26 + Math.random() * 44),
-        y: 28 + (Math.random() - 0.5) * 26,
-        vx: side * (12 + Math.random() * 20),
-        vy: -(24 + Math.random() * 34),
-        life: 1.0,
-        color: this.tension > 0.55 ? "#ffb700" : "#00f0ff",
-        size: 1.5 + Math.random() * 2.2,
-      });
-      if (this.sparks.length > 28) this.sparks.shift();
-    }
-    for (let i = this.sparks.length - 1; i >= 0; i--) {
-      const s = this.sparks[i];
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      s.life -= dt * 1.15;
-      if (s.life <= 0) this.sparks.splice(i, 1);
-    }
+    const timeSec = performance.now() / 1000;
+    articulationToTract(this.smoothedArt, timeSec, this.tractArt);
+    this.tractGeom = computeGeometry(this.tractArt, this.anatomy, this.teeth);
+    updateVocalFieldState(this.smoothedArt, this.tractArt, this.tractGeom, timeSec, this.fieldState);
 
     // Header live telemetry readout
     if (this.statusBadgeEl) {
@@ -230,8 +323,8 @@ export class SingingHeadPanel {
     samples: Float32Array,
     vocalLevel: number,
     isMuted: boolean,
-    bpm: number,
-    _dt: number
+    _bpm: number,
+    dt: number
   ): void {
     if (!this.canvas) return;
     if (!this.ctx) {
@@ -240,10 +333,9 @@ export class SingingHeadPanel {
     }
     const ctx = this.ctx;
 
-    // Keep backing resolution crisp on HiDPI screens while preserving 960x340 logical space
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const logicalW = 960;
-    const logicalH = 340;
+    const logicalH = 380;
     const targetW = Math.round(logicalW * dpr);
     const targetH = Math.round(logicalH * dpr);
     if (this.canvas.width !== targetW || this.canvas.height !== targetH) {
@@ -256,8 +348,6 @@ export class SingingHeadPanel {
 
     const t = performance.now() / 1000;
     const active = !isMuted && (this.aperture > 0.06 || this.smoothedRms > 0.004 || vocalLevel > 0.015);
-    const beatPhase = (t * (bpm / 60)) % 1;
-    const beatBounce = active ? Math.sin(beatPhase * Math.PI * 2) * 1.8 : Math.sin(t * 1.4) * 1.2;
 
     // -------------------------------------------------------------------------
     // 1. Background Chassis & Cyber Grid
@@ -269,7 +359,6 @@ export class SingingHeadPanel {
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, logicalW, logicalH);
 
-    // Subtle perspective scanline grid
     ctx.strokeStyle = "rgba(0, 229, 255, 0.05)";
     ctx.lineWidth = 1;
     for (let x = 40; x < logicalW; x += 40) {
@@ -286,20 +375,44 @@ export class SingingHeadPanel {
     }
 
     // -------------------------------------------------------------------------
-    // 2. Left Panel: Vocal Waveform & Formant Vowel Pentagon Radar
+    // 2. Left Panel: Vocal Waveform & Inverse Vowel Posterior Pentagon
     // -------------------------------------------------------------------------
     this.drawLeftTelemetry(ctx, samples, active, isMuted, t);
 
     // -------------------------------------------------------------------------
-    // 3. Center Portrait: Cyberpunk Neon Singing Head
+    // 3. Center Stage: Voice Workshop Exact Side View or 3D Vocal Tract View
     // -------------------------------------------------------------------------
-    const headX = logicalW * 0.5;
-    const pitchLift = (this.pitchNorm - 0.42) * -8;
-    const vibX = active ? Math.sin(t * 32) * this.vibrato * 2.2 : 0;
-    const headY = logicalH * 0.47 + beatBounce + pitchLift;
-    const tilt = active ? (this.pitchNorm - 0.45) * 0.05 + Math.sin(t * 1.7) * 0.015 : Math.sin(t * 0.9) * 0.01;
+    const vx = 266;
+    const vy = 12;
+    const vw = 428;
+    const vh = 356;
 
-    this.drawSingingHead(ctx, headX + vibX, headY, tilt, samples, active, isMuted, meta, t);
+    if (this.viewMode === "side") {
+      this.sideView.renderRegion(
+        ctx,
+        dpr,
+        vx,
+        vy,
+        vw,
+        vh,
+        this.tractGeom,
+        this.anatomy,
+        this.tractArt,
+        this.teeth,
+        active ? this.fieldState : null,
+        this.fieldMode,
+        this.showLabels,
+        t,
+        dt
+      );
+      ctx.strokeStyle = active ? "rgba(0, 229, 255, 0.36)" : "rgba(100, 116, 139, 0.28)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.roundRect(vx, vy, vw, vh, 8);
+      ctx.stroke();
+    } else if (this.tract3dView) {
+      this.tract3dView.renderFrame(this.tractGeom, active ? this.fieldState : null);
+    }
 
     // -------------------------------------------------------------------------
     // 4. Right Panel: Reverse-Trained Articulator Meters & Lyric Status
@@ -317,7 +430,7 @@ export class SingingHeadPanel {
     t: number
   ): void {
     const px = 22;
-    const py = 20;
+    const py = 40;
     const pw = 232;
 
     // Box 1: Live Vocal Stem Waveform
@@ -454,7 +567,7 @@ export class SingingHeadPanel {
   ): void {
     const pw = 236;
     const px = 960 - 22 - pw;
-    const py = 20;
+    const py = 40;
     const ph = 300;
 
     ctx.save();
@@ -538,443 +651,6 @@ export class SingingHeadPanel {
     ctx.fillStyle = "#67e8f9";
     const clipped = trackLabel.length > 29 ? `${trackLabel.slice(0, 28)}…` : trackLabel;
     ctx.fillText(clipped, px + 12, footY + 35);
-
-    ctx.restore();
-  }
-
-  private drawSingingHead(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    tilt: number,
-    samples: Float32Array,
-    active: boolean,
-    isMuted: boolean,
-    meta: GrooveboxMeta | null,
-    t: number
-  ): void {
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(tilt);
-
-    const isDrop = meta?.section === "DROP";
-    const primaryCyan = active ? "#00f0ff" : "#38bdf8";
-    const hotMagenta = active ? (this.tension > 0.55 || isDrop ? "#ff2e93" : "#ff4de3") : "#7e22ce";
-    const amberGlow = "#ffb700";
-
-    // -------------------------------------------------------------------------
-    // A. Concentric Vocal Aura Halo
-    // -------------------------------------------------------------------------
-    const auraR = 128 + this.aperture * 26 + this.tension * 18;
-    const halo = ctx.createRadialGradient(0, 0, 24, 0, 0, auraR);
-    halo.addColorStop(0, active ? "rgba(255, 0, 170, 0.26)" : "rgba(0, 229, 255, 0.08)");
-    halo.addColorStop(0.55, active ? "rgba(0, 229, 255, 0.14)" : "rgba(15, 23, 42, 0.05)");
-    halo.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = halo;
-    ctx.beginPath();
-    ctx.arc(0, 0, auraR, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Outer resonance ring reacting to vocal waveform
-    ctx.save();
-    ctx.beginPath();
-    const ringSegs = 72;
-    for (let i = 0; i <= ringSegs; i++) {
-      const a = (i / ringSegs) * Math.PI * 2;
-      const idx = Math.floor((i / ringSegs) * (samples.length - 1));
-      const s = isMuted ? 0 : samples[idx] ?? 0;
-      const r = 124 + this.aperture * 10 + s * (active ? 22 : 3);
-      const rx = Math.cos(a) * r;
-      const ry = Math.sin(a) * r * 0.96;
-      if (i === 0) ctx.moveTo(rx, ry);
-      else ctx.lineTo(rx, ry);
-    }
-    ctx.closePath();
-    ctx.strokeStyle = active ? "rgba(0, 240, 255, 0.42)" : "rgba(56, 189, 248, 0.16)";
-    ctx.lineWidth = 1.6;
-    ctx.stroke();
-    ctx.restore();
-
-    // -------------------------------------------------------------------------
-    // B. Cyber Neck & Pulsing Vocal Cords
-    // -------------------------------------------------------------------------
-    const jawOffset = this.jawDrop * 20 + this.aperture * 7;
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(-34, 72 + jawOffset * 0.35);
-    ctx.lineTo(-42, 146);
-    ctx.lineTo(42, 146);
-    ctx.lineTo(34, 72 + jawOffset * 0.35);
-    ctx.closePath();
-    const neckGrad = ctx.createLinearGradient(0, 70, 0, 146);
-    neckGrad.addColorStop(0, "rgba(14, 21, 38, 0.96)");
-    neckGrad.addColorStop(1, "rgba(6, 10, 20, 0.98)");
-    ctx.fillStyle = neckGrad;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0, 229, 255, 0.38)";
-    ctx.lineWidth = 1.8;
-    ctx.stroke();
-
-    // Vertical vocal cord waveform ribbons inside the throat
-    for (const side of [-1, 1]) {
-      ctx.beginPath();
-      for (let k = 0; k <= 24; k++) {
-        const u = k / 24;
-        const sIdx = Math.min(samples.length - 1, Math.floor(u * 256));
-        const amp = isMuted ? 0 : samples[sIdx] ?? 0;
-        const x = side * (9 + u * 6) + amp * (active ? 14 : 1) * side;
-        const y = 78 + jawOffset * 0.35 + u * 64;
-        if (k === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = active ? amberGlow : "rgba(100, 116, 139, 0.35)";
-      ctx.shadowBlur = active ? 8 : 0;
-      ctx.shadowColor = amberGlow;
-      ctx.lineWidth = 1.6;
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // -------------------------------------------------------------------------
-    // C. Cyber Headphone / Ear Nodes
-    // -------------------------------------------------------------------------
-    for (const side of [-1, 1]) {
-      ctx.save();
-      const ex = side * 80;
-      const ey = -4;
-      ctx.fillStyle = "#0e1526";
-      ctx.strokeStyle = active ? hotMagenta : "#475569";
-      ctx.shadowBlur = active ? 12 : 4;
-      ctx.shadowColor = hotMagenta;
-      ctx.lineWidth = 2.2;
-      ctx.beginPath();
-      ctx.roundRect(ex - 11, ey - 26, 22, 52, 9);
-      ctx.fill();
-      ctx.stroke();
-
-      // Inner LED bar on ear cup
-      ctx.fillStyle = active ? primaryCyan : "#334155";
-      ctx.fillRect(ex - 3, ey - 14 * (0.35 + 0.65 * this.aperture), 6, 28 * (0.35 + 0.65 * this.aperture));
-      ctx.restore();
-    }
-
-    // -------------------------------------------------------------------------
-    // D. Sculpted Head & Hinged Jaw Silhouette
-    // -------------------------------------------------------------------------
-    const cheekRound = this.roundness * 4;
-    const chinY = 92 + jawOffset;
-    const jawCornerY = 44 + jawOffset * 0.55;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(0, -104);
-    // Right cranium -> temple -> cheekbone -> hinged jaw -> chin
-    ctx.bezierCurveTo(54, -104, 78, -68, 76, -18);
-    ctx.bezierCurveTo(75, 16, 66 - cheekRound, 32, 54 - cheekRound, jawCornerY);
-    ctx.quadraticCurveTo(32, chinY - 4, 15, chinY);
-    ctx.lineTo(-15, chinY);
-    ctx.quadraticCurveTo(-32, chinY - 4, -54 + cheekRound, jawCornerY);
-    ctx.bezierCurveTo(-66 + cheekRound, 32, -75, 16, -76, -18);
-    ctx.bezierCurveTo(-78, -68, -54, -104, 0, -104);
-    ctx.closePath();
-
-    const faceGrad = ctx.createRadialGradient(0, -24, 14, 0, 10, 120);
-    faceGrad.addColorStop(0, active ? "rgba(32, 24, 62, 0.96)" : "rgba(18, 24, 38, 0.96)");
-    faceGrad.addColorStop(0.65, "rgba(13, 18, 32, 0.98)");
-    faceGrad.addColorStop(1, "#070b14");
-    ctx.fillStyle = faceGrad;
-    ctx.fill();
-
-    // Neon rim outline
-    ctx.strokeStyle = primaryCyan;
-    ctx.shadowBlur = active ? 18 + this.tension * 14 : 6;
-    ctx.shadowColor = primaryCyan;
-    ctx.lineWidth = 2.6;
-    ctx.stroke();
-
-    // Inner cyber contour lines (cheekbones & forehead crown)
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = active ? "rgba(255, 77, 227, 0.45)" : "rgba(100, 116, 139, 0.24)";
-    ctx.lineWidth = 1.2;
-    // Crown arc
-    ctx.beginPath();
-    ctx.arc(0, -34, 58, 1.18 * Math.PI, 1.82 * Math.PI);
-    ctx.stroke();
-    // Cheek cyber panels
-    for (const side of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(side * 66, -2);
-      ctx.lineTo(side * 44, 18);
-      ctx.lineTo(side * 36, 42 + jawOffset * 0.35);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // -------------------------------------------------------------------------
-    // E. Expressive Eyebrows & Cyber Eyes
-    // -------------------------------------------------------------------------
-    const eyeY = -24;
-    const eyeXOff = 29;
-    const browLift = (this.pitchNorm - 0.4) * 9 + this.aperture * 3;
-    const browFurrow = this.tension * 5;
-
-    for (const side of [-1, 1]) {
-      const ex = side * eyeXOff;
-      // Eyebrow
-      ctx.save();
-      ctx.strokeStyle = active ? primaryCyan : "#64748b";
-      ctx.shadowBlur = active ? 8 : 0;
-      ctx.shadowColor = primaryCyan;
-      ctx.lineWidth = 2.8;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(ex - side * 14, eyeY - 19 - browLift + browFurrow);
-      ctx.quadraticCurveTo(
-        ex,
-        eyeY - 24 - browLift,
-        ex + side * 15,
-        eyeY - 17 - browLift - browFurrow * 0.4
-      );
-      ctx.stroke();
-      ctx.restore();
-
-      // Eye socket & iris
-      ctx.save();
-      const openH = Math.max(1.2, 10.5 * (1 - this.blinkAmount * 0.92));
-      ctx.beginPath();
-      ctx.ellipse(ex, eyeY, 15, openH, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#04070e";
-      ctx.fill();
-      ctx.strokeStyle = active ? primaryCyan : "#475569";
-      ctx.lineWidth = 1.8;
-      ctx.stroke();
-
-      if (this.blinkAmount < 0.78) {
-        ctx.save();
-        ctx.clip();
-        // Gaze rises subtly with vocal pitch
-        const gazeY = eyeY - (this.pitchNorm - 0.45) * 4;
-        const irisR = 6.8 + this.tension * 1.4;
-        const irisColor = this.tension > 0.58 ? amberGlow : active ? primaryCyan : "#38bdf8";
-
-        ctx.beginPath();
-        ctx.arc(ex, gazeY, irisR, 0, Math.PI * 2);
-        ctx.fillStyle = irisColor;
-        ctx.shadowBlur = active ? 12 : 3;
-        ctx.shadowColor = irisColor;
-        ctx.fill();
-
-        // Dark cyber pupil
-        ctx.shadowBlur = 0;
-        ctx.beginPath();
-        ctx.arc(ex, gazeY, 3.0 - this.tension * 0.7, 0, Math.PI * 2);
-        ctx.fillStyle = "#05070e";
-        ctx.fill();
-
-        // Specular catchlight
-        ctx.beginPath();
-        ctx.arc(ex - 2.4, gazeY - 2.2, 1.6, 0, Math.PI * 2);
-        ctx.fillStyle = "#ffffff";
-        ctx.fill();
-        ctx.restore();
-      }
-      ctx.restore();
-    }
-
-    // Minimalist cyber nose bridge
-    ctx.save();
-    ctx.strokeStyle = "rgba(148, 163, 184, 0.55)";
-    ctx.lineWidth = 1.5;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(0, -16);
-    ctx.lineTo(-3.5, 11);
-    ctx.lineTo(3.5, 13);
-    ctx.stroke();
-    ctx.restore();
-
-    // -------------------------------------------------------------------------
-    // F. Reverse-Trained Articulated Singing Mouth (Lips, Cavity, Teeth, Tongue)
-    // -------------------------------------------------------------------------
-    const mouthY = 44 + jawOffset * 0.48;
-    const halfW = 14 + this.width * 24 - this.roundness * 12;
-    const halfH = 1.8 + this.aperture * 23 + this.jawDrop * 5;
-    const cornerLift = (this.width - 0.5) * -6 + this.roundness * 3.5;
-    const bowDepth = 2.6 + (1 - this.roundness) * 2.2;
-    const vibRip = active ? Math.sin(t * 36) * this.vibrato * 1.6 : 0;
-
-    const leftX = -halfW;
-    const rightX = halfW;
-    const cornerY = mouthY + cornerLift;
-    const topY = mouthY - halfH * 0.72 + vibRip;
-    const botY = mouthY + halfH * 1.08 + vibRip;
-
-    // Helper path for inner mouth cavity
-    const traceMouthCavity = (): void => {
-      ctx.beginPath();
-      ctx.moveTo(leftX, cornerY);
-      ctx.bezierCurveTo(
-        leftX * 0.48,
-        topY - bowDepth * 0.45,
-        -halfW * 0.18,
-        topY,
-        0,
-        topY + bowDepth * 0.35
-      );
-      ctx.bezierCurveTo(
-        halfW * 0.18,
-        topY,
-        rightX * 0.48,
-        topY - bowDepth * 0.45,
-        rightX,
-        cornerY
-      );
-      ctx.bezierCurveTo(
-        rightX * 0.62,
-        botY,
-        -rightX * 0.62,
-        botY,
-        leftX,
-        cornerY
-      );
-      ctx.closePath();
-    };
-
-    if (this.aperture > 0.045) {
-      // 1) Oral cavity interior + vocal resonance throat glow
-      ctx.save();
-      traceMouthCavity();
-      ctx.fillStyle = "#080312";
-      ctx.fill();
-      ctx.clip();
-
-      // Throat resonance glow when voicing/belting
-      const throatGlow = ctx.createRadialGradient(0, mouthY + halfH * 0.1, 2, 0, mouthY + halfH * 0.1, Math.max(12, halfW));
-      throatGlow.addColorStop(0, `rgba(255, 60, 150, ${(0.18 + 0.55 * this.tension) * this.smoothedVoicing})`);
-      throatGlow.addColorStop(1, "rgba(8, 3, 18, 0)");
-      ctx.fillStyle = throatGlow;
-      ctx.fillRect(-halfW - 4, topY - 8, halfW * 2 + 8, halfH * 2 + 16);
-
-      // 2) Articulated Tongue (rises with tongueHeight, fronts with width)
-      const tongueTop = botY - (0.28 + 0.46 * this.tongueHeight) * halfH * 1.15;
-      const tongueW = halfW * (0.76 - 0.18 * this.roundness);
-      ctx.beginPath();
-      ctx.ellipse(0, tongueTop + halfH * 0.55, tongueW, Math.max(5, halfH * 0.68), 0, Math.PI, Math.PI * 2);
-      const tongueGrad = ctx.createLinearGradient(0, tongueTop, 0, botY + 6);
-      tongueGrad.addColorStop(0, "#ff5c9e");
-      tongueGrad.addColorStop(1, "#9d174d");
-      ctx.fillStyle = tongueGrad;
-      ctx.fill();
-
-      // 3) Upper Teeth Row (revealed on open vowels, wide EE/AY, and fricative breath)
-      const teethExpose = clamp01((this.aperture * 1.2 + this.width * 0.45 + this.breath * 0.6 - this.roundness * 0.75) * 0.9);
-      if (teethExpose > 0.18) {
-        const teethH = Math.min(halfH * 0.46, 3.5 + teethExpose * 5.2);
-        const teethW = halfW * 0.78;
-        ctx.fillStyle = "rgba(235, 250, 255, 0.94)";
-        ctx.beginPath();
-        ctx.roundRect(-teethW, topY - 1, teethW * 2, teethH, 3);
-        ctx.fill();
-
-        // Subtle tooth dividers
-        ctx.strokeStyle = "rgba(148, 163, 184, 0.35)";
-        ctx.lineWidth = 0.8;
-        for (let tx = -2; tx <= 2; tx++) {
-          const xPos = (tx / 3) * teethW;
-          ctx.beginPath();
-          ctx.moveTo(xPos, topY);
-          ctx.lineTo(xPos, topY + teethH - 1);
-          ctx.stroke();
-        }
-      }
-
-      // Lower teeth hint on wide open belts
-      if (this.aperture > 0.48 && this.jawDrop > 0.42 && this.roundness < 0.55) {
-        const ltW = halfW * 0.65;
-        ctx.fillStyle = "rgba(220, 240, 255, 0.78)";
-        ctx.beginPath();
-        ctx.roundRect(-ltW, botY - 4.2, ltW * 2, 5, 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-
-    // 4) Outer Neon Lips (Upper & Lower)
-    ctx.save();
-    const lipColor = active ? hotMagenta : "#db2777";
-    ctx.strokeStyle = lipColor;
-    ctx.shadowBlur = active ? 14 + this.aperture * 12 : 5;
-    ctx.shadowColor = lipColor;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
-    // Upper lip line (with subtle waveform shimmer when singing)
-    ctx.lineWidth = 2.6 + this.roundness * 1.1;
-    ctx.beginPath();
-    ctx.moveTo(leftX - 2, cornerY);
-    ctx.bezierCurveTo(
-      leftX * 0.5,
-      topY - bowDepth * 0.85,
-      -halfW * 0.16,
-      topY - bowDepth * 0.35,
-      0,
-      topY + bowDepth * 0.25
-    );
-    ctx.bezierCurveTo(
-      halfW * 0.16,
-      topY - bowDepth * 0.35,
-      rightX * 0.5,
-      topY - bowDepth * 0.85,
-      rightX + 2,
-      cornerY
-    );
-    ctx.stroke();
-
-    // Lower lip line
-    ctx.lineWidth = 3.0 + this.roundness * 1.2;
-    ctx.beginPath();
-    ctx.moveTo(leftX - 1.5, cornerY);
-    ctx.bezierCurveTo(
-      leftX * 0.62,
-      botY + 2.5,
-      rightX * 0.62,
-      botY + 2.5,
-      rightX + 1.5,
-      cornerY
-    );
-    ctx.stroke();
-
-    // Breath / sibilance mist wisps when breath > 0.30
-    if (active && this.breath > 0.30) {
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = "#38bdf8";
-      ctx.strokeStyle = `rgba(125, 211, 252, ${Math.min(0.65, this.breath * 0.7)})`;
-      ctx.lineWidth = 1.2;
-      for (let w = -1; w <= 1; w++) {
-        const phase = (t * 6 + w * 0.7) % 1;
-        const wx = w * 10;
-        const wy = mouthY + 4 + phase * 18;
-        ctx.beginPath();
-        ctx.arc(wx, wy, 2 + phase * 5, 0.2 * Math.PI, 0.8 * Math.PI);
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-
-    // -------------------------------------------------------------------------
-    // G. Floating Vocal Sparks
-    // -------------------------------------------------------------------------
-    ctx.save();
-    for (const sp of this.sparks) {
-      ctx.globalAlpha = clamp01(sp.life);
-      ctx.fillStyle = sp.color;
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = sp.color;
-      ctx.beginPath();
-      ctx.arc(sp.x, sp.y, sp.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
 
     ctx.restore();
   }

@@ -1,0 +1,8 @@
+Voice Workshop
+Copyright 2026 Fabio Angela
+
+This product includes data derived from Misaki (https://github.com/hexgrad/misaki) by hexgrad, licensed under
+the Apache License, Version 2.0: public/lexicon/en-us.lex is built by scripts/build-lexicon.ts from Misaki's
+American English "gold" dictionary (us_gold.json). The build keeps one pronunciation per word (the default one
+for homographs), drops entries that are not plain words, lower-cases the spellings and stores the list
+gzip-compressed.

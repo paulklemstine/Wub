@@ -884,12 +884,118 @@
       border: 2px solid var(--mc-bezel);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 12px 28px rgba(0, 0, 0, 0.85), 0 0 24px rgba(0, 229, 255, 0.12);
     }
+    .singing-head-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 6px 12px;
+      background: rgba(9, 13, 22, 0.96);
+      border-bottom: 1px solid rgba(100, 116, 139, 0.25);
+      font-family: monospace;
+      font-size: 0.72rem;
+    }
+    .sh-btn-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .sh-btn {
+      background: rgba(18, 25, 38, 0.92);
+      border: 1px solid rgba(100, 116, 139, 0.42);
+      color: #cbd5e1;
+      border-radius: 4px;
+      padding: 3px 9px;
+      font-family: monospace;
+      font-size: 0.71rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .sh-btn:hover {
+      border-color: var(--neon-cyan);
+      color: #f8fafc;
+    }
+    .sh-btn.active {
+      background: rgba(0, 229, 255, 0.18);
+      border-color: var(--neon-cyan);
+      color: var(--neon-cyan);
+      box-shadow: 0 0 10px rgba(0, 229, 255, 0.22);
+    }
+    .sh-btn.amber.active {
+      background: rgba(246, 168, 35, 0.18);
+      border-color: var(--neon-amber);
+      color: var(--neon-amber);
+      box-shadow: 0 0 10px rgba(246, 168, 35, 0.22);
+    }
+    .singing-head-stage {
+      position: relative;
+      width: 100%;
+      background: #05070c;
+    }
     #singing-head-canvas {
-      aspect-ratio: 960 / 340;
+      aspect-ratio: 960 / 380;
       width: 100%;
       height: auto;
       display: block;
       background: #05070c;
+    }
+    #singing-head-3d-host {
+      position: absolute;
+      top: 3.1579%;
+      bottom: 3.1579%;
+      left: 27.7083%;
+      width: 44.5833%;
+      display: none;
+      overflow: hidden;
+      background: #0b0e14;
+      border: 1px solid rgba(0, 229, 255, 0.28);
+      border-radius: 8px;
+      z-index: 4;
+    }
+    .tract3d-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      outline: none;
+      cursor: grab;
+    }
+    .tract3d-canvas:active {
+      cursor: grabbing;
+    }
+    .tract3d-labels {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    .tract3d-label {
+      position: absolute;
+      top: 0;
+      left: 0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(11, 14, 20, 0.8);
+      border: 1px solid rgba(42, 212, 189, 0.35);
+      color: #e7ebf3;
+      font-family: system-ui, sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .tract3d-hint {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 6px;
+      text-align: center;
+      pointer-events: none;
+      font-family: system-ui, sans-serif;
+      font-size: 11px;
+      color: rgba(231, 235, 243, 0.65);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
     }
     .singing-head-meta-row {
       display: flex;
@@ -2224,7 +2330,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.272 <span class="mc-build-num">#272</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.273 <span class="mc-build-num">#273</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -2978,16 +3084,39 @@
         <span style="color: var(--neon-cyan);">🎤 NEURAL SINGING HEAD • VOCAL INSTRUMENT ARTICULATOR</span>
         <span id="singing-head-status">LISTENING TO VOCAL INSTRUMENT…</span>
       </div>
-      <canvas id="singing-head-canvas" class="stage" width="960" height="340" aria-label="Reverse-Trained Cyberpunk Singing Head"></canvas>
+      <div class="singing-head-toolbar" role="toolbar" aria-label="Singing Head View Controls">
+        <div class="sh-btn-group">
+          <button type="button" id="sh-mode-side" class="sh-btn active" title="Mid-sagittal Side View Head">SIDE VIEW</button>
+          <button type="button" id="sh-mode-3d" class="sh-btn amber" title="Toggle Interactive 3D Vocal Tract View">3D VIEW</button>
+        </div>
+        <div class="sh-btn-group">
+          <button type="button" data-sh-field="pressure" class="sh-btn active">PRESSURE</button>
+          <button type="button" data-sh-field="velocity" class="sh-btn">VELOCITY</button>
+          <button type="button" data-sh-field="air" class="sh-btn">AIR</button>
+          <button type="button" id="sh-toggle-labels" class="sh-btn active" title="Toggle Anatomical Labels">Aa</button>
+        </div>
+        <div id="sh-3d-controls" class="sh-btn-group" style="display: none;">
+          <button type="button" data-sh-preset="side" class="sh-btn">SIDE</button>
+          <button type="button" data-sh-preset="front" class="sh-btn">FRONT</button>
+          <button type="button" data-sh-preset="top" class="sh-btn">TOP</button>
+          <button type="button" data-sh-preset="three" class="sh-btn active">¾</button>
+          <button type="button" id="sh-toggle-cut" class="sh-btn amber active">CUTAWAY</button>
+          <button type="button" id="sh-toggle-tissues" class="sh-btn amber active">TISSUES</button>
+        </div>
+      </div>
+      <div class="singing-head-stage">
+        <canvas id="singing-head-canvas" class="stage" width="960" height="380" aria-label="Reverse-Trained Mid-Sagittal Singing Head"></canvas>
+        <div id="singing-head-3d-host" aria-label="Interactive 3D Vocal Tract View"></div>
+      </div>
       <div class="singing-head-meta-row">
-        <span>INVERSE VOCAL-TRACT MLP • 18 ACOUSTIC FEATURES → 9 ARTICULATORS + 5 VOWELS</span>
+        <span>INVERSE VOCAL-TRACT MLP + SAGITTAL/3D ARTICULATOR • 18 ACOUSTIC FEATURES → 9 ARTICULATORS + 5 VOWELS</span>
         <span id="singing-head-model-badge">LOADING VOCAL MODEL…</span>
       </div>
     </section>
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.272 (Build #272 • rev 73eeba2387)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.273 (Build #273 • rev 821a395478)</span>
     </div>
   </div>
 

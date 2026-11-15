@@ -2,8 +2,16 @@
 // Singing Head Reverse-Trained Acoustic-to-Articulatory Inference
 // Exact TypeScript parity with scripts/train_singing_head.py.
 // Converts live 2048-sample vocal AnalyserNode frames into 9 articulators +
-// 5 vowel posteriors using the reverse-trained vocal stub MLP weights.
+// 5 vowel posteriors + 14 Voice Workshop mouth/throat parameters using the
+// reverse-trained vocal stub/stem MLP weights.
 // -----------------------------------------------------------------------------
+
+import {
+  Articulators,
+  ARTICULATOR_KEYS,
+  ARTICULATOR_RANGES,
+  DEFAULT_ARTICULATORS,
+} from "./vocal_sim/tract/types";
 
 export const SINGING_VOWELS = ["AH", "EE", "OH", "OO", "AY"] as const;
 export type SingingVowel = (typeof SINGING_VOWELS)[number];
@@ -34,13 +42,18 @@ export interface SingingHeadModelWeights {
     train_frames?: number;
     val_frames?: number;
     val_mae?: number;
+    tract_val_mae?: number;
     val_vowel_acc?: number;
     cycle_r2?: number;
+    physics_forward_r2?: number;
+    physics_cycle_r2?: number;
     db_p10?: number;
     db_p95?: number;
     f0_p10?: number;
     f0_p95?: number;
   };
+  tract_keys?: string[];
+  tract_ranges?: [number, number][];
   weights: {
     w1: number[][];
     b1: number[];
@@ -63,12 +76,18 @@ export interface SingingHeadArticulation {
   breath: number;        // 0..1 unvoiced air / sibilance
   vowelProbs: readonly number[]; // [AH, EE, OH, OO, AY]
   topVowel: SingingVowel;
+  /** All 14 reverse-trained Voice Workshop mouth & throat articulators (when available / inferred). */
+  tract?: Articulators;
   rms: number;
   f0Hz: number;
   voicing: number;
   centroidHz: number;
   trained: boolean;
 }
+
+const TRACT_REST_RAW: readonly number[] = [
+  0.12, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.02, 0.0,
+];
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -104,7 +123,9 @@ function gelu(x: number): number {
 export function isValidSingingHeadModel(raw: unknown): raw is SingingHeadModelWeights {
   if (!raw || typeof raw !== "object") return false;
   const obj = raw as Record<string, unknown>;
-  if (obj.format !== "wub_singing_head_mlp_v1") return false;
+  if (obj.format !== "wub_singing_head_mlp_v1" && obj.format !== "wub_singing_head_mlp_v2") {
+    return false;
+  }
   if (!Array.isArray(obj.feature_mean) || obj.feature_mean.length !== 18) return false;
   if (!Array.isArray(obj.feature_std) || obj.feature_std.length !== 18) return false;
   const w = obj.weights as Record<string, unknown> | undefined;
@@ -112,7 +133,14 @@ export function isValidSingingHeadModel(raw: unknown): raw is SingingHeadModelWe
   if (!Array.isArray(w.w1) || !Array.isArray(w.b1) || !Array.isArray(w.w2) || !Array.isArray(w.b2) || !Array.isArray(w.w3) || !Array.isArray(w.b3)) {
     return false;
   }
-  return w.w1.length === 48 && w.b1.length === 48 && w.w2.length === 32 && w.b2.length === 32 && w.w3.length === 14 && w.b3.length === 14;
+  const h1 = w.b1.length;
+  const h2 = w.b2.length;
+  const out = w.b3.length;
+  if (w.w1.length !== h1 || w.w2.length !== h2 || w.w3.length !== out) return false;
+  if (obj.format === "wub_singing_head_mlp_v1") {
+    return h1 === 48 && h2 === 32 && out === 14;
+  }
+  return h1 >= 16 && h2 >= 16 && out === 28;
 }
 
 /**
@@ -134,9 +162,9 @@ export class SingingHeadInference {
 
   private readonly features = new Float32Array(18);
   private readonly xNorm = new Float64Array(18);
-  private readonly h1 = new Float64Array(48);
-  private readonly h2 = new Float64Array(32);
-  private readonly rawOut = new Float64Array(14);
+  private h1 = new Float64Array(64);
+  private h2 = new Float64Array(48);
+  private rawOut = new Float64Array(28);
   private readonly vowelProbs = new Float64Array(5);
 
   constructor() {
@@ -147,6 +175,11 @@ export class SingingHeadInference {
 
   public setModel(model: SingingHeadModelWeights | null): void {
     this.model = model;
+    if (model) {
+      if (this.h1.length < model.weights.b1.length) this.h1 = new Float64Array(model.weights.b1.length);
+      if (this.h2.length < model.weights.b2.length) this.h2 = new Float64Array(model.weights.b2.length);
+      if (this.rawOut.length < model.weights.b3.length) this.rawOut = new Float64Array(model.weights.b3.length);
+    }
   }
 
   public getModel(): SingingHeadModelWeights | null {
@@ -371,32 +404,36 @@ export class SingingHeadInference {
     const { features, rms, f0Hz, voicing, centroidHz } = this.extractFeatures(samples, sampleRate);
 
     if (this.model !== null) {
-      const { feature_mean, feature_std, weights } = this.model;
+      const { feature_mean, feature_std, weights, tract_ranges } = this.model;
       for (let i = 0; i < 18; i++) {
         this.xNorm[i] = (features[i] - feature_mean[i]) / Math.max(1e-4, feature_std[i]);
       }
 
-      // Layer 1: 18 -> 48 (GELU)
-      for (let j = 0; j < 48; j++) {
+      const h1Dim = weights.b1.length;
+      const h2Dim = weights.b2.length;
+      const outDim = weights.b3.length;
+
+      // Layer 1: 18 -> h1Dim (GELU)
+      for (let j = 0; j < h1Dim; j++) {
         const row = weights.w1[j];
         let acc = weights.b1[j];
         for (let i = 0; i < 18; i++) acc += row[i] * this.xNorm[i];
         this.h1[j] = gelu(acc);
       }
 
-      // Layer 2: 48 -> 32 (GELU)
-      for (let j = 0; j < 32; j++) {
+      // Layer 2: h1Dim -> h2Dim (GELU)
+      for (let j = 0; j < h2Dim; j++) {
         const row = weights.w2[j];
         let acc = weights.b2[j];
-        for (let i = 0; i < 48; i++) acc += row[i] * this.h1[i];
+        for (let i = 0; i < h1Dim; i++) acc += row[i] * this.h1[i];
         this.h2[j] = gelu(acc);
       }
 
-      // Layer 3: 32 -> 14
-      for (let j = 0; j < 14; j++) {
+      // Layer 3: h2Dim -> outDim (14 in v1, 28 in v2)
+      for (let j = 0; j < outDim; j++) {
         const row = weights.w3[j];
         let acc = weights.b3[j];
-        for (let i = 0; i < 32; i++) acc += row[i] * this.h2[i];
+        for (let i = 0; i < h2Dim; i++) acc += row[i] * this.h2[i];
         this.rawOut[j] = acc;
       }
 
@@ -434,6 +471,21 @@ export class SingingHeadInference {
         }
       }
 
+      let tract: Articulators | undefined;
+      if (outDim >= 28) {
+        const outTract: Articulators = { ...DEFAULT_ARTICULATORS };
+        for (let k = 0; k < 14; k++) {
+          const key = ARTICULATOR_KEYS[k];
+          const [lo, hi] =
+            tract_ranges && tract_ranges[k] ? tract_ranges[k] : ARTICULATOR_RANGES[key];
+          const normVal = sigmoid(this.rawOut[14 + k]);
+          const predRaw = lo + normVal * (hi - lo);
+          const restRaw = TRACT_REST_RAW[k];
+          outTract[key] = clamp(restRaw + (predRaw - restRaw) * silenceScale, lo, hi);
+        }
+        tract = outTract;
+      }
+
       return {
         aperture,
         width,
@@ -452,6 +504,7 @@ export class SingingHeadInference {
           this.vowelProbs[4],
         ],
         topVowel: SINGING_VOWELS[bestK],
+        tract,
         rms,
         f0Hz,
         voicing,
@@ -473,6 +526,24 @@ export class SingingHeadInference {
     const topVowel: SingingVowel =
       bright > 0.7 ? "EE" : bright > 0.45 ? "AY" : bright > 0.25 ? "AH" : roundness > 0.45 ? "OO" : "OH";
 
+    const tract: Articulators = {
+      ...DEFAULT_ARTICULATORS,
+      jaw: clamp(0.12 + jawDrop * 0.78, 0, 1),
+      tongueX: clamp((bright - 0.45) * 2.1, -1.6, 1.4),
+      tongueY: clamp((tongueHeight - 0.5) * 2.0, -1.6, 1.6),
+      tongueRoot: clamp((bright - 0.5) * 1.3 - 0.3 * jawDrop, -1.2, 1.2),
+      tipX: clamp((bright - 0.4) * 1.4 + breath * 0.6, -1.2, 1.4),
+      tipY: clamp(breath * 1.1, -0.6, 2.2),
+      groove: clamp(breath * 0.75, 0, 1),
+      tongueSides: clamp(breath * 0.55, 0, 1),
+      lipOpen: clamp(0.02 + aperture * 0.95 - 0.3 * breath, -0.4, 1.2),
+      lipRound: roundness,
+      lipProtrude: clamp(roundness * 0.85 - (width - 0.5) * 0.4, -0.6, 1),
+      lipTuck: clamp(breath * (1 - aperture) * 0.4, 0, 1),
+      velum: clamp(0.02 + 0.1 * gate * (1 - bright), 0, 1),
+      larynx: clamp((pitchNorm - 0.48) * 1.4 * gate, -1.5, 1.2),
+    };
+
     return {
       aperture,
       width,
@@ -485,6 +556,7 @@ export class SingingHeadInference {
       breath,
       vowelProbs: [0.2, 0.2, 0.2, 0.2, 0.2],
       topVowel,
+      tract,
       rms,
       f0Hz,
       voicing,

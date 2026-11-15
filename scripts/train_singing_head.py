@@ -94,6 +94,49 @@ ARTICULATOR_NAMES = [
     "breath",
 ]
 
+# Exact 14 Voice Workshop mid-sagittal mouth & throat parameters & ranges
+# matching `frontend/src/vocal_sim/tract/types.ts`.
+TRACT_ARTICULATOR_KEYS = [
+    "jaw",
+    "tongueX",
+    "tongueY",
+    "tongueRoot",
+    "tipX",
+    "tipY",
+    "groove",
+    "tongueSides",
+    "lipOpen",
+    "lipRound",
+    "lipProtrude",
+    "lipTuck",
+    "velum",
+    "larynx",
+]
+
+TRACT_RANGES: List[Tuple[float, float]] = [
+    (0.0, 1.0),    # jaw
+    (-1.6, 1.4),   # tongueX
+    (-1.6, 1.6),   # tongueY
+    (-1.2, 1.2),   # tongueRoot
+    (-1.2, 1.4),   # tipX
+    (-0.6, 2.2),   # tipY
+    (0.0, 1.0),    # groove
+    (0.0, 1.0),    # tongueSides
+    (-0.4, 1.2),   # lipOpen
+    (0.0, 1.0),    # lipRound
+    (-0.6, 1.0),   # lipProtrude
+    (0.0, 1.0),    # lipTuck
+    (0.0, 1.0),    # velum
+    (-1.5, 1.2),   # larynx
+]
+
+# Quiet closed-lips neutral posture in normalized [0, 1] tract coordinates
+TRACT_REST_RAW = [0.12, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.02, 0.0]
+TRACT_REST_NORM = np.array(
+    [(v - lo) / (hi - lo) for v, (lo, hi) in zip(TRACT_REST_RAW, TRACT_RANGES)],
+    dtype=np.float32,
+)
+
 _HANN_2048 = (0.5 - 0.5 * np.cos((2.0 * np.pi * np.arange(FFT_SIZE)) / (FFT_SIZE - 1))).astype(np.float64)
 
 
@@ -434,16 +477,16 @@ def _worker_stub(args: Tuple[str, str, bool]) -> List[dict]:
                 if chunk_sr != TARGET_SR:
                     g = math.gcd(TARGET_SR, int(chunk_sr))
                     chunk = resample_poly(chunk, TARGET_SR // g, int(chunk_sr) // g).astype(np.float32)
-                rows.extend(_process_audio_segment(track_id, chunk, is_stem=True, max_frames=10))
+                rows.extend(_process_audio_segment(track_id, chunk, is_stem=True, max_frames=12))
             return rows
     except Exception:
         return []
 
 
-def compute_articulatory_targets(
+def compute_articulatory_targets_with_physics(
     rows: List[dict],
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
-    """Map corpus-calibrated acoustic rows to (X_18, Y_14, cycle_4, corpus_stats)."""
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
+    """Map corpus-calibrated acoustic rows to (X_18, Y_14, cycle_4, obs_phys_7, cues_5, corpus_stats)."""
     rms_arr = np.array([r["rms"] for r in rows], dtype=np.float64)
     active_rms = rms_arr[rms_arr > 0.004]
     if len(active_rms) < 20:
@@ -469,6 +512,8 @@ def compute_articulatory_targets(
     x_mat = np.zeros((n, len(FEATURE_NAMES)), dtype=np.float32)
     y_mat = np.zeros((n, 14), dtype=np.float32)
     cycle_mat = np.zeros((n, 4), dtype=np.float32)
+    obs_phys_mat = np.zeros((n, 7), dtype=np.float32)
+    cues_mat = np.zeros((n, 5), dtype=np.float32)  # [active_gate, nasality, sibilance, frication_mid, pitch_norm]
 
     log_f0_lo = math.log2(f0_p10)
     log_f0_hi = math.log2(f0_p95)
@@ -481,6 +526,7 @@ def compute_articulatory_targets(
         voicing = float(row["voicing"])
         f1 = float(row["f1"])
         f2 = float(row["f2"])
+        f3 = float(row.get("f3", 2550.0))
         vibrato = float(row["vibrato"])
         rms_rise = float(row["rms_rise"])
 
@@ -497,12 +543,45 @@ def compute_articulatory_targets(
         f1_norm = clamp((f1 - 260.0) / (920.0 - 260.0), 0.0, 1.0)
         f2_norm = clamp((f2 - 800.0) / (2450.0 - 800.0), 0.0, 1.0)
 
-        # Unvoiced sibilance / breathiness (high 5-9 kHz + low voicing + active RMS)
-        sib_band = float(feats[16])  # band_7_5000_9000
-        presence_band = float(feats[15])  # band_6_3000_5000
+        # Unvoiced sibilance / breathiness / frication / nasal murmur descriptors from 18-d FFT bands
+        zcr = float(feats[2])
         flatness = float(feats[7])
+        band0 = float(feats[9])    # 80..250 Hz (nasal murmur / fundamental)
+        band1 = float(feats[10])   # 250..500 Hz
+        band2 = float(feats[11])   # 500..850 Hz (oral vowel F1 body)
+        band3 = float(feats[12])   # 850..1350 Hz (oral vowel F1/F2)
+        presence_band = float(feats[15])  # band_6_3000_5000
+        sib_band = float(feats[16])       # band_7_5000_9000
         active_gate = clamp((rms - 0.003) / 0.025, 0.0, 1.0)
-        breath = clamp(active_gate * (1.0 - voicing * 0.85) * (0.45 * clamp(sib_band / 2.2, 0.0, 1.0) + 0.55 * flatness), 0.0, 1.0)
+        breath = clamp(
+            active_gate * (1.0 - voicing * 0.85) * (0.45 * clamp(sib_band / 2.2, 0.0, 1.0) + 0.55 * flatness),
+            0.0,
+            1.0,
+        )
+        sibilance = clamp(
+            active_gate
+            * (1.0 - 0.72 * voicing)
+            * (0.55 * clamp(sib_band / 0.50, 0.0, 1.0) + 0.30 * flatness + 0.15 * clamp(zcr / 0.22, 0.0, 1.0)),
+            0.0,
+            1.0,
+        )
+        frication_mid = clamp(
+            active_gate
+            * (1.0 - 0.72 * voicing)
+            * (0.55 * clamp(presence_band / 1.2, 0.0, 1.0) + 0.45 * flatness)
+            * (1.0 - 0.55 * sibilance),
+            0.0,
+            1.0,
+        )
+        oral_body = band1 + band2 + band3 + 0.5 * float(feats[13])
+        nasality = clamp(
+            active_gate
+            * voicing
+            * clamp((band0 - 0.52 * oral_body) / max(0.32, band0 + band1 + band2), 0.0, 1.0)
+            * 1.50,
+            0.0,
+            1.0,
+        )
 
         # Pitch normalized within empirical corpus singing range
         if f0 > 0.0:
@@ -556,31 +635,286 @@ def compute_articulatory_targets(
 
         cycle_mat[i] = np.array([f1_norm, f2_norm, pitch_norm, loud_norm], dtype=np.float32)
 
+        desired_lip_area = clamp(
+            (0.32 + 3.6 * f1_norm + 2.4 * loud_norm * (0.25 + 0.75 * f1_norm))
+            * (1.0 - 0.55 * sibilance)
+            * (1.0 - 0.45 * nasality * (1.0 - loud_norm)),
+            0.12,
+            8.0,
+        )
+        desired_min_area = clamp(
+            (0.18 + 0.95 * loud_norm * (0.5 + 0.5 * f1_norm)) * (1.0 - 0.72 * sibilance),
+            0.04,
+            2.2,
+        )
+        desired_pharynx = clamp(2.1 + 1.8 * f2_norm - 0.9 * f1_norm, 0.8, 5.8)
+        desired_oral = clamp(1.2 + 2.8 * loud_norm + 1.4 * f1_norm - 0.8 * f2_norm, 0.5, 6.5)
+        obs_phys_mat[i] = np.array(
+            [f1, f2, f3, desired_lip_area, desired_min_area, desired_pharynx, desired_oral],
+            dtype=np.float32,
+        )
+        cues_mat[i] = np.array([active_gate, nasality, sibilance, frication_mid, pitch_norm], dtype=np.float32)
+
     stats = {
         "db_p10": round(db_p10, 3),
         "db_p95": round(db_p95, 3),
         "f0_p10": round(f0_p10, 2),
         "f0_p95": round(f0_p95, 2),
     }
+    return x_mat, y_mat, cycle_mat, obs_phys_mat, cues_mat, stats
+
+
+def compute_articulatory_targets(
+    rows: List[dict],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
+    """Map corpus-calibrated acoustic rows to (X_18, Y_14, cycle_4, corpus_stats)."""
+    x_mat, y_mat, cycle_mat, _, _, stats = compute_articulatory_targets_with_physics(rows)
     return x_mat, y_mat, cycle_mat, stats
 
 
-class SingingHeadInverseNet(nn.Module):
-    """Compact acoustic-to-articulatory inverse encoder (exports to browser JSON)."""
+def _norm_tract_np(art_raw: np.ndarray) -> np.ndarray:
+    lo = np.array([r[0] for r in TRACT_RANGES], dtype=np.float32)
+    span = np.array([r[1] - r[0] for r in TRACT_RANGES], dtype=np.float32)
+    return np.clip((art_raw - lo) / span, 0.0, 1.0)
 
-    def __init__(self, in_dim: int = 18, h1: int = 48, h2: int = 32, out_dim: int = 14) -> None:
+
+def derive_fallback_tract_targets(y_mat: np.ndarray, cycle_mat: np.ndarray) -> np.ndarray:
+    """Synthesize smooth 14-D normalized tract targets when no physics atlas is supplied."""
+    n = len(y_mat)
+    out = np.zeros((n, 14), dtype=np.float32)
+    aperture = y_mat[:, 0]
+    width = y_mat[:, 1]
+    roundness = y_mat[:, 2]
+    jaw_drop = y_mat[:, 3]
+    tongue_h = y_mat[:, 4]
+    pitch_n = y_mat[:, 5]
+    breath = y_mat[:, 8]
+    f1_n = cycle_mat[:, 0]
+    f2_n = cycle_mat[:, 1]
+    raw = np.zeros((n, 14), dtype=np.float32)
+    raw[:, 0] = 0.12 + 0.78 * jaw_drop
+    raw[:, 1] = (f2_n - 0.5) * 2.2
+    raw[:, 2] = (tongue_h - 0.45) * 2.4
+    raw[:, 3] = (f2_n - 0.5) * 1.4 - 0.35 * f1_n
+    raw[:, 4] = (f2_n - 0.45) * 1.6 + 0.65 * breath
+    raw[:, 5] = (tongue_h - 0.35) * 1.4 + 1.2 * breath
+    raw[:, 6] = 0.12 + 0.78 * breath
+    raw[:, 7] = 0.15 + 0.65 * breath
+    raw[:, 8] = -0.05 + 1.05 * aperture
+    raw[:, 9] = roundness
+    raw[:, 10] = -0.15 + 0.95 * roundness - 0.25 * (width - 0.5)
+    raw[:, 11] = 0.35 * breath * (1.0 - aperture)
+    raw[:, 12] = 0.05 + 0.15 * (1.0 - aperture) * (1.0 - breath)
+    raw[:, 13] = (pitch_n - 0.5) * 1.8
+    out[:] = _norm_tract_np(raw)
+    return out
+
+
+class TractPhysicsForwardNet(nn.Module):
+    """Differentiable surrogate for Voice Workshop's 44-section vocal tract physics."""
+
+    def __init__(self, art_dim: int = 14, phys_dim: int = 7) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(art_dim, 96),
+            nn.GELU(),
+            nn.Linear(96, 96),
+            nn.GELU(),
+            nn.Linear(96, 64),
+            nn.GELU(),
+            nn.Linear(64, phys_dim),
+        )
+
+    def forward(self, art_norm: torch.Tensor) -> torch.Tensor:
+        return self.net(art_norm)
+
+
+def train_physics_forward_net(
+    atlas_path: Path,
+    dev: torch.device,
+    epochs: int = 160,
+    batch_size: int = 256,
+    seed: int = 42,
+) -> Tuple[TractPhysicsForwardNet, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """Train & freeze forward vocal-tract physics surrogate on resonant Voice Workshop postures."""
+    d = np.load(atlas_path)
+    atlas_art_raw = d["art"].astype(np.float32)
+    atlas_phys = d["phys"].astype(np.float32)
+
+    valid = (
+        (atlas_phys[:, 0] >= 170.0)
+        & (atlas_phys[:, 0] <= 1150.0)
+        & (atlas_phys[:, 1] >= 500.0)
+        & (atlas_phys[:, 1] <= 3100.0)
+        & (atlas_phys[:, 2] >= 1500.0)
+        & (atlas_phys[:, 2] <= 4150.0)
+        & (atlas_phys[:, 3] >= 0.04)
+    )
+    if int(np.sum(valid)) >= 1000:
+        atlas_art_raw = atlas_art_raw[valid]
+        atlas_phys = atlas_phys[valid]
+
+    atlas_art_norm = _norm_tract_np(atlas_art_raw)
+
+    phys_mean = np.mean(atlas_phys, axis=0).astype(np.float32)
+    phys_std = np.maximum(np.std(atlas_phys, axis=0), 1e-4).astype(np.float32)
+    phys_norm = ((atlas_phys - phys_mean) / phys_std).astype(np.float32)
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(atlas_art_norm))
+    split = int(0.88 * len(perm))
+    tr_idx, va_idx = perm[:split], perm[split:]
+
+    xa = torch.from_numpy(atlas_art_norm[tr_idx]).to(dev)
+    yp = torch.from_numpy(phys_norm[tr_idx]).to(dev)
+    xva = torch.from_numpy(atlas_art_norm[va_idx]).to(dev)
+    yvp = torch.from_numpy(phys_norm[va_idx]).to(dev)
+
+    fwd = TractPhysicsForwardNet(art_dim=14, phys_dim=7).to(dev)
+    opt = torch.optim.AdamW(fwd.parameters(), lr=3e-3, weight_decay=1e-5)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
+
+    n_tr = len(xa)
+    for _ in range(epochs):
+        fwd.train()
+        p = torch.randperm(n_tr, device=dev)
+        for s in range(0, n_tr, batch_size):
+            idx = p[s : s + batch_size]
+            pred = fwd(xa[idx])
+            loss = F.smooth_l1_loss(pred, yp[idx])
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        sched.step()
+
+    fwd.eval()
+    with torch.no_grad():
+        vp = fwd(xva)
+        ss_res = float(((vp - yvp) ** 2).sum().item())
+        ss_tot = float(((yvp - yvp.mean(dim=0, keepdim=True)) ** 2).sum().item())
+        r2 = 1.0 - ss_res / max(1e-8, ss_tot)
+    for param in fwd.parameters():
+        param.requires_grad = False
+    return fwd, atlas_art_norm, atlas_phys, phys_mean, phys_std, r2
+
+
+# Canonical 14-D Voice Workshop vowel anchors [AH, EE, OH, OO, AY] to resolve
+# many-to-one acoustic inverse ambiguity toward natural human articulation.
+_CANONICAL_VOWEL_14 = np.array(
+    [
+        # jaw, tX,   tY,   tRoot, tipX, tipY, groove, sides, lipO, lipR, lipP, tuck, velum, larynx
+        [0.82, -0.45, -0.75, -0.35, -0.20, -0.10, 0.14, 0.20, 0.56, 0.04, -0.05, 0.0, 0.04, -0.05],  # AH
+        [0.20, 1.05, 0.92, 0.95, 0.55, 0.42, 0.22, 0.35, 0.25, 0.04, -0.28, 0.0, 0.04, 0.16],       # EE
+        [0.44, -0.74, 0.35, 0.25, -0.30, -0.05, 0.18, 0.25, 0.20, 0.86, 0.45, 0.0, 0.05, -0.20],     # OH
+        [0.16, -0.35, 1.02, 0.30, -0.35, 0.08, 0.24, 0.30, 0.08, 0.95, 0.88, 0.0, 0.05, -0.35],      # OO
+        [0.44, 0.76, 0.78, 0.12, 0.38, 0.22, 0.16, 0.22, 0.58, 0.02, -0.22, 0.0, 0.04, 0.08],        # AY
+    ],
+    dtype=np.float32,
+)
+_CANONICAL_VOWEL_NORM = _norm_tract_np(_CANONICAL_VOWEL_14)
+
+
+def invert_tract_targets_from_atlas(
+    obs_phys: np.ndarray,
+    cues: np.ndarray,
+    atlas_art_norm: np.ndarray,
+    atlas_phys: np.ndarray,
+    dev: torch.device,
+    y_mat: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Invert (F1, F2, F3, opening/constriction, nasal/sibilant/pitch cues) to 14-D tract targets."""
+    cand_phys = atlas_phys
+    cand_art = atlas_art_norm
+
+    # Physics tolerances for weighted Euclidean matching:
+    # [F1, F2, F3, lipArea, minArea, pharynxArea, oralArea]
+    scales = np.array([150.0, 320.0, 520.0, 1.85, 0.65, 1.6, 1.8], dtype=np.float32)
+    weights = np.array([1.2, 1.1, 0.40, 0.75, 0.35, 0.15, 0.15], dtype=np.float32)
+    w_phys_sqrt = np.sqrt(weights) / scales
+
+    # Canonical anatomical prior (vowel-blended) resolves many-to-one redundancy cleanly
+    if y_mat is not None:
+        v_probs = np.clip(y_mat[:, 9:14], 0.0, 1.0)
+        v_probs = v_probs / np.maximum(1e-6, v_probs.sum(axis=1, keepdims=True))
+        prior_norm = v_probs @ _CANONICAL_VOWEL_NORM
+    else:
+        prior_norm = np.broadcast_to(TRACT_REST_NORM[None, :], (len(obs_phys), 14)).copy()
+
+    w_prior = np.array([0.85, 0.55, 0.55, 0.40, 0.35, 0.35, 0.45, 0.35, 0.85, 1.35, 1.25, 0.45, 0.85, 0.45], dtype=np.float32)
+    w_prior_sqrt = np.sqrt(w_prior)
+
+    cp_mat = np.concatenate([cand_phys * w_phys_sqrt[None, :], cand_art * w_prior_sqrt[None, :]], axis=1)
+    cp_t = torch.from_numpy(cp_mat).to(dev)    # (M, 21)
+    ca_t = torch.from_numpy(cand_art).to(dev)  # (M, 14)
+
+    n = len(obs_phys)
+    inv_norm = np.zeros((n, 14), dtype=np.float32)
+    chunk_sz = 2048
+    k_top = min(12, len(cand_phys))
+
+    with torch.no_grad():
+        c2 = (cp_t * cp_t).sum(dim=1).unsqueeze(0)
+        for s in range(0, n, chunk_sz):
+            q_mat = np.concatenate(
+                [obs_phys[s : s + chunk_sz] * w_phys_sqrt[None, :], prior_norm[s : s + chunk_sz] * w_prior_sqrt[None, :]],
+                axis=1,
+            )
+            q = torch.from_numpy(q_mat).to(dev)
+            q2 = (q * q).sum(dim=1, keepdim=True)
+            dist2 = torch.clamp(q2 + c2 - 2.0 * (q @ cp_t.T), min=0.0)
+            vals, idxs = torch.topk(dist2, k=k_top, dim=1, largest=False)
+            w = torch.softmax(-vals / 0.25, dim=1)
+            blended = (w.unsqueeze(-1) * ca_t[idxs]).sum(dim=1)
+            inv_norm[s : s + chunk_sz] = blended.cpu().numpy()
+
+    # Refine consonant / nasal / pitch-driven articulators + smooth silent rest
+    # cues: [active_gate, nasality, sibilance, frication_mid, pitch_norm]
+    active_gate = cues[:, 0:1]
+    nasality = cues[:, 1]
+    sibilance = cues[:, 2]
+    frication_mid = cues[:, 3]
+    pitch_norm = cues[:, 4]
+
+    # Convert from normalized [0, 1] -> raw Voice Workshop units for crisp refinement
+    lo = np.array([r[0] for r in TRACT_RANGES], dtype=np.float32)
+    span = np.array([r[1] - r[0] for r in TRACT_RANGES], dtype=np.float32)
+    raw = lo[None, :] + inv_norm * span[None, :]
+
+    # tipX, tipY, groove, tongueSides during sibilants (/s/, /z/, /sh/)
+    raw[:, 4] = raw[:, 4] * (1.0 - 0.65 * sibilance) + 0.92 * sibilance
+    raw[:, 5] = raw[:, 5] * (1.0 - 0.72 * sibilance) + 1.55 * sibilance
+    raw[:, 6] = np.clip(0.14 + 0.78 * sibilance, 0.0, 1.0)
+    raw[:, 7] = np.clip(0.18 + 0.68 * sibilance, 0.0, 1.0)
+    # lipTuck during labiodental frication (/f/, /v/)
+    raw[:, 11] = np.clip(raw[:, 11] * (1.0 - 0.6 * frication_mid) + 0.78 * frication_mid, 0.0, 1.0)
+    # velum drop during low-frequency nasal murmur (/m/, /n/, /ng/)
+    raw[:, 12] = np.clip(0.06 + 0.84 * nasality, 0.0, 1.0)
+    # larynx height co-articulates subtly with vocal pitch alongside formant tube length
+    pitch_larynx = (pitch_norm - 0.45) * 1.55
+    raw[:, 13] = np.clip(0.55 * raw[:, 13] + 0.45 * pitch_larynx, -1.5, 1.2)
+
+    refined_norm = _norm_tract_np(raw)
+    rest = TRACT_REST_NORM[None, :]
+    return active_gate * refined_norm + (1.0 - active_gate) * rest
+
+
+class SingingHeadInverseNet(nn.Module):
+    """Acoustic-to-articulatory inverse encoder driving all 14 mouth & throat parameters."""
+
+    def __init__(self, in_dim: int = 18, h1: int = 64, h2: int = 48, out_dim: int = 28) -> None:
         super().__init__()
         self.fc1 = nn.Linear(in_dim, h1)
         self.fc2 = nn.Linear(h1, h2)
         self.fc3 = nn.Linear(h2, out_dim)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         h = F.gelu(self.fc1(x))
         h = F.gelu(self.fc2(h))
         raw = self.fc3(h)
         articulators = torch.sigmoid(raw[:, :9])
-        vowel_logits = raw[:, 9:]
-        return articulators, vowel_logits
+        vowel_logits = raw[:, 9:14]
+        tract_norm = torch.sigmoid(raw[:, 14:28])
+        return articulators, vowel_logits, tract_norm
 
 
 class ForwardFormantDecoder(nn.Module):
@@ -615,13 +949,40 @@ def train_reverse_model(
     batch_size: int = 512,
     seed: int = 42,
     device: str = "auto",
+    obs_phys_mat: Optional[np.ndarray] = None,
+    cues_mat: Optional[np.ndarray] = None,
+    atlas_path: Optional[Path] = None,
 ) -> Tuple[SingingHeadInverseNet, np.ndarray, np.ndarray, Dict[str, float]]:
-    """Train inverse encoder + forward formant cycle decoder with track split."""
+    """Train 14-D inverse tract encoder + frozen forward vocal-tract physics cycle consistency."""
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
     dev = _resolve_device(device)
     if dev.type == "cuda":
         torch.cuda.manual_seed_all(seed)
+
+    has_atlas = atlas_path is not None and Path(atlas_path).exists() and obs_phys_mat is not None and cues_mat is not None
+    fwd_phys_net: Optional[TractPhysicsForwardNet] = None
+    phys_mean_t: Optional[torch.Tensor] = None
+    phys_std_t: Optional[torch.Tensor] = None
+    physics_forward_r2 = 0.0
+
+    if has_atlas:
+        assert atlas_path is not None and obs_phys_mat is not None and cues_mat is not None
+        fwd_phys_net, atlas_art_norm, atlas_phys, phys_mean, phys_std, physics_forward_r2 = train_physics_forward_net(
+            Path(atlas_path), dev=dev, seed=seed
+        )
+        tract_targets = invert_tract_targets_from_atlas(
+            obs_phys_mat, cues_mat, atlas_art_norm, atlas_phys, dev=dev, y_mat=y_mat
+        )
+        phys_mean_t = torch.from_numpy(phys_mean).to(dev)
+        phys_std_t = torch.from_numpy(phys_std).to(dev)
+        obs_phys_norm = ((obs_phys_mat - phys_mean[None, :]) / phys_std[None, :]).astype(np.float32)
+        voicing_w = np.clip(x_mat[:, 3:4], 0.0, 1.0)
+        active_weights = (cues_mat[:, 0:1] * (0.25 + 0.75 * voicing_w)).astype(np.float32)
+    else:
+        tract_targets = derive_fallback_tract_targets(y_mat, cycle_mat)
+        obs_phys_norm = np.zeros((len(x_mat), 7), dtype=np.float32)
+        active_weights = (y_mat[:, 0:1] > 0.08).astype(np.float32)
 
     unique_tids = sorted(set(track_ids))
     rng.shuffle(unique_tids)
@@ -647,12 +1008,18 @@ def train_reverse_model(
     xt = norm_x(x_train).to(dev)
     yt = torch.from_numpy(y_mat[is_train]).to(dev)
     ct = torch.from_numpy(cycle_mat[is_train]).to(dev)
+    tt = torch.from_numpy(tract_targets[is_train]).to(dev)
+    pt = torch.from_numpy(obs_phys_norm[is_train]).to(dev)
+    wt = torch.from_numpy(active_weights[is_train]).to(dev)
 
     xv = norm_x(x_mat[is_val]).to(dev)
     yv = torch.from_numpy(y_mat[is_val]).to(dev)
     cv = torch.from_numpy(cycle_mat[is_val]).to(dev)
+    tv = torch.from_numpy(tract_targets[is_val]).to(dev)
+    pv = torch.from_numpy(obs_phys_norm[is_val]).to(dev)
+    wv = torch.from_numpy(active_weights[is_val]).to(dev)
 
-    inv_net = SingingHeadInverseNet(in_dim=x_mat.shape[1], h1=48, h2=32, out_dim=14).to(dev)
+    inv_net = SingingHeadInverseNet(in_dim=x_mat.shape[1], h1=64, h2=48, out_dim=28).to(dev)
     fwd_net = ForwardFormantDecoder(in_dim=14, out_dim=4).to(dev)
 
     opt = torch.optim.AdamW(
@@ -663,7 +1030,7 @@ def train_reverse_model(
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
 
     n_train = len(xt)
-    for ep in range(epochs):
+    for _ in range(epochs):
         inv_net.train()
         fwd_net.train()
         perm = torch.randperm(n_train, device=dev)
@@ -672,8 +1039,11 @@ def train_reverse_model(
             xb = xt[idx]
             yb = yt[idx]
             cb = ct[idx]
+            tb = tt[idx]
+            pb = pt[idx]
+            wb = wt[idx]
 
-            pred_art, pred_vlogits = inv_net(xb)
+            pred_art, pred_vlogits, pred_tract = inv_net(xb)
             pred_cycle = fwd_net(pred_art, pred_vlogits)
 
             loss_art = F.mse_loss(pred_art, yb[:, :9])
@@ -681,8 +1051,20 @@ def train_reverse_model(
             log_probs = F.log_softmax(pred_vlogits, dim=-1)
             loss_vowel = -(target_vprobs * log_probs).sum(dim=-1).mean()
             loss_cycle = F.mse_loss(pred_cycle, cb)
+            loss_tract = F.smooth_l1_loss(pred_tract, tb)
 
-            loss = loss_art + 0.35 * loss_vowel + 0.25 * loss_cycle
+            loss = loss_art + 0.35 * loss_vowel + 0.25 * loss_cycle + 3.20 * loss_tract
+
+            if fwd_phys_net is not None:
+                pred_phys = fwd_phys_net(pred_tract)
+                # Differentiable (F1, F2, lipArea) cycle consistency gently refines vocal tract resonance
+                w_act = wb.squeeze(-1)
+                formant_err = F.smooth_l1_loss(pred_phys[:, :2], pb[:, :2], reduction="none").mean(dim=-1)
+                apert_err = F.smooth_l1_loss(pred_phys[:, 3:5], pb[:, 3:5], reduction="none").mean(dim=-1)
+                denom_w = torch.clamp(w_act.sum(), min=1.0)
+                loss_phys_cycle = (w_act * (0.14 * formant_err + 0.06 * apert_err)).sum() / denom_w
+                loss = loss + loss_phys_cycle
+
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -691,9 +1073,10 @@ def train_reverse_model(
     inv_net.eval()
     fwd_net.eval()
     with torch.no_grad():
-        va, vv = inv_net(xv)
+        va, vv, vt = inv_net(xv)
         vc = fwd_net(va, vv)
         val_mae = float(torch.mean(torch.abs(va - yv[:, :9])).item())
+        tract_val_mae = float(torch.mean(torch.abs(vt - tv)).item())
         active_mask = yv[:, 0] > 0.12
         if int(active_mask.sum().item()) > 10:
             pred_cls = torch.argmax(vv[active_mask], dim=-1)
@@ -705,13 +1088,25 @@ def train_reverse_model(
         ss_tot = float(((cv - cv.mean(dim=0, keepdim=True)) ** 2).sum().item())
         cycle_r2 = 1.0 - ss_res / max(1e-8, ss_tot)
 
+        physics_cycle_r2 = 0.0
+        voiced_mask = active_mask & (wv.squeeze(-1) > 0.50)
+        if fwd_phys_net is not None and int(voiced_mask.sum().item()) > 10:
+            vp_phys = fwd_phys_net(vt[voiced_mask])[:, :2]
+            tp_phys = pv[voiced_mask, :2]
+            p_res = float(((vp_phys - tp_phys) ** 2).sum().item())
+            p_tot = float(((tp_phys - tp_phys.mean(dim=0, keepdim=True)) ** 2).sum().item())
+            physics_cycle_r2 = 1.0 - p_res / max(1e-8, p_tot)
+
     inv_net_cpu = inv_net.cpu()
     metrics = {
         "train_frames": int(np.sum(is_train)),
         "val_frames": int(np.sum(is_val)),
         "val_mae": round(val_mae, 4),
+        "tract_val_mae": round(tract_val_mae, 4),
         "val_vowel_acc": round(val_vowel_acc, 4),
         "cycle_r2": round(cycle_r2, 4),
+        "physics_forward_r2": round(physics_forward_r2, 4),
+        "physics_cycle_r2": round(physics_cycle_r2, 4),
     }
     return inv_net_cpu, feat_mean, feat_std, metrics
 
@@ -726,7 +1121,7 @@ def export_model_json(
     stubs_used: int,
     stems_used: int,
 ) -> None:
-    """Export trained reverse-model weights and normalization stats as compact JSON."""
+    """Export trained 14-D reverse-model weights and normalization stats as compact JSON."""
     state = model.state_dict()
 
     def round_list(t: torch.Tensor) -> list:
@@ -734,14 +1129,16 @@ def export_model_json(
         return arr.tolist()
 
     payload = {
-        "version": 1,
-        "format": "wub_singing_head_mlp_v1",
+        "version": 2,
+        "format": "wub_singing_head_mlp_v2",
         "sample_rate": TARGET_SR,
         "fft_size": FFT_SIZE,
         "hop_size": HOP_SIZE,
         "feature_names": FEATURE_NAMES,
         "articulators": ARTICULATOR_NAMES,
         "vowels": VOWELS,
+        "tract_keys": TRACT_ARTICULATOR_KEYS,
+        "tract_ranges": [list(r) for r in TRACT_RANGES],
         "bands_hz": [list(b) for b in BANDS_HZ],
         "feature_mean": [round(float(v), 6) for v in feat_mean.tolist()],
         "feature_std": [round(float(v), 6) for v in feat_std.tolist()],
@@ -769,14 +1166,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Reverse-train Singing Head on vocal stubs & stems.")
     parser.add_argument("--kits-dir", type=Path, default=Path("frontend/public/data/kits/kits"))
     parser.add_argument("--stems-dir", type=Path, default=Path("data/stems"))
+    parser.add_argument("--atlas", type=Path, default=Path("/tmp/tract_physics_atlas.npz"))
     parser.add_argument("--out", type=Path, default=Path("frontend/public/data/singing_head_model.json"))
     parser.add_argument("--max-kits", type=int, default=0, help="0 = all vocal kit stubs")
     parser.add_argument("--max-stems", type=int, default=0, help="0 = all full vocal stems")
-    parser.add_argument("--epochs", type=int, default=35)
+    parser.add_argument("--epochs", type=int, default=65)
     parser.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 4))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     args = parser.parse_args()
+
+    if not args.atlas.exists():
+        from scripts.generate_tract_atlas import generate_atlas
+
+        print(f"Generating Voice Workshop physics atlas at {args.atlas}...", flush=True)
+        generate_atlas(args.atlas, count=10000)
 
     stub_paths = sorted(glob.glob(str(args.kits_dir / "*" / "*_vocals.opus")))
     stem_paths = sorted(glob.glob(str(args.stems_dir / "*" / "vocals.wav")))
@@ -829,13 +1233,22 @@ def main() -> None:
         flush=True,
     )
 
-    x_mat, y_mat, cycle_mat, corpus_stats = compute_articulatory_targets(rows)
+    x_mat, y_mat, cycle_mat, obs_phys_mat, cues_mat, corpus_stats = compute_articulatory_targets_with_physics(rows)
     track_ids = [r["track_id"] for r in rows]
 
     dev = _resolve_device(args.device)
-    print(f"Training inverse+cycle network on {dev} ({args.epochs} epochs)...", flush=True)
+    print(f"Training 14-D inverse+physics-cycle network on {dev} ({args.epochs} epochs)...", flush=True)
     model, feat_mean, feat_std, metrics = train_reverse_model(
-        x_mat, y_mat, cycle_mat, track_ids, epochs=args.epochs, seed=args.seed, device=args.device
+        x_mat,
+        y_mat,
+        cycle_mat,
+        track_ids,
+        epochs=args.epochs,
+        seed=args.seed,
+        device=args.device,
+        obs_phys_mat=obs_phys_mat,
+        cues_mat=cues_mat,
+        atlas_path=args.atlas,
     )
     print(f"Validation metrics: {metrics} | Corpus stats: {corpus_stats}", flush=True)
 
@@ -850,7 +1263,7 @@ def main() -> None:
         stems_used=len(stem_paths),
     )
     size_kb = args.out.stat().st_size / 1024.0
-    print(f"Exported reverse-trained Singing Head model to {args.out} ({size_kb:.1f} KB).", flush=True)
+    print(f"Exported reverse-trained 14-D Singing Head model to {args.out} ({size_kb:.1f} KB).", flush=True)
 
 
 if __name__ == "__main__":
