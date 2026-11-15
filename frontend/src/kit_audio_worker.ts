@@ -23,7 +23,7 @@
  * Any item failure fails the whole run (mirrors the main-thread loader's
  * "a missing phrase fails the run" semantics).
  */
-import { concatStereoRun, splitChannels } from "./kit_pcm";
+import { assembleSlicedStereoRun, concatStereoRun, splitChannels, type SliceSpec } from "./kit_pcm";
 
 interface PoolItem {
   key: string;
@@ -93,15 +93,28 @@ async function loadItem(item: PoolItem): Promise<{ stereo: [Float32Array, Float3
   return { stereo, pre };
 }
 
-async function handleLoad(id: number, items: PoolItem[]): Promise<void> {
+async function handleLoad(
+  id: number,
+  items: PoolItem[],
+  slices?: SliceSpec[],
+  crossfadeMs?: number,
+): Promise<void> {
   // Decode this run's phrases concurrently (fetch + decode are async), then
-  // concatenate; only the first phrase's pre-roll starts the run.
+  // concatenate or assemble sub-phrase slices; only the first phrase's pre-roll starts the run.
   const loaded = await Promise.all(items.map((item) => loadItem(item)));
-  const { samples, preDur, mainDurations } = concatStereoRun(
-    loaded.map((entry) => entry.stereo),
-    loaded[0]?.pre ?? null,
-    sampleRate,
-  );
+  const { samples, preDur, mainDurations } = slices && slices.length > 0
+    ? assembleSlicedStereoRun(
+        loaded.map((entry) => entry.stereo),
+        loaded[0]?.pre ?? null,
+        slices,
+        sampleRate,
+        crossfadeMs ?? 8,
+      )
+    : concatStereoRun(
+        loaded.map((entry) => entry.stereo),
+        loaded[0]?.pre ?? null,
+        sampleRate,
+      );
   host().postMessage(
     { type: "run", id, samples, preDur, mainDurations, sampleRate },
     [samples[0].buffer, samples[1].buffer],
@@ -112,7 +125,7 @@ async function handleLoad(id: number, items: PoolItem[]): Promise<void> {
   onmessage: ((ev: MessageEvent) => void) | null;
 }).onmessage = (ev: MessageEvent): void => {
   const msg = ev.data as
-    | { type?: string; sampleRate?: number; id?: number; items?: PoolItem[] }
+    | { type?: string; sampleRate?: number; id?: number; items?: PoolItem[]; slices?: SliceSpec[]; crossfadeMs?: number }
     | null
     | undefined;
   if (!msg || typeof msg.type !== "string") return;
@@ -124,7 +137,7 @@ async function handleLoad(id: number, items: PoolItem[]): Promise<void> {
   }
   if (msg.type === "load" && typeof msg.id === "number" && Array.isArray(msg.items)) {
     const id = msg.id;
-    void handleLoad(id, msg.items).catch((err: unknown) => {
+    void handleLoad(id, msg.items, msg.slices, msg.crossfadeMs).catch((err: unknown) => {
       host().postMessage({
         type: "error",
         id,

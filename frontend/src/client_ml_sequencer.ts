@@ -2559,6 +2559,7 @@ export class ClientGrooveboxConductor {
 
   public playbackMode: "jukebox" | "slices" | "phrase_blocks" | "kit" = "kit";
   private kitPlayer: KitPlayer | null = null;
+  private pendingSongMode: "song" | "morph" = "song";
   private kitLoadStarted: boolean = false;
   private kitAudioActive: boolean = false;
   private kitFailureLogged: boolean = false;
@@ -2707,6 +2708,7 @@ export class ClientGrooveboxConductor {
     if (this.kitPlayer !== null || this.kitLoadStarted || !this.engine.ready) return;
     this.kitLoadStarted = true;
     const player = new KitPlayer(this.engine);
+    player.setSongMode(this.pendingSongMode);
     if (this.userBpmOverride !== null) {
       player.setBpm(this.userBpmOverride, true);
     }
@@ -5242,6 +5244,20 @@ export class ClientGrooveboxConductor {
 
   public getAllKitPhrasePoints(): NebulaPoint[] {
     return this.kitPlayer?.allPhrasePoints() ?? [];
+  }
+
+  /** Switch between structured Song Mode and Infinite DJ Morph Mode. */
+  public setSongMode(mode: "song" | "morph"): void {
+    this.pendingSongMode = mode;
+    this.kitPlayer?.setSongMode(mode);
+  }
+
+  public getSongMode(): "song" | "morph" {
+    return this.kitPlayer?.getSongMode() ?? this.pendingSongMode;
+  }
+
+  public getCompositionTelemetry() {
+    return this.kitPlayer?.getCompositionTelemetry() ?? null;
   }
 
   public get steeringStems(): string[] {

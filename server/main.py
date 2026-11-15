@@ -7,7 +7,9 @@ Run:  uvicorn server.main:app --host 0.0.0.0 --port 8000
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -16,13 +18,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
+import soundfile as sf
 
 from server.stream_manager import SliceCache, StreamSession, render_slice_wav
 from wub_core.corpus import CorpusStore
 
-STORE = CorpusStore(processed_dir=Path("data/processed"),
-                    stems_base=Path("data/stems"),
-                    library_dirs=[Path("pandora")])
+
+def _resolve_corpus_path(env_key: str, remote_mount: str, local_rel: str) -> Path:
+    env_val = os.environ.get(env_key)
+    if env_val:
+        return Path(env_val)
+    mount_path = Path(remote_mount)
+    if mount_path.exists():
+        return mount_path
+    return Path(local_rel)
+
+
+_PROCESSED_DIR = _resolve_corpus_path("WUB_PROCESSED_DIR", "/mnt/e/Wub/data/processed", "data/processed")
+_STEMS_DIR = _resolve_corpus_path("WUB_STEMS_DIR", "/mnt/e/Wub/data/stems", "data/stems")
+_LIBRARY_DIR = _resolve_corpus_path("WUB_LIBRARY_DIR", "/mnt/e/pandora", "pandora")
+
+STORE = CorpusStore(processed_dir=_PROCESSED_DIR,
+                    stems_base=_STEMS_DIR,
+                    library_dirs=[_LIBRARY_DIR])
 CACHE = SliceCache()
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -193,6 +211,57 @@ async def ws_stream(ws: WebSocket) -> None:
             await asyncio.sleep(max(0.02, ev["tatum_duration"] * 0.9))
     except WebSocketDisconnect:
         pass
+
+
+@app.get("/api/cells/status")
+def api_cells_status() -> dict:
+    STORE.refresh(min_interval=10.0, max_tracks=300)
+    kits_dir = Path(__file__).resolve().parents[1] / "frontend" / "public" / "data" / "kits"
+    return {
+        "status": "ok",
+        "processed_dir": str(_PROCESSED_DIR),
+        "stems_dir": str(_STEMS_DIR),
+        "library_dir": str(_LIBRARY_DIR),
+        "cell_index_available": (kits_dir / "cell_index.json").exists(),
+        "cell_compat_available": (kits_dir / "cell_compat.json").exists(),
+        **STORE.summary(),
+    }
+
+
+@app.get("/api/cells/slice/{track_id}/{stem}.wav")
+def api_cell_slice(track_id: str, stem: str, start_bar: int = 0, bars: float = 1.0) -> Response:
+    if stem not in ("drums", "bass", "other", "vocals"):
+        raise HTTPException(status_code=400, detail=f"invalid stem '{stem}'")
+    stem_dir = _STEMS_DIR / track_id
+    stem_path = None
+    for ext in (".wav", ".flac", ".opus", ".mp3"):
+        cand = stem_dir / f"{stem}{ext}"
+        if cand.exists():
+            stem_path = cand
+            break
+    if stem_path is None:
+        raise HTTPException(status_code=404, detail=f"stem audio not found for '{track_id}/{stem}'")
+
+    proc_path = _PROCESSED_DIR / f"{track_id}.json"
+    bpm = 128.0
+    if proc_path.exists():
+        try:
+            with open(proc_path, "r") as f:
+                bpm = float(json.load(f).get("bpm") or 128.0)
+        except Exception:
+            bpm = 128.0
+
+    bar_sec = 240.0 / max(40.0, bpm)
+    start_sec = max(0.0, float(start_bar) * bar_sec)
+    dur_sec = max(0.05, min(32.0, float(bars) * bar_sec))
+    info = sf.info(str(stem_path))
+    sr = int(info.samplerate)
+    start_frame = min(max(0, int(start_sec * sr)), max(0, info.frames - 1))
+    stop_frame = min(info.frames, start_frame + max(1, int(dur_sec * sr)))
+    audio, _ = sf.read(str(stem_path), start=start_frame, stop=stop_frame, dtype="float32")
+    buf = io.BytesIO()
+    sf.write(buf, audio, sr, format="WAV")
+    return Response(content=buf.getvalue(), media_type="audio/wav")
 
 
 # Serve the built frontend (frontend/dist) when present so the UI and the

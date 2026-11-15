@@ -369,6 +369,7 @@ class WubApp {
           lastHoldBars: this.movementHoldBars,
           maxHoldBars: this.movementMaxHoldBars,
           log: this.movementLog,
+          composition: this.clientConductor?.getCompositionTelemetry() ?? null,
         });
         (window as any).__wubDebugBar = () => {
           const c = this.clientConductor as any;
@@ -681,6 +682,15 @@ class WubApp {
     el<HTMLButtonElement>("btn-stop").addEventListener("click", () => {
       void this.stop();
     });
+    const songBtn = document.getElementById("btn-song-mode");
+    if (songBtn instanceof HTMLButtonElement) {
+      songBtn.addEventListener("click", () => {
+        const nextMode = this.clientConductor?.getSongMode() === "morph" ? "song" : "morph";
+        this.clientConductor?.setSongMode(nextMode);
+        songBtn.textContent = nextMode === "song" ? "MODE: SONG" : "MODE: MORPH";
+        songBtn.classList.toggle("active", nextMode === "song");
+      });
+    }
   }
 
   private async play(): Promise<void> {

@@ -9,6 +9,7 @@ import type { StemName } from "./types";
 import type { AudioEngine } from "./audio_engine";
 import type { NebulaPoint } from "./visualizer";
 import { StemRemixPlayer, type StemRemixState, type StemPin } from "./stem_remix";
+import type { SongMode } from "./song_architect";
 
 export interface StemXY {
   x: number;
@@ -316,6 +317,7 @@ export class KitPlayer {
 
   private readonly engine: AudioEngine;
   private remix: StemRemixPlayer | null = null;
+  private pendingSongMode: SongMode = "song";
   private baseUrl: string = "";
   private manifest: KitManifest | null = null;
   private kit: Kit | null = null;
@@ -464,6 +466,22 @@ export class KitPlayer {
   /** Pin a stem style region and commit the nearest phrase at the next bar. */
   setStemTarget(stem: StemName, x: number, y: number): StemPin | null {
     return this.remix?.setTarget(stem, x, y) ?? null;
+  }
+
+  /** Switch between Song Mode ("song") and Infinite DJ Morph Mode ("morph"). */
+  setSongMode(mode: SongMode): void {
+    this.pendingSongMode = mode;
+    this.remix?.setSongMode(mode);
+  }
+
+  /** Active composition mode. */
+  getSongMode(): SongMode {
+    return this.remix?.getSongMode() ?? this.pendingSongMode;
+  }
+
+  /** Live composition telemetry for debugging/UI status. */
+  getCompositionTelemetry() {
+    return this.remix?.getCompositionTelemetry() ?? null;
   }
 
   /** Return a stem to auto-mix. */
@@ -645,6 +663,7 @@ export class KitPlayer {
     this.manifest = manifest;
     if (Array.isArray(manifest.clusters) && manifest.clusters.length > 0) {
       this.remix = new StemRemixPlayer(this.engine);
+      this.remix.setSongMode(this.pendingSongMode);
       this.remix.onStatus = (message) => console.info(`[StemRemix] ${message}`);
       await this.remix.load(base);
       if (this.pendingUserBpm !== null) {

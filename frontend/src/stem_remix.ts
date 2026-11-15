@@ -9,11 +9,15 @@
 // phrases are strongly preferred by scoring, far ones surface as the near
 // pool is played out, so a long session traverses the full bank.
 import { ENGINE_SAMPLE_RATE, type AudioEngine } from "./audio_engine";
-import { concatStereoRun, mixToMono, splitChannels } from "./kit_pcm";
+import { concatStereoRun, mixToMono, splitChannels, assembleSlicedStereoRun, type SliceSpec } from "./kit_pcm";
 import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
-import { StretchVoice } from "./stretch_voice";
+import { StretchVoice, type PitchAutomationPoint } from "./stretch_voice";
+import { BarComposer } from "./bar_composer";
+import { CellCompatScorer } from "./cell_compat";
+import { SongArchitect, type SongMode } from "./song_architect";
+import { parseKey as parseTheoryKey } from "./theory_engine";
 import {
   ARC_SECTIONS, arcPredictNext, isArcModelArtifact,
   type ArcModelArtifact, type ArcPrediction,
@@ -490,7 +494,7 @@ class KitAudioWorkerLoader {
     this.pending.clear();
   }
 
-  load(items: WorkerRunItem[]): Promise<LoadedStemRun | null> {
+  load(items: WorkerRunItem[], slices?: SliceSpec[], crossfadeMs?: number): Promise<LoadedStemRun | null> {
     if (!this.ok || !this.worker) return Promise.resolve(null);
     return new Promise<LoadedStemRun | null>((resolve) => {
       const id = this.nextId++;
@@ -503,7 +507,12 @@ class KitAudioWorkerLoader {
       }, 5000);
       this.pending.set(id, { resolve, timer });
       try {
-        this.worker!.postMessage({ type: "load", id, items });
+        this.worker!.postMessage({
+          type: "load",
+          id,
+          items,
+          ...(slices && slices.length > 0 ? { slices, crossfadeMs } : {}),
+        });
       } catch {
         this.pending.delete(id);
         clearTimeout(timer);
@@ -566,6 +575,25 @@ export class StemRemixPlayer {
   private jointRanker: JointRanker | null = null;
   /** Per-bar mix-compat critic (rhythm-prioritized); null when unavailable. */
   private mixCompat: MixCompatModel | null = null;
+  /** Hierarchical music-theory bar composer, song architect & neural cell compatibility scorer. */
+  private readonly barComposer = new BarComposer();
+  private readonly songArchitect = new SongArchitect();
+  private readonly cellCompat = new CellCompatScorer();
+  private composedStats: {
+    mode: SongMode;
+    role: string;
+    blocksComposed: number;
+    lastMeanTheoryScore: number;
+    lastCrossTrackCells: number;
+    chords: string;
+  } = {
+    mode: "song",
+    role: "INTRO",
+    blocksComposed: 0,
+    lastMeanTheoryScore: 0,
+    lastCrossTrackCells: 0,
+    chords: "",
+  };
   private lastBlockEntries: Partial<Record<StemName, StemPoolEntry>> = {};
   private previousEntries: Partial<Record<StemName, StemPoolEntry>> = {};
   /** Run starts of the last scheduled block, for hold/repeat. */
@@ -793,6 +821,12 @@ export class StemRemixPlayer {
     }
     if (this.sidecarEnabled("vocal_mix")) {
       void this.loadVocalMix(base);
+    }
+    if (!this.sidecarsIndex || this.sidecarEnabled("cell_index")) {
+      void this.barComposer.load(`${base}/cell_index.json`);
+    }
+    if (!this.sidecarsIndex || this.sidecarEnabled("cell_compat")) {
+      void this.cellCompat.load(`${base}/cell_compat.json`);
     }
   }
 
@@ -1323,6 +1357,26 @@ export class StemRemixPlayer {
    *  filter at pool build.  Unknown-genre kits never pass an active filter. */
   private genreFilter: Set<string> | null = null;
 
+  /** Switch between structured "song" mode (themes + chorus recall) and "morph" mode. */
+  setSongMode(mode: SongMode): void {
+    this.songArchitect.setMode(mode);
+    this.composedStats.mode = mode;
+  }
+
+  /** Active composition mode ("song" or "morph"). */
+  getSongMode(): SongMode {
+    return this.songArchitect.getMode();
+  }
+
+  /** Live composition & music-theory telemetry. */
+  getCompositionTelemetry() {
+    return {
+      ...this.composedStats,
+      cellIndexReady: this.barComposer.isReady(),
+      cellCompatReady: this.cellCompat.isReady(),
+    };
+  }
+
   /** Restrict the bank pools + session clusters to the selected styles.
    *  Empty selection = all styles (escape hatch, never an empty pool).
    *  The caller restarts the session after calling this. */
@@ -1756,6 +1810,8 @@ export class StemRemixPlayer {
   private applyCluster(cluster: KitCluster): void {
     this.cluster = cluster;
     this.sessionKey = cluster.key;
+    const parsedKey = parseTheoryKey(cluster.key);
+    this.songArchitect.resetForNewSet(cluster.style, parsedKey.root, parsedKey.mode);
     const targetBpm = this.userBpmOverride ?? cluster.bpm;
     this.sessionBpm = targetBpm;
     this.blockSec = 960 / targetBpm;
@@ -2278,7 +2334,14 @@ export class StemRemixPlayer {
 
   private beginBlock(at: number, section: string): {
     result: StemBlockResult;
-    tasks: Array<{ stem: StemName; run: StemPoolEntry[]; transition?: TransitionTechnique }>;
+    tasks: Array<{
+      stem: StemName;
+      run: StemPoolEntry[];
+      transition?: TransitionTechnique;
+      slices?: SliceSpec[];
+      baseSemitones?: number;
+      pitchPoints?: PitchAutomationPoint[];
+    }>;
   } {
     const blocksPlayed = this.blockIndex;
 
@@ -2375,6 +2438,28 @@ export class StemRemixPlayer {
     const bars = rotation ? 4 : this.blockBarsAt(startBar);
     const blockSec = bars * this.barSec;
     const phrasesPerStem = Math.max(1, Math.round(bars / 4));
+    const parsedSessionKey = parseTheoryKey(this.sessionKey);
+    const activeStyle = this.cluster?.style ?? "house";
+    const secCtx = this.songArchitect.describeBlock(
+      startBar,
+      bars,
+      activeStyle,
+      parsedSessionKey.root,
+      parsedSessionKey.mode,
+      targetEnergy,
+      normalized,
+      this.barComposer.getStyleProgressions(),
+    );
+    if (this.songArchitect.getMode() === "song" && !bridge && !rotation) {
+      normalized = secCtx.kitSection;
+      displaySection = secCtx.role;
+      targetEnergy = secCtx.targetEnergy;
+    }
+    this.composedStats.mode = this.songArchitect.getMode();
+    this.composedStats.role = displaySection;
+    this.composedStats.chords = secCtx.progression
+      .map((c) => `${(parsedSessionKey.root + c.relRoot) % 12}:${c.quality.slice(0, 3)}`)
+      .join(" ");
     const budget = movementBudgetAt(startBar, bars);
 
     // Pins are measured in session bars.  Release at the first block boundary
@@ -2400,7 +2485,14 @@ export class StemRemixPlayer {
     const phrases: Partial<Record<StemName, KitPhrase>> = {};
     const kits: Partial<Record<StemName, Kit>> = {};
     const stemTracks: Partial<Record<StemName, string>> = {};
-    const tasks: Array<{ stem: StemName; run: StemPoolEntry[]; transition?: TransitionTechnique }> = [];
+    const tasks: Array<{
+      stem: StemName;
+      run: StemPoolEntry[];
+      transition?: TransitionTechnique;
+      slices?: SliceSpec[];
+      baseSemitones?: number;
+      pitchPoints?: PitchAutomationPoint[];
+    }> = [];
 
     if (bridge && !rotation) {
       for (const stem of ["drums", "bass"] as const) {
@@ -2575,6 +2667,58 @@ export class StemRemixPlayer {
         this.recordPlayed(stem, runEntry);
       }
     }
+
+    if (!opening && this.barComposer.isReady()) {
+      const baseEntries: Partial<Record<StemName, StemPoolEntry>> = {};
+      for (const s of STEMS) {
+        const chosen = chosenRuns[s]?.[0] ?? this.holdEntry(s);
+        if (chosen) baseEntries[s] = chosen;
+      }
+      const pinnedSet = new Set<StemName>();
+      for (const s of STEMS) {
+        if (this.pins[s] !== undefined || this.manualPins[s] || this.pinning.has(s)) {
+          pinnedSet.add(s);
+        }
+      }
+      if (baseEntries.drums && baseEntries.bass && baseEntries.other && baseEntries.vocals) {
+        const composed = this.barComposer.composeBlock({
+          baseEntries: baseEntries as Record<StemName, StemPoolEntry>,
+          pools: this.pools,
+          sectionCtx: secCtx,
+          blockBars: bars,
+          blockDurationSec: blockSec,
+          blockIndex: blocksPlayed,
+          sessionRoot: parsedSessionKey.root,
+          sessionMode: parsedSessionKey.mode,
+          isBridgeBlock: bridge,
+          pinnedStems: pinnedSet,
+          compatScorer: this.cellCompat,
+        });
+        this.songArchitect.recordSectionTheme(secCtx, {
+          drums: composed.stems.drums.donors[0]?.phrase.id,
+          bass: composed.stems.bass.donors[0]?.phrase.id,
+          other: composed.stems.other.donors[0]?.phrase.id,
+          vocals: composed.stems.vocals.donors[0]?.phrase.id,
+        });
+        for (const task of tasks) {
+          if (this.manualPins[task.stem] || this.pinning.has(task.stem)) continue;
+          const plan = composed.stems[task.stem];
+          if (!plan || plan.donors.length === 0) continue;
+          task.run = plan.donors;
+          task.slices = plan.slices;
+          task.baseSemitones = plan.baseSemitones;
+          task.pitchPoints = plan.pitchPoints;
+          chosenRuns[task.stem] = plan.donors;
+          phrases[task.stem] = plan.donors[0].phrase;
+          kits[task.stem] = plan.donors[0].kit;
+          stemTracks[task.stem] = plan.donorTrackIds.join("+");
+        }
+        this.composedStats.blocksComposed += 1;
+        this.composedStats.lastMeanTheoryScore = Number(composed.meanTheoryScore.toFixed(3));
+        this.composedStats.lastCrossTrackCells = composed.crossTrackCellCount;
+      }
+    }
+
     this.previousEntries = priorEntries;
     this.lastBlockRuns = chosenRuns;
     const boundaryEntries: Partial<Record<StemName, StemPoolEntry>> = {};
@@ -3603,7 +3747,14 @@ export class StemRemixPlayer {
   }
 
   private async finishBlock(
-    tasks: Array<{ stem: StemName; run: StemPoolEntry[]; transition?: TransitionTechnique }>,
+    tasks: Array<{
+      stem: StemName;
+      run: StemPoolEntry[];
+      transition?: TransitionTechnique;
+      slices?: SliceSpec[];
+      baseSemitones?: number;
+      pitchPoints?: PitchAutomationPoint[];
+    }>,
     at: number,
     resumes?: Map<StemName, ResumeHint>,
   ): Promise<void> {
@@ -3616,7 +3767,7 @@ export class StemRemixPlayer {
     // macrotask measured 600-1100 ms of blocking (v0.2.233 dropout).
     const audios = await Promise.all(tasks.map(async (task) => {
       const loadT0 = performance.now();
-      const audio = await this.loadRunAudio(task.run);
+      const audio = await this.loadRunAudio(task.run, task.slices);
       maxLoadMs = Math.max(maxLoadMs, performance.now() - loadT0);
       return { task, audio };
     }));
@@ -3633,7 +3784,18 @@ export class StemRemixPlayer {
           }
         }
       } else {
-        await this.scheduleRun(task.stem, task.run, audio, targetAt, this.currentBlockBars, false, resume, task.transition);
+        await this.scheduleRun(
+          task.stem,
+          task.run,
+          audio,
+          targetAt,
+          this.currentBlockBars,
+          false,
+          resume,
+          task.transition,
+          task.baseSemitones,
+          task.pitchPoints,
+        );
       }
       await yieldToMain();
     }
@@ -3795,7 +3957,11 @@ export class StemRemixPlayer {
   }
 
   /** Decode every phrase in a run: worker first, main-thread fallback. */
-  private async loadRunAudio(run: readonly StemPoolEntry[]): Promise<LoadedStemRun | null> {
+  private async loadRunAudio(
+    run: readonly StemPoolEntry[],
+    slices?: SliceSpec[],
+    crossfadeMs: number = 8,
+  ): Promise<LoadedStemRun | null> {
     if (this.audioWorker.ok) {
       const items: WorkerRunItem[] = [];
       for (const entry of run) {
@@ -3814,20 +3980,24 @@ export class StemRemixPlayer {
             : null,
         });
       }
-      const loaded = await this.audioWorker.load(items);
+      const loaded = await this.audioWorker.load(items, slices, crossfadeMs);
       if (loaded) return loaded;
       // The worker reported a failed run (or glitched silently): the
       // main-thread loader keeps the session alive from here.  It records
       // per-phrase failures (failedKits) the same way, so a genuinely
       // missing file still fails the run.
-      return this.loadRunAudioMain(run);
+      return this.loadRunAudioMain(run, slices, crossfadeMs);
     }
-    return this.loadRunAudioMain(run);
+    return this.loadRunAudioMain(run, slices, crossfadeMs);
   }
 
   /** Main-thread fallback: fetch + decode through the audio cache, then
-   *  concat into one PCM run (the pre-worker path, kept for coverage). */
-  private async loadRunAudioMain(run: readonly StemPoolEntry[]): Promise<LoadedStemRun | null> {
+   *  concat or slice-assemble into one PCM run (the pre-worker path, kept for coverage). */
+  private async loadRunAudioMain(
+    run: readonly StemPoolEntry[],
+    slices?: SliceSpec[],
+    crossfadeMs: number = 8,
+  ): Promise<LoadedStemRun | null> {
     const audios = await Promise.all(run.map(async (entry) => {
       try {
         return await this.loadAudio(entry);
@@ -3840,11 +4010,12 @@ export class StemRemixPlayer {
     if (audios.some((audio) => audio === null)) return null;
     const loaded = audios as LoadedStemAudio[];
     const sampleRate = loaded[0]?.main.sampleRate ?? ENGINE_SAMPLE_RATE;
-    return concatStereoRun(
-      loaded.map((audio) => splitChannels(audio.main)),
-      loaded[0]?.pre ? splitChannels(loaded[0].pre) : null,
-      sampleRate,
-    );
+    const pairs = loaded.map((audio) => splitChannels(audio.main));
+    const prePair = loaded[0]?.pre ? splitChannels(loaded[0].pre) : null;
+    if (slices && slices.length > 0) {
+      return assembleSlicedStereoRun(pairs, prePair, slices, sampleRate, crossfadeMs);
+    }
+    return concatStereoRun(pairs, prePair, sampleRate);
   }
 
   /** Two reusable voices per stem: one playing, one being prepared. */
@@ -3884,6 +4055,8 @@ export class StemRemixPlayer {
     manual: boolean,
     resume?: ResumeHint,
     transition?: TransitionTechnique,
+    baseSemitones?: number,
+    pitchPoints?: readonly PitchAutomationPoint[],
   ): Promise<void> {
     const first = run[0];
     if (!first) return;
@@ -3930,7 +4103,7 @@ export class StemRemixPlayer {
         when: startAt,
         inputSec,
         rate,
-        semitones: first.keyShift,
+        semitones: baseSemitones ?? first.keyShift,
         formantCompensation: stem === "vocals",
         fadeInSec: crossfadeSec,
         gain: first.gain,
@@ -3940,6 +4113,9 @@ export class StemRemixPlayer {
           ? previous.voice.outputGainTarget
           : undefined,
       });
+      if (!resume && pitchPoints && pitchPoints.length > 0 && stem !== "drums") {
+        voice.schedulePitchAutomation(startedAt, rate, pitchPoints, stem === "vocals");
+      }
       voice.fadeOut(runEndAt, STEM_FADE_OUT[stem]);
 
       const offsets: number[] = [];

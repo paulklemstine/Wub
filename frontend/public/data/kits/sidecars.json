@@ -9,5 +9,7 @@
   "progression_model": true,
   "progression_context": true,
   "vocal_mix": true,
-  "section_model": true
+  "section_model": true,
+  "cell_index": true,
+  "cell_compat": true
 }

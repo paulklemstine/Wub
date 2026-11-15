@@ -256,6 +256,23 @@
       box-shadow: 0 0 8px #ef4444;
     }
 
+    #btn-song-mode {
+      background: linear-gradient(180deg, #1b3446 0%, #101f2d 100%);
+      border-color: #38bdf8;
+      border-bottom: 3px solid #08121b;
+      border-top: 1px solid #7dd3fc;
+      color: #bae6fd;
+    }
+    #btn-song-mode:hover {
+      background: linear-gradient(180deg, #224258 0%, #152a3d 100%);
+    }
+    #btn-song-mode.active {
+      background: linear-gradient(180deg, #0284c7 0%, #0369a1 100%) !important;
+      color: #ffffff !important;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.75), inset 0 1px 2px #e0f2fe !important;
+      text-shadow: 0 0 8px #bae6fd;
+    }
+
     /* --- BACKEND CONFIG & ENGINE MODE BAR --- */
     .mc-mode-toggle {
       background: linear-gradient(135deg, rgba(0, 243, 255, 0.25), rgba(188, 19, 254, 0.25));
@@ -2330,12 +2347,13 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.281 <span class="mc-build-num">#281</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.282 <span class="mc-build-num">#282</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
         <button id="btn-stop" type="button">Stop</button>
+        <button id="btn-song-mode" class="active" type="button" title="Toggle structured Song Mode (verse/chorus recall + progressions) vs Infinite DJ Morph">MODE: SONG</button>
         <!-- BACKLIT MC-505 LCD MATRIX SCREEN -->
         <div id="master" aria-label="Master controls">
           <label>TEMPO
@@ -3120,7 +3138,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.281 (Build #281 • rev 276727995c)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.282 (Build #282 • rev 0a02c75fa7)</span>
     </div>
   </div>
 

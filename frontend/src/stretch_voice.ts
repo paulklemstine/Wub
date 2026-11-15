@@ -50,6 +50,13 @@ export interface StretchVoiceOptions {
   blockMs?: number;
 }
 
+export interface PitchAutomationPoint {
+  /** Offset in seconds from the block downbeat (`at`). */
+  offsetSec: number;
+  /** Semitone shift at this point. */
+  semitones: number;
+}
+
 export interface StretchScheduleOptions {
   /** Absolute AudioContext time of the first sample. */
   when: number;
@@ -235,6 +242,37 @@ export class StretchVoice {
       formantCompensation: this.scheduledFormant,
     });
     this.scheduled = true;
+  }
+
+  /**
+   * Schedule bar- or beat-level semitone shifts on a single pooled voice so a
+   * bassline, chord progression, or vocal chop run follows the active chords
+   * without allocating extra WASM stretcher nodes or resetting input position.
+   */
+  schedulePitchAutomation(
+    downbeatAt: number,
+    rate: number,
+    points: readonly PitchAutomationPoint[],
+    formantCompensation: boolean,
+  ): void {
+    if (this.disposed || !this.scheduled || points.length === 0) return;
+    const ctx = this.gain.context;
+    const clampedRate = Math.max(0.25, Math.min(4.0, rate));
+    let lastSemitones = this.scheduledSemitones;
+    for (const pt of points) {
+      if (!Number.isFinite(pt.offsetSec) || !Number.isFinite(pt.semitones)) continue;
+      if (pt.offsetSec <= 0.005) continue;
+      const semitones = Math.max(-12, Math.min(12, pt.semitones));
+      if (Math.abs(semitones - lastSemitones) < 1e-3) continue;
+      lastSemitones = semitones;
+      const outputTime = Math.max(ctx.currentTime + 0.005, downbeatAt + pt.offsetSec);
+      this.node.schedule({
+        outputTime,
+        rate: clampedRate,
+        semitones,
+        formantCompensation,
+      });
+    }
   }
 
   /**
