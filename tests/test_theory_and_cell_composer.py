@@ -553,3 +553,151 @@ def test_bar_seam_continuity_and_frontend_seamless_flow(tmp_path: Path) -> None:
         check=True,
     )
     assert proc.stdout.strip() == "OK"
+
+
+def test_vocal_activity_filtering_and_empty_bar_repair(tmp_path: Path) -> None:
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    out_dir = tmp_path / "js_vocal"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    esbuild = root / "frontend" / "node_modules" / ".bin" / "esbuild"
+    subprocess.run(
+        [
+            str(esbuild),
+            str(root / "frontend" / "src" / "bar_composer.ts"),
+            "--bundle",
+            "--platform=node",
+            "--format=cjs",
+            f"--outfile={out_dir / 'bar_composer.js'}",
+        ],
+        check=True,
+    )
+    node_script = """
+    const bc = require(process.env.OUT + '/bar_composer.js');
+    const composer = new bc.BarComposer();
+    composer.index = {
+      version: 2,
+      format: 'cell_index_v2',
+      count: 3,
+      stem_names: ['drums', 'bass', 'other', 'vocals'],
+      style_progressions: {},
+      section_motif_priors: {},
+      phrases: {
+        ph_sparse: {
+          drums: { s: 'ABCD', p: [0.85, 0.85, 0.85, 0.85], r: [-1, -1, -1, -1], q: ['perc','perc','perc','perc'], o: [0x1111,0x1111,0x1111,0x1111], hr: [0.8,0.8,0.8,0.8], tr: [0.8,0.8,0.8,0.8], sm: [0.9,0.9,0.9,0.9] },
+          bass:  { s: 'ABCD', p: [0.82, 0.82, 0.82, 0.82], r: [0, 0, 0, 0], q: ['minor','minor','minor','minor'], o: [0x1111,0x1111,0x1111,0x1111], hr: [0.8,0.8,0.8,0.8], tr: [0.8,0.8,0.8,0.8], sm: [0.9,0.9,0.9,0.9] },
+          other: { s: 'ABCD', p: [0.82, 0.82, 0.82, 0.82], r: [0, 0, 0, 0], q: ['minor','minor','minor','minor'], o: [0x2222,0x2222,0x2222,0x2222], hr: [0.8,0.8,0.8,0.8], tr: [0.8,0.8,0.8,0.8], sm: [0.9,0.9,0.9,0.9] },
+          vocals:{ s: 'ABCD', p: [0.75, 0.75, 0.75, 0.75], r: [0, 0, 0, 0], q: ['mono','mono','mono','mono'], o: [0, 0, 0, 0], hr: [0.02,0.02,0.02,0.02], tr: [0.02,0.02,0.02,0.02], sm: [0.9,0.9,0.9,0.9] },
+        },
+        ph_active: {
+          vocals:{ s: 'ABCD', p: [0.78, 0.78, 0.78, 0.78], r: [0, 0, 0, 0], q: ['mono','mono','mono','mono'], o: [0x3333,0x3333,0x3333,0x3333], hr: [0.7,0.7,0.7,0.7], tr: [0.7,0.7,0.7,0.7], sm: [0.9,0.9,0.9,0.9] },
+        },
+        ph_half_empty: {
+          vocals:{ s: 'ABCD', p: [0.70, 0.75, 0.75, 0.70], r: [0, 0, 0, 0], q: ['mono','mono','mono','mono'], o: [0, 0x3333, 0x3333, 0], hr: [0.01,0.7,0.7,0.01], tr: [0.01,0.7,0.7,0.01], sm: [0.9,0.9,0.9,0.9] },
+        },
+      },
+    };
+    composer.loaded = true;
+    const actMap = new Map([
+      ['ph_sparse', { frac: 0.05, barFracs: [0.05, 0, 0, 0], activeBars: 0 }],
+      ['ph_active', { frac: 0.75, barFracs: [0.75, 0.75, 0.75, 0.75], activeBars: 4 }],
+      ['ph_half_empty', { frac: 0.40, barFracs: [0.0, 0.80, 0.80, 0.0], activeBars: 2 }],
+    ]);
+    composer.setVocalActivity(actMap);
+
+    const mkEntry = (phraseId, stem) => ({
+      kit: { track_id: 'trk_' + phraseId, bpm: 126, key: 'C minor', style: 'house' },
+      phrase: { id: phraseId, section: 'GROOVE_A', start_bar: 0, duration_sec: 7.6 },
+      stem, keyShift: 0, rate: 1.0, energy: 0.8, section: 'GROOVE_A', rmsDb: -18,
+    });
+    const secCtx = {
+      role: 'VERSE_1',
+      kitSection: 'GROOVE_A',
+      progression: [
+        { relRoot: 0, quality: 'minor' },
+        { relRoot: 0, quality: 'minor' },
+        { relRoot: 0, quality: 'minor' },
+        { relRoot: 0, quality: 'minor' },
+      ],
+      isBuildup: false, isPreDrop: false, isDropDownbeat: false, isBreakdownStart: false,
+    };
+
+    // 1. Sparse primary in baseEntries should be replaced by active pool vocal
+    const planSwap = composer.composeBlock({
+      baseEntries: {
+        drums: mkEntry('ph_sparse', 'drums'),
+        bass: mkEntry('ph_sparse', 'bass'),
+        other: mkEntry('ph_sparse', 'other'),
+        vocals: mkEntry('ph_sparse', 'vocals'),
+      },
+      pools: {
+        drums: [],
+        bass: [],
+        other: [],
+        vocals: [mkEntry('ph_sparse', 'vocals'), mkEntry('ph_active', 'vocals')],
+      },
+      sectionCtx: secCtx,
+      blockBars: 4, blockDurationSec: 7.6, blockIndex: 2,
+      sessionRoot: 0, sessionMode: 'minor', isBridgeBlock: false,
+      pinnedStems: new Set(),
+    });
+    if (planSwap.stems.vocals.donors[0].phrase.id !== 'ph_active') {
+      throw new Error('expected ph_active vocal replacement, got ' + planSwap.stems.vocals.donors[0].phrase.id);
+    }
+
+    // 2. Half-empty vocal phrase (pinned or selected) must repair bars 0 and 3 using active bars 1 and 2
+    const planRepair = composer.composeBlock({
+      baseEntries: {
+        drums: mkEntry('ph_sparse', 'drums'),
+        bass: mkEntry('ph_sparse', 'bass'),
+        other: mkEntry('ph_sparse', 'other'),
+        vocals: mkEntry('ph_half_empty', 'vocals'),
+      },
+      pools: { drums: [], bass: [], other: [], vocals: [] },
+      sectionCtx: secCtx,
+      blockBars: 4, blockDurationSec: 7.6, blockIndex: 2,
+      sessionRoot: 0, sessionMode: 'minor', isBridgeBlock: false,
+      pinnedStems: new Set(),
+    });
+    const vocSlices = planRepair.stems.vocals.slices;
+    for (const s of vocSlices) {
+      if (s.startFrac < 0.24 || s.startFrac >= 0.74) {
+        throw new Error('silent bar sliced into vocal plan: ' + JSON.stringify(vocSlices));
+      }
+    }
+    console.log('OK');
+    """
+    proc = subprocess.run(
+        ["node", "-e", node_script],
+        env={**os.environ, "OUT": str(out_dir)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "OK"
+
+    # Also verify shipped bank retains abundant singing vocal phrases across all 16 clusters
+    kits_dir = root / "frontend" / "public" / "data" / "kits"
+    manifest_path = kits_dir / "kit_manifest.json"
+    vm_path = kits_dir / "vocal_mix.json"
+    if manifest_path.exists() and vm_path.exists():
+        import json
+        manifest = json.loads(manifest_path.read_text())
+        vm = json.loads(vm_path.read_text())
+        by_pid = {}
+        for kit in manifest.get("kits", []):
+            for phr in kit.get("phrases", []):
+                asset = phr.get("stems", {}).get("vocals")
+                if not asset:
+                    continue
+                act = vm.get(phr["id"], {}).get("vocal_activity16", "")
+                frac = act.count("1") / 64.0 if len(act) == 64 else 1.0
+                if float(asset.get("rms_db", -99)) >= -34.0 and frac >= 0.20:
+                    by_pid[phr["id"]] = float(phr.get("duration_sec", 0.0))
+        assert len(by_pid) >= 1500
+        for cl in manifest.get("clusters", []):
+            block_sec = 4 * 60.0 * 4 / float(cl["bpm"])
+            count = sum(1 for dur in by_pid.values() if dur > 0 and 0.94 <= (dur / block_sec) <= 1.06)
+            assert count >= 40, f"Cluster {cl['id']} too few active vocals: {count}"

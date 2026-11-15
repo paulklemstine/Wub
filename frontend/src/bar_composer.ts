@@ -94,12 +94,55 @@ interface PrevBarTransitionContext {
   section: string;
 }
 
+export interface VocalActivityInfo {
+  frac: number;
+  barFracs: readonly [number, number, number, number];
+  activeBars: number;
+}
+
 const SCHEMAS: readonly MotifSchema[] = ["AAAB", "ABAB", "ABAC", "AABB"];
 
 export class BarComposer {
   private index: CellIndexData | null = null;
   private loaded = false;
   private lastBlockTail: Partial<Record<StemName, PrevBarTransitionContext>> = {};
+  private vocalActivity: Map<string, VocalActivityInfo> | null = null;
+
+  setVocalActivity(map: Map<string, VocalActivityInfo> | null): void {
+    this.vocalActivity = map;
+  }
+
+  private isVocalBarActive(phraseId: string, barIdx: number, meta: CellStemMeta): boolean {
+    const b = ((barIdx % 4) + 4) % 4;
+    const pur = meta.p[b] ?? 0;
+    const act = this.vocalActivity?.get(phraseId);
+    if (act) {
+      const bf = act.barFracs[b] ?? 0;
+      const onsets = meta.o ? popcount16(meta.o[b] ?? 0) : 1;
+      // Accept bar if vocal detector finds >=2 active 16ths AND (either onsets present or sustained >=25% singing),
+      // while rejecting silent noise-floor bars even if chroma purity reads high.
+      return bf >= 0.125 && (onsets > 0 || bf >= 0.25) && pur >= 0.12;
+    }
+    const onsets = meta.o ? popcount16(meta.o[b] ?? 0) : 1;
+    const rmsOk = meta.hr ? (meta.hr[b] ?? 0) >= 0.12 : true;
+    return pur >= 0.18 && onsets > 0 && rmsOk;
+  }
+
+  private vocalActivityMetrics(phraseId: string, meta: CellStemMeta): VocalActivityInfo {
+    const known = this.vocalActivity?.get(phraseId);
+    if (known) return known;
+    const barFracs: [number, number, number, number] = [0, 0, 0, 0];
+    let activeBars = 0;
+    let sum = 0;
+    for (let b = 0; b < 4; b++) {
+      const active = this.isVocalBarActive(phraseId, b, meta);
+      const density = active ? Math.min(1, popcount16(meta.o?.[b] ?? 0) / 10) : 0;
+      barFracs[b] = active ? Math.max(0.25, density) : 0;
+      if (active) activeBars++;
+      sum += barFracs[b];
+    }
+    return { frac: sum / 4, barFracs, activeBars };
+  }
 
   isReady(): boolean {
     return this.loaded && this.index !== null;
@@ -175,18 +218,40 @@ export class BarComposer {
       }
     }
 
+    const fallbackMeta = this.getPhraseMeta(fallback.phrase.id, "vocals");
+    const fallbackAct = fallbackMeta
+      ? this.vocalActivityMetrics(fallback.phrase.id, fallbackMeta)
+      : (this.vocalActivity?.get(fallback.phrase.id) ?? { frac: 0.5, barFracs: [0.5, 0.5, 0.5, 0.5] as const, activeBars: 4 });
+    const fallbackIsSparse = fallbackAct.activeBars < 2 || fallbackAct.frac < 0.22;
+
     const rateRef = fallback.rate;
     const scored: Array<{ entry: TEntry; score: number; strategy: ComposedStemPlan<TEntry>["vocalStrategy"] }> = [];
-    for (let i = 0; i < Math.min(pool.length, 60); i++) {
+    const maxCandidates = 240;
+    const stride = Math.max(1, Math.floor(pool.length / maxCandidates));
+    const seenIds = new Set<string>();
+    const sampleIndices: number[] = [];
+    for (let i = 0; i < pool.length && sampleIndices.length < maxCandidates; i += stride) {
+      sampleIndices.push(i);
+    }
+    const fbIdx = pool.findIndex((e) => e.phrase.id === fallback.phrase.id);
+    if (fbIdx >= 0 && !sampleIndices.includes(fbIdx)) sampleIndices.push(fbIdx);
+
+    for (const i of sampleIndices) {
       const e = pool[i];
+      if (seenIds.has(e.phrase.id)) continue;
+      seenIds.add(e.phrase.id);
       if (Math.abs(e.rate - rateRef) > 0.04) continue;
       const meta = this.getPhraseMeta(e.phrase.id, "vocals");
       if (!meta) continue;
       const avgP = (meta.p[0] + meta.p[1] + meta.p[2] + meta.p[3]) / 4;
-      if (avgP < 0.2) continue;
+      if (avgP < 0.16) continue;
+      const act = this.vocalActivityMetrics(e.phrase.id, meta);
+      if (act.activeBars === 0 || act.frac < 0.18) continue;
 
       const essMax = meta.es ? Math.max(...meta.es) : avgP;
-      let s = avgP * 0.50 + essMax * 0.30 + (meta.fid ?? 0.65) * 0.12;
+      const singingDensity = Math.min(1, act.frac / 0.60) * 0.65 + (act.activeBars / 4) * 0.55;
+      let s = avgP * 0.40 + essMax * 0.25 + singingDensity + (meta.fid ?? 0.65) * 0.10;
+      if (act.activeBars < 2) s -= 0.6;
       let strat: ComposedStemPlan<TEntry>["vocalStrategy"] = "section_role";
 
       if (ctx.isBuildup) {
@@ -204,7 +269,9 @@ export class BarComposer {
       } else {
         if (meta.vr === "verse" || meta.vr === "chop") s += 0.35;
       }
-      if (e.phrase.id === fallback.phrase.id) s += 0.08;
+      if (e.phrase.id === fallback.phrase.id) {
+        s += fallbackIsSparse ? -0.4 : 0.20;
+      }
       scored.push({ entry: e, score: s, strategy: strat });
     }
 
@@ -347,9 +414,10 @@ export class BarComposer {
     let best: TEntry | null = null;
     let bestScore = -999;
 
-    const maxScan = Math.min(pool.length, 48);
-    for (let i = 0; i < maxScan; i++) {
-      const cand = pool[i];
+    const maxScan = Math.min(pool.length, 96);
+    const stride = Math.max(1, Math.floor(pool.length / maxScan));
+    for (let idx = 0, inspected = 0; idx < pool.length && inspected < maxScan; idx += stride, inspected++) {
+      const cand = pool[idx];
       if (cand.kit.track_id === primary.kit.track_id) continue;
       const bpmDelta = Math.abs((cand.kit.bpm || bpmRef) - bpmRef) / bpmRef;
       if (bpmDelta > 0.04) continue;
@@ -358,6 +426,12 @@ export class BarComposer {
       if (!meta) continue;
       const maxBarP = Math.max(meta.p[0], meta.p[1], meta.p[2], meta.p[3]);
       if (maxBarP < 0.25) continue;
+      let vocalBonus = 0;
+      if (stem === "vocals") {
+        const act = this.vocalActivityMetrics(cand.phrase.id, meta);
+        if (act.activeBars < 2 || act.frac < 0.20) continue;
+        vocalBonus = Math.min(1, act.frac / 0.6) * 0.35;
+      }
 
       const targetBar = stem === "drums" ? 3 : 0;
       const seamCont = pMeta
@@ -378,6 +452,7 @@ export class BarComposer {
         maxBarP * 0.40 +
         maxBarEs * 0.25 +
         seamCont * 0.45 +
+        vocalBonus +
         (meta.fid ?? 0.65) * 0.10 -
         bpmDelta * 5.0 -
         Math.abs(cand.rate - rateRef) * 2.5;
@@ -620,7 +695,7 @@ export class BarComposer {
       const sMeta = secondary ? (this.getPhraseMeta(secondary.phrase.id, stem) ?? null) : null;
 
       const ch0 = sectionCtx.progression[0] ?? { relRoot: 0, quality: "minor" as const };
-      const phraseKeyShift = this.solvePhraseKeyShift(stem, primary, pMeta, ch0, sessionRoot);
+      let phraseKeyShift = this.solvePhraseKeyShift(stem, primary, pMeta, ch0, sessionRoot);
       const selectedBars = this.buildContiguous4BarCells(primary, pMeta, stem, blockBars, phraseKeyShift);
 
       let schema: MotifSchema = pMeta.s ?? "AAAB";
@@ -701,8 +776,61 @@ export class BarComposer {
           }
         }
       } else if (stem === "vocals") {
+        // First repair dead/silent bars in the primary vocal phrase so the
+        // vocal track never plays empty silence gaps between lines.
+        const activeSrcBars: number[] = [];
+        for (let bIdx = 0; bIdx < 4; bIdx++) {
+          if (this.isVocalBarActive(primary.phrase.id, bIdx, pMeta)) activeSrcBars.push(bIdx);
+        }
+        if (activeSrcBars.length > 0 && activeSrcBars.length < 4 && !pinnedStems.has("vocals")) {
+          for (let b = 0; b < blockBars; b++) {
+            const cur = selectedBars[b];
+            if (!this.isVocalBarActive(primary.phrase.id, cur.srcBar, pMeta)) {
+              const donorBar = activeSrcBars[b % activeSrcBars.length];
+              selectedBars[b] = {
+                ...cur,
+                itemIndex: 0,
+                srcBar: donorBar,
+                purity: pMeta.p[donorBar] ?? cur.purity,
+                onsetMask: pMeta.o[donorBar] ?? cur.onsetMask,
+                quality: pMeta.q[donorBar] ?? cur.quality,
+                essentialScore: pMeta.es?.[donorBar] ?? (pMeta.p[donorBar] ?? cur.essentialScore),
+                essentialRole: pMeta.er?.[donorBar] ?? cur.essentialRole,
+              };
+              hasSpliceOrGainEdit = true;
+            }
+          }
+        } else if (activeSrcBars.length === 0 && secondary && sMeta && !pinnedStems.has("vocals")) {
+          const secActive: number[] = [];
+          for (let bIdx = 0; bIdx < 4; bIdx++) {
+            if (this.isVocalBarActive(secondary.phrase.id, bIdx, sMeta)) secActive.push(bIdx);
+          }
+          if (secActive.length > 0) {
+            const secShift = this.solvePhraseKeyShift("vocals", secondary, sMeta, ch0, sessionRoot);
+            for (let b = 0; b < blockBars; b++) {
+              const sb = secActive[b % secActive.length];
+              selectedBars[b] = {
+                entry: secondary,
+                itemIndex: 1,
+                srcBar: sb,
+                purity: sMeta.p[sb] ?? 0.5,
+                semitones: secShift,
+                onsetMask: sMeta.o[sb] ?? 0,
+                quality: sMeta.q[sb] ?? "mono",
+                meta: sMeta,
+                essentialScore: sMeta.es?.[sb] ?? (sMeta.p[sb] ?? 0.5),
+                essentialRole: sMeta.er?.[sb] ?? "A",
+              };
+            }
+            phraseKeyShift = secShift;
+            hasSpliceOrGainEdit = true;
+          }
+        }
+
         const isChorus = ctxIsChorus(sectionCtx) || vocalStrategy === "hook_loop";
-        if (isChorus && pMeta.hook && pMeta.hb === 2 && blockBars >= 4) {
+        if (isChorus && pMeta.hook && pMeta.hb === 2 && blockBars >= 4
+          && this.isVocalBarActive(primary.phrase.id, 0, pMeta)
+          && this.isVocalBarActive(primary.phrase.id, 1, pMeta)) {
           const loopSeam = this.evaluateSeamGate({
             stem: "vocals",
             prevMeta: pMeta,
@@ -727,7 +855,7 @@ export class BarComposer {
           }
         } else if (sectionCtx.isBuildup && !pinnedStems.has("vocals")) {
           const cb = Math.max(0, Math.min(3, pMeta.cb ?? 0));
-          if ((pMeta.p[cb] ?? 0) >= 0.30) {
+          if ((pMeta.p[cb] ?? 0) >= 0.30 && this.isVocalBarActive(primary.phrase.id, cb, pMeta)) {
             hasSpliceOrGainEdit = true;
           }
         }

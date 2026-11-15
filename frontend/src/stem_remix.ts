@@ -21,7 +21,7 @@ import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
 import { StretchVoice, type PitchAutomationPoint } from "./stretch_voice";
-import { BarComposer } from "./bar_composer";
+import { BarComposer, type VocalActivityInfo } from "./bar_composer";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
 import { parseKey as parseTheoryKey } from "./theory_engine";
@@ -89,10 +89,13 @@ const TEMPO_COST_WEIGHT = 2.0;
 const KEY_COST_WEIGHT = 0.12;
 const CACHE_LIMIT = 24;
 // Phrases whose stem is effectively absent are not useful as independent
-// streams; keep a floor per stem so a "bass" phrase actually has bass.
+// streams; keep a floor per stem so a "bass" or "vocals" phrase actually plays.
 const MIN_RMS_DB: Record<StemName, number> = {
-  drums: -28, bass: -28, other: -34, vocals: -42,
+  drums: -28, bass: -28, other: -34, vocals: -34,
 };
+const VOCAL_MIN_ACTIVITY_FRAC = 0.20;
+const VOCAL_RELAXED_RMS_DB = -38;
+const VOCAL_RELAXED_ACTIVITY_FRAC = 0.10;
 // Boundary fade profiles: snap drums, but give bass/pads/vocals enough
 // overlap to smooth cross-song hand-offs (reduces jumpy feel shifts).
 const STEM_FADE_IN: Record<StemName, number> = {
@@ -826,14 +829,18 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("progression_model") || this.sidecarEnabled("progression_context")) {
       void this.loadProgressionArtifacts(base);
     }
+    const setupLoads: Promise<unknown>[] = [];
     if (this.sidecarEnabled("vocal_mix")) {
-      void this.loadVocalMix(base);
+      setupLoads.push(this.loadVocalMix(base));
     }
     if (!this.sidecarsIndex || this.sidecarEnabled("cell_index")) {
-      void this.barComposer.load(`${base}/cell_index.json`);
+      setupLoads.push(this.barComposer.load(`${base}/cell_index.json`));
     }
     if (!this.sidecarsIndex || this.sidecarEnabled("cell_compat")) {
-      void this.cellCompat.load(`${base}/cell_compat.json`);
+      setupLoads.push(this.cellCompat.load(`${base}/cell_compat.json`));
+    }
+    if (setupLoads.length > 0) {
+      await Promise.all(setupLoads);
     }
   }
 
@@ -1122,11 +1129,22 @@ export class StemRemixPlayer {
   /** phraseId -> { starts, ends }: vocal activity at step 0 / step 63 of
    *  the phrase's 64-step grid (from vocal_activity16). */
   private vocalActivity: Map<string, { starts: boolean; ends: boolean }> | null = null;
+  /** phraseId -> full 4-bar / 64-step vocal singing density from vocal_activity16. */
+  private vocalPresence: Map<string, VocalActivityInfo> | null = null;
   /** phraseId -> vocal segment membership { pos, lenBars } where pos is the
    *  0-based phrase index inside its (same-track, boundary-chained) segment
    *  and lenBars its total length in bars. */
   private vocalSegments: Map<string, { pos: number; lenBars: number }> | null = null;
   private vocalLoggedUnavailable = false;
+
+  /** Soft bonus/penalty for vocal singing density; neutral (0) when absent. */
+  private vocalPresenceBonus(phraseId: string): number {
+    const info = this.vocalPresence?.get(phraseId);
+    if (!info) return 0;
+    const fracScore = clamp01((info.frac - 0.15) / 0.55) * 0.55;
+    const barBonus = info.activeBars >= 3 ? 0.22 : (info.activeBars === 2 ? 0.08 : -0.35);
+    return fracScore + barBonus;
+  }
 
   /**
    * Chain vocal segments from the per-phrase activity grids: consecutive
@@ -1194,6 +1212,7 @@ export class StemRemixPlayer {
       if (!doc || typeof doc !== "object") throw new Error("invalid vocal mix");
       const map = new Map<string, number[]>();
       const activity = new Map<string, { starts: boolean; ends: boolean }>();
+      const presence = new Map<string, VocalActivityInfo>();
       for (const [phraseId, entry] of Object.entries(doc)) {
         const edges = entry?.vocal_edge_strength;
         if (Array.isArray(edges) && edges.length > 0
@@ -1203,16 +1222,38 @@ export class StemRemixPlayer {
         const act = entry?.vocal_activity16;
         if (typeof act === "string" && act.length === 64) {
           activity.set(phraseId, { starts: act[0] === "1", ends: act[63] === "1" });
+          const counts = [0, 0, 0, 0];
+          let totalOnes = 0;
+          for (let i = 0; i < 64; i++) {
+            if (act[i] === "1") {
+              counts[i >> 4]++;
+              totalOnes++;
+            }
+          }
+          const barFracs: [number, number, number, number] = [
+            counts[0] / 16,
+            counts[1] / 16,
+            counts[2] / 16,
+            counts[3] / 16,
+          ];
+          const activeBars = counts.filter((c) => c >= 2).length;
+          presence.set(phraseId, {
+            frac: totalOnes / 64,
+            barFracs,
+            activeBars,
+          });
         }
       }
-      if (map.size === 0) throw new Error("empty vocal mix");
+      if (map.size === 0 && presence.size === 0) throw new Error("empty vocal mix");
       this.vocalEdgeStrength = map;
       this.vocalActivity = activity;
+      this.vocalPresence = presence;
+      this.barComposer.setVocalActivity(presence);
       this.buildVocalSegments(activity);
       const longCount = [...(this.vocalSegments?.values() ?? [])]
         .filter((s) => s.lenBars > 4).length;
       console.info(
-        `[StemRemix] Vocal edges loaded (${map.size} phrases, ` +
+        `[StemRemix] Vocal edges loaded (${map.size} phrases, ${presence.size} activity grids, ` +
         `${longCount} phrases inside >4-bar vocal segments)`,
       );
     } catch (err) {
@@ -1531,7 +1572,21 @@ export class StemRemixPlayer {
         if (!byStem.has(entry.stem)) byStem.set(entry.stem, entry);
       }
       const prepared = await Promise.all(STEMS.map(async (stem) => {
-        const primary = byStem.get(stem) ?? this.anchorEntry(stem, phrase);
+        let primary = byStem.get(stem) ?? this.anchorEntry(stem, phrase);
+        if (stem === "vocals") {
+          const vp = primary ? this.vocalPresence?.get(primary.phrase.id) : null;
+          const weakVocal = !primary || (vp && (vp.frac < VOCAL_MIN_ACTIVITY_FRAC || vp.activeBars < 2));
+          if (weakVocal) {
+            const sameTrackVocals = this.pools.vocals
+              .filter((e) => e.kit.track_id === anchor.track_id)
+              .sort((a, b) => this.vocalPresenceBonus(b.phrase.id) - this.vocalPresenceBonus(a.phrase.id));
+            if (sameTrackVocals.length > 0) {
+              primary = sameTrackVocals[0];
+            } else {
+              primary = null;
+            }
+          }
+        }
         if (primary) {
           const loaded = await this.prepareEntry(stem, primary);
           if (loaded) return { stem, entry: loaded.entry, audio: loaded.audio };
@@ -1539,7 +1594,11 @@ export class StemRemixPlayer {
         // Fallback: pick the closest-tempo/key pooled candidate so an odd stem
         // never leaves the opening block silent.
         const fallback = [...this.pools[stem]].sort(
-          (a, b) => (a.tempoCost * 2 + a.keyCost * 0.1) - (b.tempoCost * 2 + b.keyCost * 0.1)
+          (a, b) => {
+            const baseA = a.tempoCost * 2 + a.keyCost * 0.1 - (stem === "vocals" ? this.vocalPresenceBonus(a.phrase.id) * 0.5 : 0);
+            const baseB = b.tempoCost * 2 + b.keyCost * 0.1 - (stem === "vocals" ? this.vocalPresenceBonus(b.phrase.id) * 0.5 : 0);
+            return baseA - baseB;
+          }
         )[0];
         if (!fallback) return null;
         const loaded = await this.prepareEntry(stem, fallback);
@@ -1610,6 +1669,40 @@ export class StemRemixPlayer {
     entry.tempoCost = Math.abs(rate - 1);
   }
 
+  private makePoolEntry(
+    kit: Kit,
+    phrase: KitPhrase,
+    stem: StemName,
+    shift: number,
+    rate: number,
+    tempoCost: number,
+    rmsDb: number,
+  ): StemPoolEntry {
+    const xy = phrase.stem_xy?.[stem];
+    const rawRoot = phrase.bass_root ?? null;
+    const bassRoot = rawRoot === null
+      ? null
+      : (((rawRoot + shift) % 12) + 12) % 12;
+    return {
+      kit,
+      phrase,
+      stem,
+      keyShift: shift,
+      rate,
+      tempoCost,
+      keyCost: Math.abs(shift),
+      x: xy?.x ?? phrase.x ?? 0.5,
+      y: xy?.y ?? phrase.y ?? 0.5,
+      energy: Number(phrase.energy) || 0.5,
+      section: String(phrase.section ?? "GROOVE_A").toUpperCase(),
+      chroma: rotateChroma(phrase.chroma, shift),
+      bassRoot,
+      rmsDb,
+      gain: stemGain(stem, rmsDb),
+      earQ: this.earQOf(stem, phrase.id),
+    };
+  }
+
   private rebuildPool(): void {
     this.pools = { drums: [], bass: [], other: [], vocals: [] };
     this.entryById.clear();
@@ -1648,36 +1741,47 @@ export class StemRemixPlayer {
             }
             const rmsDb = Number(asset.rms_db) || -20;
             if (rmsDb < MIN_RMS_DB[stem]) continue;
-            const xy = phrase.stem_xy?.[stem];
-            // Keep the bass root in session-key space when transposed, so the
-            // harmony scoring can reason about shifted phrases instead of
-            // treating every shifted root as unknown.
-            const rawRoot = phrase.bass_root ?? null;
-            const bassRoot = rawRoot === null
-              ? null
-              : (((rawRoot + shift) % 12) + 12) % 12;
-            const entry: StemPoolEntry = {
-              kit,
-              phrase,
-              stem,
-              keyShift: shift,
-              rate,
-              tempoCost,
-              keyCost: Math.abs(shift),
-              x: xy?.x ?? phrase.x ?? 0.5,
-              y: xy?.y ?? phrase.y ?? 0.5,
-              energy: Number(phrase.energy) || 0.5,
-              section: String(phrase.section ?? "GROOVE_A").toUpperCase(),
-              chroma: rotateChroma(phrase.chroma, shift),
-              bassRoot,
-              rmsDb,
-              gain: stemGain(stem, rmsDb),
-              earQ: this.earQOf(stem, phrase.id),
-            };
+            if (stem === "vocals" && this.vocalPresence) {
+              const vp = this.vocalPresence.get(phrase.id);
+              if (!vp || vp.frac < VOCAL_MIN_ACTIVITY_FRAC || vp.activeBars < 1) continue;
+            }
+            const entry = this.makePoolEntry(kit, phrase, stem, shift, rate, tempoCost, rmsDb);
             this.pools[stem].push(entry);
             this.entryById.set(entryKey, entry);
             seen.add(entryKey);
           }
+        }
+      }
+    }
+    // Safety net: if a strict style/BPM filter leaves almost no active vocals,
+    // backfill from the relaxed floor so the vocal stream never goes silent.
+    if (this.pools.vocals.length < 8) {
+      const [minR, maxR] = rateTiers[rateTiers.length - 1];
+      for (const kit of this.kitById.values()) {
+        if (this.failedKits.has(kit.track_id)) continue;
+        if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) continue;
+        if (this.genreFilter !== null && !(kit.genre && this.genreFilter.has(kit.genre))) continue;
+        for (const phrase of kit.phrases) {
+          const entryKey = `${phrase.id}:vocals`;
+          if (seen.has(entryKey)) continue;
+          const duration = Number(phrase.duration_sec);
+          if (!(duration > 0)) continue;
+          const rate = duration / this.blockSec;
+          if (rate < minR || rate > maxR) continue;
+          const asset = phrase.stems?.vocals;
+          if (!asset || !asset.file) continue;
+          const shift = keyShift(this.sessionKey, kit.key);
+          if (shift === null || Math.abs(shift) > MAX_SHIFT.vocals) continue;
+          const rmsDb = Number(asset.rms_db) || -20;
+          if (rmsDb < VOCAL_RELAXED_RMS_DB) continue;
+          if (this.vocalPresence) {
+            const vp = this.vocalPresence.get(phrase.id);
+            if (!vp || vp.frac < VOCAL_RELAXED_ACTIVITY_FRAC) continue;
+          }
+          const entry = this.makePoolEntry(kit, phrase, "vocals", shift, rate, Math.abs(rate - 1), rmsDb);
+          this.pools.vocals.push(entry);
+          this.entryById.set(entryKey, entry);
+          seen.add(entryKey);
         }
       }
     }
@@ -2908,11 +3012,12 @@ export class StemRemixPlayer {
         + entry.keyCost * KEY_COST_WEIGHT;
       const earBonus = EAR_W_JOINT * (entry.earQ - 0.5);
       const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
+      const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
       return {
         entry,
         full: legal,
         judge,
-        score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus + signatureBonus + timbre,
+        score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus + signatureBonus + timbre + vocalActBonus,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -3648,7 +3753,8 @@ export class StemRemixPlayer {
       const judgeBonus = judge > 0 ? 1.5 + 2.5 * judge : -0.2;
       const style = entry.kit.style === this.cluster?.style ? 0.25 : 0;
       const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *
-        (stem === "vocals" ? 0.25 : 0.6);
+        (stem === "vocals" ? 0.45 : 0.6);
+      const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
       const plays = this.playCountOf(stem, entry.phrase.id);
       const isSigMorph = this.isSignature(stem, entry.phrase.id);
       const morphPlays = isSigMorph ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
@@ -3681,6 +3787,7 @@ export class StemRemixPlayer {
         0.9 * harmonic +
         0.25 * style +
         presence +
+        vocalActBonus +
         novelty +
         judgeBonus -
         jumpPenalty -
@@ -3887,7 +3994,8 @@ export class StemRemixPlayer {
       const judge = this.judgeScore(stem, current?.phrase.id ?? null, entry.phrase.id);
       const judgeBonus = judge > 0 ? 1.5 + 2.5 * judge : -0.2;
       const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *
-        (stem === "vocals" ? 0.25 : 0.6);
+        (stem === "vocals" ? 0.45 : 0.6);
+      const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
       const score =
         1.0 * sectionScore +
         0.9 * harmonic +
@@ -3896,6 +4004,7 @@ export class StemRemixPlayer {
         0.25 * style +
         novelty +
         presence +
+        vocalActBonus +
         judgeBonus;
 
       if (best === null || score > best.score) best = { entry, score };
@@ -4648,7 +4757,7 @@ const SECTION_ENERGY: Record<string, number> = {
 };
 
 const TARGET_RMS_DB: Record<StemName, number> = {
-  drums: -17, bass: -18, other: -20, vocals: -23,
+  drums: -17, bass: -18, other: -20, vocals: -21,
 };
 
 /** Runtime level match for quiet phrases, capped at ~+7 dB, never baked. */
