@@ -80,6 +80,7 @@ export class Tract3DView {
   private bearCage: THREE.Mesh | null = null;
   private bearNeck: THREE.Mesh | null = null;
   private bearMuzzle: THREE.Mesh | null = null;
+  private bearJaw: THREE.Mesh | null = null;
   private farPuff: THREE.Mesh | null = null;
   private nearPuff: THREE.Mesh | null = null;
   private leftEar: THREE.Group | null = null;
@@ -89,6 +90,8 @@ export class Tract3DView {
   private bearNose: THREE.Group | null = null;
   private haloMesh: THREE.Mesh | null = null;
   private voiceLight: THREE.PointLight | null = null;
+  private baseCenter: [number, number, number] = [0, 0, 0];
+  private baseRadius = 10;
   private readonly bearDisposables: Array<{ dispose: () => void }> = [];
   private animPhase = 0;
   private lastFrameMs = 0;
@@ -142,8 +145,8 @@ export class Tract3DView {
 
   public setPreset(preset: CameraPreset3D): void {
     if (!this.meshes || !this.camera || !this.controls) return;
-    const [cx, cy, cz] = this.meshes.center;
-    const r = this.meshes.radius;
+    const [cx, cy, cz] = this.baseCenter;
+    const r = this.baseRadius;
     const pos: Record<CameraPreset3D, [number, number, number]> = {
       side: [cx, cy + 0.12 * r, cz + 3.05 * r],
       front: [cx + 3.05 * r, cy + 0.24 * r, cz],
@@ -156,12 +159,11 @@ export class Tract3DView {
     this.controls.update();
   }
 
-  private initBearRig(scene: THREE.Scene, meshes: TractMeshes): void {
-    const [cx, cy, cz] = meshes.center;
-    const r = meshes.radius;
-    const lips = meshes.anchors.lips ?? [cx + 0.55 * r, cy + 0.42 * r, cz];
-    const lipX = lips[0];
-    const lipY = lips[1];
+  private initBearRig(scene: THREE.Scene, meshes: TractMeshes, s0 = 0.9): void {
+    this.baseCenter = [...meshes.center] as [number, number, number];
+    this.baseRadius = meshes.radius;
+    const s = s0;
+    const cz = 0;
     const group = new THREE.Group();
     scene.add(group);
     this.bearGroup = group;
@@ -172,19 +174,17 @@ export class Tract3DView {
     };
 
     // Internal vocal-tract rave illumination pulsing with voicing
-    const vLight = new THREE.PointLight(0xffcf2e, 0.3, r * 4.5, 1.5);
-    vLight.position.set(cx - 0.1 * r, cy - 0.12 * r, cz);
+    const vLight = new THREE.PointLight(0xffcf2e, 0.3, s * 45, 1.5);
+    vLight.position.set(2.2 * s, 7.5 * s, cz);
     scene.add(vLight);
     this.voiceLight = vLight;
 
-    // Translucent gummi-bear cranium kept strictly BEHIND lipX so the mouth opens on the EXTERIOR
-    const domeFrontX = lipX - 0.12 * r;
-    const domeBackX = cx - 0.72 * r;
-    const domeCx = 0.5 * (domeFrontX + domeBackX);
-    const domeRx = Math.max(0.45 * r, 0.5 * (domeFrontX - domeBackX));
-    const domeCy = lipY + 0.28 * r;
-    const domeRy = 0.64 * r;
-    const domeRz = 0.78 * r;
+    // Fixed anatomical bear cranium anchored to the skull (above palate y=10.5*s, behind brow x=7.4*s)
+    const domeCx = 1.65 * s;
+    const domeCy = 14.35 * s;
+    const domeRx = 5.65 * s;
+    const domeRy = 5.35 * s;
+    const domeRz = 5.25 * s;
 
     const domeGeo = track(new THREE.SphereGeometry(1, 28, 22));
     const shellMat = track(
@@ -224,13 +224,14 @@ export class Tract3DView {
     this.bearCageMat = cageMat;
 
     // Translucent bear neck cylinder enclosing the lower pharynx/larynx cleanly
-    const neckGeo = track(new THREE.CylinderGeometry(0.42 * r, 0.48 * r, 0.62 * r, 22, 1, false));
+    const neckGeo = track(new THREE.CylinderGeometry(1, 1.12, 1, 22, 1, false));
     const bearNeck = new THREE.Mesh(neckGeo, shellMat);
-    bearNeck.position.set(cx - 0.14 * r, cy - 0.22 * r, cz);
+    bearNeck.position.set(-0.65 * s, 1.8 * s, cz);
+    bearNeck.scale.set(3.4 * s, 6.8 * s, 3.4 * s);
     group.add(bearNeck);
     this.bearNeck = bearNeck;
 
-    // Exterior protruding bear snout cushion whose front meets (lipX - 0.01*r), so lips/mouth sit OUTSIDE
+    // Upper bear snout cushion wrapping the maxilla/palate right up to the upper lip
     const muzzleMat = track(
       new THREE.MeshStandardMaterial({
         color: 0xf4a8ff,
@@ -246,25 +247,33 @@ export class Tract3DView {
     this.muzzleMat = muzzleMat;
     const muzzleGeo = track(new THREE.SphereGeometry(1, 22, 18));
     const bearMuzzle = new THREE.Mesh(muzzleGeo, muzzleMat);
-    bearMuzzle.position.set(lipX - 0.22 * r, lipY + 0.04 * r, cz);
-    bearMuzzle.scale.set(0.18 * r, 0.24 * r, 0.34 * r);
+    bearMuzzle.position.set(6.35 * s, 10.65 * s, cz);
+    bearMuzzle.scale.set(2.45 * s, 1.85 * s, 2.75 * s);
     group.add(bearMuzzle);
     this.bearMuzzle = bearMuzzle;
 
-    // Cute chubby upper bear "ω" whisker puffs framing the top of the exterior mouth
-    const puffGeo = track(new THREE.SphereGeometry(0.115 * r, 14, 12));
+    // Lower bear jaw/chin cushion that pivots with geom.jawAngle under the tongue floor & lower lip
+    const bearJaw = new THREE.Mesh(muzzleGeo, shellMat);
+    bearJaw.position.set(5.35 * s, 5.05 * s, cz);
+    bearJaw.scale.set(3.05 * s, 1.75 * s, 2.65 * s);
+    bearJaw.rotation.z = 0.12;
+    group.add(bearJaw);
+    this.bearJaw = bearJaw;
+
+    // Cute chubby upper bear "ω" whisker puffs framing the top of the upper lip
+    const puffGeo = track(new THREE.SphereGeometry(1, 14, 12));
     const makePuff = (zSign: number): THREE.Mesh => {
       const puff = new THREE.Mesh(puffGeo, muzzleMat);
-      puff.scale.set(0.85, 0.9, 1.15);
-      puff.position.set(lipX - 0.06 * r, lipY + 0.08 * r, cz + zSign * 0.125 * r);
+      puff.scale.set(0.95 * s, 0.88 * s, 1.15 * s);
+      puff.position.set(7.85 * s, 9.75 * s, cz + zSign * 1.25 * s);
       group.add(puff);
       return puff;
     };
     this.farPuff = makePuff(-1);
     this.nearPuff = makePuff(1);
 
-    // Shared ear/eye geometries & materials
-    const earGeo = track(new THREE.SphereGeometry(0.32 * r, 20, 16));
+    // Shared ear/eye geometries & materials (unit-scaled so group scale handles speaker size)
+    const earGeo = track(new THREE.SphereGeometry(2.6 * s, 20, 16));
     const earOuterMat = track(
       new THREE.MeshStandardMaterial({
         color: 0xa23dff,
@@ -275,7 +284,7 @@ export class Tract3DView {
         opacity: 0.72,
       })
     );
-    const earPadGeo = track(new THREE.SphereGeometry(0.2 * r, 16, 12));
+    const earPadGeo = track(new THREE.SphereGeometry(1.65 * s, 16, 12));
     const earPadMat = track(
       new THREE.MeshStandardMaterial({
         color: 0xff77e9,
@@ -284,7 +293,7 @@ export class Tract3DView {
         roughness: 0.3,
       })
     );
-    const earRimGeo = track(new THREE.TorusGeometry(0.31 * r, 0.026 * r, 10, 28));
+    const earRimGeo = track(new THREE.TorusGeometry(2.55 * s, 0.22 * s, 10, 28));
     const goldMat = track(
       new THREE.MeshStandardMaterial({
         color: 0xffcf2e,
@@ -301,7 +310,7 @@ export class Tract3DView {
       ear.add(outer);
 
       const pad = new THREE.Mesh(earPadGeo, earPadMat);
-      pad.position.set(0.09 * r, 0, 0);
+      pad.position.set(0.75 * s, 0, 0);
       pad.scale.set(0.45, 0.95, 0.92);
       ear.add(pad);
 
@@ -309,7 +318,7 @@ export class Tract3DView {
       rim.rotation.y = Math.PI / 2;
       ear.add(rim);
 
-      ear.position.set(domeCx - 0.04 * r, domeCy + 0.72 * r, cz + zSign * 0.62 * r);
+      ear.position.set(0.8 * s, 19.6 * s, cz + zSign * 4.4 * s);
       ear.rotation.x = zSign * -0.44;
       group.add(ear);
       return ear;
@@ -318,9 +327,9 @@ export class Tract3DView {
     this.leftEar = makeEar(1);
 
     // Sparkly kawaii 3D anime eyes on the upper front face
-    const scleraGeo = track(new THREE.SphereGeometry(0.14 * r, 16, 14));
+    const scleraGeo = track(new THREE.SphereGeometry(1.15 * s, 16, 14));
     const scleraMat = track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.15 }));
-    const irisGeo = track(new THREE.SphereGeometry(0.095 * r, 14, 12));
+    const irisGeo = track(new THREE.SphereGeometry(0.78 * s, 14, 12));
     const irisMat = track(
       new THREE.MeshStandardMaterial({
         color: 0x2ae8d4,
@@ -329,9 +338,9 @@ export class Tract3DView {
         roughness: 0.2,
       })
     );
-    const pupilGeo = track(new THREE.SphereGeometry(0.055 * r, 12, 10));
+    const pupilGeo = track(new THREE.SphereGeometry(0.45 * s, 12, 10));
     const darkMat = track(new THREE.MeshStandardMaterial({ color: 0x160529, roughness: 0.15 }));
-    const sparkGeo = track(new THREE.SphereGeometry(0.032 * r, 10, 8));
+    const sparkGeo = track(new THREE.SphereGeometry(0.26 * s, 10, 8));
     const sparkMat = track(new THREE.MeshBasicMaterial({ color: 0xffffff }));
 
     const makeEye = (zSign: number): THREE.Group => {
@@ -341,44 +350,44 @@ export class Tract3DView {
       eye.add(sclera);
 
       const iris = new THREE.Mesh(irisGeo, irisMat);
-      iris.position.set(0.068 * r, 0, 0);
+      iris.position.set(0.56 * s, 0, 0);
       iris.scale.set(0.6, 1.0, 0.9);
       eye.add(iris);
 
       const pupil = new THREE.Mesh(pupilGeo, darkMat);
-      pupil.position.set(0.096 * r, 0, 0);
+      pupil.position.set(0.78 * s, 0, 0);
       pupil.scale.set(0.6, 1.0, 0.9);
       eye.add(pupil);
 
       const sp = new THREE.Mesh(sparkGeo, sparkMat);
-      sp.position.set(0.11 * r, 0.045 * r, zSign * 0.03 * r);
+      sp.position.set(0.90 * s, 0.36 * s, zSign * 0.24 * s);
       eye.add(sp);
 
-      eye.position.set(domeCx + domeRx * 0.78, domeCy + 0.14 * r, cz + zSign * 0.36 * r);
+      eye.position.set(6.05 * s, 15.6 * s, cz + zSign * 2.65 * s);
       group.add(eye);
       return eye;
     };
     this.farEye = makeEye(-1);
     this.nearEye = makeEye(1);
 
-    // Glossy 3D button bear nose perched above the exterior upper lip on the snout
+    // Glossy 3D button bear nose perched on the tip of the upper snout above the upper lip
     const noseGroup = new THREE.Group();
-    const noseGeo = track(new THREE.SphereGeometry(0.125 * r, 16, 14));
+    const noseGeo = track(new THREE.SphereGeometry(0.95 * s, 16, 14));
     const noseMesh = new THREE.Mesh(noseGeo, darkMat);
-    noseMesh.scale.set(0.95, 0.78, 1.2);
+    noseMesh.scale.set(0.95, 0.75, 1.18);
     noseGroup.add(noseMesh);
     const noseSpark = new THREE.Mesh(sparkGeo, sparkMat);
-    noseSpark.position.set(0.08 * r, 0.055 * r, 0);
+    noseSpark.position.set(0.62 * s, 0.42 * s, 0);
     noseGroup.add(noseSpark);
-    noseGroup.position.set(lipX + 0.04 * r, lipY + 0.17 * r, cz);
+    noseGroup.position.set(8.65 * s, 11.25 * s, cz);
     group.add(noseGroup);
     this.bearNose = noseGroup;
 
     // Floating golden rave halo above the bear crown
-    const haloGeo = track(new THREE.TorusGeometry(0.56 * r, 0.028 * r, 10, 40));
+    const haloGeo = track(new THREE.TorusGeometry(4.2 * s, 0.22 * s, 10, 40));
     const halo = new THREE.Mesh(haloGeo, goldMat);
     halo.rotation.x = Math.PI / 2 - 0.15;
-    halo.position.set(domeCx, domeCy + 0.96 * r, cz);
+    halo.position.set(domeCx, 22.2 * s, cz);
     group.add(halo);
     this.haloMesh = halo;
   }
@@ -513,7 +522,7 @@ export class Tract3DView {
     }
 
     // Cartoon Rave Wub-Bear 3D head rig framing the anatomical tract
-    this.initBearRig(scene, meshes);
+    this.initBearRig(scene, meshes, geom0.scale);
 
     const controls = new OrbitControls(camera, canvas);
     controls.enableDamping = true;
@@ -688,59 +697,72 @@ export class Tract3DView {
         this.nearPuff.visible = !this.cut;
       }
 
-      const [cx, cy, cz] = this.meshes.center;
-      const r = this.meshes.radius;
+      const s = geom.scale;
+      const cz = 0;
       const lips = this.meshes.anchors.lips;
-      const lipX = lips ? lips[0] : cx + 0.55 * r;
-      const lipY = lips ? lips[1] : cy + 0.42 * r;
-      const domeFrontX = lipX - 0.12 * r;
-      const domeBackX = cx - 0.72 * r;
-      const domeCx = 0.5 * (domeFrontX + domeBackX);
-      const domeRx = Math.max(0.45 * r, 0.5 * (domeFrontX - domeBackX));
-      const domeCy = lipY + 0.28 * r;
+      const lipX = lips ? lips[0] : 8.2 * s;
+      const dLipX = lipX - 8.1 * s;
+      const domeCx = 1.65 * s;
+      const domeCy = 14.35 * s;
+      const domeRx = 5.65 * s;
 
       if (this.bearDome) {
         this.bearDome.position.set(domeCx, domeCy, cz);
-        this.bearDome.scale.set(domeRx, 0.64 * r, 0.78 * r);
+        this.bearDome.scale.set(domeRx, 5.35 * s, 5.25 * s);
       }
       if (this.bearCage) {
         this.bearCage.position.set(domeCx, domeCy, cz);
-        this.bearCage.scale.set(domeRx * 1.01, 0.64 * 1.01 * r, 0.78 * 1.01 * r);
+        this.bearCage.scale.set(domeRx * 1.01, 5.35 * 1.01 * s, 5.25 * 1.01 * s);
       }
       if (this.bearNeck) {
-        this.bearNeck.position.set(cx - 0.14 * r, cy - 0.22 * r, cz);
+        this.bearNeck.position.set(-0.65 * s, 1.8 * s, cz);
+        this.bearNeck.scale.set(3.4 * s, 6.8 * s, 3.4 * s);
       }
       if (this.bearMuzzle) {
-        this.bearMuzzle.position.set(lipX - 0.22 * r, lipY + 0.04 * r, cz);
+        this.bearMuzzle.position.set(6.35 * s + 0.35 * dLipX, 10.65 * s, cz);
+        this.bearMuzzle.scale.set(2.45 * s + Math.max(0, 0.25 * dLipX), 1.85 * s, 2.75 * s);
+      }
+      if (this.bearJaw) {
+        const [jx, jy] = geom.landmarks.jawPivot;
+        const jaw = geom.jawAngle;
+        const c = Math.cos(jaw);
+        const sn = Math.sin(jaw);
+        const bx = 5.35 * s + 0.35 * dLipX - jx;
+        const by = 5.05 * s - jy;
+        this.bearJaw.position.set(jx + bx * c - by * sn, jy + bx * sn + by * c, cz);
+        this.bearJaw.scale.set(3.05 * s + Math.max(0, 0.2 * dLipX), 1.75 * s, 2.65 * s);
+        this.bearJaw.rotation.z = 0.12 + jaw;
       }
       if (this.farPuff) {
-        this.farPuff.position.set(lipX - 0.06 * r, lipY + 0.08 * r, cz - 0.125 * r);
+        this.farPuff.position.set(7.85 * s + 0.65 * dLipX, 9.75 * s, cz - 1.25 * s);
+        this.farPuff.scale.set(0.95 * s, 0.88 * s, 1.15 * s);
       }
       if (this.nearPuff) {
-        this.nearPuff.position.set(lipX - 0.06 * r, lipY + 0.08 * r, cz + 0.125 * r);
+        this.nearPuff.position.set(7.85 * s + 0.65 * dLipX, 9.75 * s, cz + 1.25 * s);
+        this.nearPuff.scale.set(0.95 * s, 0.88 * s, 1.15 * s);
       }
       if (this.farEye) {
-        this.farEye.position.set(domeCx + domeRx * 0.78, domeCy + 0.14 * r, cz - 0.36 * r);
+        this.farEye.position.set(6.05 * s, 15.6 * s, cz - 2.65 * s);
       }
       if (this.nearEye) {
-        this.nearEye.position.set(domeCx + domeRx * 0.78, domeCy + 0.14 * r, cz + 0.36 * r);
+        this.nearEye.position.set(6.05 * s, 15.6 * s, cz + 2.65 * s);
       }
 
       const wiggle = Math.sin(this.animPhase * 11) * (0.04 + 0.14 * voicing);
       if (this.leftEar) {
-        this.leftEar.position.set(domeCx - 0.04 * r, domeCy + 0.72 * r, cz + 0.62 * r);
+        this.leftEar.position.set(0.8 * s, 19.6 * s, cz + 4.4 * s);
         this.leftEar.rotation.x = -0.44 + wiggle;
       }
       if (this.rightEar) {
-        this.rightEar.position.set(domeCx - 0.04 * r, domeCy + 0.72 * r, cz - 0.62 * r);
+        this.rightEar.position.set(0.8 * s, 19.6 * s, cz - 4.4 * s);
         this.rightEar.rotation.x = 0.44 - wiggle;
       }
       if (this.haloMesh) {
-        this.haloMesh.position.set(domeCx, domeCy + 0.96 * r + Math.sin(this.animPhase * 3.2) * (0.03 * r), cz);
+        this.haloMesh.position.set(domeCx, 22.2 * s + Math.sin(this.animPhase * 3.2) * (0.3 * s), cz);
         this.haloMesh.rotation.z = this.animPhase * 0.9;
       }
       if (this.bearNose) {
-        this.bearNose.position.set(lipX + 0.04 * r, lipY + 0.17 * r, cz);
+        this.bearNose.position.set(8.65 * s + 0.65 * dLipX, 11.25 * s, cz);
       }
     }
 

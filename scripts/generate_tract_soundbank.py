@@ -88,37 +88,35 @@ const buf = new Float32Array(count * STRIDE);
 
 let geom = null;
 let sec = null;
-function extremeRand() {
-  const u = rand();
-  // U-shaped arcsine transform pushes random samples toward full range extremes [0, 1]
-  return rand() < 0.72 ? (0.5 + 0.5 * Math.sin((u - 0.5) * Math.PI)) : u;
+function natRand() {
+  // Smooth, natural vocal distribution covering the full physiological singing range
+  // without clustering at 0.5 or pinning to screaming extremes
+  return 0.72 * rand() + 0.28 * 0.5 * (rand() + rand());
 }
 for (let i = 0; i < count; i++) {
-  // Sample coupled, wide-range random vocal simulator drives across ARTICULATOR_RANGES
-  // so open/closed jaw+lips, spread/rounded lips, and front/back/high/low tongue
-  // sweep across their full dynamic range coherently without canceling out to the middle.
-  const uOpen = extremeRand();           // 0 = closed mouth, 1 = wide-open jaw & lips
-  const uFront = extremeRand() * 2 - 1;  // -1 = far back tongue, +1 = far front tongue
-  const uHigh = extremeRand() * 2 - 1;   // -1 = low open oral cavity, +1 = high palatal arch
-  const uRound = extremeRand();          // 0 = wide spread lips, 1 = pursed protruding lips
-  const uTip = extremeRand();            // tongue tip & alveolar constriction drive
-  const uLarynx = extremeRand() * 2 - 1;
+  // Sample coupled, natural singing vocal simulator drives across ARTICULATOR_RANGES
+  const uOpen = natRand();               // 0 = closed mouth, 1 = full sung vowel opening
+  const uFront = natRand() * 2 - 1;      // -1 = back tongue, +1 = front tongue
+  const uHigh = natRand() * 2 - 1;       // -1 = low oral cavity, +1 = high palatal arch
+  const uRound = natRand();              // 0 = spread lips, 1 = rounded lips
+  const uTip = natRand();                // tongue tip & alveolar constriction drive
+  const uLarynx = natRand() * 2 - 1;
 
   const cand = {
-    jaw: 0.02 + 0.96 * uOpen + randn() * 0.08,
-    lipOpen: -0.32 + 1.45 * uOpen * (1.0 - 0.35 * uRound) + randn() * 0.10,
-    lipRound: uRound * (1.0 - 0.30 * Math.max(0, uFront)) + randn() * 0.08,
-    lipProtrude: -0.48 + 1.42 * uRound - 0.25 * Math.max(0, uFront) + randn() * 0.08,
-    tongueX: 1.40 * uFront + randn() * 0.16,
-    tongueY: 1.45 * uHigh * (1.0 - 0.45 * uOpen) - 0.55 * uOpen + randn() * 0.16,
-    tongueRoot: 0.85 * uFront - 0.45 * uOpen + randn() * 0.16,
-    tipX: 0.95 * uFront + 0.45 * (uTip - 0.4) + randn() * 0.16,
-    tipY: -0.35 + 2.35 * uTip * (1.0 - 0.50 * uOpen) + randn() * 0.16,
-    groove: 0.08 + 0.88 * uTip * Math.max(0, 1.0 - uOpen) + randn() * 0.08,
-    tongueSides: 0.10 + 0.82 * Math.max(0, uHigh * 0.5 + uTip * 0.5) + randn() * 0.08,
-    lipTuck: rand() < 0.22 ? (0.30 + 0.70 * extremeRand()) : (rand() * 0.14),
-    velum: rand() < 0.24 ? (0.30 + 0.70 * extremeRand()) : (rand() * 0.12),
-    larynx: 1.25 * uLarynx + randn() * 0.14,
+    jaw: 0.02 + 0.64 * uOpen + randn() * 0.05,
+    lipOpen: -0.22 + 0.88 * uOpen * (1.0 - 0.30 * uRound) + randn() * 0.06,
+    lipRound: 0.88 * uRound * (1.0 - 0.25 * Math.max(0, uFront)) + randn() * 0.06,
+    lipProtrude: -0.28 + 0.98 * uRound - 0.20 * Math.max(0, uFront) + randn() * 0.06,
+    tongueX: 1.15 * uFront + randn() * 0.12,
+    tongueY: 1.15 * uHigh * (1.0 - 0.35 * uOpen) - 0.38 * uOpen + randn() * 0.12,
+    tongueRoot: 0.70 * uFront - 0.35 * uOpen + randn() * 0.12,
+    tipX: 0.82 * uFront + 0.38 * (uTip - 0.4) + randn() * 0.12,
+    tipY: -0.28 + 1.75 * uTip * (1.0 - 0.42 * uOpen) + randn() * 0.12,
+    groove: 0.12 + 0.72 * uTip * Math.max(0, 1.0 - uOpen) + randn() * 0.06,
+    tongueSides: 0.15 + 0.68 * Math.max(0, uHigh * 0.5 + uTip * 0.5) + randn() * 0.06,
+    lipTuck: rand() < 0.18 ? (0.18 + 0.52 * natRand()) : (rand() * 0.10),
+    velum: rand() < 0.20 ? (0.18 + 0.55 * natRand()) : (rand() * 0.08),
+    larynx: 0.92 * uLarynx + randn() * 0.10,
   };
 
   const art = clampArt(cand);

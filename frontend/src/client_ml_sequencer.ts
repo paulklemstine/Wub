@@ -3038,15 +3038,7 @@ export class ClientGrooveboxConductor {
 
   public async loadStaticBundle(basePath: string = "data"): Promise<boolean> {
     this.staticBundleBasePath = basePath;
-    // Kit mode needs only kit_manifest.json + its 32 stem files. Skip the
-    // legacy weights/manifest, global vocabulary/patterns, slice + loop
-    // preloads, and the full catalog. If the user later switches away from
-    // kit, setPlaybackMode() calls this method again with the same base path.
-    if (this.playbackMode === "kit") {
-      if (!this.staticBundleSkippedForKit) {
-        console.info("[KitPlayer] Legacy bundle loads skipped (kit mode)");
-      }
-      this.staticBundleSkippedForKit = true;
+    if (this.staticBundleLoaded && !this.staticBundleSkippedForKit) {
       return true;
     }
     try {
@@ -3099,19 +3091,28 @@ export class ClientGrooveboxConductor {
         } catch {
           // Workers unsupported; Markov planner covers generation.
         }
-        // 1. Await priority 4-part cohesive song chains FIRST before queuing hundreds of slice/loop HTTP fetches!
-        // This guarantees complete 4-part (16-bar) songs are in memory immediately when Play is clicked.
-        // (phrase_blocks empty since static room reclaimed for global vocab; no-op.)
-        await this.preloadPhraseBlocks(basePath, true);
-        // 2. Background load remaining song chains, slice vocabulary, and 1-bar loops without starving phrase playback
-        void (async () => {
-          await this.preloadPhraseBlocks(basePath, false);
-          await this.preloadAudioSlices(basePath);
-          await this.preloadPatternLoops(basePath);
-        })();
+        if (this.playbackMode !== "kit") {
+          await this.preloadPhraseBlocks(basePath, true);
+          void (async () => {
+            await this.preloadPhraseBlocks(basePath, false);
+            await this.preloadAudioSlices(basePath);
+            await this.preloadPatternLoops(basePath);
+          })();
+        } else {
+          // In kit mode, register slices & loops without blocking kit audio worker startup
+          void (async () => {
+            await this.preloadPhraseBlocks(basePath, false);
+            await this.preloadAudioSlices(basePath);
+            await this.preloadPatternLoops(basePath);
+          })();
+        }
         // 3. Load the full-corpus catalog index (every analyzed song) and prefetch a fresh catalog song
         this.catalogBasePath = basePath;
-        void this.loadFullCatalog(basePath).then(() => this.prefetchNextCatalogSong());
+        void this.loadFullCatalog(basePath).then(() => {
+          if (this.playbackMode !== "kit") {
+            this.prefetchNextCatalogSong();
+          }
+        });
       }
       this.staticBundleLoaded = true;
       this.staticBundleSkippedForKit = false;

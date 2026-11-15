@@ -323,40 +323,34 @@ export class SingingHeadPanel {
     const pred: SingingHeadArticulation = this.inference.infer(samples, sampleRate > 0 ? sampleRate : 44100);
 
     // Track fast and slow syllable RMS envelopes so inter-syllable dips close the
-    // mouth while vowel peaks and attacks exaggerate mouth opening and lip/tongue motion.
-    this.smoothedRms = smoothAsym(this.smoothedRms, pred.rms, dt, 0.018, 0.095);
-    this.slowRms = smoothAsym(this.slowRms, pred.rms, dt, 0.14, 0.32);
+    // mouth cleanly while voiced syllables track the reconstructed vocal simulator parameters.
+    this.smoothedRms = smoothAsym(this.smoothedRms, pred.rms, dt, 0.020, 0.090);
+    this.slowRms = smoothAsym(this.slowRms, pred.rms, dt, 0.14, 0.30);
     this.smoothedVoicing = smoothAsym(this.smoothedVoicing, pred.voicing, dt, 0.03, 0.14);
 
-    const sylGate = clamp01((pred.rms - 0.0022) / 0.014);
-    const sylPulse = clampRange(
-      (pred.rms - this.slowRms * 0.72) / Math.max(0.012, this.slowRms + 0.022),
-      -0.45,
-      0.85
-    );
-    const openBoost = sylGate * clampRange(sylPulse * 0.28 + clamp01(pred.rms / 0.11) * 0.22, -0.22, 0.45);
+    const sylGate = clamp01((pred.rms - 0.0022) / 0.012);
 
-    const targetAperture = clamp01(((pred.aperture - 0.38) * 1.55 + 0.38 + openBoost) * sylGate);
-    const targetWidth = clamp01(0.5 + (pred.width - 0.5) * 1.55 * sylGate);
-    const targetRoundness = clamp01(((pred.roundness - 0.32) * 1.55 + 0.32) * sylGate);
-    const targetJawDrop = clamp01(((pred.jawDrop - 0.36) * 1.6 + 0.36 + openBoost) * sylGate);
-    const targetTongueHeight = clamp01(0.55 + (pred.tongueHeight - 0.55) * 1.5 * sylGate);
+    const targetAperture = clamp01(pred.aperture * sylGate);
+    const targetWidth = clamp01(0.5 + (pred.width - 0.5) * sylGate);
+    const targetRoundness = clamp01(pred.roundness * sylGate);
+    const targetJawDrop = clamp01(pred.jawDrop * sylGate);
+    const targetTongueHeight = clamp01(0.55 + (pred.tongueHeight - 0.55) * sylGate);
 
-    // Critically-damped 2nd-order spring-damper articulators: brisk syllable
-    // snap (omega_attack 36-42 rad/s) and clean musical co-articulation
-    // (omega_release 20-25 rad/s), rejecting frame-to-frame jitter without overshoot.
-    this.aperture = stepSpringAsym(this.scalarSprings.aperture, targetAperture, dt, 42, 24);
-    this.width = stepSpringAsym(this.scalarSprings.width, targetWidth, dt, 36, 22);
-    this.roundness = stepSpringAsym(this.scalarSprings.roundness, targetRoundness, dt, 36, 22);
-    this.jawDrop = stepSpringAsym(this.scalarSprings.jawDrop, targetJawDrop, dt, 40, 24);
-    this.tongueHeight = stepSpringAsym(this.scalarSprings.tongueHeight, targetTongueHeight, dt, 34, 21);
-    this.pitchNorm = stepSpringAsym(this.scalarSprings.pitchNorm, pred.pitchNorm, dt, 26, 16);
-    this.vibrato = stepSpringAsym(this.scalarSprings.vibrato, pred.vibrato, dt, 20, 14);
-    this.tension = stepSpringAsym(this.scalarSprings.tension, pred.tension, dt, 30, 18);
-    this.breath = stepSpringAsym(this.scalarSprings.breath, pred.breath, dt, 32, 20);
+    // Critically-damped 2nd-order spring-damper articulators: natural syllable
+    // articulation (omega_attack 28-32 rad/s) and smooth co-articulation
+    // (omega_release 18-22 rad/s), rejecting frame-to-frame jitter without overshoot.
+    this.aperture = stepSpringAsym(this.scalarSprings.aperture, targetAperture, dt, 32, 20);
+    this.width = stepSpringAsym(this.scalarSprings.width, targetWidth, dt, 28, 18);
+    this.roundness = stepSpringAsym(this.scalarSprings.roundness, targetRoundness, dt, 28, 18);
+    this.jawDrop = stepSpringAsym(this.scalarSprings.jawDrop, targetJawDrop, dt, 30, 19);
+    this.tongueHeight = stepSpringAsym(this.scalarSprings.tongueHeight, targetTongueHeight, dt, 28, 18);
+    this.pitchNorm = stepSpringAsym(this.scalarSprings.pitchNorm, pred.pitchNorm, dt, 24, 15);
+    this.vibrato = stepSpringAsym(this.scalarSprings.vibrato, pred.vibrato, dt, 18, 12);
+    this.tension = stepSpringAsym(this.scalarSprings.tension, pred.tension, dt, 26, 16);
+    this.breath = stepSpringAsym(this.scalarSprings.breath, pred.breath, dt, 28, 18);
 
     for (let k = 0; k < 5; k++) {
-      this.vowelProbs[k] = stepSpringAsym(this.vowelSprings[k], pred.vowelProbs[k], dt, 34, 20);
+      this.vowelProbs[k] = stepSpringAsym(this.vowelSprings[k], pred.vowelProbs[k], dt, 28, 18);
     }
     let bestK = 0;
     for (let k = 1; k < 5; k++) {
@@ -391,27 +385,8 @@ export class SingingHeadPanel {
         const [lo, hi] = ARTICULATOR_RANGES[k];
         const restVal = DEFAULT_ARTICULATORS[k];
         const rawVal = pred.tract[k];
-        let exagVal: number;
-        if (k === "jaw") {
-          const centered = 0.04 + (rawVal - 0.34) * 1.65 + 0.30 + openBoost * 0.65;
-          exagVal = clampRange(0.04 + (centered - 0.04) * sylGate, lo, hi);
-        } else if (k === "lipOpen") {
-          const centered = -0.04 + (rawVal - 0.25) * 1.7 + 0.29 + openBoost * 0.72;
-          exagVal = clampRange(-0.04 + (centered + 0.04) * sylGate, lo, hi);
-        } else if (k === "lipRound" || k === "lipProtrude") {
-          const mid = k === "lipRound" ? 0.35 : 0.22;
-          const centered = mid + (rawVal - mid) * 1.6;
-          exagVal = clampRange(restVal + (centered - restVal) * sylGate, lo, hi);
-        } else if (k === "tongueX" || k === "tongueY" || k === "tongueRoot" || k === "tipX" || k === "tipY") {
-          const mid = 0.5 * (lo + hi);
-          const centered = mid + (rawVal - mid) * 1.55;
-          exagVal = clampRange(restVal + (centered - restVal) * sylGate, lo, hi);
-        } else {
-          const mid = 0.5 * (lo + hi);
-          const centered = mid + (rawVal - mid) * 1.4;
-          exagVal = clampRange(restVal + (centered - restVal) * sylGate, lo, hi);
-        }
-        this.smoothedTract[k] = stepSpringAsym(this.tractSprings[k], exagVal, dt, 38, 22);
+        const targetVal = clampRange(restVal + (rawVal - restVal) * sylGate, lo, hi);
+        this.smoothedTract[k] = stepSpringAsym(this.tractSprings[k], targetVal, dt, 30, 19);
       }
       this.smoothedArt.tract = this.smoothedTract;
     } else {

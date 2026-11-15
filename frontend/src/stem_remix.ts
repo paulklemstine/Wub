@@ -4337,6 +4337,33 @@ export class StemRemixPlayer {
 
   points(): NebulaPoint[] {
     const points: NebulaPoint[] = [];
+    if (this.kitById.size > 0) {
+      for (const kit of this.kitById.values()) {
+        if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) {
+          continue;
+        }
+        if (this.genreFilter !== null && !(kit.genre && this.genreFilter.has(kit.genre))) {
+          continue;
+        }
+        for (const phrase of kit.phrases) {
+          for (const stem of STEMS) {
+            if (!phrase.stems[stem]) continue;
+            const xy = phrase.stem_xy?.[stem] ?? { x: phrase.x ?? 0.5, y: phrase.y ?? 0.5 };
+            points.push({
+              x: xy.x,
+              y: xy.y,
+              stem,
+              trackId: kit.track_id,
+              phraseId: phrase.id,
+              kitId: kit.track_id,
+            });
+          }
+        }
+      }
+      if (points.length > 0) {
+        return points;
+      }
+    }
     for (const stem of STEMS) {
       for (const entry of this.pools[stem]) {
         points.push({

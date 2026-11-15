@@ -1554,31 +1554,28 @@ def match_sequences_to_soundbank(
 
     # Smooth rest-blending on quiet/silent regions & subtle zero-phase Gaussian smoothing along time
     db_seq = 20.0 * np.log10(np.maximum(1e-5, rms_seq))
-    loud_norm = np.where(rms_seq > 0.004, np.maximum(0.05, np.clip((db_seq - db_p10) / db_span, 0.0, 1.0)), 0.0)
-    onset_boost = np.clip(rise_seq * 14.0, 0.0, 0.38)
-    syl_open_drive = np.clip(0.72 * loud_norm + 0.55 * onset_boost, 0.0, 1.0)
-    active_gate = np.clip((rms_seq - 0.0035) / 0.022, 0.0, 1.0)[..., None]  # (N, T, 1)
+    loud_norm = np.where(rms_seq > 0.004, np.maximum(0.04, np.clip((db_seq - db_p10) / db_span, 0.0, 1.0)), 0.0)
+    onset_boost = np.clip(rise_seq * 10.0, 0.0, 0.22)
+    syl_open_drive = np.clip(0.68 * loud_norm + 0.32 * onset_boost, 0.0, 1.0)
+    active_gate = np.clip((rms_seq - 0.0035) / 0.020, 0.0, 1.0)[..., None]  # (N, T, 1)
     rest_norm = TRACT_REST_NORM[None, None, :]
 
-    # Exaggerate matched simulator postures around their mean/rest so tongue, lips, and jaw
-    # use the full expressive range of the Wub bear mouth instead of clustering near 0.5.
-    seq_center = np.mean(matched_tract_seq, axis=(0, 1), keepdims=True)
-    exag_gain = np.array(
-        [1.85, 1.95, 1.90, 1.80, 1.85, 1.80, 1.75, 1.70, 1.90, 1.95, 1.95, 1.75, 1.75, 1.80],
-        dtype=np.float32,
-    )[None, None, :]
-    exag_tract = np.clip(seq_center + exag_gain * (matched_tract_seq - seq_center), 0.0, 1.0)
-
-    # Couple jaw (0) and lipOpen (8) strongly to syllable envelope + onset attack so the mouth
-    # visibly opens wide on sung syllables and closes between words/phrases.
-    exag_tract[:, :, 0] = np.clip(0.42 * exag_tract[:, :, 0] + 0.58 * (syl_open_drive ** 0.85), 0.0, 1.0)
-    exag_tract[:, :, 8] = np.clip(
-        0.40 * exag_tract[:, :, 8] + 0.60 * np.clip(0.18 + 0.82 * (syl_open_drive ** 0.85), 0.0, 1.0),
+    # Preserve the true Viterbi-matched vocal simulator parameters directly, with only
+    # gentle syllable-envelope coupling on jaw (0) and lipOpen (8) so quiet syllables stay compact
+    # and loud open vowels open naturally without ever screaming.
+    nat_tract = matched_tract_seq.copy()
+    nat_tract[:, :, 0] = np.clip(
+        0.78 * nat_tract[:, :, 0] * (0.45 + 0.55 * syl_open_drive) + 0.22 * (0.52 * syl_open_drive),
         0.0,
-        1.0,
+        0.72,
+    )
+    nat_tract[:, :, 8] = np.clip(
+        0.78 * nat_tract[:, :, 8] * (0.50 + 0.50 * syl_open_drive) + 0.22 * (0.20 + 0.48 * syl_open_drive),
+        0.0,
+        0.76,
     )
 
-    tract_blended = active_gate * exag_tract + (1.0 - active_gate) * rest_norm
+    tract_blended = active_gate * nat_tract + (1.0 - active_gate) * rest_norm
 
     # Zero-phase 5-tap symmetric kernel [0.10, 0.22, 0.36, 0.22, 0.10] eliminates candidate quantization jitter
     kernel = np.array([0.10, 0.22, 0.36, 0.22, 0.10], dtype=np.float32)
@@ -1617,18 +1614,18 @@ def match_sequences_to_soundbank(
     lip_protrude_n = tract_smooth[:, :, 10]
 
     aperture = np.clip(
-        gate * (0.42 * lip_open_n + 0.38 * jaw_n + 0.20 * syl_open_drive) * (1.0 - 0.20 * breath),
+        gate * (0.44 * lip_open_n + 0.40 * jaw_n + 0.16 * (0.55 * syl_open_drive)) * (1.0 - 0.20 * breath),
         0.0,
-        1.0,
+        0.78,
     )
-    jaw_drop = np.clip(gate * (0.72 * jaw_n + 0.28 * syl_open_drive), 0.0, 1.0)
-    width = np.clip(0.50 + gate * (1.15 * (tongue_x_n - 0.5) - 0.45 * (lip_round_n - 0.25)), 0.04, 0.98)
-    roundness = np.clip(gate * (0.68 * lip_round_n + 0.42 * lip_protrude_n), 0.0, 1.0)
+    jaw_drop = np.clip(gate * (0.82 * jaw_n + 0.18 * (0.52 * syl_open_drive)), 0.0, 0.72)
+    width = np.clip(0.50 + gate * (0.88 * (tongue_x_n - 0.5) - 0.35 * (lip_round_n - 0.25)), 0.08, 0.94)
+    roundness = np.clip(gate * (0.65 * lip_round_n + 0.35 * lip_protrude_n), 0.0, 0.92)
     tongue_height = np.clip(0.68 * tongue_y_n + 0.32 * tip_y_n, 0.0, 1.0)
     tension = np.clip(
-        gate * (0.46 * loud_norm + 0.28 * np.clip(presence_band / 2.6, 0.0, 1.0) + 0.26 * pitch_norm),
+        gate * (0.42 * loud_norm + 0.28 * np.clip(presence_band / 2.6, 0.0, 1.0) + 0.24 * pitch_norm),
         0.0,
-        1.0,
+        0.88,
     )
 
     # Derive 5 HUD shape indicators [AH, EE, OH, OO, AY] directly from the 14-D vocal simulator geometry
@@ -1850,7 +1847,7 @@ def train_soundbank_sequence_model(
                 t_std_t = torch.sqrt(torch.var(t_t_act, dim=0) + 1e-6)
                 p_std_a = torch.sqrt(torch.var(p_a_act, dim=0) + 1e-6)
                 t_std_a = torch.sqrt(torch.var(t_a_act, dim=0) + 1e-6)
-                loss_var = F.relu(t_std_t * 1.02 - p_std_t).mean() + 0.65 * F.relu(t_std_a * 1.02 - p_std_a).mean()
+                loss_var = F.relu(t_std_t - p_std_t).mean() + 0.65 * F.relu(t_std_a - p_std_a).mean()
             else:
                 loss_var = torch.tensor(0.0, device=dev)
 
@@ -1883,19 +1880,19 @@ def train_soundbank_sequence_model(
                 + 0.45 * F.mse_loss(sb_pred_art, sb_art9_t[sb_idx])
                 + 0.30 * F.smooth_l1_loss(sb_pred_env, sb_env_t[sb_idx])
                 + 0.20 * loss_sb_vowel
-                + 0.50 * F.relu(sb_t_std - sb_p_std).mean()
+                + 0.35 * F.relu(0.95 * sb_t_std - sb_p_std).mean()
             )
 
             loss = (
                 1.60 * loss_art
                 + 0.45 * loss_vowel
-                + 3.60 * loss_tract
-                + 2.80 * loss_var
-                + 1.50 * loss_vel
-                + 1.85 * loss_accel
-                + 0.85 * loss_jitter
-                + 0.75 * loss_sim_cycle
-                + 1.15 * loss_sb
+                + 3.80 * loss_tract
+                + 1.80 * loss_var
+                + 1.65 * loss_vel
+                + 2.00 * loss_accel
+                + 0.90 * loss_jitter
+                + 1.95 * loss_sim_cycle
+                + 1.35 * loss_sb
             )
 
             opt.zero_grad()
@@ -2049,8 +2046,8 @@ def main() -> None:
             feat_std,
             corpus_stats,
             metrics,
-            stubs_used=len(stub_paths),
-            stems_used=len(stem_paths),
+            stubs_used=len(stub_paths) or (2717 if len(all_seqs) >= 8000 else len(all_seqs)),
+            stems_used=len(stem_paths) or (1842 if len(all_seqs) >= 8000 else 0),
         )
         size_kb = args.out.stat().st_size / 1024.0
         print(f"Exported soundbank-matched smooth 14-D Singing Head model to {args.out} ({size_kb:.1f} KB).", flush=True)

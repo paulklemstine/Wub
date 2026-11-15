@@ -3,25 +3,51 @@
 
 import { VocalFieldState } from "./articulation_bridge";
 import { C, fieldColor, FieldMode } from "./canvas_colors";
-import { chinWeight, NASAL_CENTRE, NASAL_HALF, smoothOutline } from "./head/outline";
+import { NASAL_CENTRE, NASAL_HALF, smoothOutline } from "./head/outline";
 import { N_SECTIONS } from "./tract/areaFunction";
 import { canonToWorld, Solid, TractGeometry } from "./tract/geometry";
 import { Anatomy, Articulators, Teeth } from "./tract/types";
 
 /** Chubby Wub-Bear back cranium + cute gummi neck pinch (canonical cm). */
 const BEAR_BACK = [
-  -4.8, -3.6, -4.3, 0.2, -3.9, 2.0, -5.6, 4.8, -7.1, 8.8,
-  -7.5, 13.2, -6.5, 17.6, -3.6, 20.8, 0.4, 22.0, 3.8, 21.7,
+  -4.8, -3.6, -4.4, 0.2, -4.2, 2.5, -5.6, 5.4, -6.9, 9.2,
+  -7.2, 13.4, -6.2, 17.5, -3.4, 20.6, 0.4, 21.8, 3.8, 21.5,
 ];
-/** Chubby Wub-Bear rounded forehead -> brow dip -> protruding bear snout/muzzle -> upper lip. */
-const BEAR_FRONT_UP = [
-  3.8, 21.7, 6.8, 20.3, 8.1, 18.0, 8.2, 16.0, 9.9, 14.9,
-  11.5, 13.7, 11.9, 12.2, 11.2, 10.9, 9.9, 10.5, 9.2, 10.0, 9.15, 9.5,
-];
-/** Plush rounded bear lower muzzle jaw + tucked chin curving into neck pinch. */
-const BEAR_CHIN = [
-  9.0, 7.6, 9.3, 6.5, 8.9, 5.1, 7.3, 3.7, 4.9, 2.9, 3.2, 1.8, 2.7, -0.3, 2.65, -3.6,
-];
+
+/**
+ * Forehead -> brow dip -> bear snout bridge over nasal cavity -> upper lip attachment.
+ * Follows lipProtrusion(a) so the snout and upper lip always meet seamlessly.
+ */
+function buildBearFrontUp(p: number): number[] {
+  return [
+    3.8, 21.5, 6.6, 20.2, 7.9, 18.2, 7.85, 16.0, 8.95, 14.3,
+    9.95 + 0.35 * p, 13.0, 10.35 + 0.45 * p, 11.95, 9.95 + 0.55 * p, 11.05,
+    9.05 + 0.60 * p, 10.55, 8.42 + 0.50 * p, 9.60, 7.45 + 0.30 * p, 9.65,
+  ];
+}
+
+/**
+ * Lower bear jaw & chin starting directly at the base of lowerLip and enclosing
+ * the sublingual jaw floor before curving into the front neck.
+ */
+function buildBearChin(p: number): number[] {
+  return [
+    7.05, 6.25, 8.20 + 0.40 * p, 6.60, 8.38 + 0.35 * p, 5.65,
+    7.95 + 0.15 * p, 4.35, 6.45, 2.85, 4.15, 2.55, 2.95, 1.45,
+    2.70, -0.4, 2.65, -3.6,
+  ];
+}
+
+/**
+ * Mandibular rotation weight: 1.0 across the entire lower jaw/floor (x >= 3.9, y >= 2.3)
+ * so the bear chin moves in 100% lockstep with lowerLip, lowerIncisor, and floor,
+ * tapering smoothly to 0 along the neck.
+ */
+function bearChinWeight(x: number, y: number): number {
+  const wx = Math.max(0, Math.min(1, (x - 2.75) / 1.15));
+  const wy = Math.max(0, Math.min(1, (y - 0.2) / 2.1));
+  return wx * wy;
+}
 
 interface Particle {
   s: number;
@@ -369,14 +395,17 @@ function paintRaveBearHead(
   const beatScale = 1 + voicing * 0.08;
   const earWiggle = Math.sin(timeSec * 12) * (0.04 + 0.14 * voicing);
 
-  const back = canonToWorld(BEAR_BACK, { ...an, pharynx: 1 }, { ...a, larynx: 0 });
-  const frontUp = canonToWorld(BEAR_FRONT_UP, an, a);
-  const chin = canonToWorld(BEAR_CHIN, { ...an, pharynx: 1 }, { ...a, larynx: 0 }, chinWeight);
-  const rawSilhouette = [...back, ...frontUp, ...chin];
-  const silhouette = smoothOutline(rawSilhouette, 5);
+  const p = Math.min(0.9, 0.65 * a.lipProtrude + 0.25 * a.lipRound);
+  const back = canonToWorld(BEAR_BACK, an, a);
+  const frontUp = canonToWorld(buildBearFrontUp(p), an, a);
+  const interiorBridge = canonToWorld([6.5, 9.6, 1.5, 9.6, 1.5, 4.8], an, a);
+  const chin = canonToWorld(buildBearChin(p), an, a, bearChinWeight);
+  const upperOutline = smoothOutline([...back, ...frontUp], 5);
+  const lowerOutline = smoothOutline(chin, 5);
+  const silhouette = [...upperOutline, ...interiorBridge, ...lowerOutline];
 
   // Far bear ear peeking behind the top forehead crown
-  const farEarWorld = canonToWorld([3.3, 21.8], { ...an, pharynx: 1 }, { ...a, larynx: 0 });
+  const farEarWorld = canonToWorld([3.3, 21.5], an, a);
   drawBearEar(
     ctx,
     X(farEarWorld[0]),
@@ -389,7 +418,7 @@ function paintRaveBearHead(
   );
 
   // Floating WubGotchi golden halo hovering above the bear dome
-  const haloPos = canonToWorld([0.6, 24.1], { ...an, pharynx: 1 }, { ...a, larynx: 0 });
+  const haloPos = canonToWorld([0.6, 23.8], an, a);
   ctx.save();
   ctx.translate(X(haloPos[0]), Y(haloPos[1]) + Math.sin(timeSec * 3.0) * (0.14 * k));
   ctx.rotate(-0.08);
@@ -406,13 +435,13 @@ function paintRaveBearHead(
   ctx.restore();
 
   // Translucent gummi bear body gradient (WubGotchi aesthetic)
-  const jellyGrad = ctx.createLinearGradient(X(-7.4 * s), Y(22.0 * s), X(11.8 * s), Y(1.0 * s));
+  const jellyGrad = ctx.createLinearGradient(X(-7.2 * s), Y(21.8 * s), X(10.8 * s), Y(1.0 * s));
   jellyGrad.addColorStop(0, `hsla(${(hue + 28) % 360}, 92%, 64%, 0.78)`);
   jellyGrad.addColorStop(0.45, `hsla(${(hue + 318) % 360}, 86%, 52%, 0.72)`);
   jellyGrad.addColorStop(0.85, `hsla(${(hue + 215) % 360}, 84%, 40%, 0.80)`);
   jellyGrad.addColorStop(1, "rgba(18, 6, 40, 0.92)");
 
-  // Outer golden neon bloom aura on bear silhouette
+  // Outer golden neon bloom aura on bear silhouette (open at the mouth so lips sit cleanly at the front)
   ctx.save();
   ctx.shadowColor = "#ffae00";
   ctx.shadowBlur = 18 + voicing * 10;
@@ -422,14 +451,21 @@ function paintRaveBearHead(
   ctx.strokeStyle = "#ffcf2e";
   ctx.lineWidth = 4.6;
   ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  path(upperOutline, false);
+  ctx.stroke();
+  path(lowerOutline, false);
   ctx.stroke();
   ctx.restore();
 
-  // Crisp inner laser gold stroke
-  path(silhouette);
+  // Crisp inner laser gold stroke along the exterior head & jaw contour
   ctx.strokeStyle = "#ffe45c";
   ctx.lineWidth = 2.0;
   ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  path(upperOutline, false);
+  ctx.stroke();
+  path(lowerOutline, false);
   ctx.stroke();
 
   // Clipped interior cartoon details: muzzle cushion, glowing blush, glossy shine, spine pills
@@ -438,14 +474,14 @@ function paintRaveBearHead(
   ctx.clip();
 
   // Soft pastel bear snout/muzzle highlight cushion around mouth & nose bridge
-  const muz = canonToWorld([9.8, 11.4], an, a);
-  const muzGrad = ctx.createRadialGradient(X(muz[0]), Y(muz[1]), 0, X(muz[0]), Y(muz[1]), 2.9 * k * s);
+  const muz = canonToWorld([8.85 + 0.40 * p, 11.2], an, a);
+  const muzGrad = ctx.createRadialGradient(X(muz[0]), Y(muz[1]), 0, X(muz[0]), Y(muz[1]), 2.6 * k * s);
   muzGrad.addColorStop(0, "rgba(255, 224, 248, 0.34)");
   muzGrad.addColorStop(0.65, "rgba(255, 170, 232, 0.14)");
   muzGrad.addColorStop(1, "rgba(255, 170, 232, 0)");
   ctx.fillStyle = muzGrad;
   ctx.beginPath();
-  ctx.arc(X(muz[0]), Y(muz[1]), 2.9 * k * s, 0, Math.PI * 2);
+  ctx.arc(X(muz[0]), Y(muz[1]), 2.6 * k * s, 0, Math.PI * 2);
   ctx.fill();
 
   // Rosy kawaii rave cheek blush (brightens when singing)
@@ -460,7 +496,7 @@ function paintRaveBearHead(
   ctx.fill();
 
   // Glossy gummi bear specular crown shine
-  const crown = canonToWorld([0.2, 20.1], { ...an, pharynx: 1 }, { ...a, larynx: 0 });
+  const crown = canonToWorld([0.2, 19.9], an, a);
   ctx.save();
   ctx.translate(X(crown[0]), Y(crown[1]));
   ctx.rotate(-0.3);
@@ -484,7 +520,7 @@ function paintRaveBearHead(
   ctx.restore();
 
   // Foreground round Wub-Bear ear overlapping top-back crown
-  const nearEarWorld = canonToWorld([-2.2, 21.0], { ...an, pharynx: 1 }, { ...a, larynx: 0 });
+  const nearEarWorld = canonToWorld([-2.2, 20.8], an, a);
   drawBearEar(
     ctx,
     X(nearEarWorld[0]),
@@ -496,26 +532,26 @@ function paintRaveBearHead(
     false
   );
 
-  // Cute chubby shiny button bear nose right on tip of the bear snout
-  const nose = canonToWorld([11.45, 12.6], an, a);
+  // Cute chubby shiny button bear nose right on tip of the bear snout above the nostril
+  const nose = canonToWorld([10.12 + 0.45 * p, 12.05], an, a);
   ctx.save();
   ctx.translate(X(nose[0]), Y(nose[1]));
   ctx.rotate(0.18);
   ctx.beginPath();
-  ctx.ellipse(0, 0, 0.94 * k * s, 0.72 * k * s, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, 0.88 * k * s, 0.68 * k * s, 0, 0, Math.PI * 2);
   ctx.fillStyle = "#19072e";
   ctx.fill();
   ctx.strokeStyle = "#ffe45c";
   ctx.lineWidth = 1.8;
   ctx.stroke();
   ctx.beginPath();
-  ctx.arc(-0.26 * k * s, -0.22 * k * s, 0.23 * k * s, 0, Math.PI * 2);
+  ctx.arc(-0.24 * k * s, -0.20 * k * s, 0.21 * k * s, 0, Math.PI * 2);
   ctx.fillStyle = "#ffffff";
   ctx.fill();
   ctx.restore();
 
   // Big kawaii Wub-Bear anime eye
-  const eye = canonToWorld([6.2, 16.35], an, a);
+  const eye = canonToWorld([6.1, 16.2], an, a);
   drawAnimeEye(ctx, X(eye[0]), Y(eye[1]), 1.02 * k * s, timeSec, voicing, a.lipOpen);
 
   // Nasal cavity + neon cyan/magenta shimmer when velum port is open
@@ -704,9 +740,9 @@ export class SideHeadView {
 
     const s = an.scale * 0.9;
     const X0 = -7.6;
-    const X1 = 13.2;
+    const X1 = 11.8;
     const Y0 = -3.4;
-    let Y1 = 21.8;
+    let Y1 = 22.0;
     if (rh / rw > (Y1 - Y0) / (X1 - X0)) {
       Y1 = Math.min(24.0, Y0 + (rh / rw) * (X1 - X0));
     }

@@ -222,6 +222,7 @@ class WubApp {
   private segmentPositions = new Map<string, { x: number; y: number }>();
   private trackStemPositions = new Map<string, { x: number; y: number }>();
   private umapLoadStarted = false;
+  private umapPoints: NebulaPoint[] = [];
   private lastNebulaKitId: string | null = null;
   private nebulaKitBaseSet = false;
   private kitBarIndex = -1;
@@ -298,12 +299,7 @@ class WubApp {
       },
     });
     this.nebula.setPoints(demoPoints());
-    // Kit mode must not pull the legacy /data bank; keep the seeded demo
-    // constellation until the user switches to another engine mode.
-    const initialEngineMode = document.querySelector<HTMLButtonElement>("[data-playback].active")?.dataset.playback;
-    if (initialEngineMode !== "kit") {
-      void this.loadUmapPoints();
-    }
+    void this.loadUmapPoints();
 
     try {
       this.psychedelicBg = new PsychedelicBackground("psychedelic-bg");
@@ -545,7 +541,9 @@ class WubApp {
         const label = document.getElementById("bpm-value");
         if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
         this.engine.setTargetBpm(this.bpm);
-        this.clientConductor?.setBpm(this.bpm);
+        if (this.clientConductor?.getPlaybackMode() !== "kit") {
+          this.clientConductor?.setBpm(this.bpm);
+        }
       }
     } else {
       this.bpm = DEFAULT_BPM;
@@ -630,7 +628,12 @@ class WubApp {
         }
       }
       if (pts.length > 0 && this.nebula !== null) {
-        this.nebula.setPoints(pts);
+        this.umapPoints = pts;
+        const kitPts =
+          this.clientConductor && this.clientConductor.getPlaybackMode() === "kit"
+            ? this.clientConductor.getAllKitPhrasePoints()
+            : [];
+        this.nebula.setPoints(kitPts.length > 0 ? [...pts, ...kitPts] : pts);
         if (this.clientConductor) {
           this.clientConductor.setSegmentPositions(this.segmentPositions);
           this.clientConductor.setTrackStemPositions(this.trackStemPositions);
@@ -1550,13 +1553,13 @@ class WubApp {
       }
     }
 
-    // Kit mode: the base nebula is the full 2,466-phrase space; the active kit
-    // is a bright highlight set, updated only when the kit rotates.
+    // Kit mode: the base nebula combines the full UMAP slice space and all
+    // 2,717 × 4 kit phrase points; the active kit is a bright highlight set.
     if (this.clientConductor && this.clientConductor.getPlaybackMode() === "kit") {
       if (!this.nebulaKitBaseSet && this.nebula !== null) {
         const basePoints = this.clientConductor.getAllKitPhrasePoints();
         if (basePoints.length > 0) {
-          this.nebula.setPoints(basePoints);
+          this.nebula.setPoints(this.umapPoints.length > 0 ? [...this.umapPoints, ...basePoints] : basePoints);
           this.nebulaKitBaseSet = true;
         }
       }
@@ -1566,9 +1569,11 @@ class WubApp {
       if (kitId !== this.lastNebulaKitId) {
         this.lastNebulaKitId = kitId;
         if (this.clientConductor.isStemRemix && this.nebula !== null) {
-          // The pool changes with the cluster; rebuild the base cloud.
+          // Rebuild the combined cloud when the cluster or filters change.
           const basePoints = this.clientConductor.getAllKitPhrasePoints();
-          if (basePoints.length > 0) this.nebula.setPoints(basePoints);
+          if (basePoints.length > 0) {
+            this.nebula.setPoints(this.umapPoints.length > 0 ? [...this.umapPoints, ...basePoints] : basePoints);
+          }
         }
         const highlight = this.clientConductor.getKitNebulaPoints();
         if (highlight.length > 0 && this.nebula !== null) {
