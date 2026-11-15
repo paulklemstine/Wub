@@ -3080,39 +3080,26 @@ export class ClientGrooveboxConductor {
         }
         // Initialize default active patterns with the nearest real patterns from the authentic manifest
         this.initDefaultPatterns();
-        // 0. Global reusable vocab (new two-stage compression). Merges into manifest.slices.
-        await this.loadGlobalVocabulary(basePath);
-        void this.loadGlobalPatterns(basePath);
-        // Bar-arranger GPT (ONNX worker): whole-bar plans from arrangement history.
-        // Tatum filler (second ONNX worker): 16-step VQ fills per planned bar.
-        try {
-          this.ensureArrangerModel(basePath);
-          this.ensureTatumModel(basePath);
-        } catch {
-          // Workers unsupported; Markov planner covers generation.
-        }
-        if (this.playbackMode !== "kit") {
-          await this.preloadPhraseBlocks(basePath, true);
-          void (async () => {
-            await this.preloadPhraseBlocks(basePath, false);
-            await this.preloadAudioSlices(basePath);
-            await this.preloadPatternLoops(basePath);
-          })();
-        } else {
-          // In kit mode, register slices & loops without blocking kit audio worker startup
-          void (async () => {
-            await this.preloadPhraseBlocks(basePath, false);
-            await this.preloadAudioSlices(basePath);
-            await this.preloadPatternLoops(basePath);
-          })();
-        }
-        // 3. Load the full-corpus catalog index (every analyzed song) and prefetch a fresh catalog song
+        // Register slice metadata in-memory immediately (zero network requests)
+        this.registerManifestSliceMetadata();
+        // Load the full-corpus catalog index (every analyzed song)
         this.catalogBasePath = basePath;
         void this.loadFullCatalog(basePath).then(() => {
           if (this.playbackMode !== "kit") {
             this.prefetchNextCatalogSong();
           }
         });
+        if (this.playbackMode === "kit") {
+          this.staticBundleSkippedForKit = true;
+          return true;
+        }
+        // Legacy slice/jukebox mode only: load optional loops & phrase blocks with rate-limit protection
+        await this.preloadPhraseBlocks(basePath, true);
+        void (async () => {
+          await this.preloadPhraseBlocks(basePath, false);
+          await this.preloadAudioSlices(basePath);
+          await this.preloadPatternLoops(basePath);
+        })();
       }
       this.staticBundleLoaded = true;
       this.staticBundleSkippedForKit = false;
@@ -3962,8 +3949,80 @@ export class ClientGrooveboxConductor {
     return true;
   }
 
+  /**
+   * Registers slice metadata from standalone_patterns.json into sliceRegistry and sliceById
+   * using embedded b64 or synthesized fallback buffers, with zero network requests.
+   */
+  private registerManifestSliceMetadata(): void {
+    if (!this.manifest || !this.manifest.slices) return;
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const stemSlices = this.manifest.slices[stem];
+      if (!stemSlices) continue;
+      for (const [cat, list] of Object.entries(stemSlices)) {
+        if (!Array.isArray(list) || list.length === 0) continue;
+        const fallbackBuf = this.synth.getSliceBuffer(`${stem}:${cat}`) || this.synth.getSliceBuffer(stem);
+        if (!fallbackBuf) continue;
+        const assets: SliceAsset[] = [];
+        const limit = Math.min(list.length, 64);
+        for (let i = 0; i < limit; i++) {
+          const item = list[i];
+          const normCentroid = Math.max(0, Math.min(1, Math.log2(Math.max(50, item.centroid || 500) / 50) / 7.6));
+          const isRight = cat.includes("cyber") || cat.includes("breaks");
+          const isBottom = cat.includes("house") || cat.includes("breaks");
+          const x = (isRight ? 0.52 : 0.04) + 0.44 * normCentroid;
+          const y = (isBottom ? 0.52 : 0.04) + 0.44 * Math.max(0, Math.min(1, (item.duration || 0.2) / 0.8));
+          const asset: SliceAsset = {
+            buffer: fallbackBuf,
+            pitch: typeof item.pitch === "number" ? item.pitch : 0,
+            centroid: typeof item.centroid === "number" ? item.centroid : 0,
+            duration: typeof item.duration === "number" ? item.duration : fallbackBuf.duration,
+            loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
+            loudDb: typeof (item as { loudDb?: unknown }).loudDb === "number" ? (item as { loudDb: number }).loudDb : -14,
+            name: item.name,
+            vowel: item.vowel,
+            trackTitle: item.track_title,
+            trackId: item.track_id,
+            segmentId: item.segment_id,
+            start: typeof item.start === "number" ? item.start : 0,
+            x,
+            y,
+          };
+          assets.push(asset);
+          this.sliceById.set(asset.name, asset);
+          if (asset.segmentId) {
+            this.sliceById.set(asset.segmentId, asset);
+          }
+        }
+        if (assets.length > 0 && !this.sliceRegistry.has(`${stem}:${cat}`)) {
+          this.sliceRegistry.set(`${stem}:${cat}`, assets);
+          if (cat.includes("_")) {
+            this.sliceRegistry.set(`${stem}:${cat.replace("_", ":")}`, assets);
+          }
+        }
+      }
+    }
+  }
+
   private async preloadAudioSlices(basePath: string): Promise<void> {
     if (!this.manifest || !this.manifest.slices) return;
+    // Probe one slice file first; if /data/slices/ is not deployed on static hosting,
+    // skip firing hundreds of 404/429 requests and rely on registerManifestSliceMetadata().
+    const probeItem = this.manifest.slices.drums
+      ? Object.values(this.manifest.slices.drums).find((arr) => Array.isArray(arr) && arr.length > 0)?.[0]
+      : null;
+    if (probeItem && probeItem.url && !probeItem.b64) {
+      try {
+        const probeUrl = probeItem.url.startsWith("http")
+          ? probeItem.url
+          : `${basePath}/${probeItem.url.replace(/^data\//, "")}`;
+        const probeRes = await this.fetchSlot(() => fetch(probeUrl));
+        if (!probeRes.ok) {
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
     type SliceGroup = { stem: StemName; cat: string; list: any[]; assets: SliceAsset[] };
     const groups: SliceGroup[] = [];
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
@@ -4140,14 +4199,18 @@ export class ClientGrooveboxConductor {
       const list = this.manifest.loops[stem];
       if (!list || list.length === 0) continue;
       const loaded: LoadedLoop[] = [];
-      for (const item of list) {
+      // Cap initial loop preloads per stem to avoid triggering GitHub Pages HTTP 429 rate limits
+      const capped = list.slice(0, 12);
+      for (const item of capped) {
         try {
           const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
-          const res = await this.fetchSlot(() => fetch(url));
+          const res = await this.fetchWithRetry(url);
           if (res.ok) {
             const bytes = await res.arrayBuffer();
             const decoded = await this.engine.decodeAudio(bytes);
             loaded.push({ meta: item, buffer: decoded });
+          } else if (res.status === 404 || res.status === 429) {
+            break;
           }
         } catch {
           // Graceful fallback
