@@ -1464,14 +1464,15 @@ def match_sequences_to_soundbank(
     sim_env_mat = sim_env_t.T.contiguous().half() if use_fp16 else sim_env_t.T.contiguous()
     sim_feats_mat = sim_feats_norm_t.T.contiguous().half() if use_fp16 else sim_feats_norm_t.T.contiguous()
 
-    # Transition stiffness weights per normalized 14-D articulator for Viterbi smoothing
-    # Higher stiffness on jaw, lips, tongue body & velum prevents rapid frame chatter.
+    # Transition stiffness weights per normalized 14-D articulator for Viterbi smoothing:
+    # Balanced (lambda_trans = 0.22) so Viterbi tracks every syllable & formant shift
+    # while preventing erratic single-frame candidate jumps.
     trans_w = torch.tensor(
-        [2.6, 2.2, 2.2, 1.5, 1.5, 1.4, 1.3, 1.1, 2.4, 2.5, 2.3, 1.3, 1.7, 1.4],
+        [1.4, 1.2, 1.2, 1.0, 1.0, 1.0, 0.9, 0.9, 1.3, 1.4, 1.3, 0.9, 1.1, 1.0],
         device=dev,
         dtype=torch.float32,
     )
-    lambda_trans = 1.85
+    lambda_trans = 0.22
 
     n_seq = len(seqs)
     t_len = seqs[0]["feats"].shape[0]
@@ -1552,9 +1553,32 @@ def match_sequences_to_soundbank(
             matched_tract_seq[b0:b1] = chosen_art.cpu().numpy()
 
     # Smooth rest-blending on quiet/silent regions & subtle zero-phase Gaussian smoothing along time
-    active_gate = np.clip((rms_seq - 0.003) / 0.025, 0.0, 1.0)[..., None]  # (N, T, 1)
+    db_seq = 20.0 * np.log10(np.maximum(1e-5, rms_seq))
+    loud_norm = np.where(rms_seq > 0.004, np.maximum(0.05, np.clip((db_seq - db_p10) / db_span, 0.0, 1.0)), 0.0)
+    onset_boost = np.clip(rise_seq * 14.0, 0.0, 0.38)
+    syl_open_drive = np.clip(0.72 * loud_norm + 0.55 * onset_boost, 0.0, 1.0)
+    active_gate = np.clip((rms_seq - 0.0035) / 0.022, 0.0, 1.0)[..., None]  # (N, T, 1)
     rest_norm = TRACT_REST_NORM[None, None, :]
-    tract_blended = active_gate * matched_tract_seq + (1.0 - active_gate) * rest_norm
+
+    # Exaggerate matched simulator postures around their mean/rest so tongue, lips, and jaw
+    # use the full expressive range of the Wub bear mouth instead of clustering near 0.5.
+    seq_center = np.mean(matched_tract_seq, axis=(0, 1), keepdims=True)
+    exag_gain = np.array(
+        [1.85, 1.95, 1.90, 1.80, 1.85, 1.80, 1.75, 1.70, 1.90, 1.95, 1.95, 1.75, 1.75, 1.80],
+        dtype=np.float32,
+    )[None, None, :]
+    exag_tract = np.clip(seq_center + exag_gain * (matched_tract_seq - seq_center), 0.0, 1.0)
+
+    # Couple jaw (0) and lipOpen (8) strongly to syllable envelope + onset attack so the mouth
+    # visibly opens wide on sung syllables and closes between words/phrases.
+    exag_tract[:, :, 0] = np.clip(0.42 * exag_tract[:, :, 0] + 0.58 * (syl_open_drive ** 0.85), 0.0, 1.0)
+    exag_tract[:, :, 8] = np.clip(
+        0.40 * exag_tract[:, :, 8] + 0.60 * np.clip(0.18 + 0.82 * (syl_open_drive ** 0.85), 0.0, 1.0),
+        0.0,
+        1.0,
+    )
+
+    tract_blended = active_gate * exag_tract + (1.0 - active_gate) * rest_norm
 
     # Zero-phase 5-tap symmetric kernel [0.10, 0.22, 0.36, 0.22, 0.10] eliminates candidate quantization jitter
     kernel = np.array([0.10, 0.22, 0.36, 0.22, 0.10], dtype=np.float32)
@@ -1568,8 +1592,6 @@ def match_sequences_to_soundbank(
     ).astype(np.float32)
 
     # Derive auxiliary HUD display values directly from the matched 14-D vocal simulator parameters
-    db_seq = 20.0 * np.log10(np.maximum(1e-5, rms_seq))
-    loud_norm = np.where(rms_seq > 0.004, np.maximum(0.08, np.clip((db_seq - db_p10) / db_span, 0.0, 1.0)), 0.0)
     gate = active_gate.squeeze(-1)
 
     flatness = x_seq[:, :, 7]
@@ -1594,15 +1616,14 @@ def match_sequences_to_soundbank(
     lip_round_n = tract_smooth[:, :, 9]
     lip_protrude_n = tract_smooth[:, :, 10]
 
-    onset_boost = np.clip(rise_seq * 10.0, 0.0, 0.22)
     aperture = np.clip(
-        gate * (0.45 * lip_open_n + 0.35 * jaw_n + 0.20 * loud_norm + 0.5 * onset_boost) * (1.0 - 0.25 * breath),
+        gate * (0.42 * lip_open_n + 0.38 * jaw_n + 0.20 * syl_open_drive) * (1.0 - 0.20 * breath),
         0.0,
         1.0,
     )
-    jaw_drop = np.clip(gate * (0.75 * jaw_n + 0.25 * loud_norm), 0.0, 1.0)
-    width = np.clip(0.50 + gate * (0.85 * (tongue_x_n - 0.5) - 0.35 * (lip_round_n - 0.25)), 0.06, 0.96)
-    roundness = np.clip(gate * (0.65 * lip_round_n + 0.35 * lip_protrude_n), 0.0, 1.0)
+    jaw_drop = np.clip(gate * (0.72 * jaw_n + 0.28 * syl_open_drive), 0.0, 1.0)
+    width = np.clip(0.50 + gate * (1.15 * (tongue_x_n - 0.5) - 0.45 * (lip_round_n - 0.25)), 0.04, 0.98)
+    roundness = np.clip(gate * (0.68 * lip_round_n + 0.42 * lip_protrude_n), 0.0, 1.0)
     tongue_height = np.clip(0.68 * tongue_y_n + 0.32 * tip_y_n, 0.0, 1.0)
     tension = np.clip(
         gate * (0.46 * loud_norm + 0.28 * np.clip(presence_band / 2.6, 0.0, 1.0) + 0.26 * pitch_norm),
@@ -1793,7 +1814,7 @@ def train_soundbank_sequence_model(
             loss_vowel = (-(yb[:, :, 9:] * log_probs).sum(dim=-1, keepdim=True) * v_w).sum() / denom_v
             loss_tract = (F.smooth_l1_loss(p_tract, tb, reduction="none") * v_w).sum() / (14.0 * denom_v)
 
-            # Temporal velocity matching + 2nd-derivative jerk suppression (critical for butter-smooth mouths!)
+            # Temporal velocity matching + target-matched 2nd-derivative smoothness
             m1 = v_w[:, 1:] * v_w[:, :-1]
             denom_1 = torch.clamp(m1.sum(), min=1.0)
             dp_t = p_tract[:, 1:] - p_tract[:, :-1]
@@ -1802,21 +1823,39 @@ def train_soundbank_sequence_model(
             dt_a = yb[:, 1:, :9] - yb[:, :-1, :9]
             loss_vel = (
                 (F.smooth_l1_loss(dp_t, dt_t, reduction="none") * m1).sum() / (14.0 * denom_1)
-                + 0.45 * ((dp_t * dp_t) * m1).sum() / (14.0 * denom_1)
-                + 0.45 * (F.smooth_l1_loss(dp_a, dt_a, reduction="none") * m1).sum() / (9.0 * denom_1)
+                + 0.55 * (F.smooth_l1_loss(dp_a, dt_a, reduction="none") * m1).sum() / (9.0 * denom_1)
             )
 
             m2 = v_w[:, 2:] * v_w[:, 1:-1] * v_w[:, :-2]
             denom_2 = torch.clamp(m2.sum(), min=1.0)
             acc_t = p_tract[:, 2:] - 2.0 * p_tract[:, 1:-1] + p_tract[:, :-2]
+            t_acc_t = tb[:, 2:] - 2.0 * tb[:, 1:-1] + tb[:, :-2]
             acc_a = p_art[:, 2:] - 2.0 * p_art[:, 1:-1] + p_art[:, :-2]
+            t_acc_a = yb[:, 2:, :9] - 2.0 * yb[:, 1:-1, :9] + yb[:, :-2, :9]
             loss_accel = (
-                ((acc_t * acc_t) * m2).sum() / (14.0 * denom_2)
-                + 0.70 * ((acc_a * acc_a) * m2).sum() / (9.0 * denom_2)
+                (F.smooth_l1_loss(acc_t, t_acc_t, reduction="none") * m2).sum() / (14.0 * denom_2)
+                + 0.75 * ((acc_t * acc_t) * m2).sum() / (14.0 * denom_2)
+                + 0.45 * (F.smooth_l1_loss(acc_a, t_acc_a, reduction="none") * m2).sum() / (9.0 * denom_2)
+                + 0.45 * ((acc_a * acc_a) * m2).sum() / (9.0 * denom_2)
             )
 
+            # Dynamic range / variance preservation loss: prevent regression to the mean!
+            act_flat = (v_w.reshape(flat_b) > 0.5) & (yb[:, :, 0].reshape(flat_b) > 0.08)
+            if int(act_flat.sum().item()) > 32:
+                p_t_act = p_tract.reshape(flat_b, 14)[act_flat]
+                t_t_act = tb.reshape(flat_b, 14)[act_flat]
+                p_a_act = p_art.reshape(flat_b, 9)[act_flat]
+                t_a_act = yb[:, :, :9].reshape(flat_b, 9)[act_flat]
+                p_std_t = torch.sqrt(torch.var(p_t_act, dim=0) + 1e-6)
+                t_std_t = torch.sqrt(torch.var(t_t_act, dim=0) + 1e-6)
+                p_std_a = torch.sqrt(torch.var(p_a_act, dim=0) + 1e-6)
+                t_std_a = torch.sqrt(torch.var(t_a_act, dim=0) + 1e-6)
+                loss_var = F.relu(t_std_t * 1.02 - p_std_t).mean() + 0.65 * F.relu(t_std_a * 1.02 - p_std_a).mean()
+            else:
+                loss_var = torch.tensor(0.0, device=dev)
+
             # Input micro-jitter invariance: perturbed noisy frame features shouldn't shake mouth parameters
-            noise = torch.randn_like(xb) * 0.09 * jit_mask
+            noise = torch.randn_like(xb) * 0.055 * jit_mask
             j_art, _, j_tract = inv_net((xb + noise).reshape(flat_b, 18))
             j_art = j_art.reshape(bs, t_len, 9)
             j_tract = j_tract.reshape(bs, t_len, 14)
@@ -1837,22 +1876,26 @@ def train_soundbank_sequence_model(
             sb_vprob = sb_vtarget[sb_idx]
             loss_sb_vowel = -(sb_vprob * F.log_softmax(sb_vlog, dim=-1)).sum(dim=-1).mean()
             sb_pred_env = fwd_sim_net(torch.cat([sb_pred_tract, sb_exc_t[sb_idx]], dim=1))
+            sb_p_std = torch.sqrt(torch.var(sb_pred_tract, dim=0) + 1e-6)
+            sb_t_std = torch.sqrt(torch.var(sb_art_t[sb_idx], dim=0) + 1e-6)
             loss_sb = (
                 F.smooth_l1_loss(sb_pred_tract, sb_art_t[sb_idx])
-                + 0.40 * F.mse_loss(sb_pred_art, sb_art9_t[sb_idx])
-                + 0.25 * F.smooth_l1_loss(sb_pred_env, sb_env_t[sb_idx])
-                + 0.15 * loss_sb_vowel
+                + 0.45 * F.mse_loss(sb_pred_art, sb_art9_t[sb_idx])
+                + 0.30 * F.smooth_l1_loss(sb_pred_env, sb_env_t[sb_idx])
+                + 0.20 * loss_sb_vowel
+                + 0.50 * F.relu(sb_t_std - sb_p_std).mean()
             )
 
             loss = (
-                loss_art
-                + 0.35 * loss_vowel
-                + 3.00 * loss_tract
-                + 1.80 * loss_vel
-                + 3.60 * loss_accel
-                + 1.50 * loss_jitter
-                + 0.60 * loss_sim_cycle
-                + 0.65 * loss_sb
+                1.60 * loss_art
+                + 0.45 * loss_vowel
+                + 3.60 * loss_tract
+                + 2.80 * loss_var
+                + 1.50 * loss_vel
+                + 1.85 * loss_accel
+                + 0.85 * loss_jitter
+                + 0.75 * loss_sim_cycle
+                + 1.15 * loss_sb
             )
 
             opt.zero_grad()
@@ -1917,6 +1960,7 @@ def main() -> None:
     parser.add_argument("--stems-dir", type=Path, default=Path("data/stems"))
     parser.add_argument("--atlas", type=Path, default=Path("/tmp/tract_physics_atlas.npz"))
     parser.add_argument("--soundbank", type=Path, default=None, help="Optional simulated tract soundbank (.npz) for sequential Viterbi+smoothness training")
+    parser.add_argument("--seq-cache", type=Path, default=Path("/tmp/wub_vocal_seqs_cache.pt"), help="Optional sequence cache to avoid re-decoding stems")
     parser.add_argument("--out", type=Path, default=Path("frontend/public/data/singing_head_model.json"))
     parser.add_argument("--max-kits", type=int, default=0, help="0 = all vocal kit stubs")
     parser.add_argument("--max-stems", type=int, default=0, help="0 = all full vocal stems")
@@ -1943,22 +1987,30 @@ def main() -> None:
         jobs.append((p, tid, True))
 
     if args.soundbank is not None and args.soundbank.exists():
-        print(
-            f"Extracting contiguous 60 Hz sequences from {len(stub_paths)} kit stubs + {len(stem_paths)} full stems "
-            f"({args.workers} workers)...",
-            flush=True,
-        )
-        all_seqs: List[dict] = []
-        with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
-            futures = [pool.submit(_worker_sequence, j) for j in jobs]
-            done = 0
-            for fut in as_completed(futures):
-                done += 1
-                res = fut.result()
-                if res:
-                    all_seqs.extend(res)
-                if done % 500 == 0 or done == len(jobs):
-                    print(f"  processed {done}/{len(jobs)} sources -> {len(all_seqs)} sequences", flush=True)
+        if args.seq_cache is not None and args.seq_cache.exists() and args.max_kits == 0 and args.max_stems == 0:
+            print(f"Loading cached 60 Hz vocal sequences from {args.seq_cache}...", flush=True)
+            all_seqs = torch.load(args.seq_cache, weights_only=False)
+            print(f"  loaded {len(all_seqs)} sequences.", flush=True)
+        else:
+            print(
+                f"Extracting contiguous 60 Hz sequences from {len(stub_paths)} kit stubs + {len(stem_paths)} full stems "
+                f"({args.workers} workers)...",
+                flush=True,
+            )
+            all_seqs = []
+            with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
+                futures = [pool.submit(_worker_sequence, j) for j in jobs]
+                done = 0
+                for fut in as_completed(futures):
+                    done += 1
+                    res = fut.result()
+                    if res:
+                        all_seqs.extend(res)
+                    if done % 500 == 0 or done == len(jobs):
+                        print(f"  processed {done}/{len(jobs)} sources -> {len(all_seqs)} sequences", flush=True)
+            if args.seq_cache is not None and args.max_kits == 0 and args.max_stems == 0:
+                torch.save(all_seqs, args.seq_cache)
+                print(f"  saved sequence cache to {args.seq_cache}", flush=True)
 
         dev = _resolve_device(args.device)
         sb = np.load(args.soundbank)

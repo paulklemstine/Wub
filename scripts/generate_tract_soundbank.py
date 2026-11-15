@@ -88,32 +88,38 @@ const buf = new Float32Array(count * STRIDE);
 
 let geom = null;
 let sec = null;
+function extremeRand() {
+  const u = rand();
+  // U-shaped arcsine transform pushes random samples toward full range extremes [0, 1]
+  return rand() < 0.72 ? (0.5 + 0.5 * Math.sin((u - 0.5) * Math.PI)) : u;
+}
 for (let i = 0; i < count; i++) {
-  // Pure random 14-D vocal simulator parameters across ARTICULATOR_RANGES.
-  // We use stratified Sobol-like / uniform + beta-varied random sampling across
-  // all 14 parameters so open, closed, constricted, rounded, spread, and nasal
-  // vocal simulator configurations are densely covered without any preset vowels.
-  const cand = {};
-  const shapeMode = rand();
-  for (const k of ARTICULATOR_KEYS) {
-    const [lo, hi] = ARTICULATOR_RANGES[k];
-    let u = rand();
-    if (shapeMode < 0.35) {
-      // Gently favor full-range extremes as well as interior values
-      u = 0.5 + 0.5 * Math.sin((u - 0.5) * Math.PI);
-    } else if (shapeMode < 0.65) {
-      // Smooth interior distribution
-      u = 0.5 * (u + rand());
-    }
-    cand[k] = lo + u * (hi - lo);
-  }
-  // Ensure physical variety across both open oral resonators and tight constrictions
-  if (rand() < 0.50) {
-    cand.velum = rand() * 0.15;
-  }
-  if (rand() < 0.55) {
-    cand.lipTuck = rand() * 0.20;
-  }
+  // Sample coupled, wide-range random vocal simulator drives across ARTICULATOR_RANGES
+  // so open/closed jaw+lips, spread/rounded lips, and front/back/high/low tongue
+  // sweep across their full dynamic range coherently without canceling out to the middle.
+  const uOpen = extremeRand();           // 0 = closed mouth, 1 = wide-open jaw & lips
+  const uFront = extremeRand() * 2 - 1;  // -1 = far back tongue, +1 = far front tongue
+  const uHigh = extremeRand() * 2 - 1;   // -1 = low open oral cavity, +1 = high palatal arch
+  const uRound = extremeRand();          // 0 = wide spread lips, 1 = pursed protruding lips
+  const uTip = extremeRand();            // tongue tip & alveolar constriction drive
+  const uLarynx = extremeRand() * 2 - 1;
+
+  const cand = {
+    jaw: 0.02 + 0.96 * uOpen + randn() * 0.08,
+    lipOpen: -0.32 + 1.45 * uOpen * (1.0 - 0.35 * uRound) + randn() * 0.10,
+    lipRound: uRound * (1.0 - 0.30 * Math.max(0, uFront)) + randn() * 0.08,
+    lipProtrude: -0.48 + 1.42 * uRound - 0.25 * Math.max(0, uFront) + randn() * 0.08,
+    tongueX: 1.40 * uFront + randn() * 0.16,
+    tongueY: 1.45 * uHigh * (1.0 - 0.45 * uOpen) - 0.55 * uOpen + randn() * 0.16,
+    tongueRoot: 0.85 * uFront - 0.45 * uOpen + randn() * 0.16,
+    tipX: 0.95 * uFront + 0.45 * (uTip - 0.4) + randn() * 0.16,
+    tipY: -0.35 + 2.35 * uTip * (1.0 - 0.50 * uOpen) + randn() * 0.16,
+    groove: 0.08 + 0.88 * uTip * Math.max(0, 1.0 - uOpen) + randn() * 0.08,
+    tongueSides: 0.10 + 0.82 * Math.max(0, uHigh * 0.5 + uTip * 0.5) + randn() * 0.08,
+    lipTuck: rand() < 0.22 ? (0.30 + 0.70 * extremeRand()) : (rand() * 0.14),
+    velum: rand() < 0.24 ? (0.30 + 0.70 * extremeRand()) : (rand() * 0.12),
+    larynx: 1.25 * uLarynx + randn() * 0.14,
+  };
 
   const art = clampArt(cand);
   geom = computeGeometry(art, DEFAULT_ANATOMY, DEFAULT_TEETH, geom ? { reuse: geom } : undefined);
@@ -255,7 +261,7 @@ def _compute_transfer_spectra(
     """
     rho = 1.14e-3
     c_snd = 35000.0
-    alpha = 0.006
+    alpha = 0.0028
 
     # freqs_hz: (F,) -> omega: (1, F)
     w = (2.0 * math.pi * freqs_hz).unsqueeze(0)
@@ -529,52 +535,60 @@ def synthesize_soundbank(
             ar_t, dx_t, lip_t, velum_t, mina_t, mini_t, liptuck_t, freqs_eval
         )
 
-        # Sample realistic singing excitation: f0 tied softly to larynx, random vocal effort tilt
-        larynx_semis = larynx_t * 5.0
-        log_f0 = torch.empty((b,), device=dev).uniform_(math.log2(95.0), math.log2(640.0), generator=gen)
-        f0_hz = torch.clamp(2.0 ** (log_f0 + larynx_semis / 12.0 * 0.35), 82.0, 720.0)
+        # Sample realistic singing excitation: f0 tied to larynx, volume & radiation tied to mouth opening
+        jaw_t = torch.clamp(a_t[:, 0], 0.0, 1.0)
+        lipo_norm_t = torch.clamp((a_t[:, 8] + 0.4) / 1.6, 0.0, 1.0)
+        open_drive = torch.clamp(0.50 * jaw_t + 0.35 * lipo_norm_t + 0.15 * torch.clamp(lip_t / 4.0, 0.0, 1.0), 0.02, 1.0)
 
-        # Tight constrictions (<0.25 cm^2) or high lipTuck produce strong unvoiced frication/breath
-        tightness = torch.clamp((0.28 - mina_t) / 0.26, 0.0, 1.0)
+        larynx_semis = larynx_t * 6.5
+        log_f0 = torch.empty((b,), device=dev).uniform_(math.log2(105.0), math.log2(520.0), generator=gen)
+        f0_hz = torch.clamp(2.0 ** (log_f0 + larynx_semis / 12.0 * 0.45), 82.0, 720.0)
+
+        # Tight constrictions (<0.28 cm^2) or high lipTuck produce strong unvoiced frication/breath
+        tightness = torch.clamp((0.30 - mina_t) / 0.28, 0.0, 1.0)
         tuck_w = torch.clamp((liptuck_t - 0.25) / 0.65, 0.0, 1.0)
-        is_fric_dom = torch.rand((b,), device=dev, generator=gen) < (0.12 + 0.65 * torch.maximum(tightness, tuck_w))
+        is_fric_dom = torch.rand((b,), device=dev, generator=gen) < (0.08 + 0.72 * torch.maximum(tightness, tuck_w))
 
         voicing_target = torch.where(
             is_fric_dom,
-            torch.empty((b,), device=dev).uniform_(0.0, 0.35, generator=gen),
-            torch.empty((b,), device=dev).uniform_(0.55, 0.98, generator=gen),
+            torch.empty((b,), device=dev).uniform_(0.0, 0.30, generator=gen),
+            torch.empty((b,), device=dev).uniform_(0.62, 0.98, generator=gen),
         )
         breath_amt = torch.clamp(
-            torch.maximum(tightness, tuck_w) * 0.75 + (1.0 - voicing_target) * 0.55 + torch.rand((b,), device=dev, generator=gen) * 0.15,
+            torch.maximum(tightness, tuck_w) * 0.75 + (1.0 - voicing_target) * 0.55 + torch.rand((b,), device=dev, generator=gen) * 0.12,
             0.0,
             1.0,
         )
-        tilt_exp = torch.empty((b,), device=dev).uniform_(0.95, 1.85, generator=gen)  # bright belt vs warm falsetto
+        # Brighter glottal source when mouth/jaw is belted open; warmer/softer when closed
+        tilt_exp = torch.clamp(1.68 - 0.55 * open_drive + torch.empty((b,), device=dev).uniform_(-0.18, 0.18, generator=gen), 0.88, 1.95)
 
-        # Harmonic glottal source synthesized cleanly via nearest-bin spectral comb or harmonic sum, then filtered
+        # Harmonic glottal source filtered by vocal tract transfer function + mouth opening radiation
         phase0 = torch.empty((b, 1), device=dev).uniform_(0.0, 2.0 * math.pi, generator=gen)
         harm_freqs = f0_hz.unsqueeze(1) * harmonics  # (B, 55)
-        # Look up vocal tract transfer gain |H_vocal(h * f0)| at exact harmonic frequencies!
         bin_idx = torch.clamp(
             torch.round(harm_freqs / (TARGET_SR / float(FFT_SIZE))).to(torch.int64),
             0,
             n_fft_bins - 1,
         )
-        h_gain_at_harm = torch.gather(h_vocal, 1, bin_idx)
-        # Nyquist fade
+        # Mouth opening radiation boost in F1/F2 vocal projection band (500..3200 Hz)
+        f_row = freqs_eval.unsqueeze(0)
+        rad_open_filter = 0.35 + (0.25 + 1.45 * open_drive.unsqueeze(1)) * torch.sigmoid((f_row - 380.0) / 180.0) * torch.exp(
+            -0.5 * ((f_row - 1400.0) / 1850.0) ** 2
+        )
+        h_vocal_rad = h_vocal * rad_open_filter
+        h_gain_at_harm = torch.gather(h_vocal_rad, 1, bin_idx)
         nyq_mask = (harm_freqs < (TARGET_SR * 0.46)).to(torch.float32)
         harm_amp = (1.0 / (harmonics ** tilt_exp.unsqueeze(1))) * h_gain_at_harm * nyq_mask
         angles = 2.0 * math.pi * harm_freqs.unsqueeze(2) * t_axis.view(1, 1, -1) + phase0.unsqueeze(2)
         voiced_wave = torch.sum(harm_amp.unsqueeze(2) * torch.sin(angles), dim=1)  # (B, 2048)
 
-        # Normalize voiced component by its energy cleanly before mixing with shaped noise
         v_rms = torch.sqrt(torch.mean(voiced_wave * voiced_wave, dim=1, keepdim=True) + 1e-12)
         voiced_unit = voiced_wave / v_rms
 
         # Noise source filtered by oral + frication transfer spectra
         white = torch.randn((b, FFT_SIZE), device=dev, generator=gen)
         white_spec = torch.fft.rfft(white, dim=1)
-        noise_filter = (0.35 * h_vocal + 2.8 * h_fric)
+        noise_filter = (0.30 * h_vocal_rad + 3.2 * h_fric)
         noise_wave = torch.fft.irfft(white_spec * noise_filter, n=FFT_SIZE, dim=1)
         n_rms = torch.sqrt(torch.mean(noise_wave * noise_wave, dim=1, keepdim=True) + 1e-12)
         noise_unit = noise_wave / n_rms
@@ -583,10 +597,9 @@ def synthesize_soundbank(
         mix_n = (1.0 - mix_v) + breath_amt.unsqueeze(1) * 0.45
         mixed = mix_v * voiced_unit + mix_n * noise_unit
 
-        # Target singing RMS across corpus range [-30 dB .. -6 dB] correlated with lip radiation opening
-        loud_u = torch.empty((b,), device=dev).uniform_(0.08, 1.0, generator=gen)
-        open_scale = torch.clamp((lip_t / 1.5) ** 0.25, 0.35, 1.15)
-        target_rms = (0.008 * ((0.35 / 0.008) ** (loud_u * open_scale))).unsqueeze(1)
+        # Radiated vocal RMS directly coupled to simulator mouth opening (jaw + lipOpen + lipArea)
+        loud_u = torch.clamp(0.72 * open_drive + 0.28 * torch.rand((b,), device=dev, generator=gen), 0.03, 1.0)
+        target_rms = (0.004 * ((0.36 / 0.004) ** loud_u)).unsqueeze(1)
         m_rms = torch.sqrt(torch.mean(mixed * mixed, dim=1, keepdim=True) + 1e-12)
         audio_batch = (mixed / m_rms) * target_rms
 
