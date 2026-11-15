@@ -7,6 +7,7 @@ export type StemName = "drums" | "bass" | "other" | "vocals";
 export type TriadQuality = "minor" | "major" | "sus" | "mono" | "perc";
 export type MotifSchema = "AAAB" | "ABAB" | "ABAC" | "AABB" | "ABCD";
 export type VocalRole = "none" | "teaser" | "airy" | "hook_1bar" | "hook_2bar" | "chop" | "verse";
+export type EssentialRole = "A" | "B" | "T" | "H";
 
 export interface ProgressionChord {
   relRoot: number;
@@ -38,6 +39,12 @@ export interface CellStemMeta {
   cb?: number;
   /** Vocals only: vowel class */
   vow?: string;
+  /** Per-bar essentiality / reconstitution score (0..1) */
+  es?: [number, number, number, number];
+  /** Per-bar compressed structural pattern role (A primary, B var, T turnaround, H hook) */
+  er?: [EssentialRole, EssentialRole, EssentialRole, EssentialRole];
+  /** Song-level reconstitution fidelity for this stem in the source kit (0..1) */
+  fid?: number;
 }
 
 export interface CellIndexData {
@@ -45,6 +52,9 @@ export interface CellIndexData {
   format: string;
   count: number;
   stem_names: StemName[];
+  mean_reconstitution_fidelity?: number;
+  corpus_reconstitution_fidelity?: number;
+  essential_role_transitions?: Record<string, Record<string, number>>;
   style_progressions: Record<string, Record<string, Array<Array<[number, string] | (string | number)[]>>>>;
   section_motif_priors: Record<string, Record<string, Record<string, number>>>;
   phrases: Record<string, Record<string, CellStemMeta>>;

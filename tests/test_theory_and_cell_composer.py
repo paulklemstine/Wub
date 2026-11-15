@@ -10,8 +10,19 @@ import pytest
 import torch
 from fastapi.testclient import TestClient
 
-from scripts.train_cell_compat import CellCompatNet, build_cell_feature_vector
+from scripts.train_cell_compat import (
+    CellCompatNet,
+    _build_arr_ctx,
+    build_cell_feature_vector,
+)
 from server.main import app
+from wub_core.essential_slices import (
+    ESSENTIAL_ROLES,
+    bar_reconstitution_similarity,
+    mine_processed_track_essential_bars,
+    pitch_invariant_chroma_sim,
+    select_essential_slices_for_song,
+)
 from wub_core.motif_miner import (
     bar_similarity_matrix,
     classify_motif_schema,
@@ -136,7 +147,7 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
     assert sidecars.get("cell_compat") is True
 
     ci = json.loads(ci_path.read_text())
-    assert ci["format"] == "cell_index_v1"
+    assert ci["format"] in ("cell_index_v1", "cell_index_v2")
     assert ci["count"] >= 2500
     assert len(ci["phrases"]) == ci["count"]
     assert "DROP" in ci["section_motif_priors"]
@@ -149,8 +160,21 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
         assert len(first_phrase[stem]["o"]) == 4
         assert all(0 <= m <= 0xFFFF for m in first_phrase[stem]["o"])
 
+    if ci["format"] == "cell_index_v2":
+        assert float(ci["mean_reconstitution_fidelity"]) >= 0.80
+        rt = ci["essential_role_transitions"]
+        assert set(rt.keys()) == set(ESSENTIAL_ROLES)
+        for r1 in ESSENTIAL_ROLES:
+            assert sum(rt[r1].values()) == pytest.approx(1.0, abs=0.02)
+        for stem in ("drums", "bass", "other", "vocals"):
+            assert len(first_phrase[stem]["es"]) == 4
+            assert len(first_phrase[stem]["er"]) == 4
+            assert all(0.0 <= float(x) <= 1.0 for x in first_phrase[stem]["es"])
+            assert all(r in ESSENTIAL_ROLES for r in first_phrase[stem]["er"])
+            assert 0.0 <= float(first_phrase[stem]["fid"]) <= 1.0
+
     cc = json.loads(cc_path.read_text())
-    assert cc["format"] == "cell_compat_v1"
+    assert cc["format"] in ("cell_compat_v1", "cell_compat_v2")
     assert cc["input_dim"] == 24
     assert cc["embed_dim"] == 32
     assert cc["val_auc"] >= 0.90
@@ -166,6 +190,11 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
         net.mix_fc1.bias.copy_(torch.tensor(cc["mix_b1"], dtype=torch.float32))
         net.mix_fc2.weight.copy_(torch.tensor(cc["mix_w2"], dtype=torch.float32))
         net.mix_fc2.bias.copy_(torch.tensor(cc["mix_b2"], dtype=torch.float32))
+        if cc["format"] == "cell_compat_v2":
+            net.arr_fc1.weight.copy_(torch.tensor(cc["arr_w1"], dtype=torch.float32))
+            net.arr_fc1.bias.copy_(torch.tensor(cc["arr_b1"], dtype=torch.float32))
+            net.arr_fc2.weight.copy_(torch.tensor(cc["arr_w2"], dtype=torch.float32))
+            net.arr_fc2.bias.copy_(torch.tensor(cc["arr_b2"], dtype=torch.float32))
     net.eval()
 
     drum_m = set_to_onset_bits([0, 4, 8, 12])
@@ -195,6 +224,32 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
     assert probs[0] > probs[1]
     assert probs[0] > 0.65 and probs[1] < 0.35
 
+    if cc["format"] == "cell_compat_v2":
+        assert cc["arr_val_auc"] >= 0.85
+        assert cc["tracks_mined"] >= 1500
+        assert cc["essential_slices_mined"] > 10000
+        assert len(cc["arr_w1"]) == 48 and len(cc["arr_w1"][0]) == 72
+
+        prev_v = torch.tensor(
+            build_cell_feature_vector("other", 0.82, other_good_m, 0, "minor", 0, "minor", False, False, "AAAB"),
+            dtype=torch.float32,
+        ).unsqueeze(0)
+        good_next = torch.tensor(
+            build_cell_feature_vector("other", 0.80, other_good_m, 7, "minor", 0, "minor", False, False, "AAAB"),
+            dtype=torch.float32,
+        ).unsqueeze(0)
+        dead_next = torch.tensor(
+            build_cell_feature_vector("other", 0.04, 0, -1, "major", 6, "minor", False, False, "ABCD"),
+            dtype=torch.float32,
+        ).unsqueeze(0)
+        ctx_good = torch.from_numpy(_build_arr_ctx(1, False, 0.85, 0.82, 0.82, 0.80)).unsqueeze(0)
+        ctx_bad = torch.from_numpy(_build_arr_ctx(1, False, 0.85, 0.05, 0.82, 0.04)).unsqueeze(0)
+        with torch.no_grad():
+            p_good = float(torch.sigmoid(net.forward_transition(prev_v, good_next, ctx_good)).item())
+            p_bad = float(torch.sigmoid(net.forward_transition(prev_v, dead_next, ctx_bad)).item())
+        assert p_good > 0.65 and p_bad < 0.35
+        assert p_good > p_bad + 0.35
+
 
 def test_server_cells_routes() -> None:
     client = TestClient(app)
@@ -207,3 +262,135 @@ def test_server_cells_routes() -> None:
 
     bad = client.get("/api/cells/slice/nonexistent_track/invalidstem.wav")
     assert bad.status_code == 400
+
+
+def test_essential_slices_reconstitution_and_mining() -> None:
+    c_min = [1.0, 0.0, 0.0, 0.85, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.0]
+    g_min = [0.0] * 12
+    g_min[7] = 1.0
+    g_min[10] = 0.85
+    g_min[2] = 0.8
+    assert pitch_invariant_chroma_sim(c_min, g_min) > 0.80
+
+    beat = set_to_onset_bits([0, 4, 8, 12])
+    off = set_to_onset_bits([1, 5, 9, 13])
+    b_good = {"purity": 0.85, "mask": beat, "root": 0, "qual": "minor", "chroma": c_min}
+    b_copy = {"purity": 0.80, "mask": beat, "root": 7, "qual": "minor", "chroma": g_min}
+    b_mud = {"purity": 0.04, "mask": 0, "root": -1, "qual": "mono", "chroma": [0.0] * 12}
+    assert bar_reconstitution_similarity(b_good, b_copy, "other") > bar_reconstitution_similarity(b_mud, b_good, "other")
+
+    # Build a 12-bar synthetic song with recurring groove (bars 0..2,4..6,8..10) + turnaround fills (3,7,11)
+    drums = []
+    other = []
+    bass = []
+    vocals = []
+    fill_m = set_to_onset_bits([0, 2, 4, 6, 8, 10, 12, 13, 14, 15])
+    for b in range(12):
+        is_t = (b % 4) == 3
+        drums.append({
+            "bar_in_phrase": b % 4,
+            "section": "DROP" if b >= 4 else "GROOVE_A",
+            "purity": 0.85,
+            "mask": fill_m if is_t else beat,
+            "root": -1,
+            "qual": "perc",
+            "is_fill": is_t,
+            "is_hook": False,
+        })
+        other.append({
+            "bar_in_phrase": b % 4,
+            "section": "DROP" if b >= 4 else "GROOVE_A",
+            "purity": 0.82 if not is_t else 0.72,
+            "mask": beat,
+            "root": 0 if b < 8 else 7,
+            "qual": "minor",
+            "chroma": c_min if b < 8 else g_min,
+            "is_fill": False,
+            "is_hook": False,
+        })
+        bass.append({
+            "bar_in_phrase": b % 4,
+            "section": "DROP" if b >= 4 else "GROOVE_A",
+            "purity": 0.80,
+            "mask": beat if (b % 2 == 0) else off,
+            "root": 0,
+            "qual": "mono",
+            "is_fill": False,
+            "is_hook": False,
+        })
+        vocals.append({
+            "bar_in_phrase": b % 4,
+            "section": "DROP" if b >= 4 else "GROOVE_A",
+            "purity": 0.78 if b >= 4 else 0.05,
+            "mask": beat if b >= 4 else 0,
+            "root": 0 if b >= 4 else -1,
+            "qual": "mono",
+            "is_fill": False,
+            "is_hook": b >= 4 and (b % 2 == 0),
+        })
+
+    sel = select_essential_slices_for_song(
+        {"drums": drums, "bass": bass, "other": other, "vocals": vocals},
+        max_codebook_per_stem=5,
+    )
+    assert sel["mean_fidelity"] >= 0.85
+    assert sel["stems"]["drums"]["roles"][3] == "T"
+    assert any(r == "H" for r in sel["stems"]["vocals"]["roles"][4:])
+    # Silent vocal intro scores far below active hook bars
+    assert max(sel["stems"]["vocals"]["essential_scores"][4:]) > max(sel["stems"]["vocals"]["essential_scores"][:4]) + 0.3
+
+    # Test single-stem & 4-stem processed JSON mining
+    tatums = []
+    segs = []
+    for t in range(128):  # 8 bars at 120 BPM (bar=2.0s, tatum=0.125s)
+        start = t * 0.125
+        sid_d = f"sd_{t}"
+        sid_o = f"so_{t}"
+        segs.append({
+            "id": sid_d,
+            "stem": "drums",
+            "start": start,
+            "duration": 0.12,
+            "is_silent": False,
+            "loudness_start": -40.0,
+            "loudness_max": -12.0 if t % 4 == 0 else -22.0,
+            "pitches": [0.5] * 12,
+            "timbre": [50.0, 0.0, 0.0, 20.0],
+            "spectral_centroid": 4800.0,
+        })
+        segs.append({
+            "id": sid_o,
+            "stem": "other",
+            "start": start,
+            "duration": 0.35,
+            "is_silent": False,
+            "loudness_start": -36.0,
+            "loudness_max": -14.0,
+            "pitches": c_min,
+            "timbre": [50.0, 0.0, 0.0, 0.0],
+            "spectral_centroid": 1200.0,
+        })
+        tatums.append({
+            "start": start,
+            "duration": 0.125,
+            "stem_segments": {"drums": [sid_d], "bass": [sid_o], "other": [sid_o], "vocals": [sid_o]},
+        })
+
+    doc_4 = {
+        "track_id": "test_4s",
+        "bpm": 120.0,
+        "key": "C minor",
+        "duration": 16.0,
+        "stems_available": ["drums", "bass", "other", "vocals"],
+        "tatums": tatums,
+        "segments": segs,
+    }
+    mined_4 = mine_processed_track_essential_bars(doc_4, max_bars=16)
+    assert mined_4["is_4stem"] is True
+    assert len(mined_4["bar_quartets"]) == 8
+    assert mined_4["essential"]["mean_fidelity"] >= 0.8
+
+    doc_1 = dict(doc_4, track_id="test_1s", stems_available=["other"])
+    mined_1 = mine_processed_track_essential_bars(doc_1, max_bars=16)
+    assert mined_1["is_4stem"] is False
+    assert len(mined_1["bar_quartets"]) >= 1

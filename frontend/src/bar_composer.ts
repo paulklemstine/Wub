@@ -21,6 +21,7 @@ import { PitchAutomationPoint } from "./stretch_voice";
 import {
   CellIndexData,
   CellStemMeta,
+  EssentialRole,
   MotifSchema,
   ProgressionChord,
   StemName,
@@ -77,6 +78,17 @@ interface SelectedCell<TEntry extends ComposingPoolEntry> {
   onsetMask: number;
   quality: TriadQuality;
   meta: CellStemMeta;
+  essentialScore: number;
+  essentialRole: EssentialRole;
+}
+
+interface PrevBarTransitionContext {
+  meta: CellStemMeta;
+  srcBar: number;
+  semitones: number;
+  quality: TriadQuality;
+  role: EssentialRole;
+  section: string;
 }
 
 const SCHEMAS: readonly MotifSchema[] = ["AAAB", "ABAB", "ABAC", "AABB"];
@@ -84,6 +96,7 @@ const SCHEMAS: readonly MotifSchema[] = ["AAAB", "ABAB", "ABAC", "AABB"];
 export class BarComposer {
   private index: CellIndexData | null = null;
   private loaded = false;
+  private lastBlockTail: Partial<Record<StemName, PrevBarTransitionContext>> = {};
 
   isReady(): boolean {
     return this.loaded && this.index !== null;
@@ -98,7 +111,11 @@ export class BarComposer {
       const resp = await fetch(url);
       if (!resp.ok) return false;
       const raw = (await resp.json()) as Partial<CellIndexData>;
-      if (!raw || raw.format !== "cell_index_v1" || !raw.phrases) {
+      if (
+        !raw ||
+        (raw.format !== "cell_index_v1" && raw.format !== "cell_index_v2") ||
+        !raw.phrases
+      ) {
         return false;
       }
       this.index = raw as CellIndexData;
@@ -165,7 +182,8 @@ export class BarComposer {
       const avgP = (meta.p[0] + meta.p[1] + meta.p[2] + meta.p[3]) / 4;
       if (avgP < 0.2) continue;
 
-      let s = avgP * 0.6;
+      const essMax = meta.es ? Math.max(...meta.es) : avgP;
+      let s = avgP * 0.50 + essMax * 0.30 + (meta.fid ?? 0.65) * 0.12;
       let strat: ComposedStemPlan<TEntry>["vocalStrategy"] = "section_role";
 
       if (ctx.isBuildup) {
@@ -214,7 +232,8 @@ export class BarComposer {
       const maxBarP = Math.max(meta.p[0], meta.p[1], meta.p[2], meta.p[3]);
       if (maxBarP < 0.25) continue;
 
-      let s = maxBarP * 0.7 - Math.abs(cand.rate - rateRef) * 4.0;
+      const maxBarEs = meta.es ? Math.max(...meta.es) : maxBarP;
+      let s = maxBarP * 0.55 + maxBarEs * 0.35 + (meta.fid ?? 0.65) * 0.12 - Math.abs(cand.rate - rateRef) * 4.0;
       if (!forbiddenTracks.has(cand.kit.track_id)) s += 0.35;
       if (cand.section.toUpperCase() === ctx.kitSection) s += 0.12;
       if (stem === "drums" && meta.fill) s += 0.18;
@@ -237,6 +256,11 @@ export class BarComposer {
     drumMaskHint: number | null,
     otherOrVocalMaskHint: number | null,
     preferFill: boolean,
+    prevContext?: PrevBarTransitionContext,
+    barPos?: number,
+    isSectionBoundary?: boolean,
+    desiredRole?: EssentialRole,
+    compatScorer?: CellCompatScorer,
   ): SelectedCell<TEntry> {
     const entry = donors[itemIdx];
     const meta = this.getPhraseMeta(entry.phrase.id, stem) ?? {
@@ -250,12 +274,15 @@ export class BarComposer {
     let bestBar = 0;
     let bestScore = -999;
     let bestShift = entry.keyShift;
+    const roleTransitions = this.index?.essential_role_transitions;
 
     for (let b = 0; b < 4; b++) {
       const pur = meta.p[b] ?? 0;
       const mask = meta.o[b] ?? 0;
       const root = meta.r[b] ?? -1;
       const qual = meta.q[b] ?? (stem === "drums" ? "perc" : "mono");
+      const ess = meta.es?.[b] ?? pur;
+      const role: EssentialRole = meta.er?.[b] ?? (preferFill && b === 3 ? "T" : "A");
 
       const { semitones, penalty } = solveCellPitchShift(
         stem,
@@ -268,8 +295,17 @@ export class BarComposer {
         true,
       );
 
-      let score = pur * 0.85 - penalty * 1.15 - Math.abs(semitones) * 0.015;
+      let score =
+        pur * 0.75 +
+        ess * 0.38 +
+        (meta.fid ?? 0.65) * 0.08 -
+        penalty * 1.15 -
+        Math.abs(semitones) * 0.015;
       if (pur < 0.15) score -= 0.8; // Strongly avoid dead/silent bar cells
+      if (desiredRole && role === desiredRole) score += 0.14;
+      if (prevContext && roleTransitions?.[prevContext.role]?.[role] !== undefined) {
+        score += 0.24 * (roleTransitions[prevContext.role][role] - 0.25);
+      }
 
       if (stem === "drums") {
         const dense = popcount16(mask) / 16;
@@ -285,6 +321,28 @@ export class BarComposer {
         if (otherOrVocalMaskHint !== null) {
           score += 0.25 * scoreSynthVocalUnmasking(otherOrVocalMaskHint, mask);
         }
+      }
+
+      if (prevContext && compatScorer?.hasArrangementHead()) {
+        const arrProb = compatScorer.scoreTransition({
+          prev: {
+            stem,
+            meta: prevContext.meta,
+            barIdx: prevContext.srcBar,
+            semitonesShift: prevContext.semitones,
+            targetQuality: chord.quality,
+          },
+          next: {
+            stem,
+            meta,
+            barIdx: b,
+            semitonesShift: semitones,
+            targetQuality: chord.quality,
+          },
+          barPos: barPos ?? b,
+          isSectionBoundary: Boolean(isSectionBoundary),
+        });
+        score += 0.45 * (arrProb - 0.5);
       }
 
       if (score > bestScore) {
@@ -303,6 +361,8 @@ export class BarComposer {
       onsetMask: meta.o[bestBar] ?? 0,
       quality: meta.q[bestBar] ?? (stem === "drums" ? "perc" : "mono"),
       meta,
+      essentialScore: meta.es?.[bestBar] ?? (meta.p[bestBar] ?? 0.5),
+      essentialRole: meta.er?.[bestBar] ?? (preferFill && bestBar === 3 ? "T" : "A"),
     };
   }
 
@@ -426,6 +486,27 @@ export class BarComposer {
         const chord = sectionCtx.progression[m] ?? sectionCtx.progression[0];
         const slot = cycleSlots[m];
         const letter = schema[m];
+        const prevCell = selectedBars[b - 1];
+        const prevCtx: PrevBarTransitionContext | undefined = prevCell
+          ? {
+              meta: prevCell.meta,
+              srcBar: prevCell.srcBar,
+              semitones: prevCell.semitones,
+              quality: prevCell.quality,
+              role: prevCell.essentialRole,
+              section: sectionCtx.kitSection,
+            }
+          : this.lastBlockTail[stem];
+        const isSecBound = b === 0 && Boolean(prevCtx && prevCtx.section !== sectionCtx.kitSection);
+        const desiredRole: EssentialRole =
+          slot.preferFill || (m === 3 && blockBars >= 4)
+            ? "T"
+            : ctxIsChorus(sectionCtx) && (stem === "vocals" || stem === "other") && slot.donorIdx === 0
+              ? "H"
+              : letter === "A"
+                ? "A"
+                : "B";
+
         const cacheKey = `${letter}_${slot.donorIdx}`;
         let cell = motifCellCache.get(cacheKey);
         if (!cell) {
@@ -438,6 +519,11 @@ export class BarComposer {
             stem === "bass" ? (barDrumMasks[b] ?? null) : null,
             stem === "other" ? (barVocalMasks[b] ?? null) : null,
             slot.preferFill,
+            prevCtx,
+            m,
+            isSecBound,
+            desiredRole,
+            compatScorer,
           );
           motifCellCache.set(cacheKey, cell);
         } else {
@@ -552,9 +638,74 @@ export class BarComposer {
       }
 
       barSelectedCells[stem] = selectedBars;
+      const tailCell = selectedBars[selectedBars.length - 1];
+      const incomingBoundary = Boolean(
+        this.lastBlockTail[stem] && this.lastBlockTail[stem]!.section !== sectionCtx.kitSection,
+      );
+
+      let arrScoreSum = 0;
+      let arrCount = 0;
+      if (compatScorer?.hasArrangementHead() && selectedBars.length > 0) {
+        if (this.lastBlockTail[stem]) {
+          arrScoreSum += compatScorer.scoreTransition({
+            prev: {
+              stem,
+              meta: this.lastBlockTail[stem]!.meta,
+              barIdx: this.lastBlockTail[stem]!.srcBar,
+              semitonesShift: this.lastBlockTail[stem]!.semitones,
+              targetQuality: sectionCtx.progression[0]?.quality ?? "minor",
+            },
+            next: {
+              stem,
+              meta: selectedBars[0].meta,
+              barIdx: selectedBars[0].srcBar,
+              semitonesShift: selectedBars[0].semitones,
+              targetQuality: sectionCtx.progression[0]?.quality ?? "minor",
+            },
+            barPos: 0,
+            isSectionBoundary: incomingBoundary,
+          });
+          arrCount++;
+        }
+        for (let b = 1; b < selectedBars.length; b++) {
+          const ch = sectionCtx.progression[b % 4] ?? sectionCtx.progression[0];
+          arrScoreSum += compatScorer.scoreTransition({
+            prev: {
+              stem,
+              meta: selectedBars[b - 1].meta,
+              barIdx: selectedBars[b - 1].srcBar,
+              semitonesShift: selectedBars[b - 1].semitones,
+              targetQuality: ch.quality,
+            },
+            next: {
+              stem,
+              meta: selectedBars[b].meta,
+              barIdx: selectedBars[b].srcBar,
+              semitonesShift: selectedBars[b].semitones,
+              targetQuality: ch.quality,
+            },
+            barPos: b % 4,
+            isSectionBoundary: false,
+          });
+          arrCount++;
+        }
+      }
+      if (tailCell) {
+        this.lastBlockTail[stem] = {
+          meta: tailCell.meta,
+          srcBar: tailCell.srcBar,
+          semitones: tailCell.semitones,
+          quality: tailCell.quality,
+          role: tailCell.essentialRole,
+          section: sectionCtx.kitSection,
+        };
+      }
 
       const purities = selectedBars.map((c) => c.purity);
       const meanPurity = purities.reduce((a, b) => a + b, 0) / Math.max(1, purities.length);
+      const meanEss =
+        selectedBars.reduce((a, b) => a + b.essentialScore, 0) / Math.max(1, selectedBars.length);
+      const meanArr = arrCount > 0 ? arrScoreSum / arrCount : meanEss;
       let extraTheory = 0;
       if (stem === "bass" && barSelectedCells.drums.length > 0) {
         let pSum = 0;
@@ -569,7 +720,7 @@ export class BarComposer {
         }
         extraTheory = uSum / selectedBars.length;
       } else {
-        extraTheory = meanPurity;
+        extraTheory = 0.6 * meanPurity + 0.4 * meanEss;
       }
 
       const donorTrackIds = Array.from(new Set(donors.map((d) => d.kit.track_id)));
@@ -581,7 +732,7 @@ export class BarComposer {
         pitchPoints,
         motifSchema: schema,
         vocalStrategy,
-        theoryScore: Math.max(0, Math.min(1, 0.55 * meanPurity + 0.45 * extraTheory)),
+        theoryScore: Math.max(0, Math.min(1, 0.42 * meanPurity + 0.36 * extraTheory + 0.22 * meanArr)),
         donorTrackIds,
       };
     }

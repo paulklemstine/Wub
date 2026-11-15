@@ -37,6 +37,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from wub_core.essential_slices import (  # noqa: E402
+    ESSENTIAL_ROLES,
+    mine_processed_track_essential_bars,
+    select_essential_slices_for_song,
+)
 from wub_core.motif_miner import (  # noqa: E402
     classify_motif_schema,
     classify_vocal_role,
@@ -214,8 +219,14 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
     kit_results: Dict[str, Dict[str, Any]] = {}
     section_schema_samples: List[Tuple[str, str, str, float]] = []
     chord_seqs: List[Tuple[List[Tuple[int, str]], float]] = []
+    kit_bars_by_stem: Dict[str, List[Dict[str, Any]]] = {s: [] for s in STEMS}
 
-    for phrase in kit.get("phrases", []):
+    sorted_phrases = sorted(
+        kit.get("phrases", []),
+        key=lambda p: (int(p.get("start_bar", 0)), str(p.get("id", ""))),
+    )
+
+    for p_idx, phrase in enumerate(sorted_phrases):
         pid = phrase["id"]
         section = (phrase.get("section") or "GROOVE_A").upper()
         start_bar = int(phrase.get("start_bar", 0))
@@ -259,6 +270,7 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
             bar_qualities: List[str] = []
             bar_purities: List[float] = []
             bar_vectors: List[List[float]] = []
+            bar_chromas: List[List[float]] = []
             centroids: List[float] = []
 
             ref_rms = max(float(np.sqrt(np.mean(bars_audio ** 2) + 1e-12)) if bars_audio is not None else 10 ** (rms_db / 20.0), 1e-5)
@@ -280,6 +292,7 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
                     purity = score_cell_purity(stem, b_rms_db, b_peak, [0.0] * 12, bar_counts[b])
                     bar_purities.append(round(purity, 2))
                     bar_vectors.append(step_vec + [bar_energies[b], bar_counts[b] / 16.0])
+                    bar_chromas.append([0.0] * 12)
                 else:
                     if bars_audio is not None:
                         mode = "bass" if stem == "bass" else "tonal"
@@ -316,6 +329,7 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
                     c_tot = sum(chroma) or 1.0
                     norm_c = [float(x) / c_tot for x in chroma]
                     bar_vectors.append(step_vec + norm_c)
+                    bar_chromas.append(norm_c)
 
                     # Vote toward bar chord progression (`other` weighted more for harmony quality, `bass` for root)
                     if r_pc >= 0 and purity >= 0.30:
@@ -358,6 +372,20 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
                 entry["cb"] = int(vrole["best_chop_bar"])
                 entry["vow"] = vowel
 
+            # Record chronological bars for whole-kit submodular essential-slice reconstitution
+            for b in range(4):
+                kit_bars_by_stem[stem].append({
+                    "bar_in_phrase": b,
+                    "section": section,
+                    "purity": float(bar_purities[b]),
+                    "mask": int(bar_masks[b]),
+                    "root": int(bar_roots[b]),
+                    "qual": str(bar_qualities[b]),
+                    "chroma": bar_chromas[b],
+                    "is_fill": bool(stem == "drums" and entry.get("fill") and b == 3),
+                    "is_hook": bool(stem == "vocals" and entry.get("hook") and bar_purities[b] >= 0.38),
+                })
+
             phrase_out[stem] = entry
             mean_pur = sum(bar_purities) / 4.0
             if mean_pur >= 0.25:
@@ -371,13 +399,41 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
             avg_w = sum(v[2] for v in bar_chord_votes) / 4.0
             chord_seqs.append((rel_prog, avg_w))
 
+    # Run whole-kit essential slice selection so every phrase/bar gets `es`, `er`, `fid`
+    essential_info = select_essential_slices_for_song(kit_bars_by_stem, max_codebook_per_stem=8)
+    for p_idx, phrase in enumerate(sorted_phrases):
+        pid = phrase["id"]
+        b0 = p_idx * 4
+        b1 = b0 + 4
+        for stem in STEMS:
+            st_ess = essential_info["stems"][stem]
+            entry = kit_results[pid][stem]
+            entry["es"] = st_ess["essential_scores"][b0:b1]
+            entry["er"] = st_ess["roles"][b0:b1]
+            entry["fid"] = round(float(st_ess["fidelity"]), 3)
+
     return {
         "style": style,
         "mode": key_mode,
         "phrases": kit_results,
         "schema_samples": section_schema_samples,
         "chord_seqs": chord_seqs,
+        "mean_fidelity": float(essential_info["mean_fidelity"]),
+        "role_transitions": essential_info["role_transitions"],
     }
+
+
+def _mine_proc_grammar_worker(pfile_str: str) -> Optional[Tuple[bool, float, Dict[str, Dict[str, int]]]]:
+    try:
+        with open(pfile_str, "r") as f:
+            td = json.load(f)
+        mined = mine_processed_track_essential_bars(td, max_bars=64)
+        ess = mined.get("essential") or {}
+        mf = float(ess.get("mean_fidelity", 0.0))
+        rt = ess.get("role_transitions") or {}
+        return bool(mined.get("is_4stem")), mf, rt
+    except Exception:
+        return None
 
 
 def _aggregate_progressions(
@@ -475,6 +531,10 @@ def main() -> None:
     phrases_out: Dict[str, Dict[str, Any]] = {}
     all_schema_samples: List[Tuple[str, str, str, float]] = []
     raw_progs: Dict[Tuple[str, str], List[Tuple[List[Tuple[int, str]], float]]] = defaultdict(list)
+    kit_fidelities: List[float] = []
+    role_trans_counts: Dict[str, Dict[str, float]] = {
+        r: {r2: 0.0 for r2 in ESSENTIAL_ROLES} for r in ESSENTIAL_ROLES
+    }
 
     workers = max(1, int(args.workers))
     print(f"Indexing {len(tasks)} kits across {workers} workers...")
@@ -486,15 +546,60 @@ def main() -> None:
             phrases_out.update(res["phrases"])
             all_schema_samples.extend(res["schema_samples"])
             raw_progs[(res["style"], res["mode"])].extend(res["chord_seqs"])
+            kit_fidelities.append(float(res.get("mean_fidelity", 0.0)))
+            rt = res.get("role_transitions") or {}
+            for r1 in ESSENTIAL_ROLES:
+                for r2 in ESSENTIAL_ROLES:
+                    role_trans_counts[r1][r2] += float((rt.get(r1) or {}).get(r2, 0.0))
             done_cnt += 1
             if done_cnt % 60 == 0 or done_cnt == len(tasks):
                 print(f"  [{done_cnt}/{len(tasks)}] phrases indexed={len(phrases_out)} ({time.time()-t0:.1f}s)")
 
+    # Also mine processed corpus tracks in parallel to enrich the compressed role grammar if present
+    proc_fidelities: List[float] = []
+    if args.processed_dir.exists():
+        proc_files = sorted(args.processed_dir.glob("*.json"))
+        if proc_files:
+            print(f"Mining essential slice grammar across {len(proc_files)} processed tracks ({workers} workers)...")
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                futs = [pool.submit(_mine_proc_grammar_worker, str(pf)) for pf in proc_files]
+                p_done = 0
+                for fut in as_completed(futs):
+                    p_done += 1
+                    res_p = fut.result()
+                    if res_p is not None:
+                        is_4s, mf, rt = res_p
+                        if mf > 0.0:
+                            proc_fidelities.append(mf)
+                        w = 1.5 if is_4s else 0.75
+                        for r1 in ESSENTIAL_ROLES:
+                            row_rt = rt.get(r1) or {}
+                            for r2 in ESSENTIAL_ROLES:
+                                role_trans_counts[r1][r2] += w * float(row_rt.get(r2, 0.0))
+                    if p_done % 400 == 0 or p_done == len(proc_files):
+                        print(f"  processed grammar [{p_done}/{len(proc_files)}] ({time.time()-t0:.1f}s)")
+
+    role_trans_probs: Dict[str, Dict[str, float]] = {}
+    for r1 in ESSENTIAL_ROLES:
+        tot_r1 = sum(role_trans_counts[r1].values())
+        if tot_r1 > 0.0:
+            role_trans_probs[r1] = {
+                r2: round(role_trans_counts[r1][r2] / tot_r1, 4) for r2 in ESSENTIAL_ROLES
+            }
+        else:
+            role_trans_probs[r1] = {r2: round(1.0 / len(ESSENTIAL_ROLES), 4) for r2 in ESSENTIAL_ROLES}
+
+    mean_kit_fid = sum(kit_fidelities) / len(kit_fidelities) if kit_fidelities else 0.0
+    mean_proc_fid = sum(proc_fidelities) / len(proc_fidelities) if proc_fidelities else mean_kit_fid
+
     payload = {
-        "version": 1,
-        "format": "cell_index_v1",
+        "version": 2,
+        "format": "cell_index_v2",
         "count": len(phrases_out),
         "stem_names": list(STEMS),
+        "mean_reconstitution_fidelity": round(mean_kit_fid, 4),
+        "corpus_reconstitution_fidelity": round(mean_proc_fid, 4),
+        "essential_role_transitions": role_trans_probs,
         "style_progressions": _aggregate_progressions(raw_progs),
         "section_motif_priors": _aggregate_motif_priors(all_schema_samples),
         "phrases": phrases_out,

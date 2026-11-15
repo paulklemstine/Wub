@@ -223,7 +223,9 @@ def test_shipped_singing_head_model_and_responses() -> None:
     assert data["corpus_stats"]["stubs_used"] >= 2000
     assert data["corpus_stats"]["stems_used"] >= 1500
     assert data["corpus_stats"]["physics_forward_r2"] > 0.65
-    assert data["corpus_stats"]["physics_cycle_r2"] > 0.12
+    assert data["corpus_stats"]["physics_cycle_r2"] > 0.40
+    assert data["corpus_stats"].get("roundtrip_env_corr", 0.0) > 0.80
+    assert data["corpus_stats"].get("roundtrip_feat_r2", 0.0) > 0.50
 
     for key in ("w1", "b1", "w2", "b2", "w3", "b3"):
         arr = np.array(data["weights"][key], dtype=np.float64)
@@ -245,7 +247,9 @@ def test_shipped_singing_head_model_and_responses() -> None:
     from scripts.generate_tract_soundbank import _node_compile_and_sample, synthesize_soundbank
 
     art_14, areas_44, dx, lip_area, min_area, min_idx_norm = _node_compile_and_sample(128)
-    _, sim_feats, _, _ = synthesize_soundbank(
+    from scripts.train_singing_head import _norm_tract_np
+
+    sim_art, sim_feats, _, _ = synthesize_soundbank(
         art_14,
         areas_44,
         dx,
@@ -267,6 +271,12 @@ def test_shipped_singing_head_model_and_responses() -> None:
     assert float(np.std(pred_tracts_arr[:, idx_of["jaw"]])) > 0.03
     assert float(np.std(pred_tracts_arr[:, idx_of["tongueX"]])) > 0.04
     assert float(np.std(pred_tracts_arr[:, idx_of["lipOpen"]])) > 0.03
+    # Verify roundtrip parameter correlation against true simulator tract postures
+    true_n = _norm_tract_np(sim_art)
+    pred_n = _norm_tract_np(pred_tracts_arr)
+    assert float(np.corrcoef(true_n[:, idx_of["tongueX"]], pred_n[:, idx_of["tongueX"]])[0, 1]) > 0.65
+    assert float(np.corrcoef(true_n[:, idx_of["jaw"]], pred_n[:, idx_of["jaw"]])[0, 1]) > 0.45
+    assert float(np.corrcoef(true_n[:, idx_of["lipOpen"]], pred_n[:, idx_of["lipOpen"]])[0, 1]) > 0.45
 
     # 3. Real playing song vocal stubs produce clear mouth articulation AND smooth non-jittery trajectories
     stub_paths = sorted((ROOT / "frontend/public/data/kits/kits").glob("*/*_vocals.opus"))
@@ -456,6 +466,8 @@ def test_python_typescript_14d_parity(tmp_path: Path) -> None:
             "--outDir",
             str(out_dir),
             str(ROOT / "frontend/src/singing_head_model.ts"),
+            str(ROOT / "frontend/src/vocal_sim/articulation_bridge.ts"),
+            str(ROOT / "frontend/src/vocal_sim/tract_synth.ts"),
         ],
         check=True,
     )
@@ -487,13 +499,19 @@ def test_python_typescript_14d_parity(tmp_path: Path) -> None:
     node_script = """
     const fs = require('fs');
     const mod = require(process.env.OUT + '/singing_head_model.js');
+    const bridge = require(process.env.OUT + '/vocal_sim/articulation_bridge.js');
+    const geomMod = require(process.env.OUT + '/vocal_sim/tract/geometry.js');
+    const synthMod = require(process.env.OUT + '/vocal_sim/tract_synth.js');
     const types = require(process.env.OUT + '/vocal_sim/tract/types.js');
     const model = JSON.parse(fs.readFileSync(process.env.MODEL, 'utf8'));
     if (!mod.isValidSingingHeadModel(model)) throw new Error('isValidSingingHeadModel rejected v2');
     const probes = JSON.parse(fs.readFileSync(process.env.PROBES, 'utf8'));
     const inf = new mod.SingingHeadInference();
     inf.setModel(model);
+    const an = bridge.defaultAnatomy();
+    const teeth = bridge.defaultTeeth();
     const out = {};
+    const acOut = {};
     for (const [name, arr] of Object.entries(probes)) {
       inf.resetFluxHistory();
       const pred = inf.infer(Float32Array.from(arr), 44100);
@@ -502,7 +520,15 @@ def test_python_typescript_14d_parity(tmp_path: Path) -> None:
         vowelProbs: Array.from(pred.vowelProbs),
         tract: types.ARTICULATOR_KEYS.map((k) => pred.tract[k]),
       };
+      const tArt = bridge.articulationToTract(pred, 0.0, { ...types.DEFAULT_ARTICULATORS });
+      const geom = geomMod.computeGeometry(tArt, an, teeth);
+      const ac = synthMod.evaluateTractAcoustics(tArt, geom);
+      acOut[name] = { f0Hz: pred.f0Hz, f1: ac.formantHz[0], f2: ac.formantHz[1], openDrive: ac.openDrive, fricGain: ac.fricGain };
     }
+    if (!(acOut.ah.openDrive > acOut.oo.openDrive)) throw new Error('Roundtrip openDrive mismatch: ' + JSON.stringify(acOut));
+    if (!(acOut.ah.f1 > acOut.ee.f1)) throw new Error('Roundtrip AH vs EE F1 mismatch: ' + JSON.stringify(acOut));
+    if (!(acOut.ee.f2 > acOut.oo.f2)) throw new Error('Roundtrip EE vs OO F2 mismatch: ' + JSON.stringify(acOut));
+    if (!(Math.abs(acOut.ah.f0Hz - 220) < 6 && Math.abs(acOut.oo.f0Hz - 160) < 6)) throw new Error('Roundtrip F0 tracking mismatch: ' + JSON.stringify(acOut));
     console.log(JSON.stringify(out));
     """
     env = {

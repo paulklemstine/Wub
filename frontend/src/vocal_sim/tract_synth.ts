@@ -516,14 +516,14 @@ export class VocalTractSynthesizer {
       return profile;
     }
 
-    // Track fundamental pitch f0Hz from song vocals + larynx shift
+    // Track fundamental pitch f0Hz 1:1 from song vocals on voiced frames (larynx still shapes tract length)
     const larynxShift = Math.pow(2, (tractArt.larynx * 2.2) / 12.0);
-    if (art.f0Hz > 65 && art.voicing > 0.22) {
-      const targetF0 = clamp(art.f0Hz * (0.88 + 0.12 * larynxShift), 75, 780);
-      this.smoothedF0 += (targetF0 - this.smoothedF0) * 0.38;
+    if (art.f0Hz > 65 && art.voicing > 0.20) {
+      const targetF0 = clamp(art.f0Hz, 70, 820);
+      this.smoothedF0 += (targetF0 - this.smoothedF0) * 0.58;
     } else {
       const fallbackF0 = clamp((130 + art.pitchNorm * 190) * larynxShift, 85, 520);
-      this.smoothedF0 += (fallbackF0 - this.smoothedF0) * 0.15;
+      this.smoothedF0 += (fallbackF0 - this.smoothedF0) * 0.20;
     }
 
     if (this.glottalOsc && this.subOsc) {
@@ -538,12 +538,13 @@ export class VocalTractSynthesizer {
       this.vibratoGain.gain.setTargetAtTime(vibHz, t, 0.025);
     }
 
-    // Glottal spectral tilt (brighter harmonics when jaw/mouth is belted open)
+    // Glottal spectral tilt (tracked from sung track spectral centroid + mouth opening + tension)
     if (this.tiltFilter) {
+      const centroidDrive = clamp(((art.centroidHz || 1400) - 600) / 3200, 0, 1);
       const cutoffHz = clamp(
-        1150 + 2850 * profile.openDrive + 1400 * clamp(art.tension, 0, 1),
-        900,
-        5800
+        950 + 2100 * profile.openDrive + 1450 * centroidDrive + 950 * clamp(art.tension, 0, 1),
+        850,
+        6400
       );
       this.tiltFilter.frequency.setTargetAtTime(cutoffHz, t, tau);
     }
@@ -607,7 +608,7 @@ export class VocalTractSynthesizer {
     }
 
     // Overall vocal output gain matched to the song's vocal track RMS + mouth opening radiation
-    this.smoothedRms += (art.rms - this.smoothedRms) * 0.42;
+    this.smoothedRms += (art.rms - this.smoothedRms) * 0.55;
     const radScale = 0.55 + 0.65 * Math.sqrt(profile.openDrive);
     const outGain = clamp(this.smoothedRms * 2.35 * radScale, 0.0, 1.35);
     this.outputNode.gain.setTargetAtTime(outGain, t, 0.014);

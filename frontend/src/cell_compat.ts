@@ -28,6 +28,17 @@ export interface CellCompatModelWeights {
   mix_b1: number[];   // [64]
   mix_w2: number[][]; // [1][64]
   mix_b2: number[];   // [1]
+  arr_ctx_dim?: number;
+  arr_samples?: number;
+  arr_val_auc?: number;
+  arr_val_acc?: number;
+  essential_slices_mined?: number;
+  tracks_mined?: number;
+  mean_reconstitution_fidelity?: number;
+  arr_w1?: number[][]; // [48][72]
+  arr_b1?: number[];   // [48]
+  arr_w2?: number[][]; // [1][48]
+  arr_b2?: number[];   // [1]
 }
 
 export interface CellFeatureInput {
@@ -89,7 +100,7 @@ export function buildCellFeatureVector(input: CellFeatureInput): Float32Array {
   v[18] = thirdClashPenalty(qual, input.targetQuality);
   v[19] = root >= 0 ? 1 : 0;
   v[20] = m.hook ? 1 : 0;
-  v[21] = m.fill ? 1 : 0;
+  v[21] = m.fill && b === 3 ? 1 : 0;
   v[22] = m.s === "AAAB" || m.s === "ABAB" ? 1 : 0;
   v[23] = m.s === "AABB" || m.s === "ABAC" ? 1 : 0;
   return v;
@@ -103,6 +114,34 @@ export class CellCompatScorer {
     return this.loaded && this.weights !== null;
   }
 
+  hasArrangementHead(): boolean {
+    const w = this.weights;
+    return Boolean(
+      this.loaded &&
+      w &&
+      Array.isArray(w.arr_w1) &&
+      Array.isArray(w.arr_b1) &&
+      Array.isArray(w.arr_w2) &&
+      Array.isArray(w.arr_b2),
+    );
+  }
+
+  getTrainingStats(): {
+    essentialSlicesMined: number;
+    tracksMined: number;
+    meanReconstitutionFidelity: number;
+    arrValAuc: number;
+  } | null {
+    const w = this.weights;
+    if (!w) return null;
+    return {
+      essentialSlicesMined: Number(w.essential_slices_mined ?? 0),
+      tracksMined: Number(w.tracks_mined ?? 0),
+      meanReconstitutionFidelity: Number(w.mean_reconstitution_fidelity ?? 0),
+      arrValAuc: Number(w.arr_val_auc ?? 0),
+    };
+  }
+
   async load(url = "/data/kits/cell_compat.json"): Promise<boolean> {
     try {
       const resp = await fetch(url);
@@ -110,7 +149,7 @@ export class CellCompatScorer {
       const raw = (await resp.json()) as Partial<CellCompatModelWeights>;
       if (
         !raw ||
-        raw.format !== "cell_compat_v1" ||
+        (raw.format !== "cell_compat_v1" && raw.format !== "cell_compat_v2") ||
         !Array.isArray(raw.enc_w1) ||
         !Array.isArray(raw.mix_w1)
       ) {
@@ -182,6 +221,58 @@ export class CellCompatScorer {
 
     let logit = w.mix_b2[0] ?? 0;
     const row2 = w.mix_w2[0];
+    for (let j = 0; j < h.length; j++) logit += row2[j] * h[j];
+    return sigmoid(logit);
+  }
+
+  /** Score horizontal slice-to-slice continuation at `barPos` (0..3) and section boundary. */
+  scoreTransition(args: {
+    prev: CellFeatureInput;
+    next: CellFeatureInput;
+    barPos: number;
+    isSectionBoundary: boolean;
+  }): number {
+    const w = this.weights;
+    if (!w) return 0.5;
+    const ePrev = this.encode(args.prev);
+    const eNext = this.encode(args.next);
+    if (!ePrev || !eNext) return 0.5;
+
+    if (!w.arr_w1 || !w.arr_b1 || !w.arr_w2 || !w.arr_b2) {
+      let dot = 0;
+      for (let i = 0; i < ePrev.length; i++) dot += ePrev[i] * eNext[i];
+      return Math.max(0, Math.min(1, 0.5 + 0.35 * dot));
+    }
+
+    const embedDim = ePrev.length;
+    const pBar = Math.max(0, Math.min(3, args.prev.barIdx));
+    const nBar = Math.max(0, Math.min(3, args.next.barIdx));
+    const prevEs = Math.max(0, Math.min(1, args.prev.meta.es?.[pBar] ?? args.prev.meta.p[pBar] ?? 0.5));
+    const nextEs = Math.max(0, Math.min(1, args.next.meta.es?.[nBar] ?? args.next.meta.p[nBar] ?? 0.5));
+    const prevPur = args.prev.meta.p[pBar] ?? 0.5;
+    const nextPur = args.next.meta.p[nBar] ?? 0.5;
+    const delta = Math.max(-1, Math.min(1, nextPur - prevPur));
+
+    const concat = new Float32Array(embedDim * 2 + 8);
+    concat.set(ePrev, 0);
+    concat.set(eNext, embedDim);
+    const bPos = ((args.barPos % 4) + 4) % 4;
+    concat[embedDim * 2 + bPos] = 1;
+    concat[embedDim * 2 + 4] = args.isSectionBoundary ? 1 : 0;
+    concat[embedDim * 2 + 5] = prevEs;
+    concat[embedDim * 2 + 6] = nextEs;
+    concat[embedDim * 2 + 7] = 0.5 + 0.5 * delta;
+
+    const h = new Float32Array(w.arr_w1.length);
+    for (let i = 0; i < w.arr_w1.length; i++) {
+      const row = w.arr_w1[i];
+      let sum = w.arr_b1[i] ?? 0;
+      for (let j = 0; j < concat.length; j++) sum += row[j] * concat[j];
+      h[i] = gelu(sum);
+    }
+
+    let logit = w.arr_b2[0] ?? 0;
+    const row2 = w.arr_w2[0];
     for (let j = 0; j < h.length; j++) logit += row2[j] * h[j];
     return sigmoid(logit);
   }

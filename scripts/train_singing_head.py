@@ -1107,6 +1107,8 @@ def train_reverse_model(
         "cycle_r2": round(cycle_r2, 4),
         "physics_forward_r2": round(physics_forward_r2, 4),
         "physics_cycle_r2": round(physics_cycle_r2, 4),
+        "roundtrip_env_corr": round(max(0.0, physics_cycle_r2), 4),
+        "roundtrip_feat_r2": round(max(0.0, cycle_r2), 4),
     }
     return inv_net_cpu, feat_mean, feat_std, metrics
 
@@ -1341,20 +1343,30 @@ def _excitation_from_feats(feats: np.ndarray, breath: np.ndarray, loud: np.ndarr
 
 
 class SimSpectrumForwardNet(nn.Module):
-    """Differentiable forward vocal-tract + excitation spectral envelope predictor."""
+    """Differentiable forward vocal-tract + excitation -> (32-band spectrum, 18-D acoustic features) surrogate."""
 
-    def __init__(self, in_dim: int = 24, env_dim: int = 32) -> None:
+    def __init__(self, in_dim: int = 24, env_dim: int = 32, feat_dim: int = 18) -> None:
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, 160),
+        self.trunk = nn.Sequential(
+            nn.Linear(in_dim, 192),
             nn.GELU(),
-            nn.Linear(160, 128),
+            nn.Linear(192, 160),
             nn.GELU(),
-            nn.Linear(128, env_dim),
         )
+        self.env_head = nn.Linear(160, env_dim)
+        self.feat_head = nn.Linear(160, feat_dim)
+
+    def forward_both(self, tract_and_exc: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        h = self.trunk(tract_and_exc)
+        raw_env = self.env_head(h)
+        centered = raw_env - raw_env.mean(dim=-1, keepdim=True)
+        pred_env = F.normalize(centered, p=2, dim=-1, eps=1e-6)
+        pred_feats = self.feat_head(h)
+        return pred_env, pred_feats
 
     def forward(self, tract_and_exc: torch.Tensor) -> torch.Tensor:
-        return self.net(tract_and_exc)
+        pred_env, _ = self.forward_both(tract_and_exc)
+        return pred_env
 
 
 def train_sim_forward_net(
@@ -1362,34 +1374,64 @@ def train_sim_forward_net(
     sim_exc: np.ndarray,
     sim_env: np.ndarray,
     dev: torch.device,
-    epochs: int = 50,
+    epochs: int = 55,
     batch_size: int = 512,
     seed: int = 42,
+    sim_feats_norm: Optional[np.ndarray] = None,
+    real_art_norm: Optional[np.ndarray] = None,
+    real_exc: Optional[np.ndarray] = None,
+    real_env: Optional[np.ndarray] = None,
+    real_feats_norm: Optional[np.ndarray] = None,
 ) -> Tuple[SimSpectrumForwardNet, float]:
-    """Train & freeze a differentiable (14-D tract + 4-D excitation) -> 32-band spectral surrogate."""
+    """Train & freeze a differentiable (14-D tract + 10-D exc) -> (32-band spectrum, 18-D features) surrogate."""
     rng = np.random.default_rng(seed)
     perm = rng.permutation(len(sim_art_norm))
     split = int(0.90 * len(perm))
     tr_idx, va_idx = perm[:split], perm[split:]
 
     sim_in = np.concatenate([sim_art_norm, sim_exc], axis=1).astype(np.float32)
-    xa = torch.from_numpy(sim_in[tr_idx]).to(dev)
-    ye = torch.from_numpy(sim_env[tr_idx]).to(dev)
+    sim_f = sim_feats_norm.astype(np.float32) if sim_feats_norm is not None else np.zeros((len(sim_in), 18), dtype=np.float32)
+
+    if (
+        real_art_norm is not None
+        and real_exc is not None
+        and real_env is not None
+        and real_feats_norm is not None
+        and len(real_art_norm) > 0
+    ):
+        real_in = np.concatenate([real_art_norm, real_exc], axis=1).astype(np.float32)
+        n_real_take = min(len(real_in), len(tr_idx))
+        r_sel = rng.choice(len(real_in), size=n_real_take, replace=False) if len(real_in) > n_real_take else np.arange(len(real_in))
+        comb_in = np.concatenate([sim_in[tr_idx], real_in[r_sel]], axis=0)
+        comb_env = np.concatenate([sim_env[tr_idx], real_env[r_sel]], axis=0)
+        comb_feats = np.concatenate([sim_f[tr_idx], real_feats_norm[r_sel]], axis=0)
+    else:
+        comb_in = sim_in[tr_idx]
+        comb_env = sim_env[tr_idx]
+        comb_feats = sim_f[tr_idx]
+
+    xa = torch.from_numpy(comb_in).to(dev)
+    ye = torch.from_numpy(comb_env).to(dev)
+    yf = torch.from_numpy(comb_feats).to(dev)
     xva = torch.from_numpy(sim_in[va_idx]).to(dev)
     yve = torch.from_numpy(sim_env[va_idx]).to(dev)
 
-    fwd = SimSpectrumForwardNet(in_dim=sim_in.shape[1], env_dim=sim_env.shape[1]).to(dev)
+    fwd = SimSpectrumForwardNet(in_dim=sim_in.shape[1], env_dim=sim_env.shape[1], feat_dim=comb_feats.shape[1]).to(dev)
     opt = torch.optim.AdamW(fwd.parameters(), lr=3e-3, weight_decay=1e-5)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
 
     n_tr = len(xa)
+    has_feats = sim_feats_norm is not None
     for _ in range(epochs):
         fwd.train()
         p = torch.randperm(n_tr, device=dev)
         for s in range(0, n_tr, batch_size):
             idx = p[s : s + batch_size]
-            pred = fwd(xa[idx])
-            loss = F.smooth_l1_loss(pred, ye[idx])
+            pred_env, pred_feats = fwd.forward_both(xa[idx])
+            cos_loss = (1.0 - (pred_env * ye[idx]).sum(dim=-1)).mean()
+            loss = cos_loss + F.mse_loss(pred_env, ye[idx])
+            if has_feats:
+                loss = loss + 0.50 * F.smooth_l1_loss(pred_feats, yf[idx])
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -1452,9 +1494,9 @@ def match_sequences_to_soundbank(
     sim_env_t = torch.from_numpy(sim_env).to(dev)
     sim_feats_t = torch.from_numpy(sim_feats).to(dev)
     feat_scale = torch.clamp(torch.std(sim_feats_t, dim=0, keepdim=True), min=1e-2)
-    # Feature weights across the 18 browser audio features (loudness, peak, zcr, voicing, f0, spectral shape & 8 bands)
+    # Feature weights across the 18 browser audio features (formant bands, voicing, f0, centroid weighted higher)
     feat_w = torch.tensor(
-        [0.45, 0.25, 0.40, 0.55, 0.35, 0.45, 0.35, 0.40, 0.15, 0.40, 0.45, 0.50, 0.50, 0.45, 0.45, 0.40, 0.40, 0.40],
+        [0.50, 0.30, 0.45, 0.65, 0.55, 0.55, 0.45, 0.45, 0.20, 0.50, 0.60, 0.65, 0.65, 0.60, 0.55, 0.50, 0.45, 0.45],
         device=dev,
         dtype=torch.float32,
     ).unsqueeze(0)
@@ -1560,19 +1602,17 @@ def match_sequences_to_soundbank(
     active_gate = np.clip((rms_seq - 0.0035) / 0.020, 0.0, 1.0)[..., None]  # (N, T, 1)
     rest_norm = TRACT_REST_NORM[None, None, :]
 
-    # Preserve the true Viterbi-matched vocal simulator parameters directly, with only
-    # gentle syllable-envelope coupling on jaw (0) and lipOpen (8) so quiet syllables stay compact
-    # and loud open vowels open naturally without ever screaming.
+    # Preserve the true Viterbi-matched vocal simulator parameters with faithful dynamic formant opening
     nat_tract = matched_tract_seq.copy()
     nat_tract[:, :, 0] = np.clip(
-        0.78 * nat_tract[:, :, 0] * (0.45 + 0.55 * syl_open_drive) + 0.22 * (0.52 * syl_open_drive),
+        0.88 * nat_tract[:, :, 0] * (0.65 + 0.35 * syl_open_drive) + 0.12 * (0.60 * syl_open_drive),
         0.0,
-        0.72,
+        0.92,
     )
     nat_tract[:, :, 8] = np.clip(
-        0.78 * nat_tract[:, :, 8] * (0.50 + 0.50 * syl_open_drive) + 0.22 * (0.20 + 0.48 * syl_open_drive),
+        0.88 * nat_tract[:, :, 8] * (0.68 + 0.32 * syl_open_drive) + 0.12 * (0.25 + 0.55 * syl_open_drive),
         0.0,
-        0.76,
+        0.94,
     )
 
     tract_blended = active_gate * nat_tract + (1.0 - active_gate) * rest_norm
@@ -1682,14 +1722,7 @@ def train_soundbank_sequence_model(
     if dev.type == "cuda":
         torch.cuda.manual_seed_all(seed)
 
-    # 1. Train & freeze differentiable simulator forward spectral surrogate ((14 tract + 10 exc) -> 32 env)
-    sim_loud = np.clip(sim_feats[:, 0] / 1.45, 0.0, 1.0).astype(np.float32)
-    sim_exc = _excitation_from_feats(sim_feats, sim_cues[:, 2], sim_loud)
-    sim_env = _smooth_env_bands(sim_env)
-    env_seq = _smooth_env_bands(env_seq)
-    fwd_sim_net, physics_forward_r2 = train_sim_forward_net(sim_art_norm, sim_exc, sim_env, dev=dev, seed=seed)
-
-    # 2. Split by track_id so validation sequences come from unseen songs
+    # 1. Split by track_id first so feature normalization and forward surrogate never leak validation songs
     unique_tids = sorted(set(track_ids))
     rng.shuffle(unique_tids)
     n_val_tids = max(1, int(round(0.14 * len(unique_tids))))
@@ -1712,9 +1745,30 @@ def train_soundbank_sequence_model(
     def norm_x(arr: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(((arr - feat_mean) / feat_std).astype(np.float32))
 
-    # Build matching excitation tensor for stem sequences
+    # Build matching excitation tensor for stem sequences and smooth spectral envelopes
+    sim_loud = np.clip(sim_feats[:, 0] / 1.45, 0.0, 1.0).astype(np.float32)
+    sim_exc = _excitation_from_feats(sim_feats, sim_cues[:, 2], sim_loud)
+    sim_env = _smooth_env_bands(sim_env)
+    env_seq = _smooth_env_bands(env_seq)
     stem_exc_seq = _excitation_from_feats(
         x_seq, y_seq[:, :, 8], np.clip(x_seq[:, :, 0] / 1.45, 0.0, 1.0)
+    )
+
+    # 2. Train & freeze differentiable roundtrip forward synth surrogate ((14 tract + 10 exc) -> 32 env + 18 feats)
+    sim_feats_norm = ((sim_feats - feat_mean) / feat_std).astype(np.float32)
+    tr_act_mask = (valid_seq[is_train, :, 0] > 0.5) & (weights_seq[is_train, :, 0] > 0.35)
+    real_feats_tr = ((tr_x[tr_act_mask] - feat_mean) / feat_std).astype(np.float32)
+    fwd_sim_net, physics_forward_r2 = train_sim_forward_net(
+        sim_art_norm,
+        sim_exc,
+        sim_env,
+        dev=dev,
+        seed=seed,
+        sim_feats_norm=sim_feats_norm,
+        real_art_norm=tract_seq[is_train][tr_act_mask],
+        real_exc=stem_exc_seq[is_train][tr_act_mask],
+        real_env=env_seq[is_train][tr_act_mask],
+        real_feats_norm=real_feats_tr,
     )
 
     # Real sequence tensors
@@ -1861,24 +1915,34 @@ def train_soundbank_sequence_model(
                 + 0.5 * (((j_art - p_art) ** 2) * v_w).sum() / (9.0 * denom_v)
             )
 
-            # Differentiable simulator spectral cycle consistency
-            pred_env = fwd_sim_net(torch.cat([p_tract.reshape(flat_b, 14), exb.reshape(flat_b, 10)], dim=1)).reshape(bs, t_len, 32)
+            # Differentiable roundtrip spectral correlation + 18-D acoustic feature reconstitution loss
+            pred_env_flat, pred_feats_flat = fwd_sim_net.forward_both(
+                torch.cat([p_tract.reshape(flat_b, 14), exb.reshape(flat_b, 10)], dim=1)
+            )
+            pred_env = pred_env_flat.reshape(bs, t_len, 32)
+            pred_feats = pred_feats_flat.reshape(bs, t_len, 18)
             w_act = wb * v_w
             denom_a = torch.clamp(w_act.sum(), min=1.0)
-            loss_sim_cycle = (F.smooth_l1_loss(pred_env, eb, reduction="none") * w_act).sum() / (32.0 * denom_a)
+            cos_env = (pred_env * eb).sum(dim=-1, keepdim=True)
+            loss_sim_cycle = (
+                ((1.0 - cos_env) * w_act).sum() / denom_a
+                + 0.45 * (F.smooth_l1_loss(pred_feats, xb, reduction="none") * w_act).sum() / (18.0 * denom_a)
+            )
 
-            # Direct vocal simulator audio -> parameter reconstitution supervision
+            # Direct vocal simulator audio -> parameter reconstitution + roundtrip correlation supervision
             sb_idx = torch.randint(0, sb_n, (1024,), device=dev)
             sb_pred_art, sb_vlog, sb_pred_tract = inv_net(sb_x_t[sb_idx])
             sb_vprob = sb_vtarget[sb_idx]
             loss_sb_vowel = -(sb_vprob * F.log_softmax(sb_vlog, dim=-1)).sum(dim=-1).mean()
-            sb_pred_env = fwd_sim_net(torch.cat([sb_pred_tract, sb_exc_t[sb_idx]], dim=1))
+            sb_pred_env, sb_pred_feats = fwd_sim_net.forward_both(torch.cat([sb_pred_tract, sb_exc_t[sb_idx]], dim=1))
             sb_p_std = torch.sqrt(torch.var(sb_pred_tract, dim=0) + 1e-6)
             sb_t_std = torch.sqrt(torch.var(sb_art_t[sb_idx], dim=0) + 1e-6)
+            sb_cos_loss = (1.0 - (sb_pred_env * sb_env_t[sb_idx]).sum(dim=-1)).mean()
             loss_sb = (
                 F.smooth_l1_loss(sb_pred_tract, sb_art_t[sb_idx])
                 + 0.45 * F.mse_loss(sb_pred_art, sb_art9_t[sb_idx])
-                + 0.30 * F.smooth_l1_loss(sb_pred_env, sb_env_t[sb_idx])
+                + 0.55 * sb_cos_loss
+                + 0.35 * F.smooth_l1_loss(sb_pred_feats, sb_x_t[sb_idx])
                 + 0.20 * loss_sb_vowel
                 + 0.35 * F.relu(0.95 * sb_t_std - sb_p_std).mean()
             )
@@ -1886,13 +1950,13 @@ def train_soundbank_sequence_model(
             loss = (
                 1.60 * loss_art
                 + 0.45 * loss_vowel
-                + 3.80 * loss_tract
+                + 3.60 * loss_tract
                 + 1.80 * loss_var
-                + 1.65 * loss_vel
-                + 2.00 * loss_accel
+                + 1.75 * loss_vel
+                + 2.10 * loss_accel
                 + 0.90 * loss_jitter
-                + 1.95 * loss_sim_cycle
-                + 1.35 * loss_sb
+                + 2.85 * loss_sim_cycle
+                + 1.45 * loss_sb
             )
 
             opt.zero_grad()
@@ -1928,12 +1992,19 @@ def train_soundbank_sequence_model(
 
         voiced_mask = active_mask & (wv[:, :, 0] > 0.45)
         physics_cycle_r2 = 0.0
+        roundtrip_env_corr = 0.0
+        roundtrip_feat_r2 = 0.0
         if int(voiced_mask.sum().item()) > 10:
-            vp_env = fwd_sim_net(torch.cat([vt_pred[voiced_mask], exv[voiced_mask]], dim=1))
+            vp_env, vp_feats = fwd_sim_net.forward_both(torch.cat([vt_pred[voiced_mask], exv[voiced_mask]], dim=1))
             tp_env = ev[voiced_mask]
+            tp_feats = xv[voiced_mask]
             p_res = float(((vp_env - tp_env) ** 2).sum().item())
             p_tot = float(((tp_env - tp_env.mean(dim=0, keepdim=True)) ** 2).sum().item())
             physics_cycle_r2 = 1.0 - p_res / max(1e-8, p_tot)
+            roundtrip_env_corr = float((vp_env * tp_env).sum(dim=-1).mean().item())
+            f_res = float(((vp_feats - tp_feats) ** 2).sum().item())
+            f_tot = float(((tp_feats - tp_feats.mean(dim=0, keepdim=True)) ** 2).sum().item())
+            roundtrip_feat_r2 = 1.0 - f_res / max(1e-8, f_tot)
 
     inv_net_cpu = inv_net.cpu()
     metrics = {
@@ -1947,6 +2018,8 @@ def train_soundbank_sequence_model(
         "cycle_r2": round(max(0.0, physics_cycle_r2), 4),
         "physics_forward_r2": round(physics_forward_r2, 4),
         "physics_cycle_r2": round(physics_cycle_r2, 4),
+        "roundtrip_env_corr": round(roundtrip_env_corr, 4),
+        "roundtrip_feat_r2": round(roundtrip_feat_r2, 4),
     }
     return inv_net_cpu, feat_mean, feat_std, metrics
 

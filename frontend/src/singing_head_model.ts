@@ -47,6 +47,8 @@ export interface SingingHeadModelWeights {
     cycle_r2?: number;
     physics_forward_r2?: number;
     physics_cycle_r2?: number;
+    roundtrip_env_corr?: number;
+    roundtrip_feat_r2?: number;
     db_p10?: number;
     db_p95?: number;
     f0_p10?: number;

@@ -324,11 +324,13 @@ export class SingingHeadPanel {
       const stems = json.corpus_stats?.stems_used ?? 0;
       const acc = json.corpus_stats?.val_vowel_acc;
       const physR2 = json.corpus_stats?.physics_cycle_r2;
+      const rtCorr = json.corpus_stats?.roundtrip_env_corr;
       if (this.modelBadgeEl) {
         const dimTag = json.weights.b3.length >= 28 ? " • 14D TRACT" : "";
         const accStr = typeof acc === "number" ? ` • ${(acc * 100).toFixed(0)}% VOWEL ACC` : "";
         const r2Str = typeof physR2 === "number" && physR2 > 0 ? ` • PHYS R² ${physR2.toFixed(2)}` : "";
-        this.modelBadgeEl.textContent = `REVERSE-TRAINED • ${stubs} STUBS + ${stems} STEMS${dimTag}${accStr}${r2Str}`;
+        const rtStr = typeof rtCorr === "number" && rtCorr > 0 ? ` • RT CORR ${(rtCorr * 100).toFixed(0)}%` : "";
+        this.modelBadgeEl.textContent = `REVERSE-TRAINED • ${stubs} STUBS + ${stems} STEMS${dimTag}${accStr}${r2Str}${rtStr}`;
       }
       console.info(
         `[SingingHead] loaded ${json.format} • ${stubs} stubs + ${stems} stems` +
