@@ -9,7 +9,14 @@
 // phrases are strongly preferred by scoring, far ones surface as the near
 // pool is played out, so a long session traverses the full bank.
 import { ENGINE_SAMPLE_RATE, type AudioEngine } from "./audio_engine";
-import { concatStereoRun, mixToMono, splitChannels, assembleSlicedStereoRun, type SliceSpec } from "./kit_pcm";
+import {
+  assembleSlicedStereoRun,
+  concatStereoRun,
+  isContiguousFullPhrase,
+  mixToMono,
+  splitChannels,
+  type SliceSpec,
+} from "./kit_pcm";
 import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
@@ -2704,13 +2711,27 @@ export class StemRemixPlayer {
           if (this.manualPins[task.stem] || this.pinning.has(task.stem)) continue;
           const plan = composed.stems[task.stem];
           if (!plan || plan.donors.length === 0) continue;
-          task.run = plan.donors;
-          task.slices = plan.slices;
+          const origRun = chosenRuns[task.stem];
+          const contiguousUncut =
+            plan.isContiguousUncut ||
+            (plan.donors.length === 1 && isContiguousFullPhrase(plan.slices));
+          if (contiguousUncut) {
+            const keepOrigRun = Boolean(
+              origRun &&
+              origRun.length > 1 &&
+              origRun[0]?.phrase.id === plan.donors[0].phrase.id,
+            );
+            task.run = keepOrigRun && origRun ? origRun : plan.donors;
+            task.slices = undefined;
+          } else {
+            task.run = plan.donors;
+            task.slices = plan.slices;
+          }
           task.baseSemitones = plan.baseSemitones;
           task.pitchPoints = plan.pitchPoints;
-          chosenRuns[task.stem] = plan.donors;
-          phrases[task.stem] = plan.donors[0].phrase;
-          kits[task.stem] = plan.donors[0].kit;
+          chosenRuns[task.stem] = [...task.run];
+          phrases[task.stem] = task.run[0].phrase;
+          kits[task.stem] = task.run[0].kit;
           stemTracks[task.stem] = plan.donorTrackIds.join("+");
         }
         this.composedStats.blocksComposed += 1;
@@ -3960,7 +3981,7 @@ export class StemRemixPlayer {
   private async loadRunAudio(
     run: readonly StemPoolEntry[],
     slices?: SliceSpec[],
-    crossfadeMs: number = 8,
+    crossfadeMs: number = 28,
   ): Promise<LoadedStemRun | null> {
     if (this.audioWorker.ok) {
       const items: WorkerRunItem[] = [];
@@ -3996,7 +4017,7 @@ export class StemRemixPlayer {
   private async loadRunAudioMain(
     run: readonly StemPoolEntry[],
     slices?: SliceSpec[],
-    crossfadeMs: number = 8,
+    crossfadeMs: number = 28,
   ): Promise<LoadedStemRun | null> {
     const audios = await Promise.all(run.map(async (entry) => {
       try {

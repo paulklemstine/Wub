@@ -323,15 +323,6 @@ export class SingingHeadPanel {
       const stubs = json.corpus_stats?.stubs_used ?? 0;
       const stems = json.corpus_stats?.stems_used ?? 0;
       const acc = json.corpus_stats?.val_vowel_acc;
-      const physR2 = json.corpus_stats?.physics_cycle_r2;
-      const rtCorr = json.corpus_stats?.roundtrip_env_corr;
-      if (this.modelBadgeEl) {
-        const dimTag = json.weights.b3.length >= 28 ? " • 14D TRACT" : "";
-        const accStr = typeof acc === "number" ? ` • ${(acc * 100).toFixed(0)}% VOWEL ACC` : "";
-        const r2Str = typeof physR2 === "number" && physR2 > 0 ? ` • PHYS R² ${physR2.toFixed(2)}` : "";
-        const rtStr = typeof rtCorr === "number" && rtCorr > 0 ? ` • RT CORR ${(rtCorr * 100).toFixed(0)}%` : "";
-        this.modelBadgeEl.textContent = `REVERSE-TRAINED • ${stubs} STUBS + ${stems} STEMS${dimTag}${accStr}${r2Str}${rtStr}`;
-      }
       console.info(
         `[SingingHead] loaded ${json.format} • ${stubs} stubs + ${stems} stems` +
         `${json.weights.b3.length >= 28 ? " • 14D tract" : ""}` +
@@ -340,9 +331,6 @@ export class SingingHeadPanel {
       return true;
     } catch (err) {
       console.warn("SingingHeadPanel: falling back to analytical model:", err);
-      if (this.modelBadgeEl) {
-        this.modelBadgeEl.textContent = "ANALYTICAL FALLBACK";
-      }
       return false;
     }
   }
@@ -449,15 +437,13 @@ export class SingingHeadPanel {
 
     // Header live telemetry readout
     if (this.statusBadgeEl) {
-      const srcTag = this.audioSourceMode === "synth" ? "🗣️ HEAD SYNTH" : "🎵 TRACK AUDIO";
       const singing = !isMuted && (this.aperture > 0.07 || vocalLevel > 0.02);
       if (isMuted) {
-        this.statusBadgeEl.textContent = `${srcTag} • VOCALS MUTED • STANDBY`;
+        this.statusBadgeEl.textContent = "MUTED";
       } else if (singing) {
-        const note = this.lastF0Hz > 0 ? `${hzToNoteName(this.lastF0Hz)} (${Math.round(this.lastF0Hz)}Hz)` : "CHOP/BREATH";
-        this.statusBadgeEl.textContent = `${srcTag} • [${this.topVowel}] • ${note} • APERTURE ${Math.round(this.aperture * 100)}%`;
+        this.statusBadgeEl.textContent = `${this.topVowel}${this.lastF0Hz > 0 ? ` • ${hzToNoteName(this.lastF0Hz)}` : ""}`;
       } else {
-        this.statusBadgeEl.textContent = `${srcTag} • LISTENING TO VOCAL INSTRUMENT…`;
+        this.statusBadgeEl.textContent = "STANDBY";
       }
     }
 
@@ -591,7 +577,7 @@ export class SingingHeadPanel {
 
     ctx.font = "bold 10px monospace";
     ctx.fillStyle = "#ffb700";
-    ctx.fillText("VOCAL INSTRUMENT WAVEFORM", px + 10, py + 16);
+    ctx.fillText("WAVEFORM", px + 10, py + 16);
 
     const waveMidY = py + 56;
     ctx.strokeStyle = "rgba(255, 183, 0, 0.18)";
@@ -633,7 +619,7 @@ export class SingingHeadPanel {
 
     ctx.font = "bold 10px monospace";
     ctx.fillStyle = "#00e5ff";
-    ctx.fillText("INVERSE VOWEL POSTERIOR", px + 10, rTop + 16);
+    ctx.fillText("VOWELS", px + 10, rTop + 16);
 
     const rcx = px + pw * 0.5;
     const rcy = rTop + 108;
@@ -727,7 +713,7 @@ export class SingingHeadPanel {
 
     ctx.font = "bold 10px monospace";
     ctx.fillStyle = "#ff77e9";
-    ctx.fillText("ARTICULATOR TELEMETRY", px + 12, py + 18);
+    ctx.fillText("ARTICULATION", px + 12, py + 18);
 
     const bars: Array<{ label: string; val: number; color: string }> = [
       { label: "APERTURE", val: this.aperture, color: "#ffb700" },
@@ -792,7 +778,7 @@ export class SingingHeadPanel {
       (meta as { activeTrackTitle?: string } | null)?.activeTrackTitle ||
       meta?.vocalSongTitle ||
       meta?.patterns?.vocals ||
-      "VOCAL INSTRUMENT";
+      "";
     ctx.font = "10px monospace";
     ctx.fillStyle = "#67e8f9";
     const clipped = trackLabel.length > 29 ? `${trackLabel.slice(0, 28)}…` : trackLabel;

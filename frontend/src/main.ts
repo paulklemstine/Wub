@@ -454,12 +454,7 @@ class WubApp {
       });
       this.clientConductor.setKitSetChangeCallback((info) => {
         const track = info.kit.title || info.kit.track_id;
-        const next = info.nextKit?.track_id ?? "pending";
-        const score = this.clientConductor?.lastKitScore;
-        const scoreText = score === null || score === undefined ? "" : ` • next score: ${score.toFixed(4)}`;
-        this.setStatus(
-          `KIT SET → ${track} (${info.kit.style}, ${info.kit.bpm.toFixed(2)} BPM) • ${info.blocksLeft} blocks left • next: ${next}${scoreText}`
-        );
+        this.setStatus(`${track} • ${Math.round(info.kit.bpm)} BPM`);
       });
       this.clientConductor.onKitPhrase = (p) => {
         const t = visualNow();
@@ -556,7 +551,7 @@ class WubApp {
     });
     window.addEventListener("beforeunload", () => this.teardown());
 
-    this.setStatus(`KG-505 In-Browser ML Ready • 24,068 Patterns • Offline Standalone (${Math.round(this.bpm)} BPM)`);
+    this.setStatus(`Ready • ${Math.round(this.bpm)} BPM`);
     el<HTMLButtonElement>("btn-play").classList.remove("active");
     el<HTMLButtonElement>("btn-stop").classList.add("active");
     requestAnimationFrame((t) => this.frame(t));
@@ -722,7 +717,7 @@ class WubApp {
       if (label !== null) label.textContent = `${Math.round(this.bpm)} BPM`;
       this.engine.setTargetBpm(this.bpm);
     }
-    this.setStatus(`Playing — 🧠 Direct In-Browser ML Engine (Sample-Accurate Sequencer @ ${Math.round(this.bpm)} BPM)`);
+    this.setStatus(`Playing • ${Math.round(this.bpm)} BPM`);
   }
 
   private async stop(): Promise<void> {

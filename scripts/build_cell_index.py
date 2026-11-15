@@ -40,6 +40,7 @@ if str(REPO_ROOT) not in sys.path:
 from wub_core.essential_slices import (  # noqa: E402
     ESSENTIAL_ROLES,
     mine_processed_track_essential_bars,
+    score_bar_seam_continuity,
     select_essential_slices_for_song,
 )
 from wub_core.motif_miner import (  # noqa: E402
@@ -195,6 +196,106 @@ def _estimate_mean_seg_dur(bars: np.ndarray, sr: int, onset_counts: Sequence[int
     return round(min(2.0, max(0.08, total_dur / max(1, total_onsets))), 3)
 
 
+def _clamp01(x: float) -> float:
+    return 0.0 if x <= 0.0 else (1.0 if x >= 1.0 else x)
+
+
+def _segment_centroid_norm(seg: np.ndarray, sr: int) -> float:
+    if seg.size < 256:
+        return 0.45
+    n_fft = 2048
+    if len(seg) < n_fft:
+        pad = np.zeros(n_fft, dtype=np.float32)
+        pad[: len(seg)] = seg
+        chunk = pad
+    else:
+        mid = (len(seg) - n_fft) // 2
+        chunk = seg[mid : mid + n_fft]
+    win = np.hanning(n_fft).astype(np.float32)
+    spec = np.abs(np.fft.rfft(chunk * win))
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / max(1, sr))
+    valid = (freqs >= 30.0) & (freqs <= 8500.0)
+    s_v = spec[valid]
+    tot = float(s_v.sum())
+    if tot <= 1e-7:
+        return 0.45
+    cent = float((s_v * freqs[valid]).sum() / tot)
+    return _clamp01(cent / 4500.0)
+
+
+def _compute_bar_head_tail_seam(
+    bars_audio: Optional[np.ndarray],
+    sr: int,
+    bar_energies: Sequence[float],
+    bar_purities: Sequence[float],
+    bar_masks: Sequence[int],
+    bar_roots: Sequence[int],
+    bar_qualities: Sequence[str],
+    stem: str,
+) -> Tuple[List[float], List[float], List[float], List[float], List[float]]:
+    hr: List[float] = []
+    tr: List[float] = []
+    hc: List[float] = []
+    tc: List[float] = []
+
+    if bars_audio is not None and bars_audio.shape[0] >= 4 and bars_audio.shape[1] >= 64:
+        q_len = max(32, bars_audio.shape[1] // 4)
+        for b in range(4):
+            seg = bars_audio[b]
+            h_seg = seg[:q_len]
+            t_seg = seg[-q_len:]
+            h_rms = float(np.sqrt(np.mean(h_seg ** 2) + 1e-12))
+            t_rms = float(np.sqrt(np.mean(t_seg ** 2) + 1e-12))
+            h_db = 20.0 * math.log10(max(1e-5, h_rms))
+            t_db = 20.0 * math.log10(max(1e-5, t_rms))
+            hr.append(round(_clamp01((h_db + 54.0) / 48.0), 2))
+            tr.append(round(_clamp01((t_db + 54.0) / 48.0), 2))
+            hc.append(round(_segment_centroid_norm(h_seg, sr) if h_rms >= 1e-4 else 0.45, 2))
+            tc.append(round(_segment_centroid_norm(t_seg, sr) if t_rms >= 1e-4 else 0.45, 2))
+    else:
+        for b in range(4):
+            base_r = round(_clamp01(0.55 * float(bar_purities[b]) + 0.45 * float(bar_energies[b])), 2)
+            hr.append(base_r)
+            tr.append(base_r)
+            hc.append(0.45)
+            tc.append(0.45)
+
+    sm: List[float] = []
+    for b in range(4):
+        nb = (b + 1) % 4
+        b0 = {
+            "purity": float(bar_purities[b]),
+            "mask": int(bar_masks[b]),
+            "root": int(bar_roots[b]),
+            "qual": str(bar_qualities[b]),
+            "hr": hr[b],
+            "tr": tr[b],
+            "hc": hc[b],
+            "tc": tc[b],
+        }
+        b1 = {
+            "purity": float(bar_purities[nb]),
+            "mask": int(bar_masks[nb]),
+            "root": int(bar_roots[nb]),
+            "qual": str(bar_qualities[nb]),
+            "hr": hr[nb],
+            "tr": tr[nb],
+            "hc": hc[nb],
+            "tc": tc[nb],
+        }
+        s_val = score_bar_seam_continuity(
+            b0, b1, stem, is_contiguous=(b < 3), is_section_boundary=False
+        )
+        if bars_audio is not None and b < 3:
+            w40 = min(bars_audio.shape[1] // 4, max(64, int(0.04 * sr)))
+            tail_e = float(np.sqrt(np.mean(bars_audio[b][-w40:] ** 2) + 1e-12))
+            head_e = float(np.sqrt(np.mean(bars_audio[nb][:w40] ** 2) + 1e-12))
+            env_cont = _clamp01(1.0 - abs(tail_e - head_e) / max(tail_e, head_e, 0.05))
+            s_val = 0.65 * s_val + 0.35 * env_cont
+        sm.append(round(_clamp01(s_val), 2))
+    return hr, tr, hc, tc, sm
+
+
 def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
     """Process all phrases in one kit (runs in worker process)."""
     kit = task["kit"]
@@ -339,12 +440,27 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
                             bar_chord_votes[b] = (r_pc, voted_q, weight)
 
             schema = classify_motif_schema(bar_vectors)
+            hr, tr, hc, tc, sm_arr = _compute_bar_head_tail_seam(
+                bars_audio,
+                sr,
+                bar_energies,
+                bar_purities,
+                bar_masks,
+                bar_roots,
+                bar_qualities,
+                stem,
+            )
             entry: Dict[str, Any] = {
                 "s": schema,
                 "p": bar_purities,
                 "r": bar_roots,
                 "q": bar_qualities,
                 "o": bar_masks,
+                "hr": hr,
+                "tr": tr,
+                "hc": hc,
+                "tc": tc,
+                "sm": sm_arr,
             }
 
             if stem == "drums":
@@ -382,6 +498,11 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
                     "root": int(bar_roots[b]),
                     "qual": str(bar_qualities[b]),
                     "chroma": bar_chromas[b],
+                    "hr": hr[b],
+                    "tr": tr[b],
+                    "hc": hc[b],
+                    "tc": tc[b],
+                    "sm": sm_arr[b],
                     "is_fill": bool(stem == "drums" and entry.get("fill") and b == 3),
                     "is_hook": bool(stem == "vocals" and entry.get("hook") and bar_purities[b] >= 0.38),
                 })
@@ -592,6 +713,14 @@ def main() -> None:
     mean_kit_fid = sum(kit_fidelities) / len(kit_fidelities) if kit_fidelities else 0.0
     mean_proc_fid = sum(proc_fidelities) / len(proc_fidelities) if proc_fidelities else mean_kit_fid
 
+    seam_vals: List[float] = []
+    for p_map in phrases_out.values():
+        for st_entry in p_map.values():
+            sm_list = st_entry.get("sm")
+            if sm_list:
+                seam_vals.extend(float(x) for x in sm_list[:3])
+    mean_seam_cont = (sum(seam_vals) / len(seam_vals)) if seam_vals else 0.0
+
     payload = {
         "version": 2,
         "format": "cell_index_v2",
@@ -599,6 +728,7 @@ def main() -> None:
         "stem_names": list(STEMS),
         "mean_reconstitution_fidelity": round(mean_kit_fid, 4),
         "corpus_reconstitution_fidelity": round(mean_proc_fid, 4),
+        "mean_seam_continuity": round(mean_seam_cont, 4),
         "essential_role_transitions": role_trans_probs,
         "style_progressions": _aggregate_progressions(raw_progs),
         "section_motif_priors": _aggregate_motif_priors(all_schema_samples),

@@ -45,6 +45,16 @@ export interface CellStemMeta {
   er?: [EssentialRole, EssentialRole, EssentialRole, EssentialRole];
   /** Song-level reconstitution fidelity for this stem in the source kit (0..1) */
   fid?: number;
+  /** Per-bar Beat-1 head normalized RMS (0..1) */
+  hr?: [number, number, number, number];
+  /** Per-bar Beat-4 tail normalized RMS (0..1) */
+  tr?: [number, number, number, number];
+  /** Per-bar Beat-1 head normalized spectral centroid (0..1) */
+  hc?: [number, number, number, number];
+  /** Per-bar Beat-4 tail normalized spectral centroid (0..1) */
+  tc?: [number, number, number, number];
+  /** Per-bar internal boundary seam smoothness to bar+1 (0..1) */
+  sm?: [number, number, number, number];
 }
 
 export interface CellIndexData {
@@ -54,6 +64,7 @@ export interface CellIndexData {
   stem_names: StemName[];
   mean_reconstitution_fidelity?: number;
   corpus_reconstitution_fidelity?: number;
+  mean_seam_continuity?: number;
   essential_role_transitions?: Record<string, Record<string, number>>;
   style_progressions: Record<string, Record<string, Array<Array<[number, string] | (string | number)[]>>>>;
   section_motif_priors: Record<string, Record<string, Record<string, number>>>;
@@ -335,4 +346,79 @@ export function scoreSynthVocalUnmasking(
   const callResp = oCnt > 0 ? popcount16(o & (~v & 0xffff)) / oCnt : 0;
   const denseClash = Math.max(0, od + vd - 0.85) * 0.6;
   return clamp01(0.55 + 0.4 * callResp - 0.45 * jaccard - denseClash);
+}
+
+/**
+ * Estimate acoustic and musical bar-boundary seam smoothness in [0, 1]
+ * from `prevMeta[prevBar]` (Beat-4 tail) into `nextMeta[nextBar]` (Beat-1 head).
+ */
+export function scoreBarSeamContinuity(args: {
+  stem: StemName;
+  prevMeta: CellStemMeta;
+  prevBar: number;
+  nextMeta: CellStemMeta;
+  nextBar: number;
+  isContiguousSamePhrase?: boolean;
+  isSectionBoundary?: boolean;
+}): number {
+  const pb = Math.max(0, Math.min(3, args.prevBar));
+  const nb = Math.max(0, Math.min(3, args.nextBar));
+  const prevP = args.prevMeta.p[pb] ?? 0.5;
+  const nextP = args.nextMeta.p[nb] ?? 0.5;
+  const isBound = Boolean(args.isSectionBoundary);
+
+  if (prevP < 0.08 && nextP < 0.08) return 0.62;
+  if ((prevP >= 0.18 && nextP < 0.08) || (prevP < 0.08 && nextP >= 0.25)) {
+    return isBound ? 0.48 : 0.18;
+  }
+
+  const prevTr = args.prevMeta.tr?.[pb] ?? prevP;
+  const nextHr = args.nextMeta.hr?.[nb] ?? nextP;
+  const rmsCont = Math.max(0, 1 - 1.55 * Math.abs(prevTr - nextHr));
+
+  const prevTc = args.prevMeta.tc?.[pb] ?? 0.45;
+  const nextHc = args.nextMeta.hc?.[nb] ?? 0.45;
+  const specCont = Math.max(0, 1 - 1.45 * Math.abs(prevTc - nextHc));
+
+  const prevMask = (args.prevMeta.o[pb] ?? 0) & 0xffff;
+  const nextMask = (args.nextMeta.o[nb] ?? 0) & 0xffff;
+  const prevB4 = popcount16((prevMask >>> 12) & 0x0f) / 4;
+  const nextB1 = (nextMask & 0x01) !== 0 ? 1.0 : (nextMask & 0x0f) !== 0 ? 0.75 : 0.25;
+  const prevD = popcount16(prevMask) / 16;
+  const nextD = popcount16(nextMask) / 16;
+  const densCont = Math.max(0, 1 - 1.15 * Math.abs(prevD - nextD));
+  const rhythmCont =
+    0.55 * densCont + 0.45 * (0.5 * nextB1 + 0.5 * (1 - 0.5 * Math.abs(prevB4 - nextB1)));
+
+  let raw: number;
+  if (args.stem === "drums") {
+    raw = 0.36 * rmsCont + 0.32 * specCont + 0.32 * rhythmCont;
+  } else {
+    const prevR = args.prevMeta.r[pb] ?? -1;
+    const nextR = args.nextMeta.r[nb] ?? -1;
+    const prevQ = args.prevMeta.q[pb] ?? "mono";
+    const nextQ = args.nextMeta.q[nb] ?? "mono";
+    let harmCont = 0.72;
+    if (prevR >= 0 && nextR >= 0) {
+      const diff = (((nextR - prevR) % 12) + 12) % 12;
+      if (diff === 0) harmCont = 0.96;
+      else if (diff === 5 || diff === 7 || diff === 3 || diff === 4 || diff === 8 || diff === 9) harmCont = 0.82;
+      else if (diff === 2 || diff === 10) harmCont = 0.68;
+      else harmCont = 0.28;
+      if ((prevQ === "minor" || prevQ === "major") && (nextQ === "minor" || nextQ === "major") && prevQ !== nextQ) {
+        harmCont *= 0.72;
+      }
+    }
+    raw = 0.32 * rmsCont + 0.26 * specCont + 0.18 * rhythmCont + 0.24 * harmCont;
+  }
+
+  if (isBound) raw = Math.min(1, raw * 0.85 + 0.12);
+  if (args.isContiguousSamePhrase) {
+    const measured = args.prevMeta.sm?.[pb];
+    if (measured !== undefined) {
+      return Math.max(0.84, Math.min(1, 0.55 * measured + 0.45 * raw));
+    }
+    return Math.max(0.85, Math.min(1, 0.70 + 0.30 * raw));
+  }
+  return clamp01(raw);
 }

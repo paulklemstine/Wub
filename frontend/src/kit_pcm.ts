@@ -99,29 +99,164 @@ export function snapZeroCrossing(
   return bestIdx;
 }
 
+export interface CoalescedSliceSpec extends SliceSpec {
+  barSpan: number;
+}
+
+/** True when `slices` represents a single uncut 4-bar phrase from `itemIndex === 0` at unit gain. */
+export function isContiguousFullPhrase(slices: readonly SliceSpec[] | undefined): boolean {
+  if (!slices || slices.length === 0) return false;
+  let expectedStart = 0;
+  for (const s of slices) {
+    if (s.itemIndex !== 0) return false;
+    const g0 = s.gain ?? 1;
+    const g1 = s.endGain ?? g0;
+    if (Math.abs(g0 - 1) > 0.02 || Math.abs(g1 - 1) > 0.02) return false;
+    if (Math.abs(s.startFrac - expectedStart) > 1e-4) return false;
+    const rawBars = (s.endFrac - s.startFrac) * 4;
+    if (s.targetBars !== undefined && Math.abs(s.targetBars - rawBars) > 1e-3) return false;
+    expectedStart = s.endFrac;
+  }
+  return Math.abs(expectedStart - 1) < 1e-4;
+}
+
+/** Merge adjacent contiguous bars from the same phrase and flat gain into one uncut waveform span. */
+export function coalesceContiguousSlices(slices: readonly SliceSpec[]): CoalescedSliceSpec[] {
+  const out: CoalescedSliceSpec[] = [];
+  for (const raw of slices) {
+    const rawBars = (raw.endFrac - raw.startFrac) * 4;
+    const tgtBars = raw.targetBars !== undefined && raw.targetBars > 0 ? raw.targetBars : rawBars;
+    const item: CoalescedSliceSpec = { ...raw, targetBars: tgtBars, barSpan: tgtBars };
+    const prev = out[out.length - 1];
+    if (prev) {
+      const pg0 = prev.gain ?? 1;
+      const pg1 = prev.endGain ?? pg0;
+      const cg0 = item.gain ?? 1;
+      const cg1 = item.endGain ?? cg0;
+      const prevRawBars = (prev.endFrac - prev.startFrac) * 4;
+      const sameSource = prev.itemIndex === item.itemIndex;
+      const contiguous = Math.abs(item.startFrac - prev.endFrac) < 1e-4;
+      const flatGain =
+        Math.abs(pg0 - pg1) < 0.05 &&
+        Math.abs(cg0 - cg1) < 0.05 &&
+        Math.abs(pg1 - cg0) < 0.05;
+      const unstretched =
+        Math.abs((prev.targetBars ?? prevRawBars) - prevRawBars) < 1e-3 &&
+        Math.abs(tgtBars - rawBars) < 1e-3;
+      if (sameSource && contiguous && flatGain && unstretched) {
+        prev.endFrac = item.endFrac;
+        prev.targetBars = (prev.targetBars ?? prevRawBars) + tgtBars;
+        prev.barSpan += tgtBars;
+        prev.endGain = item.endGain ?? cg1;
+        continue;
+      }
+    }
+    out.push(item);
+  }
+  return out;
+}
+
+/** Resample `src[s0 .. s0 + srcLen)` to exact `targetLen` frames using 4-point Hermite cubic interpolation. */
+export function resampleChannelHermite(
+  src: Float32Array,
+  s0: number,
+  srcLen: number,
+  targetLen: number,
+): Float32Array {
+  if (srcLen === targetLen && s0 >= 0 && s0 + targetLen <= src.length) {
+    return src.subarray(s0, s0 + targetLen);
+  }
+  const out = new Float32Array(targetLen);
+  if (targetLen <= 0 || src.length === 0) return out;
+  if (targetLen === 1) {
+    const idx = Math.max(0, Math.min(src.length - 1, s0));
+    out[0] = src[idx];
+    return out;
+  }
+  const step = Math.max(1, srcLen - 1) / (targetLen - 1);
+  const maxIdx = src.length - 1;
+  for (let i = 0; i < targetLen; i++) {
+    const pos = s0 + i * step;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const xm1 = src[Math.max(0, Math.min(maxIdx, idx - 1))];
+    const x0 = src[Math.max(0, Math.min(maxIdx, idx))];
+    const x1 = src[Math.max(0, Math.min(maxIdx, idx + 1))];
+    const x2 = src[Math.max(0, Math.min(maxIdx, idx + 2))];
+    const c0 = x0;
+    const c1 = 0.5 * (x1 - xm1);
+    const c2 = xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2;
+    const c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
+    out[i] = ((c3 * frac + c2) * frac + c1) * frac + c0;
+  }
+  return out;
+}
+
+/** Match secondary donor RMS loudness to `primary`, clamped to ±4.5 dB (`[0.595, 1.679]`). */
+export function matchDonorRmsGain(
+  primary: readonly [Float32Array, Float32Array],
+  donorSliceL: Float32Array,
+  donorSliceR: Float32Array,
+): number {
+  const [pL, pR] = primary;
+  const pLen = Math.min(pL.length, pR.length);
+  const dLen = Math.min(donorSliceL.length, donorSliceR.length);
+  if (pLen <= 0 || dLen <= 0) return 1.0;
+
+  let pSumSq = 0;
+  const pStride = Math.max(1, Math.floor(pLen / 8192));
+  let pCount = 0;
+  for (let i = 0; i < pLen; i += pStride) {
+    const l = pL[i];
+    const r = pR[i];
+    pSumSq += 0.5 * (l * l + r * r);
+    pCount++;
+  }
+  let dSumSq = 0;
+  const dStride = Math.max(1, Math.floor(dLen / 4096));
+  let dCount = 0;
+  for (let i = 0; i < dLen; i += dStride) {
+    const l = donorSliceL[i];
+    const r = donorSliceR[i];
+    dSumSq += 0.5 * (l * l + r * r);
+    dCount++;
+  }
+  const pRms = Math.sqrt(pSumSq / Math.max(1, pCount));
+  const dRms = Math.sqrt(dSumSq / Math.max(1, dCount));
+  if (pRms < 5e-4 || dRms < 5e-4) return 1.0;
+  const ratio = pRms / dRms;
+  return Math.max(0.595, Math.min(1.679, ratio));
+}
+
 /**
  * Assemble a stereo run from sub-phrase slices (1-bar, 2-beat, 1-beat, or
  * 1/16th stutter cells) across one or more decoded 4-bar donor phrases.
- * Applies zero-crossing snapping, per-slice gain envelopes (including
- * pre-drop silence gaps), and equal-power micro-crossfades at joins.
+ * Coalesces contiguous same-phrase bars with zero internal cuts, cubic-resamples
+ * tempo-mismatched donor bars to exact target frames, RMS-matches secondary
+ * donors within ±4.5 dB, and applies equal-power overlap crossfades at joins.
  */
 export function assembleSlicedStereoRun(
   phrases: readonly [Float32Array, Float32Array][],
   pre: readonly [Float32Array, Float32Array] | null,
   slices: readonly SliceSpec[],
   sampleRate: number,
-  crossfadeMs: number = 8,
+  crossfadeMs: number = 28,
 ): ConcatRunResult {
   if (phrases.length === 0 || slices.length === 0) {
     return concatStereoRun(phrases, pre, sampleRate);
   }
+  if (phrases.length === 1 && isContiguousFullPhrase(slices)) {
+    return concatStereoRun(phrases, pre, sampleRate);
+  }
+
+  const mergedSlices = coalesceContiguousSlices(slices);
   const refLen = phrases[0][0].length;
   const refBarFrames = Math.max(1, refLen / 4);
-  const xfadeFrames = Math.max(0, Math.min(2048, Math.round((crossfadeMs / 1000) * sampleRate)));
+  const xfadeFrames = Math.max(0, Math.min(4096, Math.round((crossfadeMs / 1000) * sampleRate)));
   const snapFrames = Math.max(0, Math.round(0.003 * sampleRate));
 
   const segments: Array<{ l: Float32Array; r: Float32Array; tailL: Float32Array; tailR: Float32Array; targetFrames: number }> = [];
-  for (const spec of slices) {
+  for (const spec of mergedSlices) {
     const srcIdx = Math.max(0, Math.min(phrases.length - 1, Math.floor(spec.itemIndex)));
     const [srcL, srcR] = phrases[srcIdx];
     const srcLen = srcL.length;
@@ -152,32 +287,34 @@ export function assembleSlicedStereoRun(
       : Math.max(startIdx + 1, snapZeroCrossing(srcL, endRaw, snapFrames));
     const cutLen = Math.max(1, endIdx - startIdx);
 
+    const resL = resampleChannelHermite(srcL, startIdx, cutLen, targetFrames);
+    const resR = resampleChannelHermite(srcR, startIdx, cutLen, targetFrames);
+    const donorGain = srcIdx > 0 ? matchDonorRmsGain(phrases[0], resL, resR) : 1.0;
+
     const segL = new Float32Array(targetFrames);
     const segR = new Float32Array(targetFrames);
-    const copyLen = Math.min(cutLen, targetFrames);
-    const fadeOutTail = cutLen > targetFrames ? Math.min(xfadeFrames, Math.floor(copyLen / 4)) : 0;
-
-    for (let i = 0; i < copyLen; i++) {
-      const t = copyLen > 1 ? i / (copyLen - 1) : 0;
-      let env = g0 + (g1 - g0) * t;
-      if (fadeOutTail > 0 && i >= copyLen - fadeOutTail) {
-        const ft = (copyLen - 1 - i) / Math.max(1, fadeOutTail);
-        env *= ft;
-      }
-      segL[i] = srcL[startIdx + i] * env;
-      segR[i] = srcR[startIdx + i] * env;
+    for (let i = 0; i < targetFrames; i++) {
+      const t = targetFrames > 1 ? i / (targetFrames - 1) : 0;
+      const env = (g0 + (g1 - g0) * t) * donorGain;
+      segL[i] = resL[i] * env;
+      segR[i] = resR[i] * env;
     }
 
-    // Grab up to xfadeFrames past copyLen (or damp the tail) for overlap-add crossfading
-    // without shortening the cumulative grid duration.
-    const extraAvail = Math.min(xfadeFrames, Math.max(0, srcLen - (startIdx + copyLen)));
-    const tailLen = copyLen >= targetFrames - xfadeFrames ? Math.min(xfadeFrames, extraAvail > 0 ? extraAvail : 64) : 0;
+    // Grab up to xfadeFrames past endIdx for equal-power overlap-add crossfading
+    // without altering the cumulative bar-grid duration.
+    const extraAvail = Math.min(xfadeFrames, Math.max(0, srcLen - endIdx));
+    const tailLen = targetFrames > xfadeFrames ? Math.min(xfadeFrames, extraAvail > 0 ? extraAvail : Math.min(xfadeFrames, 128)) : 0;
     const tailL = new Float32Array(tailLen);
     const tailR = new Float32Array(tailLen);
     for (let k = 0; k < tailLen; k++) {
       if (k < extraAvail) {
-        tailL[k] = srcL[startIdx + copyLen + k] * g1;
-        tailR[k] = srcR[startIdx + copyLen + k] * g1;
+        tailL[k] = srcL[endIdx + k] * g1 * donorGain;
+        tailR[k] = srcR[endIdx + k] * g1 * donorGain;
+      } else if (endIdx - tailLen + k >= startIdx) {
+        const decay = 1 - k / Math.max(1, tailLen);
+        const tailIdx = Math.max(0, Math.min(targetFrames - 1, targetFrames - tailLen + k));
+        tailL[k] = segL[tailIdx] * decay * 0.45;
+        tailR[k] = segR[tailIdx] * decay * 0.45;
       }
     }
     segments.push({ l: segL, r: segR, tailL, tailR, targetFrames });

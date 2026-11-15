@@ -108,7 +108,7 @@ async function handleLoad(
         loaded[0]?.pre ?? null,
         slices,
         sampleRate,
-        crossfadeMs ?? 8,
+        crossfadeMs ?? 28,
       )
     : concatStereoRun(
         loaded.map((entry) => entry.stereo),

@@ -70,6 +70,79 @@ def _normalize12(vec: Sequence[float]) -> Tuple[float, ...]:
     return tuple(float(x) * inv for x in vec)
 
 
+def _clamp01(x: float) -> float:
+    return 0.0 if x <= 0.0 else (1.0 if x >= 1.0 else x)
+
+
+def score_bar_seam_continuity(
+    prev_bar: Dict[str, Any],
+    next_bar: Dict[str, Any],
+    stem: str,
+    is_contiguous: bool = False,
+    is_section_boundary: bool = False,
+) -> float:
+    """Estimate acoustic and musical boundary seam smoothness in [0, 1] from bar N tail -> bar N+1 head."""
+    prev_p = float(prev_bar.get("purity", 0.5))
+    next_p = float(next_bar.get("purity", 0.5))
+    if prev_p < 0.08 and next_p < 0.08:
+        return 0.62
+    if (prev_p >= 0.18 and next_p < 0.08) or (prev_p < 0.08 and next_p >= 0.25):
+        return 0.48 if is_section_boundary else 0.18
+
+    prev_tr = float(prev_bar.get("tr", prev_p))
+    next_hr = float(next_bar.get("hr", next_p))
+    rms_cont = max(0.0, 1.0 - 1.55 * abs(prev_tr - next_hr))
+
+    prev_tc = float(prev_bar.get("tc", 0.45))
+    next_hc = float(next_bar.get("hc", 0.45))
+    spec_cont = max(0.0, 1.0 - 1.45 * abs(prev_tc - next_hc))
+
+    prev_mask = int(prev_bar.get("mask", 0)) & 0xFFFF
+    next_mask = int(next_bar.get("mask", 0)) & 0xFFFF
+    prev_b4 = _popcount16((prev_mask >> 12) & 0x0F) / 4.0
+    next_b1 = 1.0 if (next_mask & 0x01) else (0.75 if (next_mask & 0x0F) else 0.25)
+    prev_d = _popcount16(prev_mask) / 16.0
+    next_d = _popcount16(next_mask) / 16.0
+    dens_cont = max(0.0, 1.0 - 1.15 * abs(prev_d - next_d))
+    rhythm_cont = 0.55 * dens_cont + 0.45 * (0.5 * next_b1 + 0.5 * (1.0 - 0.5 * abs(prev_b4 - next_b1)))
+
+    if stem == "drums":
+        raw = 0.36 * rms_cont + 0.32 * spec_cont + 0.32 * rhythm_cont
+    else:
+        prev_r = int(prev_bar.get("root", -1))
+        next_r = int(next_bar.get("root", -1))
+        prev_q = str(prev_bar.get("qual", "mono")).lower()
+        next_q = str(next_bar.get("qual", "mono")).lower()
+        if prev_r < 0 or next_r < 0:
+            harm_cont = 0.72
+        else:
+            diff = (next_r - prev_r) % 12
+            if diff == 0:
+                harm_cont = 0.96
+            elif diff in (5, 7, 3, 4, 8, 9):
+                harm_cont = 0.82
+            elif diff in (2, 10):
+                harm_cont = 0.68
+            else:
+                harm_cont = 0.28
+            if prev_q in ("minor", "major") and next_q in ("minor", "major") and prev_q != next_q:
+                harm_cont *= 0.72
+        ca = prev_bar.get("chroma")
+        cb = next_bar.get("chroma")
+        if ca and cb:
+            harm_cont = 0.55 * harm_cont + 0.45 * pitch_invariant_chroma_sim(ca, cb)
+        raw = 0.32 * rms_cont + 0.26 * spec_cont + 0.18 * rhythm_cont + 0.24 * harm_cont
+
+    if is_section_boundary:
+        raw = min(1.0, raw * 0.85 + 0.12)
+    if is_contiguous:
+        measured = prev_bar.get("sm")
+        if measured is not None:
+            return max(0.84, min(1.0, 0.55 * float(measured) + 0.45 * raw))
+        return max(0.85, min(1.0, 0.70 + 0.30 * raw))
+    return _clamp01(raw)
+
+
 def pitch_invariant_chroma_sim(c_a: Sequence[float], c_b: Sequence[float]) -> float:
     """Max circular-transposed chroma cosine similarity within +/-6 semitones.
 
@@ -464,12 +537,18 @@ def mine_processed_track_essential_bars(
         duration = float(last_t.get("start", 0.0)) + float(last_t.get("duration", 0.0))
     total_bars = min(max_bars, max(4, int(duration / max(bar_sec, 0.5))))
 
-    # Accumulate per-bar per-stem segment statistics
+    # Accumulate per-bar per-stem segment statistics + Beat-1 head / Beat-4 tail seam state
     bar_masks: Dict[str, List[int]] = {s: [0] * total_bars for s in STEMS}
     bar_chroma: Dict[str, List[List[float]]] = {s: [[0.0] * 12 for _ in range(total_bars)] for s in STEMS}
     bar_w_sum: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
     bar_loud_w: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
     bar_cent_w: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
+    head_w_sum: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
+    head_loud_w: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
+    head_cent_w: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
+    tail_w_sum: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
+    tail_loud_w: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
+    tail_cent_w: Dict[str, List[float]] = {s: [0.0] * total_bars for s in STEMS}
     bar_seg_durs: Dict[str, List[List[float]]] = {s: [[] for _ in range(total_bars)] for s in STEMS}
 
     seen_seg_in_bar: Dict[Tuple[str, int, str], bool] = {}
@@ -508,6 +587,16 @@ def mine_processed_track_essential_bars(
                     # Accumulate chroma & energy once per (stem, bar, seg_id) or small slice weight
                     amp = 10.0 ** (max(-60.0, min(0.0, l_max)) / 20.0)
                     w = max(1e-4, amp * max(0.05, min(2.0, s_dur)))
+                    cent_val = float(seg.get("spectral_centroid") or 1200.0)
+                    if step16 <= 3:
+                        head_w_sum[target_stem][b_idx] += w
+                        head_loud_w[target_stem][b_idx] += l_max * w
+                        head_cent_w[target_stem][b_idx] += cent_val * w
+                    elif step16 >= 12:
+                        tail_w_sum[target_stem][b_idx] += w
+                        tail_loud_w[target_stem][b_idx] += l_max * w
+                        tail_cent_w[target_stem][b_idx] += cent_val * w
+
                     dedup_key = (target_stem, b_idx, str(seg_id))
                     if dedup_key not in seen_seg_in_bar:
                         seen_seg_in_bar[dedup_key] = True
@@ -518,7 +607,7 @@ def mine_processed_track_essential_bars(
                                 cb[k] += float(pitches[k]) * w
                         bar_w_sum[target_stem][b_idx] += w
                         bar_loud_w[target_stem][b_idx] += l_max * w
-                        bar_cent_w[target_stem][b_idx] += float(seg.get("spectral_centroid") or 1200.0) * w
+                        bar_cent_w[target_stem][b_idx] += cent_val * w
                         bar_seg_durs[target_stem][b_idx].append(s_dur)
     else:
         # Fallback if a JSON omits tatums and provides segments directly
@@ -540,6 +629,7 @@ def mine_processed_track_essential_bars(
             bar_masks[target_stem][b_idx] |= (1 << step16)
             amp = 10.0 ** (max(-60.0, min(0.0, l_max)) / 20.0)
             w = max(1e-4, amp * max(0.05, min(2.0, s_dur)))
+            cent_val = float(seg.get("spectral_centroid") or 1200.0)
             pitches = seg.get("pitches") or [0.0] * 12
             if len(pitches) == 12:
                 cb = bar_chroma[target_stem][b_idx]
@@ -547,8 +637,16 @@ def mine_processed_track_essential_bars(
                     cb[k] += float(pitches[k]) * w
             bar_w_sum[target_stem][b_idx] += w
             bar_loud_w[target_stem][b_idx] += l_max * w
-            bar_cent_w[target_stem][b_idx] += float(seg.get("spectral_centroid") or 1200.0) * w
+            bar_cent_w[target_stem][b_idx] += cent_val * w
             bar_seg_durs[target_stem][b_idx].append(s_dur)
+            if step16 <= 3:
+                head_w_sum[target_stem][b_idx] += w
+                head_loud_w[target_stem][b_idx] += l_max * w
+                head_cent_w[target_stem][b_idx] += cent_val * w
+            elif step16 >= 12:
+                tail_w_sum[target_stem][b_idx] += w
+                tail_loud_w[target_stem][b_idx] += l_max * w
+                tail_cent_w[target_stem][b_idx] += cent_val * w
 
     # First pass loudness normalization for section inference
     bar_energy_raw: List[float] = []
@@ -611,6 +709,14 @@ def mine_processed_track_essential_bars(
                 and sec in ("DROP", "GROOVE_A", "BUILDUP")
             )
 
+            hw = head_w_sum[s_name][b_idx]
+            tw = tail_w_sum[s_name][b_idx]
+            bar_c_hz = (bar_cent_w[s_name][b_idx] / ws) if ws > 1e-8 else 1200.0
+            h_db = (head_loud_w[s_name][b_idx] / hw) if hw > 1e-8 else rms_db
+            t_db = (tail_loud_w[s_name][b_idx] / tw) if tw > 1e-8 else rms_db
+            h_c_hz = (head_cent_w[s_name][b_idx] / hw) if hw > 1e-8 else bar_c_hz
+            t_c_hz = (tail_cent_w[s_name][b_idx] / tw) if tw > 1e-8 else bar_c_hz
+
             bars_by_stem[s_name].append({
                 "stem": s_name,
                 "bar_idx": b_idx,
@@ -621,6 +727,10 @@ def mine_processed_track_essential_bars(
                 "root": int(root),
                 "qual": str(qual),
                 "chroma": chroma,
+                "hr": round(_clamp01((h_db + 54.0) / 48.0), 2),
+                "tr": round(_clamp01((t_db + 54.0) / 48.0), 2),
+                "hc": round(_clamp01(h_c_hz / 4500.0), 2),
+                "tc": round(_clamp01(t_c_hz / 4500.0), 2),
                 "hook": is_hook,
                 "is_hook": is_hook,
                 "fill": is_fill,
@@ -630,9 +740,23 @@ def mine_processed_track_essential_bars(
                 "target_quality": key_mode,
             })
 
-    # For 4-bar phrase motif heuristics (ABAB vs AAAB vs ABCD)
+    # Compute sequential contiguous seam scores + 4-bar phrase motif heuristics
     for s_name in STEMS:
         s_bars = bars_by_stem[s_name]
+        for b_idx, bar_cell in enumerate(s_bars):
+            if b_idx + 1 < len(s_bars):
+                bar_cell["sm"] = round(
+                    score_bar_seam_continuity(
+                        bar_cell,
+                        s_bars[b_idx + 1],
+                        s_name,
+                        is_contiguous=True,
+                        is_section_boundary=bar_cell["section"] != s_bars[b_idx + 1]["section"],
+                    ),
+                    2,
+                )
+            else:
+                bar_cell["sm"] = 0.85
         for p_start in range(0, len(s_bars) - 3, 4):
             r0 = s_bars[p_start]["root"]
             r2 = s_bars[p_start + 2]["root"]

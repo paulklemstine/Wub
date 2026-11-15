@@ -15,7 +15,7 @@
  */
 
 import { CellCompatScorer } from "./cell_compat";
-import { SliceSpec } from "./kit_pcm";
+import { isContiguousFullPhrase, SliceSpec } from "./kit_pcm";
 import { SectionPlanContext } from "./song_architect";
 import { PitchAutomationPoint } from "./stretch_voice";
 import {
@@ -27,6 +27,7 @@ import {
   StemName,
   TriadQuality,
   popcount16,
+  scoreBarSeamContinuity,
   scoreKickBassPocket,
   scoreSynthVocalUnmasking,
   solveCellPitchShift,
@@ -61,6 +62,8 @@ export interface ComposedStemPlan<TEntry extends ComposingPoolEntry> {
   theoryScore: number;
   /** Track IDs contributing slices to this stem. */
   donorTrackIds: string[];
+  /** True when this stem flows as an uncut contiguous phrase without sub-bar splices. */
+  isContiguousUncut: boolean;
 }
 
 export interface ComposedBlockPlan<TEntry extends ComposingPoolEntry> {
@@ -210,6 +213,126 @@ export class BarComposer {
     return { entry: scored[0].entry, strategy: scored[0].strategy };
   }
 
+  private defaultMeta(stem: StemName, sessionRoot: number): CellStemMeta {
+    return {
+      s: "AAAB",
+      p: [0.5, 0.5, 0.5, 0.5],
+      r: [sessionRoot, sessionRoot, sessionRoot, sessionRoot],
+      q: stem === "drums" ? ["perc", "perc", "perc", "perc"] : ["mono", "mono", "mono", "mono"],
+      o: [0, 0, 0, 0],
+    };
+  }
+
+  private solvePhraseKeyShift<TEntry extends ComposingPoolEntry>(
+    stem: StemName,
+    primary: TEntry,
+    meta: CellStemMeta,
+    chord: ProgressionChord,
+    sessionRoot: number,
+  ): number {
+    if (stem === "drums") return 0;
+    let bestBar = 0;
+    let bestW = -1;
+    for (let b = 0; b < 4; b++) {
+      const root = meta.r[b] ?? -1;
+      const p = meta.p[b] ?? 0;
+      const w = root >= 0 ? p + 0.1 : p * 0.25;
+      if (w > bestW) {
+        bestW = w;
+        bestBar = b;
+      }
+    }
+    const repRoot = meta.r[bestBar] ?? -1;
+    if (repRoot < 0) return primary.keyShift;
+    const repQual = meta.q[bestBar] ?? "mono";
+    return solveCellPitchShift(
+      stem,
+      repRoot,
+      repQual,
+      sessionRoot,
+      chord.relRoot,
+      chord.quality,
+      6,
+      true,
+    ).semitones;
+  }
+
+  private evaluateSeamGate(args: {
+    stem: StemName;
+    prevMeta: CellStemMeta;
+    prevBar: number;
+    prevSemitones: number;
+    nextMeta: CellStemMeta;
+    nextBar: number;
+    nextSemitones: number;
+    targetQuality: "minor" | "major" | "sus";
+    barPos: number;
+    isContiguousSamePhrase: boolean;
+    isSectionBoundary: boolean;
+    compatScorer?: CellCompatScorer;
+  }): number {
+    const acoustic = scoreBarSeamContinuity({
+      stem: args.stem,
+      prevMeta: args.prevMeta,
+      prevBar: args.prevBar,
+      nextMeta: args.nextMeta,
+      nextBar: args.nextBar,
+      isContiguousSamePhrase: args.isContiguousSamePhrase,
+      isSectionBoundary: args.isSectionBoundary,
+    });
+    if (args.compatScorer?.hasArrangementHead()) {
+      const neural = args.compatScorer.scoreTransition({
+        prev: {
+          stem: args.stem,
+          meta: args.prevMeta,
+          barIdx: args.prevBar,
+          semitonesShift: args.prevSemitones,
+          targetQuality: args.targetQuality,
+        },
+        next: {
+          stem: args.stem,
+          meta: args.nextMeta,
+          barIdx: args.nextBar,
+          semitonesShift: args.nextSemitones,
+          targetQuality: args.targetQuality,
+        },
+        barPos: args.barPos,
+        isSectionBoundary: args.isSectionBoundary,
+        isContiguousSamePhrase: args.isContiguousSamePhrase,
+      });
+      return 0.55 * acoustic + 0.45 * neural;
+    }
+    return acoustic;
+  }
+
+  private buildContiguous4BarCells<TEntry extends ComposingPoolEntry>(
+    primary: TEntry,
+    meta: CellStemMeta,
+    stem: StemName,
+    blockBars: number,
+    phraseKeyShift: number,
+  ): SelectedCell<TEntry>[] {
+    const out: SelectedCell<TEntry>[] = [];
+    for (let b = 0; b < blockBars; b++) {
+      const m = b % 4;
+      const qual = meta.q[m] ?? (stem === "drums" ? "perc" : "mono");
+      const pur = meta.p[m] ?? 0.5;
+      out.push({
+        entry: primary,
+        itemIndex: 0,
+        srcBar: m,
+        purity: pur,
+        semitones: phraseKeyShift,
+        onsetMask: meta.o[m] ?? 0,
+        quality: qual,
+        meta,
+        essentialScore: meta.es?.[m] ?? pur,
+        essentialRole: meta.er?.[m] ?? (stem === "drums" && meta.fill && m === 3 ? "T" : "A"),
+      });
+    }
+    return out;
+  }
+
   private findSecondaryDonor<TEntry extends ComposingPoolEntry>(
     stem: StemName,
     primary: TEntry,
@@ -219,6 +342,8 @@ export class BarComposer {
   ): TEntry | null {
     if (!this.index || pool.length === 0) return null;
     const rateRef = primary.rate;
+    const bpmRef = Math.max(60, primary.kit.bpm || 120);
+    const pMeta = this.getPhraseMeta(primary.phrase.id, stem);
     let best: TEntry | null = null;
     let bestScore = -999;
 
@@ -226,17 +351,40 @@ export class BarComposer {
     for (let i = 0; i < maxScan; i++) {
       const cand = pool[i];
       if (cand.kit.track_id === primary.kit.track_id) continue;
-      if (Math.abs(cand.rate - rateRef) > 0.038) continue;
+      const bpmDelta = Math.abs((cand.kit.bpm || bpmRef) - bpmRef) / bpmRef;
+      if (bpmDelta > 0.04) continue;
+      if (Math.abs(cand.rate - rateRef) > 0.035) continue;
       const meta = this.getPhraseMeta(cand.phrase.id, stem);
       if (!meta) continue;
       const maxBarP = Math.max(meta.p[0], meta.p[1], meta.p[2], meta.p[3]);
       if (maxBarP < 0.25) continue;
 
+      const targetBar = stem === "drums" ? 3 : 0;
+      const seamCont = pMeta
+        ? scoreBarSeamContinuity({
+            stem,
+            prevMeta: pMeta,
+            prevBar: 2,
+            nextMeta: meta,
+            nextBar: targetBar,
+            isContiguousSamePhrase: false,
+            isSectionBoundary: false,
+          })
+        : 0.7;
+      if (seamCont < 0.62) continue;
+
       const maxBarEs = meta.es ? Math.max(...meta.es) : maxBarP;
-      let s = maxBarP * 0.55 + maxBarEs * 0.35 + (meta.fid ?? 0.65) * 0.12 - Math.abs(cand.rate - rateRef) * 4.0;
-      if (!forbiddenTracks.has(cand.kit.track_id)) s += 0.35;
-      if (cand.section.toUpperCase() === ctx.kitSection) s += 0.12;
-      if (stem === "drums" && meta.fill) s += 0.18;
+      let s =
+        maxBarP * 0.40 +
+        maxBarEs * 0.25 +
+        seamCont * 0.45 +
+        (meta.fid ?? 0.65) * 0.10 -
+        bpmDelta * 5.0 -
+        Math.abs(cand.rate - rateRef) * 2.5;
+      if (bpmDelta <= 0.015) s += 0.25;
+      if (!forbiddenTracks.has(cand.kit.track_id)) s += 0.30;
+      if (cand.section.toUpperCase() === ctx.kitSection) s += 0.10;
+      if (stem === "drums" && meta.fill) s += 0.28;
       if (stem === "vocals" && meta.hook && (ctx.role === "CHORUS_1" || ctx.role === "CHORUS_2")) s += 0.22;
 
       if (s > bestScore) {
@@ -468,102 +616,261 @@ export class BarComposer {
       const secondary = canSplit
         ? this.findSecondaryDonor(stem, primary, pools[stem] ?? [], activeTracks, sectionCtx)
         : null;
-      const donors: TEntry[] = secondary ? [primary, secondary] : [primary];
-      if (secondary) activeTracks.add(secondary.kit.track_id);
+      const pMeta = this.getPhraseMeta(primary.phrase.id, stem) ?? this.defaultMeta(stem, sessionRoot);
+      const sMeta = secondary ? (this.getPhraseMeta(secondary.phrase.id, stem) ?? null) : null;
 
-      const schema = this.pickMotifSchema(sectionCtx.kitSection, stem, blockIndex);
-      const cycleSlots = this.buildPatternSlots(schema, donors.length);
-      const slices: SliceSpec[] = [];
-      const pitchPoints: PitchAutomationPoint[] = [];
-      const selectedBars: SelectedCell<TEntry>[] = [];
+      const ch0 = sectionCtx.progression[0] ?? { relRoot: 0, quality: "minor" as const };
+      const phraseKeyShift = this.solvePhraseKeyShift(stem, primary, pMeta, ch0, sessionRoot);
+      const selectedBars = this.buildContiguous4BarCells(primary, pMeta, stem, blockBars, phraseKeyShift);
 
-      // Keep bar A / B cells cached so repeating letters (A or B) preserve motif memory!
-      const motifCellCache = new Map<string, SelectedCell<TEntry>>();
-      let baseSemitones = primary.keyShift;
+      let schema: MotifSchema = pMeta.s ?? "AAAB";
+      let hasSpliceOrGainEdit = false;
 
-      for (let b = 0; b < blockBars; b++) {
-        const m = b % 4;
-        const chord = sectionCtx.progression[m] ?? sectionCtx.progression[0];
-        const slot = cycleSlots[m];
-        const letter = schema[m];
-        const prevCell = selectedBars[b - 1];
-        const prevCtx: PrevBarTransitionContext | undefined = prevCell
-          ? {
-              meta: prevCell.meta,
-              srcBar: prevCell.srcBar,
-              semitones: prevCell.semitones,
-              quality: prevCell.quality,
-              role: prevCell.essentialRole,
-              section: sectionCtx.kitSection,
-            }
-          : this.lastBlockTail[stem];
-        const isSecBound = b === 0 && Boolean(prevCtx && prevCtx.section !== sectionCtx.kitSection);
-        const desiredRole: EssentialRole =
-          slot.preferFill || (m === 3 && blockBars >= 4)
-            ? "T"
-            : ctxIsChorus(sectionCtx) && (stem === "vocals" || stem === "other") && slot.donorIdx === 0
-              ? "H"
-              : letter === "A"
-                ? "A"
-                : "B";
-
-        const cacheKey = `${letter}_${slot.donorIdx}`;
-        let cell = motifCellCache.get(cacheKey);
-        if (!cell) {
-          cell = this.pickBestCellForBar(
+      // 2. Selective surgical splices on top of contiguous 4-bar flow (gated by acoustic + neural seam score)
+      if (stem === "drums") {
+        const isTurnaround = (blockIndex % 2 === 1) || sectionCtx.isPreDrop || sectionCtx.isBuildup;
+        if (!pinnedStems.has("drums") && !isBridgeBlock && isTurnaround && !pMeta.fill && secondary && sMeta?.fill) {
+          const bFill = blockBars - 1;
+          const prevCell = selectedBars[bFill - 1];
+          const nextCellIn = this.pickBestCellForBar(
             stem,
-            donors,
-            slot.donorIdx,
-            chord,
+            [primary, secondary],
+            1,
+            sectionCtx.progression[3] ?? ch0,
             sessionRoot,
-            stem === "bass" ? (barDrumMasks[b] ?? null) : null,
-            stem === "other" ? (barVocalMasks[b] ?? null) : null,
-            slot.preferFill,
-            prevCtx,
-            m,
-            isSecBound,
-            desiredRole,
+            null,
+            null,
+            true,
+            prevCell
+              ? {
+                  meta: prevCell.meta,
+                  srcBar: prevCell.srcBar,
+                  semitones: 0,
+                  quality: "perc",
+                  role: prevCell.essentialRole,
+                  section: sectionCtx.kitSection,
+                }
+              : undefined,
+            3,
+            false,
+            "T",
             compatScorer,
           );
-          motifCellCache.set(cacheKey, cell);
-        } else {
-          // Re-solve pitch shift of cached rhythmic cell against THIS bar's harmonic chord!
+          if (prevCell) {
+            const seamIn = this.evaluateSeamGate({
+              stem: "drums",
+              prevMeta: prevCell.meta,
+              prevBar: prevCell.srcBar,
+              prevSemitones: 0,
+              nextMeta: sMeta,
+              nextBar: 3,
+              nextSemitones: 0,
+              targetQuality: ch0.quality,
+              barPos: 3,
+              isContiguousSamePhrase: false,
+              isSectionBoundary: false,
+              compatScorer,
+            });
+            if (seamIn >= 0.68) {
+              selectedBars[bFill] = { ...nextCellIn, itemIndex: 1, srcBar: 3, semitones: 0 };
+              schema = "AAAB";
+              hasSpliceOrGainEdit = true;
+            }
+          }
+        }
+        if (sectionCtx.isBuildup && !pinnedStems.has("drums") && !hasSpliceOrGainEdit && blockBars >= 4) {
+          const seamTight = this.evaluateSeamGate({
+            stem: "drums",
+            prevMeta: pMeta,
+            prevBar: 0,
+            prevSemitones: 0,
+            nextMeta: pMeta,
+            nextBar: 0,
+            nextSemitones: 0,
+            targetQuality: ch0.quality,
+            barPos: 1,
+            isContiguousSamePhrase: false,
+            isSectionBoundary: false,
+            compatScorer,
+          });
+          if (seamTight >= 0.70 && !pMeta.fill) {
+            selectedBars[1] = { ...selectedBars[0] };
+            selectedBars[2] = { ...selectedBars[0] };
+            schema = "AAAB";
+            hasSpliceOrGainEdit = true;
+          }
+        }
+      } else if (stem === "vocals") {
+        const isChorus = ctxIsChorus(sectionCtx) || vocalStrategy === "hook_loop";
+        if (isChorus && pMeta.hook && pMeta.hb === 2 && blockBars >= 4) {
+          const loopSeam = this.evaluateSeamGate({
+            stem: "vocals",
+            prevMeta: pMeta,
+            prevBar: 1,
+            prevSemitones: phraseKeyShift,
+            nextMeta: pMeta,
+            nextBar: 0,
+            nextSemitones: phraseKeyShift,
+            targetQuality: ch0.quality,
+            barPos: 2,
+            isContiguousSamePhrase: false,
+            isSectionBoundary: false,
+            compatScorer,
+          });
+          if (loopSeam >= 0.68) {
+            for (let b = 0; b < blockBars; b++) {
+              const hkBar = b % 2;
+              selectedBars[b] = { ...selectedBars[hkBar], srcBar: hkBar };
+            }
+            schema = "ABAB";
+            hasSpliceOrGainEdit = true;
+          }
+        } else if (sectionCtx.isBuildup && !pinnedStems.has("vocals")) {
+          const cb = Math.max(0, Math.min(3, pMeta.cb ?? 0));
+          if ((pMeta.p[cb] ?? 0) >= 0.30) {
+            hasSpliceOrGainEdit = true;
+          }
+        }
+      } else {
+        // bass / other: contiguous 0->1->2->3 by default; repair dead dropout bars or seam-clean Buildups
+        let bestActive = -1;
+        let bestP = 0;
+        for (let i = 0; i < 4; i++) {
+          if ((pMeta.p[i] ?? 0) > bestP) {
+            bestP = pMeta.p[i] ?? 0;
+            bestActive = i;
+          }
+        }
+        if (bestActive >= 0 && bestP >= 0.35) {
+          for (let b = 0; b < blockBars; b++) {
+            const m = b % 4;
+            if ((pMeta.p[m] ?? 0.5) < 0.14) {
+              const prevCell = b > 0 ? selectedBars[b - 1] : undefined;
+              const seamFix = prevCell
+                ? this.evaluateSeamGate({
+                    stem,
+                    prevMeta: prevCell.meta,
+                    prevBar: prevCell.srcBar,
+                    prevSemitones: phraseKeyShift,
+                    nextMeta: pMeta,
+                    nextBar: bestActive,
+                    nextSemitones: phraseKeyShift,
+                    targetQuality: ch0.quality,
+                    barPos: m,
+                    isContiguousSamePhrase: bestActive === prevCell.srcBar + 1,
+                    isSectionBoundary: false,
+                    compatScorer,
+                  })
+                : 0.72;
+              if (seamFix >= 0.68) {
+                selectedBars[b] = {
+                  ...selectedBars[b],
+                  srcBar: bestActive,
+                  purity: pMeta.p[bestActive] ?? 0.5,
+                  onsetMask: pMeta.o[bestActive] ?? 0,
+                  quality: pMeta.q[bestActive] ?? "mono",
+                  essentialScore: pMeta.es?.[bestActive] ?? (pMeta.p[bestActive] ?? 0.5),
+                };
+                hasSpliceOrGainEdit = true;
+              }
+            }
+          }
+        }
+        if (sectionCtx.isBuildup && !pinnedStems.has(stem) && !hasSpliceOrGainEdit && blockBars >= 4) {
+          const loopSeam = this.evaluateSeamGate({
+            stem,
+            prevMeta: pMeta,
+            prevBar: 1,
+            prevSemitones: phraseKeyShift,
+            nextMeta: pMeta,
+            nextBar: 0,
+            nextSemitones: phraseKeyShift,
+            targetQuality: ch0.quality,
+            barPos: 2,
+            isContiguousSamePhrase: false,
+            isSectionBoundary: false,
+            compatScorer,
+          });
+          if (loopSeam >= 0.70) {
+            for (let b = 2; b < blockBars; b++) {
+              const srcB = b % 2;
+              selectedBars[b] = { ...selectedBars[srcB], srcBar: srcB };
+            }
+            schema = "AABB";
+            hasSpliceOrGainEdit = true;
+          }
+        }
+      }
+
+      // Drop secondary donor when unused so audio cache never fetches an unused file
+      const usedSecondary = Boolean(secondary && selectedBars.some((c) => c.itemIndex === 1));
+      const donors: TEntry[] = usedSecondary && secondary ? [primary, secondary] : [primary];
+      if (usedSecondary && secondary) activeTracks.add(secondary.kit.track_id);
+
+      const slices: SliceSpec[] = [];
+      const pitchPoints: PitchAutomationPoint[] = [];
+      let baseSemitones = phraseKeyShift;
+
+      // Single key shift per 4-bar phrase; allow per-bar pitchPoints ONLY when repeating a stationary 1-bar mono cell
+      const firstCell = selectedBars[0];
+      const allSameCell = Boolean(
+        firstCell &&
+        selectedBars.every((c) => c.itemIndex === firstCell.itemIndex && c.srcBar === firstCell.srcBar),
+      );
+      const allowPerBarPitch =
+        allSameCell &&
+        stem !== "drums" &&
+        stem !== "vocals" &&
+        firstCell.quality === "mono" &&
+        firstCell.purity >= 0.72 &&
+        (firstCell.meta.r[firstCell.srcBar] ?? -1) >= 0;
+
+      if (allowPerBarPitch) {
+        let lastSentShift = baseSemitones;
+        for (let b = 0; b < blockBars; b++) {
+          const chord = sectionCtx.progression[b % 4] ?? ch0;
           const solved = solveCellPitchShift(
             stem,
-            cell.meta.r[cell.srcBar] ?? -1,
-            cell.quality,
+            firstCell.meta.r[firstCell.srcBar] ?? -1,
+            firstCell.quality,
             sessionRoot,
             chord.relRoot,
             chord.quality,
-            6,
+            4,
             true,
           );
-          cell = { ...cell, semitones: solved.semitones };
+          if (b === 0) {
+            baseSemitones = solved.semitones;
+            lastSentShift = solved.semitones;
+            selectedBars[b] = { ...selectedBars[b], semitones: solved.semitones };
+          } else if (Math.abs(solved.semitones - baseSemitones) <= 4) {
+            selectedBars[b] = { ...selectedBars[b], semitones: solved.semitones };
+            if (solved.semitones !== lastSentShift) {
+              pitchPoints.push({ offsetSec: b * barOutSec, semitones: solved.semitones });
+              lastSentShift = solved.semitones;
+            }
+          }
         }
+      }
 
-        selectedBars.push(cell);
+      for (let b = 0; b < blockBars; b++) {
+        const cell = selectedBars[b];
         if (stem === "drums") barDrumMasks.push(cell.onsetMask);
         if (stem === "vocals") barVocalMasks.push(cell.onsetMask);
-        if (b === 0) baseSemitones = cell.semitones;
-        else if (stem !== "drums") {
-          pitchPoints.push({ offsetSec: b * barOutSec, semitones: cell.semitones });
-        }
 
         const isLastBar = b === blockBars - 1;
         const isFirstBar = b === 0;
         const barStartFrac = cell.srcBar * 0.25;
         const barEndFrac = (cell.srcBar + 1) * 0.25;
 
-        // Apply 2-bar section transition & vocal arranger operators on slice geometry
-        if (stem === "vocals" && sectionCtx.isBuildup && b >= blockBars - 2) {
+        if (stem === "vocals" && sectionCtx.isBuildup && !pinnedStems.has("vocals") && b >= blockBars - 2 && (cell.meta.p[cell.meta.cb ?? cell.srcBar] ?? 0) >= 0.30) {
           const cb = Math.max(0, Math.min(3, cell.meta.cb ?? cell.srcBar));
           const cStart = cb * 0.25;
+          hasSpliceOrGainEdit = true;
           if (!isLastBar) {
-            // Penultimate buildup bar: 2-beat loop tightening (2 x 0.5 bar)
             slices.push({ itemIndex: cell.itemIndex, startFrac: cStart, endFrac: cStart + 0.125, targetBars: 0.5, gain: 0.92 });
             slices.push({ itemIndex: cell.itemIndex, startFrac: cStart, endFrac: cStart + 0.125, targetBars: 0.5, gain: 1.0 });
           } else if (sectionCtx.isPreDrop) {
-            // Final pre-drop bar: 1-beat x2 (0.50) + 1/16th stutter x6 (0.375) + 0.5-beat silence gap (0.125) = 1.000 bar
             slices.push({ itemIndex: cell.itemIndex, startFrac: cStart, endFrac: cStart + 0.0625, targetBars: 0.25, gain: 0.98 });
             slices.push({ itemIndex: cell.itemIndex, startFrac: cStart, endFrac: cStart + 0.0625, targetBars: 0.25, gain: 1.02 });
             for (let k = 0; k < 6; k++) {
@@ -579,26 +886,9 @@ export class BarComposer {
           continue;
         }
 
-        if (stem === "vocals" && (ctxIsChorus(sectionCtx) || vocalStrategy === "hook_loop")) {
-          // Chorus hook looper: tight A-A-A-B or A-B-A-C using 1-bar or 2-bar vocal hook cell
-          const hb = cell.meta.hb === 2 ? 2 : 1;
-          if (hb === 2 && m === 1) {
-            const c0 = selectedBars[b - 1];
-            const f0 = Math.min(0.75, c0.srcBar * 0.25 + 0.25);
-            slices.push({ itemIndex: c0.itemIndex, startFrac: f0, endFrac: f0 + 0.25, targetBars: 1, gain: 1.02 });
-            continue;
-          }
-          if (sectionCtx.kitSection === "INTRO") {
-            // Intro teaser vocal sits cleanly in background without overpowering
-            const g = m % 2 === 0 ? 0.8 : 0.35;
-            slices.push({ itemIndex: cell.itemIndex, startFrac: barStartFrac, endFrac: barEndFrac, targetBars: 1, gain: g });
-            continue;
-          }
-        }
-
-        if (sectionCtx.isPreDrop && isLastBar) {
+        if (sectionCtx.isPreDrop && isLastBar && !pinnedStems.has(stem)) {
+          hasSpliceOrGainEdit = true;
           if (stem === "drums") {
-            // Drum snare buildup tightening + 0.5-beat (0.125 bar) pre-drop silence gap
             const fStart = cell.meta.fill ? 0.75 : barStartFrac;
             slices.push({ itemIndex: cell.itemIndex, startFrac: fStart, endFrac: fStart + 0.0625, targetBars: 0.25, gain: 0.92 });
             slices.push({ itemIndex: cell.itemIndex, startFrac: fStart, endFrac: fStart + 0.0625, targetBars: 0.25, gain: 0.98 });
@@ -607,15 +897,14 @@ export class BarComposer {
             slices.push({ itemIndex: cell.itemIndex, startFrac: fStart, endFrac: fStart + 0.03125, targetBars: 0.125, gain: 1.08 });
             slices.push({ itemIndex: 0, startFrac: 0, endFrac: 0.03125, targetBars: 0.125, gain: 0, endGain: 0 });
           } else {
-            // Clean 0.5-beat silence breath across bass & other right before the Drop!
             slices.push({ itemIndex: cell.itemIndex, startFrac: barStartFrac, endFrac: barStartFrac + 0.21875, targetBars: 0.875, gain: 1.0, endGain: 0.85 });
             slices.push({ itemIndex: 0, startFrac: 0, endFrac: 0.03125, targetBars: 0.125, gain: 0, endGain: 0 });
           }
           continue;
         }
 
-        if (sectionCtx.isBreakdownStart && isFirstBar && (stem === "drums" || stem === "bass")) {
-          // Breakdown opens with a 2-beat dropout followed by gentle swell
+        if (sectionCtx.isBreakdownStart && isFirstBar && (stem === "drums" || stem === "bass") && !pinnedStems.has(stem)) {
+          hasSpliceOrGainEdit = true;
           slices.push({ itemIndex: 0, startFrac: 0, endFrac: 0.125, targetBars: 0.5, gain: 0, endGain: 0 });
           slices.push({ itemIndex: cell.itemIndex, startFrac: barStartFrac + 0.125, endFrac: barEndFrac, targetBars: 0.5, gain: 0.35, endGain: 0.9 });
           continue;
@@ -623,10 +912,9 @@ export class BarComposer {
 
         const downbeatGain =
           sectionCtx.isDropDownbeat && isFirstBar && (stem === "drums" || stem === "other")
-            ? 1.08
-            : sectionCtx.kitSection === "INTRO" && stem === "vocals"
-              ? 0.78
-              : 1.0;
+            ? 1.06
+            : 1.0;
+        if (Math.abs(downbeatGain - 1) > 0.01) hasSpliceOrGainEdit = true;
 
         slices.push({
           itemIndex: cell.itemIndex,
@@ -636,6 +924,13 @@ export class BarComposer {
           gain: downbeatGain,
         });
       }
+
+      const isContiguousBars = selectedBars.every((c, idx) => c.itemIndex === 0 && c.srcBar === (idx % 4));
+      const isContiguousUncut =
+        donors.length === 1 &&
+        !hasSpliceOrGainEdit &&
+        isContiguousBars &&
+        (blockBars !== 4 || isContiguousFullPhrase(slices));
 
       barSelectedCells[stem] = selectedBars;
       const tailCell = selectedBars[selectedBars.length - 1];
@@ -734,6 +1029,7 @@ export class BarComposer {
         vocalStrategy,
         theoryScore: Math.max(0, Math.min(1, 0.42 * meanPurity + 0.36 * extraTheory + 0.22 * meanArr)),
         donorTrackIds,
+        isContiguousUncut,
       };
     }
 

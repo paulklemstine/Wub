@@ -12,6 +12,7 @@ import {
   StemName,
   TriadQuality,
   popcount16,
+  scoreBarSeamContinuity,
   thirdClashPenalty,
 } from "./theory_engine";
 
@@ -231,17 +232,28 @@ export class CellCompatScorer {
     next: CellFeatureInput;
     barPos: number;
     isSectionBoundary: boolean;
+    isContiguousSamePhrase?: boolean;
   }): number {
     const w = this.weights;
-    if (!w) return 0.5;
+    const seamScore = scoreBarSeamContinuity({
+      stem: args.next.stem,
+      prevMeta: args.prev.meta,
+      prevBar: args.prev.barIdx,
+      nextMeta: args.next.meta,
+      nextBar: args.next.barIdx,
+      isContiguousSamePhrase: args.isContiguousSamePhrase,
+      isSectionBoundary: args.isSectionBoundary,
+    });
+    if (!w) return seamScore;
     const ePrev = this.encode(args.prev);
     const eNext = this.encode(args.next);
-    if (!ePrev || !eNext) return 0.5;
+    if (!ePrev || !eNext) return seamScore;
 
     if (!w.arr_w1 || !w.arr_b1 || !w.arr_w2 || !w.arr_b2) {
       let dot = 0;
       for (let i = 0; i < ePrev.length; i++) dot += ePrev[i] * eNext[i];
-      return Math.max(0, Math.min(1, 0.5 + 0.35 * dot));
+      const dotScore = Math.max(0, Math.min(1, 0.5 + 0.35 * dot));
+      return 0.55 * dotScore + 0.45 * seamScore;
     }
 
     const embedDim = ePrev.length;
@@ -251,6 +263,9 @@ export class CellCompatScorer {
     const nextEs = Math.max(0, Math.min(1, args.next.meta.es?.[nBar] ?? args.next.meta.p[nBar] ?? 0.5));
     const prevPur = args.prev.meta.p[pBar] ?? 0.5;
     const nextPur = args.next.meta.p[nBar] ?? 0.5;
+    const prevTr = args.prev.meta.tr?.[pBar] ?? prevPur;
+    const nextHr = args.next.meta.hr?.[nBar] ?? nextPur;
+    const rmsSeamDelta = Math.min(1, Math.max(0, Math.abs(prevTr - nextHr)));
     const delta = Math.max(-1, Math.min(1, nextPur - prevPur));
 
     const concat = new Float32Array(embedDim * 2 + 8);
@@ -259,8 +274,8 @@ export class CellCompatScorer {
     const bPos = ((args.barPos % 4) + 4) % 4;
     concat[embedDim * 2 + bPos] = 1;
     concat[embedDim * 2 + 4] = args.isSectionBoundary ? 1 : 0;
-    concat[embedDim * 2 + 5] = prevEs;
-    concat[embedDim * 2 + 6] = nextEs;
+    concat[embedDim * 2 + 5] = Math.max(0, Math.min(1, 0.55 * prevEs + 0.45 * seamScore));
+    concat[embedDim * 2 + 6] = Math.max(0, Math.min(1, 0.55 * nextEs + 0.45 * (1 - rmsSeamDelta)));
     concat[embedDim * 2 + 7] = 0.5 + 0.5 * delta;
 
     const h = new Float32Array(w.arr_w1.length);
@@ -274,6 +289,6 @@ export class CellCompatScorer {
     let logit = w.arr_b2[0] ?? 0;
     const row2 = w.arr_w2[0];
     for (let j = 0; j < h.length; j++) logit += row2[j] * h[j];
-    return sigmoid(logit);
+    return Math.max(0, Math.min(1, 0.80 * sigmoid(logit) + 0.20 * seamScore));
   }
 }

@@ -436,10 +436,6 @@ export function drawMasterAnalysis(
   ctx2d.textAlign = "left";
   ctx2d.fillText("MASTER MIX", 16, 26);
 
-  ctx2d.fillStyle = "rgba(255, 255, 255, 0.55)";
-  ctx2d.font = "10px monospace";
-  ctx2d.fillText("COMBINED OUTPUT", 16, 42);
-
   // Status LED dot
   const level = state.level;
   const isPlaying = level > 0.005;

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Wub — Klemstine Group KG-505 Groovebox</title>
+  <title>Wub KG-505</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312151c'/%3E%3Ccircle cx='5' cy='8' r='2' fill='%2306b6d4'/%3E%3Ccircle cx='11' cy='8' r='2' fill='%23a855f7'/%3E%3C/svg%3E" />
   <style>
     :root {
@@ -2347,8 +2347,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.283 <span class="mc-build-num">#283</span></span>
-        <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.284 <span class="mc-build-num">#284</span></span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
@@ -2390,7 +2389,7 @@
     <!-- Panel 3: Neural ASCII Tamagotchi Avatar ("WubGotchi") -->
     <div class="stage-card tamagotchi-card">
       <div class="stage-header">
-        <span style="color: #ff77e9;">Wub • Kawaii Gummi Bear Pet</span>
+        <span style="color: #ff77e9;">WUB</span>
         <span id="tamagotchi-stage-badge">LVL 1 • GUMMI CUB</span>
       </div>
       <div class="tamagotchi-container">
@@ -2416,8 +2415,7 @@
     </div>
     <div class="stage-card">
       <div class="stage-header">
-        <span>2D Timbre Nebula &amp; Gravity Reticles</span>
-        <span>D-Beam Vector Crosshairs</span>
+        <span>TIMBRE NEBULA</span>
       </div>
       <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
     </div>
@@ -2427,18 +2425,15 @@
     <section id="groovebox-panel" aria-label="Groovebox Sequencer">
       <div class="gb-header-row">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-          <span class="gb-title">REALTIME MULTI-PATTERN SEQUENCER</span>
+          <span class="gb-title">SEQUENCER</span>
           <span id="gb-section-badge">GROOVE A</span>
           <span id="gb-fill-badge" style="display: none;">FILL</span>
         </div>
         <div style="display: flex; align-items: center; gap: 10px; font-size: 0.82rem; font-family: monospace; font-weight: 700; flex-wrap: wrap;">
           <div class="gb-cycle-selector">
             <span class="gb-cycle-label">ENGINE:</span>
-            <button class="gb-cycle-btn active" id="btn-mode-kit" data-playback="kit" type="button" title="Kit Player: Locked Studio Kit • Real 4-Bar Stem Phrases (No Resampling)">KIT</button>
-            <button class="gb-cycle-btn" disabled title="Retired in the kit build" id="btn-mode-jukebox" data-playback="jukebox" type="button" title="Jukebox Groove: Authentic Studio Loops + Groovy Slices & Vocal Chops">JUKEBOX</button>
-            <button class="gb-cycle-btn" disabled title="Retired in the kit build" id="btn-mode-slices" data-playback="slices" type="button" title="Live Slices: 16th-Step Micro-Slice Re-sequencer">SLICES</button>
-            <button class="gb-cycle-btn" disabled title="Retired in the kit build" id="btn-mode-phrases" data-playback="phrase_blocks" type="button" title="Master Phrases: Continuous 4-Bar Studio Blocks">PHRASES</button>
-            <button class="gb-cycle-btn" id="btn-next-kit" type="button" title="Force the next kit rotation bridge on the next 4-bar boundary">NEXT KIT</button>
+            <button class="gb-cycle-btn active" id="btn-mode-kit" data-playback="kit" type="button" title="Real 4-Bar Stem Phrases">KIT</button>
+            <button class="gb-cycle-btn" id="btn-next-kit" type="button" title="Queue next kit on the next 4-bar boundary">NEXT KIT</button>
           </div>
           <div class="gb-cycle-selector">
             <span class="gb-cycle-label">CYCLE:</span>
@@ -2507,7 +2502,6 @@
         <span class="rack-bolt">✛</span>
         <div class="rack-brand">
           <span class="rack-brand-glow">KG-505 MODULAR</span>
-          <span class="rack-brand-sub">NEON HARMONIC SEQUENCER RACK • 19" 4U</span>
         </div>
         <span class="rack-bolt">✛</span>
       </div>
@@ -2517,7 +2511,7 @@
         <div class="scale-module-header">
           <div class="scale-title-group">
             <span class="scale-indicator-led"></span>
-            <span class="module-title">HARMONIC SCALE MATRIX &amp; CHORD ENGINE</span>
+            <span class="module-title">HARMONIC SCALE MATRIX</span>
           </div>
           <div class="scale-camelot-badge" id="rack-camelot-badge">8B</div>
         </div>
@@ -2528,9 +2522,6 @@
             <div class="scale-name-line">
               <span class="scale-name" id="rack-scale-name">C MAJOR</span>
               <span class="scale-mode-tag" id="rack-scale-mode">IONIAN (MAJOR)</span>
-            </div>
-            <div class="scale-formula-line" id="rack-scale-formula">
-              FORMULA: 1 - 2 - 3 - 4 - 5 - 6 - 7
             </div>
           </div>
 
@@ -2822,16 +2813,6 @@
           </div>
         </div>
       </div>
-
-      <!-- Bottom Rack Rail -->
-      <div class="rack-ears bottom">
-        <span class="rack-bolt">✛</span>
-        <div class="rack-status-bar">
-          <span class="rack-status-dot"></span>
-          <span>SAMPLE-ACCURATE WEBAUDIO SYNC • REALTIME ACOUSTIC ML SCORING</span>
-        </div>
-        <span class="rack-bolt">✛</span>
-      </div>
     </section>
 
     <!-- SONG ARRANGEMENT & PATTERN MATRIX PANEL -->
@@ -2839,7 +2820,7 @@
       <div class="struct-header">
         <div class="struct-title">
           <span class="struct-icon"></span>
-          SONG ARRANGEMENT &amp; PATTERN MATRIX
+          ARRANGEMENT
         </div>
         <div class="struct-stats">
           <span>KEY: <b id="struct-camelot" style="color: var(--neon-cyan);">8B (C major)</b></span>
@@ -2959,8 +2940,7 @@
       <div class="trip-header">
         <div class="trip-title">
           <span class="trip-led"></span>
-          <span>DMT / LSD / MESCALINE LIGHT SHOW</span>
-          <span class="trip-sub">Self-Reactive • WebGL • Color-Cycling • 60 FPS</span>
+          <span>LIGHT SHOW</span>
         </div>
         <div class="trip-master-toggle">
           <button id="trip-toggle-btn" class="active" type="button" aria-pressed="true">LIGHT SHOW: ON</button>
@@ -3005,7 +2985,7 @@
     <!-- 4-STEM HARDWARE MIXER DECKS -->
     <section id="decks" aria-label="Stem decks">
       <div class="deck" id="deck-drums">
-        <h2>Part 1: Drums</h2>
+        <h2>Drums</h2>
         <div class="row toggles">
           <button id="drums-mute" type="button" aria-pressed="false">Mute</button>
           <button id="drums-solo" type="button" aria-pressed="false">Solo</button>
@@ -3014,7 +2994,7 @@
         <div class="row"><label>Chaos <input id="drums-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="drums-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="drums-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="drums-synth-val">0.00</span></div>
         <div class="deck-feedback-row">
-          <span class="feedback-label">Train Feedback:</span>
+          <span class="feedback-label">Rating</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <button class="thumb-btn thumb-up" data-stem="drums" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
             <span class="feedback-score" id="deck-score-drums">0</span>
@@ -3023,7 +3003,7 @@
         </div>
       </div>
       <div class="deck" id="deck-bass">
-        <h2>Part 2: Bass</h2>
+        <h2>Bass</h2>
         <div class="row toggles">
           <button id="bass-mute" type="button" aria-pressed="false">Mute</button>
           <button id="bass-solo" type="button" aria-pressed="false">Solo</button>
@@ -3032,7 +3012,7 @@
         <div class="row"><label>Chaos <input id="bass-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="bass-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="bass-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="bass-synth-val">0.00</span></div>
         <div class="deck-feedback-row">
-          <span class="feedback-label">Train Feedback:</span>
+          <span class="feedback-label">Rating</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <button class="thumb-btn thumb-up" data-stem="bass" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
             <span class="feedback-score" id="deck-score-bass">0</span>
@@ -3041,7 +3021,7 @@
         </div>
       </div>
       <div class="deck" id="deck-vocals">
-        <h2>Part 3: Vocals</h2>
+        <h2>Vocals</h2>
         <div class="row toggles">
           <button id="vocals-mute" type="button" aria-pressed="false">Mute</button>
           <button id="vocals-solo" type="button" aria-pressed="false">Solo</button>
@@ -3050,7 +3030,7 @@
         <div class="row"><label>Chaos <input id="vocals-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="vocals-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="vocals-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="vocals-synth-val">0.00</span></div>
         <div class="deck-feedback-row">
-          <span class="feedback-label">Train Feedback:</span>
+          <span class="feedback-label">Rating</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <button class="thumb-btn thumb-up" data-stem="vocals" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
             <span class="feedback-score" id="deck-score-vocals">0</span>
@@ -3059,7 +3039,7 @@
         </div>
       </div>
       <div class="deck" id="deck-other">
-        <h2>Part 4: Other</h2>
+        <h2>Other</h2>
         <div class="row toggles">
           <button id="other-mute" type="button" aria-pressed="false">Mute</button>
           <button id="other-solo" type="button" aria-pressed="false">Solo</button>
@@ -3068,7 +3048,7 @@
         <div class="row"><label>Chaos <input id="other-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="other-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="other-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="other-synth-val">0.00</span></div>
         <div class="deck-feedback-row">
-          <span class="feedback-label">Train Feedback:</span>
+          <span class="feedback-label">Rating</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <button class="thumb-btn thumb-up" data-stem="other" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
             <span class="feedback-score" id="deck-score-other">0</span>
@@ -3082,15 +3062,13 @@
     <section id="stages" aria-label="Visualizers">
       <div class="stage-card">
         <div class="stage-header">
-          <span>4-Stem Real-Time Waveform Analysis</span>
-          <span>Oscilloscope • FFT • RMS</span>
+          <span>STEM WAVEFORMS</span>
         </div>
         <canvas id="rings-canvas" class="stage" width="720" height="450"></canvas>
       </div>
       <div class="stage-card master-card">
         <div class="stage-header">
-          <span style="color: var(--neon-green);">Master Summed Audio Analysis</span>
-          <span>Summed Waveform • 64-Band Spectrum • Peak VU</span>
+          <span style="color: var(--neon-green);">MASTER OUTPUT</span>
         </div>
         <canvas id="master-canvas" class="stage" width="720" height="240"></canvas>
       </div>
@@ -3099,8 +3077,8 @@
     <!-- NEURAL SINGING HEAD (BOTTOM STAGE) -->
     <section id="singing-head-panel" class="stage-card" aria-label="Singing Head Vocal Articulator">
       <div class="stage-header">
-        <span style="color: var(--neon-cyan);">🎤 NEURAL SINGING HEAD • VOCAL INSTRUMENT ARTICULATOR</span>
-        <span id="singing-head-status">LISTENING TO VOCAL INSTRUMENT…</span>
+        <span style="color: var(--neon-cyan);">VOCAL ARTICULATOR</span>
+        <span id="singing-head-status">STANDBY</span>
       </div>
       <div class="singing-head-toolbar" role="toolbar" aria-label="Singing Head View Controls">
         <div class="sh-btn-group" role="group" aria-label="Vocal Instrument Audio Source">
@@ -3130,15 +3108,11 @@
         <canvas id="singing-head-canvas" class="stage" width="960" height="380" aria-label="Reverse-Trained Mid-Sagittal Singing Head"></canvas>
         <div id="singing-head-3d-host" aria-label="Interactive 3D Vocal Tract View"></div>
       </div>
-      <div class="singing-head-meta-row">
-        <span>INVERSE VOCAL-TRACT MLP + SAGITTAL/3D ARTICULATOR • 18 ACOUSTIC FEATURES → 9 ARTICULATORS + 5 VOWELS</span>
-        <span id="singing-head-model-badge">LOADING VOCAL MODEL…</span>
-      </div>
     </section>
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.283 (Build #283 • rev 6885869162)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.284 (Build #284 • rev 2301613a02)</span>
     </div>
   </div>
 

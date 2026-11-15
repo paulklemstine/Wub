@@ -32,6 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from wub_core.essential_slices import (  # noqa: E402
     mine_processed_track_essential_bars,
+    score_bar_seam_continuity,
     select_essential_slices_for_song,
 )
 from wub_core.motif_miner import extract_phrase_bar_features  # noqa: E402
@@ -265,6 +266,12 @@ def _collect_corpus_units_and_transitions(
                         "mask": int(sm["o"][b]),
                         "root": int(sm["r"][b]),
                         "qual": str(sm["q"][b]),
+                        "hr": float((sm.get("hr") or [sm["p"][b]] * 4)[b]),
+                        "tr": float((sm.get("tr") or [sm["p"][b]] * 4)[b]),
+                        "hc": float((sm.get("hc") or [0.45] * 4)[b]),
+                        "tc": float((sm.get("tc") or [0.45] * 4)[b]),
+                        "sm": float((sm.get("sm") or [0.85] * 4)[b]),
+                        "phrase_id": pid,
                         "hook": bool(sm.get("hook", False)),
                         "fill": bool(sm.get("fill", False) and b == 3),
                         "schema": str(sm.get("s", "AAAB")),
@@ -275,6 +282,7 @@ def _collect_corpus_units_and_transitions(
                     }
                 bq = {
                     "track_id": tid,
+                    "phrase_id": pid,
                     "bar_pos": b,
                     "section": sec,
                     "session_root": meta_kit["key_pc"],
@@ -290,11 +298,16 @@ def _collect_corpus_units_and_transitions(
             b0 = track_seq[i]
             b1 = track_seq[i + 1]
             is_bound = b0["section"] != b1["section"]
+            same_phrase = b0.get("phrase_id") == b1.get("phrase_id")
             for st in STEMS:
                 c0 = b0["cells"][st]
                 c1 = b1["cells"][st]
                 if c0["purity"] < 0.14 and c1["purity"] < 0.14:
                     continue
+                seam_val = score_bar_seam_continuity(
+                    c0, c1, st, is_contiguous=same_phrase, is_section_boundary=is_bound
+                )
+                rms_delta = abs(float(c0.get("tr", c0["purity"])) - float(c1.get("hr", c1["purity"])))
                 transition_pairs.append({
                     "track_id": tid,
                     "stem": st,
@@ -302,6 +315,9 @@ def _collect_corpus_units_and_transitions(
                     "next": c1,
                     "bar_pos": int(b1["bar_pos"]) % 4,
                     "is_section_boundary": is_bound,
+                    "is_contiguous": same_phrase,
+                    "seam_score": float(seam_val),
+                    "rms_seam_delta": float(rms_delta),
                     "prev_es": float(c0["essential_score"]),
                     "next_es": float(c1["essential_score"]),
                     "session_root": b1["session_root"],
@@ -362,6 +378,11 @@ def _collect_corpus_units_and_transitions(
                             # Include all high-value transitions + essential slices
                             if not is_4s and max(c0.get("essential_score", 0.0), c1.get("essential_score", 0.0)) < 0.42 and not is_bound:
                                 continue
+                            is_adj = (b1["bar_idx"] - b0["bar_idx"]) == 1
+                            seam_val = score_bar_seam_continuity(
+                                c0, c1, st, is_contiguous=is_adj, is_section_boundary=is_bound
+                            )
+                            rms_delta = abs(float(c0.get("tr", c0["purity"])) - float(c1.get("hr", c1["purity"])))
                             transition_pairs.append({
                                 "track_id": tid,
                                 "stem": st,
@@ -369,6 +390,9 @@ def _collect_corpus_units_and_transitions(
                                 "next": c1,
                                 "bar_pos": int(b1["bar_pos"]) % 4,
                                 "is_section_boundary": is_bound,
+                                "is_contiguous": is_adj,
+                                "seam_score": float(seam_val),
+                                "rms_seam_delta": float(rms_delta),
                                 "prev_es": float(c0.get("essential_score", 0.5)),
                                 "next_es": float(c1.get("essential_score", 0.5)),
                                 "session_root": b1["session_root"],
@@ -640,12 +664,24 @@ def _build_arr_ctx(
     next_es: float,
     prev_purity: float,
     next_purity: float,
+    seam_score: Optional[float] = None,
+    rms_seam_delta: Optional[float] = None,
 ) -> np.ndarray:
     ctx = np.zeros(8, dtype=np.float32)
     ctx[int(bar_pos) & 3] = 1.0
     ctx[4] = 1.0 if is_section_boundary else 0.0
-    ctx[5] = clamp01(float(prev_es))
-    ctx[6] = clamp01(float(next_es))
+    rms_delta_val = (
+        abs(float(next_purity) - float(prev_purity))
+        if rms_seam_delta is None
+        else max(0.0, min(1.0, float(rms_seam_delta)))
+    )
+    seam_val = (
+        clamp01(1.0 - rms_delta_val) * (1.0 if float(next_purity) >= 0.12 else 0.15)
+        if seam_score is None
+        else clamp01(float(seam_score))
+    )
+    ctx[5] = clamp01(0.55 * float(prev_es) + 0.45 * seam_val)
+    ctx[6] = clamp01(0.55 * float(next_es) + 0.45 * (1.0 - rms_delta_val))
     delta = max(-1.0, min(1.0, float(next_purity) - float(prev_purity)))
     ctx[7] = 0.5 + 0.5 * delta
     return ctx
@@ -685,11 +721,13 @@ def build_transition_dataset(
         t_qual = str(tp["target_quality"])
         px, p_pen, _ = _featurize_single_cell(tp["prev"], s_root, 0, t_qual)
         nx, n_pen, _ = _featurize_single_cell(tp["next"], s_root, 0, t_qual)
-        ess_bonus = 0.12 * max(tp["prev_es"], tp["next_es"])
-        pos_bonus = 0.05 if (tp["bar_pos"] == 3 and tp["next"].get("fill")) or tp["next"].get("hook") else 0.0
+        ess_bonus = 0.10 * max(tp["prev_es"], tp["next_es"])
+        pos_bonus = 0.04 if (tp["bar_pos"] == 3 and tp["next"].get("fill")) or tp["next"].get("hook") else 0.0
         harm_ok = 1.0 - 0.35 * max(p_pen, n_pen)
+        seam_s = float(tp.get("seam_score", 0.80))
+        rms_d = float(tp.get("rms_seam_delta", 0.12))
         base = 0.80 if tp.get("is_4stem", True) else 0.74
-        label = max(0.68, min(0.98, base * harm_ok + ess_bonus + pos_bonus))
+        label = max(0.66, min(0.99, base * harm_ok * (0.78 + 0.22 * seam_s) + ess_bonus + pos_bonus))
         prev_xs.append(px)
         next_xs.append(nx)
         ctxs.append(_build_arr_ctx(
@@ -699,10 +737,12 @@ def build_transition_dataset(
             tp["next_es"],
             tp["prev"]["purity"],
             tp["next"]["purity"],
+            seam_score=seam_s,
+            rms_seam_delta=rms_d,
         ))
         ys.append(label)
 
-    # 2. Theory-clean cross-song essential continuations vs hard arrangement negatives
+    # 2. Seam-verified cross-song essential continuations vs jumpy/clashing hard negatives
     while len(ys) < samples_target:
         st = rng.choice(STEMS)
         if not ess_by_stem[st] or not all_by_stem[st]:
@@ -714,7 +754,7 @@ def build_transition_dataset(
 
         roll = rng.random()
         if roll < 0.24:
-            # Cross-song essential continuation: compatible pocket + smooth harmony
+            # Cross-song essential continuation with smooth head/tail seam & pocket
             c0 = dict(rng.choice(ess_by_stem[st]))
             c1 = dict(rng.choice(ess_by_stem[st]))
             if st != "drums":
@@ -727,17 +767,25 @@ def build_transition_dataset(
             cnt1 = _popcount16(c1["mask"])
             if abs(cnt0 - cnt1) > 5 and not is_bound:
                 c1["mask"] = c0["mask"] ^ (1 << rng.choice((2, 6, 10, 14)))
+            t_r0 = float(c0.get("tr", c0["purity"]))
+            c1["hr"] = max(0.25, min(0.95, t_r0 + rng.uniform(-0.10, 0.10)))
+            c1["hc"] = max(0.15, min(0.90, float(c0.get("tc", 0.45)) + rng.uniform(-0.12, 0.12)))
+            seam_s = score_bar_seam_continuity(c0, c1, st, is_contiguous=False, is_section_boundary=is_bound)
+            rms_d = abs(t_r0 - float(c1["hr"]))
             es0 = max(0.55, float(c0.get("essential_score", 0.65)))
             es1 = max(0.55, float(c1.get("essential_score", 0.65)))
             px, _, _ = _featurize_single_cell(c0, tgt_root, 0, tgt_qual)
             nx, n_pen, _ = _featurize_single_cell(c1, tgt_root, 0, tgt_qual)
-            if n_pen <= 0.35:
+            if n_pen <= 0.35 and seam_s >= 0.60:
                 prev_xs.append(px)
                 next_xs.append(nx)
-                ctxs.append(_build_arr_ctx(b_pos, is_bound, es0, es1, c0["purity"], c1["purity"]))
-                ys.append(0.82)
-        elif roll < 0.56:
-            # Hard negative 1: clashing harmonic jump / mismatched non-essential cross-song cut
+                ctxs.append(_build_arr_ctx(
+                    b_pos, is_bound, es0, es1, c0["purity"], c1["purity"],
+                    seam_score=seam_s, rms_seam_delta=rms_d,
+                ))
+                ys.append(min(0.92, 0.74 + 0.18 * seam_s))
+        elif roll < 0.50:
+            # Hard negative 1: jumpy mid-phrase cross-song splice (loudness/spectral/harmonic jump)
             c0 = dict(rng.choice(all_by_stem[st]))
             c1 = dict(rng.choice(all_by_stem[st]))
             clash_q = "major" if tgt_qual == "minor" else "minor"
@@ -747,17 +795,25 @@ def build_transition_dataset(
                 c1["root"] = (tgt_root + rng.choice((1, 6, 11))) % 12
                 c1["qual"] = clash_q
             else:
-                # Wild rhythmic discontinuity mid-phrase without section boundary
                 c0["mask"] = (1 << 0) | (1 << 4) | (1 << 8) | (1 << 12)
                 c1["mask"] = 0xAAAA
                 is_bound = False
+            c0["tr"] = rng.uniform(0.68, 0.92)
+            c1["hr"] = rng.uniform(0.12, 0.30)
+            c0["tc"] = rng.uniform(0.15, 0.30)
+            c1["hc"] = rng.uniform(0.68, 0.92)
+            seam_s = min(0.22, score_bar_seam_continuity(c0, c1, st, is_contiguous=False, is_section_boundary=False))
+            rms_d = abs(float(c0["tr"]) - float(c1["hr"]))
             px, _, _ = _featurize_single_cell(c0, tgt_root, 0, tgt_qual)
             nx, _, _ = _featurize_single_cell(c1, tgt_root, 0, tgt_qual)
             prev_xs.append(px)
             next_xs.append(nx)
-            ctxs.append(_build_arr_ctx(b_pos, is_bound, 0.55, 0.18, c0["purity"], c1["purity"]))
-            ys.append(0.08)
-        elif roll < 0.78:
+            ctxs.append(_build_arr_ctx(
+                b_pos, is_bound, 0.55, 0.18, c0["purity"], c1["purity"],
+                seam_score=seam_s, rms_seam_delta=rms_d,
+            ))
+            ys.append(0.06)
+        elif roll < 0.76:
             # Hard negative 2: mid-phrase dead dropout / non-essential bleed interrupting groove
             c0 = dict(rng.choice(ess_by_stem[st]))
             c1 = dict(c0)
@@ -767,14 +823,18 @@ def build_transition_dataset(
             c1["qual"] = "mono"
             c1["hook"] = False
             c1["fill"] = False
+            c1["hr"] = 0.02
             px, _, _ = _featurize_single_cell(c0, tgt_root, 0, tgt_qual)
             nx, _, _ = _featurize_single_cell(c1, tgt_root, 0, tgt_qual)
             prev_xs.append(px)
             next_xs.append(nx)
-            ctxs.append(_build_arr_ctx(rng.choice((1, 2)), False, 0.72, 0.05, c0["purity"], 0.04))
-            ys.append(0.05)
+            ctxs.append(_build_arr_ctx(
+                rng.choice((1, 2)), False, 0.72, 0.05, c0["purity"], 0.04,
+                seam_score=0.14, rms_seam_delta=max(0.45, float(c0.get("tr", c0["purity"])) - 0.02),
+            ))
+            ys.append(0.04)
         else:
-            # Hard negative 3: misplaced turnaround fill on bar 0 downbeat OR vocal hook chaos
+            # Hard negative 3: misplaced turnaround fill / abrupt seam cut on bar 1 or bar 2
             c0 = dict(rng.choice(all_by_stem[st]))
             c1 = dict(rng.choice(all_by_stem[st]))
             if st == "drums":
@@ -790,8 +850,11 @@ def build_transition_dataset(
             nx, _, _ = _featurize_single_cell(c1, tgt_root, 0, tgt_qual)
             prev_xs.append(px)
             next_xs.append(nx)
-            ctxs.append(_build_arr_ctx(bad_pos, False, 0.60, 0.20, c0["purity"], c1["purity"]))
-            ys.append(0.11)
+            ctxs.append(_build_arr_ctx(
+                bad_pos, False, 0.60, 0.20, c0["purity"], c1["purity"],
+                seam_score=0.18, rms_seam_delta=0.52,
+            ))
+            ys.append(0.09)
 
     return (
         np.stack(prev_xs, axis=0).astype(np.float32),

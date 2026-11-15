@@ -21,6 +21,7 @@ from wub_core.essential_slices import (
     bar_reconstitution_similarity,
     mine_processed_track_essential_bars,
     pitch_invariant_chroma_sim,
+    score_bar_seam_continuity,
     select_essential_slices_for_song,
 )
 from wub_core.motif_miner import (
@@ -162,6 +163,7 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
 
     if ci["format"] == "cell_index_v2":
         assert float(ci["mean_reconstitution_fidelity"]) >= 0.80
+        assert float(ci.get("mean_seam_continuity", 0.0)) >= 0.70
         rt = ci["essential_role_transitions"]
         assert set(rt.keys()) == set(ESSENTIAL_ROLES)
         for r1 in ESSENTIAL_ROLES:
@@ -169,6 +171,11 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
         for stem in ("drums", "bass", "other", "vocals"):
             assert len(first_phrase[stem]["es"]) == 4
             assert len(first_phrase[stem]["er"]) == 4
+            assert len(first_phrase[stem]["hr"]) == 4
+            assert len(first_phrase[stem]["tr"]) == 4
+            assert len(first_phrase[stem]["hc"]) == 4
+            assert len(first_phrase[stem]["tc"]) == 4
+            assert len(first_phrase[stem]["sm"]) == 4
             assert all(0.0 <= float(x) <= 1.0 for x in first_phrase[stem]["es"])
             assert all(r in ESSENTIAL_ROLES for r in first_phrase[stem]["er"])
             assert 0.0 <= float(first_phrase[stem]["fid"]) <= 1.0
@@ -242,8 +249,12 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
             build_cell_feature_vector("other", 0.04, 0, -1, "major", 6, "minor", False, False, "ABCD"),
             dtype=torch.float32,
         ).unsqueeze(0)
-        ctx_good = torch.from_numpy(_build_arr_ctx(1, False, 0.85, 0.82, 0.82, 0.80)).unsqueeze(0)
-        ctx_bad = torch.from_numpy(_build_arr_ctx(1, False, 0.85, 0.05, 0.82, 0.04)).unsqueeze(0)
+        ctx_good = torch.from_numpy(
+            _build_arr_ctx(1, False, 0.85, 0.82, 0.82, 0.80, seam_score=0.90, rms_seam_delta=0.04)
+        ).unsqueeze(0)
+        ctx_bad = torch.from_numpy(
+            _build_arr_ctx(1, False, 0.85, 0.05, 0.82, 0.04, seam_score=0.14, rms_seam_delta=0.58)
+        ).unsqueeze(0)
         with torch.no_grad():
             p_good = float(torch.sigmoid(net.forward_transition(prev_v, good_next, ctx_good)).item())
             p_bad = float(torch.sigmoid(net.forward_transition(prev_v, dead_next, ctx_bad)).item())
@@ -394,3 +405,151 @@ def test_essential_slices_reconstitution_and_mining() -> None:
     mined_1 = mine_processed_track_essential_bars(doc_1, max_bars=16)
     assert mined_1["is_4stem"] is False
     assert len(mined_1["bar_quartets"]) >= 1
+    first_q = mined_4["bar_quartets"][0]["cells"]["other"]
+    for k in ("hr", "tr", "hc", "tc", "sm"):
+        assert k in first_q and 0.0 <= float(first_q[k]) <= 1.0
+
+
+def test_bar_seam_continuity_and_frontend_seamless_flow(tmp_path: Path) -> None:
+    import subprocess
+    import os
+
+    beat = set_to_onset_bits([0, 4, 8, 12])
+    b_tail = {"purity": 0.84, "mask": beat, "root": 0, "qual": "minor", "hr": 0.78, "tr": 0.76, "hc": 0.42, "tc": 0.44, "sm": 0.90}
+    b_smooth = {"purity": 0.82, "mask": beat, "root": 7, "qual": "minor", "hr": 0.74, "tr": 0.75, "hc": 0.45, "tc": 0.46}
+    b_jumpy = {"purity": 0.35, "mask": 0xAAAA, "root": 6, "qual": "major", "hr": 0.14, "tr": 0.22, "hc": 0.88, "tc": 0.85}
+
+    s_cont = score_bar_seam_continuity(b_tail, b_smooth, "other", is_contiguous=True)
+    s_smooth = score_bar_seam_continuity(b_tail, b_smooth, "other", is_contiguous=False)
+    s_jumpy = score_bar_seam_continuity(b_tail, b_jumpy, "other", is_contiguous=False)
+    assert s_cont >= 0.85
+    assert s_smooth > s_jumpy + 0.35
+
+    root = Path(__file__).resolve().parent.parent
+    out_dir = tmp_path / "js"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    esbuild = root / "frontend" / "node_modules" / ".bin" / "esbuild"
+    for mod_name in ("kit_pcm.ts", "theory_engine.ts", "bar_composer.ts"):
+        subprocess.run(
+            [
+                str(esbuild),
+                str(root / "frontend" / "src" / mod_name),
+                "--bundle",
+                "--platform=node",
+                "--format=cjs",
+                f"--outfile={out_dir / (mod_name[:-3] + '.js')}",
+            ],
+            check=True,
+        )
+
+    node_script = """
+    const pcm = require(process.env.OUT + '/kit_pcm.js');
+    const bc = require(process.env.OUT + '/bar_composer.js');
+    const theory = require(process.env.OUT + '/theory_engine.js');
+
+    // 1. Coalesce + isContiguousFullPhrase checks
+    const full4 = [0, 1, 2, 3].map((b) => ({
+      itemIndex: 0, startFrac: b * 0.25, endFrac: (b + 1) * 0.25, targetBars: 1, gain: 1.0,
+    }));
+    if (!pcm.isContiguousFullPhrase(full4)) throw new Error('expected contiguous full phrase true');
+    const spliced4 = full4.map((s, i) => (i === 3 ? { ...s, itemIndex: 1 } : s));
+    if (pcm.isContiguousFullPhrase(spliced4)) throw new Error('expected spliced phrase false');
+    const merged = pcm.coalesceContiguousSlices([
+      { itemIndex: 0, startFrac: 0, endFrac: 0.25, targetBars: 1, gain: 1 },
+      { itemIndex: 0, startFrac: 0.25, endFrac: 0.5, targetBars: 1, gain: 1 },
+      { itemIndex: 0, startFrac: 0.5, endFrac: 0.75, targetBars: 1, gain: 1 },
+      { itemIndex: 1, startFrac: 0.75, endFrac: 1.0, targetBars: 1, gain: 1 },
+    ]);
+    if (merged.length !== 2 || Math.abs(merged[0].endFrac - 0.75) > 1e-5) {
+      throw new Error('coalesce failed: ' + JSON.stringify(merged));
+    }
+
+    // 2. Exact bar resampling eliminates dead silence gap when donor2 is faster (shorter phrase)
+    const sr = 48000;
+    const len1 = 38400; // 0.8s (0.2s per bar)
+    const len2 = 32000; // faster donor: shorter buffer!
+    const p1 = [new Float32Array(len1), new Float32Array(len1)];
+    const p2 = [new Float32Array(len2), new Float32Array(len2)];
+    for (let i = 0; i < len1; i++) {
+      const v = 0.35 * Math.sin(2 * Math.PI * 110 * i / sr);
+      p1[0][i] = v; p1[1][i] = v;
+    }
+    for (let i = 0; i < len2; i++) {
+      const v = 0.08 * Math.sin(2 * Math.PI * 220 * i / sr);
+      p2[0][i] = v; p2[1][i] = v;
+    }
+    const res = pcm.assembleSlicedStereoRun([p1, p2], null, spliced4, sr, 28);
+    if (res.samples[0].length !== len1) {
+      throw new Error('expected exact target length ' + len1 + ', got ' + res.samples[0].length);
+    }
+    const bar4Tail = res.samples[0].subarray(len1 - 4800, len1 - 1200);
+    let tailRms = 0;
+    for (let i = 0; i < bar4Tail.length; i++) tailRms += bar4Tail[i] * bar4Tail[i];
+    tailRms = Math.sqrt(tailRms / bar4Tail.length);
+    if (tailRms < 0.05) {
+      throw new Error('bar4 tail still has silence gap / low RMS: ' + tailRms);
+    }
+
+    // 3. BarComposer contiguous default & single-key-shift lock
+    const composer = new bc.BarComposer();
+    composer.index = {
+      version: 2,
+      format: 'cell_index_v2',
+      count: 1,
+      stem_names: ['drums', 'bass', 'other', 'vocals'],
+      style_progressions: {},
+      section_motif_priors: {},
+      phrases: {
+        ph_main: {
+          drums: { s: 'ABCD', p: [0.85, 0.85, 0.85, 0.85], r: [-1, -1, -1, -1], q: ['perc','perc','perc','perc'], o: [0x1111,0x1111,0x1111,0x1111], hr: [0.8,0.8,0.8,0.8], tr: [0.8,0.8,0.8,0.8], sm: [0.9,0.9,0.9,0.7] },
+          bass:  { s: 'ABCD', p: [0.82, 0.82, 0.82, 0.82], r: [0, 5, 7, 10], q: ['minor','minor','minor','minor'], o: [0x1111,0x1111,0x1111,0x1111], hr: [0.8,0.8,0.8,0.8], tr: [0.8,0.8,0.8,0.8], sm: [0.9,0.9,0.9,0.7] },
+          other: { s: 'ABCD', p: [0.82, 0.82, 0.82, 0.82], r: [0, 8, 3, 10], q: ['minor','major','major','major'], o: [0x2222,0x2222,0x2222,0x2222], hr: [0.8,0.8,0.8,0.8], tr: [0.8,0.8,0.8,0.8], sm: [0.9,0.9,0.9,0.7] },
+          vocals:{ s: 'ABCD', p: [0.75, 0.75, 0.75, 0.75], r: [0, 0, 3, 7], q: ['mono','mono','mono','mono'], o: [0x1111,0x1111,0x1111,0x1111], hr: [0.7,0.7,0.7,0.7], tr: [0.7,0.7,0.7,0.7], sm: [0.9,0.9,0.9,0.7] },
+        },
+      },
+    };
+    composer.loaded = true;
+    const mkEntry = (stem) => ({
+      kit: { track_id: 'trk_1', bpm: 126, key: 'C minor', style: 'house' },
+      phrase: { id: 'ph_main', section: 'GROOVE_A', start_bar: 0, duration_sec: 7.6 },
+      stem, keyShift: 0, rate: 1.0, energy: 0.8, section: 'GROOVE_A', rmsDb: -14,
+    });
+    const plan = composer.composeBlock({
+      baseEntries: { drums: mkEntry('drums'), bass: mkEntry('bass'), other: mkEntry('other'), vocals: mkEntry('vocals') },
+      pools: { drums: [], bass: [], other: [], vocals: [] },
+      sectionCtx: {
+        role: 'GROOVE_A',
+        kitSection: 'GROOVE_A',
+        progression: [
+          { relRoot: 0, quality: 'minor' },
+          { relRoot: 8, quality: 'major' },
+          { relRoot: 3, quality: 'major' },
+          { relRoot: 10, quality: 'major' },
+        ],
+        isBuildup: false,
+        isPreDrop: false,
+        isDropDownbeat: false,
+        isBreakdownStart: false,
+      },
+      blockBars: 4,
+      blockDurationSec: 7.6,
+      blockIndex: 2,
+      sessionRoot: 0,
+      sessionMode: 'minor',
+      isBridgeBlock: false,
+      pinnedStems: new Set(),
+    });
+    for (const st of ['drums', 'bass', 'other', 'vocals']) {
+      if (!plan.stems[st].isContiguousUncut) throw new Error(st + ' should default to isContiguousUncut');
+      if (plan.stems[st].pitchPoints.length !== 0) throw new Error(st + ' should hold single keyshift with zero pitchPoints');
+    }
+    console.log('OK');
+    """
+    proc = subprocess.run(
+        ["node", "-e", node_script],
+        env={**os.environ, "OUT": str(out_dir)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "OK"
