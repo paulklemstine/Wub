@@ -204,6 +204,10 @@ export class AudioEngine {
   private masterAnalyser_: AnalyserNode | null = null;
   private probeAnalyser_: AnalyserNode | null = null;
   private buses_: Record<StemName, StemBus> | null = null;
+  private vocalTrackAnalyser_: AnalyserNode | null = null;
+  private vocalTrackGain_: GainNode | null = null;
+  private vocalSynthGain_: GainNode | null = null;
+  private vocalSynthMode_ = false;
   private timer_: ReturnType<typeof setInterval> | null = null;
   private liveSources_: Map<AudioBufferSourceNode, number> = new Map();
   private activeVoices_: Partial<Record<string, { source: AudioBufferSourceNode; gain: GainNode; endAt: number }>> = {};
@@ -339,7 +343,24 @@ export class AudioEngine {
       const reverbSend = ctx.createGain();
       reverbSend.gain.value = this.reverbSends_[stem];
       input.connect(filter);
-      filter.connect(analyser);
+      if (stem === "vocals") {
+        const trackAnalyser = ctx.createAnalyser();
+        trackAnalyser.fftSize = GLUE_ANALYSER_FFT;
+        trackAnalyser.smoothingTimeConstant = 0.8;
+        const trackGain = ctx.createGain();
+        trackGain.gain.value = this.vocalSynthMode_ ? 0.0 : 1.0;
+        const synthGain = ctx.createGain();
+        synthGain.gain.value = this.vocalSynthMode_ ? 1.0 : 0.0;
+        filter.connect(trackAnalyser);
+        filter.connect(trackGain);
+        trackGain.connect(analyser);
+        synthGain.connect(analyser);
+        this.vocalTrackAnalyser_ = trackAnalyser;
+        this.vocalTrackGain_ = trackGain;
+        this.vocalSynthGain_ = synthGain;
+      } else {
+        filter.connect(analyser);
+      }
       analyser.connect(glue);
       glue.connect(master);
       analyser.connect(reverbSend);
@@ -653,6 +674,49 @@ export class AudioEngine {
     const buses = this.buses_;
     if (buses === null) throw new Error("AudioEngine buses not initialised");
     return buses[stem].analyser;
+  }
+
+  /**
+   * Dedicated analyser tapped directly off the vocal track stem filter before
+   * the Track / Head Synth switch so the Singing Head always hears the song's
+   * vocal stem even when playing the synthesized voice.
+   */
+  getVocalTrackAnalyser(): AnalyserNode {
+    this.ensureCtx();
+    if (this.vocalTrackAnalyser_ === null) {
+      throw new Error("AudioEngine vocal track analyser not initialised");
+    }
+    return this.vocalTrackAnalyser_;
+  }
+
+  /**
+   * AudioContext and destination GainNode for the Singing Head's real-time
+   * vocal tract synthesizer.
+   */
+  getVocalSynthTarget(): { ctx: AudioContext; destination: GainNode } {
+    const ctx = this.ensureCtx();
+    if (this.vocalSynthGain_ === null) {
+      throw new Error("AudioEngine vocal synth gain not initialised");
+    }
+    return { ctx, destination: this.vocalSynthGain_ };
+  }
+
+  /**
+   * Switch between playing the song's original vocal track slice (`false`)
+   * and playing the Singing Head's synthesized vocal tract output (`true`).
+   */
+  setVocalSynthMode(enabled: boolean): void {
+    this.vocalSynthMode_ = enabled;
+    if (this.ctx_ === null || this.vocalTrackGain_ === null || this.vocalSynthGain_ === null) {
+      return;
+    }
+    const t = this.ctx_.currentTime;
+    this.vocalTrackGain_.gain.setTargetAtTime(enabled ? 0.0 : 1.0, t, 0.018);
+    this.vocalSynthGain_.gain.setTargetAtTime(enabled ? 1.0 : 0.0, t, 0.018);
+  }
+
+  isVocalSynthMode(): boolean {
+    return this.vocalSynthMode_;
   }
 
   getStemInput(stem: StemName): AudioNode {
@@ -1054,6 +1118,9 @@ export class AudioEngine {
     this.masterAnalyser_ = null;
     this.probeAnalyser_ = null;
     this.buses_ = null;
+    this.vocalTrackAnalyser_ = null;
+    this.vocalTrackGain_ = null;
+    this.vocalSynthGain_ = null;
     this.drumTransient_ = false;
     this.drumTransientUntil_ = 0;
     this.vocalPresence_ = 0;

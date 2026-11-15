@@ -2330,7 +2330,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.280 <span class="mc-build-num">#280</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.281 <span class="mc-build-num">#281</span></span>
         <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
       </div>
       <div id="transport">
@@ -3085,6 +3085,10 @@
         <span id="singing-head-status">LISTENING TO VOCAL INSTRUMENT…</span>
       </div>
       <div class="singing-head-toolbar" role="toolbar" aria-label="Singing Head View Controls">
+        <div class="sh-btn-group" role="group" aria-label="Vocal Instrument Audio Source">
+          <button type="button" id="sh-audio-track" class="sh-btn active" title="Use the song's audio track slice as the vocal instrument audio">🎵 TRACK AUDIO</button>
+          <button type="button" id="sh-audio-synth" class="sh-btn amber" title="Play the vocal synthesizer's output generated from the Singing Head parameters">🗣️ HEAD SYNTH</button>
+        </div>
         <div class="sh-btn-group">
           <button type="button" id="sh-mode-side" class="sh-btn active" title="Mid-sagittal Side View Head">SIDE VIEW</button>
           <button type="button" id="sh-mode-3d" class="sh-btn amber" title="Toggle Interactive 3D Vocal Tract View">3D VIEW</button>
@@ -3116,7 +3120,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.280 (Build #280 • rev f88046ecd0)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.281 (Build #281 • rev 276727995c)</span>
     </div>
   </div>
 

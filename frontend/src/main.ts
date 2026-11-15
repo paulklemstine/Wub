@@ -318,6 +318,7 @@ class WubApp {
     try {
       this.singingHead = new SingingHeadPanel();
       this.singingHead.initDOM();
+      this.singingHead.bindAudioEngine(this.engine);
     } catch (e) {
       console.warn("Singing head init failed:", e);
     }
@@ -1465,7 +1466,7 @@ class WubApp {
   /** Unquantized float32 vocal waveform + sample rate for the Singing Head articulator. */
   private vocalFloatFrame(): { samples: Float32Array | null; sampleRate: number } {
     try {
-      const analyser = this.engine.getAnalyser("vocals");
+      const analyser = this.engine.getVocalTrackAnalyser();
       if (this.vocalFloatScratch === null || this.vocalFloatScratch.length !== analyser.fftSize) {
         this.vocalFloatScratch = new Float32Array(analyser.fftSize);
       }

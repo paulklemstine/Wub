@@ -321,6 +321,8 @@ def test_singing_head_bottom_of_page_dom_wiring() -> None:
     assert footer_pos > host3d_pos
 
     for token in (
+        'id="sh-audio-track"',
+        'id="sh-audio-synth"',
         'id="sh-mode-side"',
         'id="sh-mode-3d"',
         'data-sh-field="pressure"',
@@ -360,6 +362,7 @@ def test_vocal_sim_geometry_and_meshes_bridge(tmp_path: Path) -> None:
             str(ROOT / "frontend/src/vocal_sim/articulation_bridge.ts"),
             str(ROOT / "frontend/src/vocal_sim/head/scene.ts"),
             str(ROOT / "frontend/src/vocal_sim/three/meshes.ts"),
+            str(ROOT / "frontend/src/vocal_sim/tract_synth.ts"),
         ],
         check=True,
     )
@@ -368,6 +371,7 @@ def test_vocal_sim_geometry_and_meshes_bridge(tmp_path: Path) -> None:
     const geomMod = require(process.env.OUT + '/vocal_sim/tract/geometry.js');
     const sceneMod = require(process.env.OUT + '/vocal_sim/head/scene.js');
     const meshMod = require(process.env.OUT + '/vocal_sim/three/meshes.js');
+    const synthMod = require(process.env.OUT + '/vocal_sim/tract_synth.js');
     const typesMod = require(process.env.OUT + '/vocal_sim/tract/types.js');
 
     const an = bridge.defaultAnatomy();
@@ -380,6 +384,12 @@ def test_vocal_sim_geometry_and_meshes_bridge(tmp_path: Path) -> None:
       vowelProbs: [0.85, 0.05, 0.04, 0.03, 0.03], topVowel: 'AH',
       rms: 0.16, f0Hz: 220, voicing: 0.9, centroidHz: 950, trained: true,
     };
+    const ee = {
+      aperture: 0.35, width: 0.88, roundness: 0.05, jawDrop: 0.18, tongueHeight: 0.9,
+      pitchNorm: 0.5, vibrato: 0.1, tension: 0.75, breath: 0.1,
+      vowelProbs: [0.03, 0.88, 0.03, 0.03, 0.03], topVowel: 'EE',
+      rms: 0.14, f0Hz: 260, voicing: 0.9, centroidHz: 1850, trained: true,
+    };
     const oo = {
       aperture: 0.25, width: 0.1, roundness: 0.9, jawDrop: 0.2, tongueHeight: 0.8,
       pitchNorm: 0.3, vibrato: 0.1, tension: 0.7, breath: 0.1,
@@ -387,16 +397,35 @@ def test_vocal_sim_geometry_and_meshes_bridge(tmp_path: Path) -> None:
       rms: 0.14, f0Hz: 180, voicing: 0.9, centroidHz: 600, trained: true,
     };
 
-    const gAh = geomMod.computeGeometry(bridge.articulationToTract(ah, 1.0, { ...outArt }), an, teeth);
-    const gOo = geomMod.computeGeometry(bridge.articulationToTract(oo, 1.0, { ...outArt }), an, teeth);
-    const sAh = sceneMod.headScene(gAh, an, outArt);
+    const artAh = bridge.articulationToTract(ah, 1.0, { ...outArt });
+    const artEe = bridge.articulationToTract(ee, 1.0, { ...outArt });
+    const artOo = bridge.articulationToTract(oo, 1.0, { ...outArt });
+
+    const gAh = geomMod.computeGeometry(artAh, an, teeth);
+    const gEe = geomMod.computeGeometry(artEe, an, teeth);
+    const gOo = geomMod.computeGeometry(artOo, an, teeth);
+    const sAh = sceneMod.headScene(gAh, an, artAh);
     const mAh = meshMod.buildTractMeshes(gAh);
+
+    const acAh = synthMod.evaluateTractAcoustics(artAh, gAh);
+    const acEe = synthMod.evaluateTractAcoustics(artEe, gEe);
+    const acOo = synthMod.evaluateTractAcoustics(artOo, gOo);
 
     if (!(gAh.lipArea > gOo.lipArea)) throw new Error('Expected AH lipArea > OO lipArea');
     if (!(gOo.length > gAh.length * 0.95)) throw new Error('Expected valid vocal tract length');
     if (!sAh.sprites || sAh.sprites.length < 3) throw new Error('Expected painted head scene sprites');
     if (!(mAh.air.positions.length > 1000 && mAh.teeth.length > 0)) throw new Error('Expected valid 3D meshes');
-    console.log(JSON.stringify({ lipAh: gAh.lipArea, lipOo: gOo.lipArea, sprites: sAh.sprites.length, teeth: mAh.teeth.length }));
+    if (!(acAh.openDrive > acOo.openDrive)) throw new Error('Expected AH openDrive > OO openDrive');
+    if (!(acEe.formantHz[1] > acOo.formantHz[1])) throw new Error('Expected EE F2 > OO F2');
+    console.log(JSON.stringify({
+      lipAh: gAh.lipArea,
+      lipOo: gOo.lipArea,
+      sprites: sAh.sprites.length,
+      teeth: mAh.teeth.length,
+      f1Ah: acAh.formantHz[0],
+      f2Ee: acEe.formantHz[1],
+      f2Oo: acOo.formantHz[1],
+    }));
     """
     env = {**os.environ, "OUT": str(out_dir)}
     proc = subprocess.run(["node", "-e", script], env=env, capture_output=True, text=True, check=True)

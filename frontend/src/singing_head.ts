@@ -4,6 +4,7 @@
 // reverse-trained acoustic-to-articulatory model on the vocal instrument stem.
 // -----------------------------------------------------------------------------
 
+import type { AudioEngine } from "./audio_engine";
 import type { GrooveboxMeta } from "./main";
 import {
   SINGING_FFT_SIZE,
@@ -24,6 +25,7 @@ import {
 import { type FieldMode } from "./vocal_sim/canvas_colors";
 import { SideHeadView } from "./vocal_sim/side_head_view";
 import { type CameraPreset3D, Tract3DView } from "./vocal_sim/tract_3d_view";
+import { VocalTractSynthesizer } from "./vocal_sim/tract_synth";
 import { computeGeometry, type TractGeometry } from "./vocal_sim/tract/geometry";
 import {
   type Articulators,
@@ -87,6 +89,7 @@ function hzToNoteName(hz: number): string {
 }
 
 export type SingingHeadViewMode = "side" | "3d";
+export type SingingHeadAudioMode = "track" | "synth";
 
 export class SingingHeadPanel {
   private canvas: HTMLCanvasElement | null = null;
@@ -95,6 +98,10 @@ export class SingingHeadPanel {
   private modelBadgeEl: HTMLElement | null = null;
   private host3dEl: HTMLElement | null = null;
   private controls3dEl: HTMLElement | null = null;
+
+  private audioEngine: AudioEngine | null = null;
+  private audioSourceMode: SingingHeadAudioMode = "track";
+  private readonly tractSynth = new VocalTractSynthesizer();
 
   private readonly inference = new SingingHeadInference();
   private readonly silentFrame = new Float32Array(SINGING_FFT_SIZE);
@@ -209,7 +216,41 @@ export class SingingHeadPanel {
     this.render(null, this.silentFrame, 0, false, 126, 0.016);
   }
 
+  public bindAudioEngine(engine: AudioEngine): void {
+    this.audioEngine = engine;
+    engine.setVocalSynthMode(this.audioSourceMode === "synth");
+    if (this.audioSourceMode === "synth" && engine.ready) {
+      const target = engine.getVocalSynthTarget();
+      this.tractSynth.attach(target.ctx, target.destination);
+      this.tractSynth.setEnabled(true);
+    }
+  }
+
+  public setAudioSourceMode(mode: SingingHeadAudioMode): void {
+    this.audioSourceMode = mode;
+    const isSynth = mode === "synth";
+    document.getElementById("sh-audio-track")?.classList.toggle("active", !isSynth);
+    document.getElementById("sh-audio-synth")?.classList.toggle("active", isSynth);
+    this.tractSynth.setEnabled(isSynth);
+    if (this.audioEngine) {
+      this.audioEngine.setVocalSynthMode(isSynth);
+      if (isSynth && this.audioEngine.ready) {
+        const target = this.audioEngine.getVocalSynthTarget();
+        this.tractSynth.attach(target.ctx, target.destination);
+      }
+    }
+  }
+
+  public getAudioSourceMode(): SingingHeadAudioMode {
+    return this.audioSourceMode;
+  }
+
   private bindToolbarControls(): void {
+    const audioTrackBtn = document.getElementById("sh-audio-track");
+    const audioSynthBtn = document.getElementById("sh-audio-synth");
+    audioTrackBtn?.addEventListener("click", () => this.setAudioSourceMode("track"));
+    audioSynthBtn?.addEventListener("click", () => this.setAudioSourceMode("synth"));
+
     const sideBtn = document.getElementById("sh-mode-side");
     const view3dBtn = document.getElementById("sh-mode-3d");
     sideBtn?.addEventListener("click", () => this.setViewMode("side"));
@@ -398,16 +439,23 @@ export class SingingHeadPanel {
     this.tractGeom = computeGeometry(this.tractArt, this.anatomy, this.teeth);
     updateVocalFieldState(this.smoothedArt, this.tractArt, this.tractGeom, timeSec, this.fieldState);
 
+    if (this.audioSourceMode === "synth" && this.audioEngine && this.audioEngine.ready) {
+      const target = this.audioEngine.getVocalSynthTarget();
+      this.tractSynth.attach(target.ctx, target.destination);
+      this.tractSynth.update(this.smoothedArt, this.tractArt, this.tractGeom, isMuted);
+    }
+
     // Header live telemetry readout
     if (this.statusBadgeEl) {
+      const srcTag = this.audioSourceMode === "synth" ? "🗣️ HEAD SYNTH" : "🎵 TRACK AUDIO";
       const singing = !isMuted && (this.aperture > 0.07 || vocalLevel > 0.02);
       if (isMuted) {
-        this.statusBadgeEl.textContent = "VOCALS MUTED • STANDBY";
+        this.statusBadgeEl.textContent = `${srcTag} • VOCALS MUTED • STANDBY`;
       } else if (singing) {
         const note = this.lastF0Hz > 0 ? `${hzToNoteName(this.lastF0Hz)} (${Math.round(this.lastF0Hz)}Hz)` : "CHOP/BREATH";
-        this.statusBadgeEl.textContent = `[${this.topVowel}] • ${note} • APERTURE ${Math.round(this.aperture * 100)}%`;
+        this.statusBadgeEl.textContent = `${srcTag} • [${this.topVowel}] • ${note} • APERTURE ${Math.round(this.aperture * 100)}%`;
       } else {
-        this.statusBadgeEl.textContent = "LISTENING TO VOCAL INSTRUMENT…";
+        this.statusBadgeEl.textContent = `${srcTag} • LISTENING TO VOCAL INSTRUMENT…`;
       }
     }
 
