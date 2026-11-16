@@ -233,10 +233,13 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
         "bear-dance-slider",
         "bear-mouth-slider",
         "lightshow-canvas",
+        "lightshow-bear-overlay",
+        "btn-ls-bear",
         "btn-lightshow-fullscreen",
         "btn-ls-cortex",
     ):
         assert dom_id in html
+    assert "drawOverlayInto" in Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
 
     ls_src = Path("frontend/src/lightshow.ts").read_text(encoding="utf-8")
     for preset in ("acid-warp", "breathing-mandala", "space-tubes", "burning-julia", "cosmic-serpent"):

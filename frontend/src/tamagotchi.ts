@@ -704,6 +704,34 @@ export class TamagotchiAvatar {
     this.updateDashboard();
   }
 
+  /** Composite the transparent dancing/singing Wub Creature canvas cleanly onto the Lightshow overlay canvas. */
+  public drawOverlayInto(targetCanvas: HTMLCanvasElement): void {
+    const src = this.canvasEl;
+    if (!src) return;
+    const rect = targetCanvas.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dw = Math.max(160, Math.round((rect.width || targetCanvas.width || 640) * dpr));
+    const dh = Math.max(120, Math.round((rect.height || targetCanvas.height || 400) * dpr));
+    if (targetCanvas.width !== dw || targetCanvas.height !== dh) {
+      targetCanvas.width = dw;
+      targetCanvas.height = dh;
+    }
+    const ctx = targetCanvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, dw, dh);
+    const sw = src.width || 280;
+    const sh = src.height || 200;
+    const scale = Math.min(dw / sw, dh / sh) * (0.82 + 0.06 * this.mixEnv + 0.04 * this.mixPunch);
+    const drawW = sw * scale;
+    const drawH = sh * scale;
+    const dx = (dw - drawW) * 0.5;
+    const dy = (dh - drawH) * 0.5;
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    ctx.drawImage(src, dx, dy, drawW, drawH);
+    ctx.restore();
+  }
+
   // ---------------------------------------------------------------------------
   // Vocal acoustics: pitch (F0) + formants (F1/F2) for mouth articulation
   // ---------------------------------------------------------------------------

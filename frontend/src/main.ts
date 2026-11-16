@@ -202,6 +202,8 @@ class WubApp {
   private masterCtx: CanvasRenderingContext2D | null = null;
   private psychedelicBg: PsychedelicBackground | null = null;
   private lightshow: RaveLightshowPanel | null = null;
+  private lsBearOverlayCanvas: HTMLCanvasElement | null = null;
+  private bearOverlayEnabled = false;
   private tapTimestamps: number[] = [];
   private macroBuildupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1057,6 +1059,20 @@ class WubApp {
       });
     }
 
+    this.lsBearOverlayCanvas = document.getElementById("lightshow-bear-overlay") as HTMLCanvasElement | null;
+    const bearOverlayBtn = document.getElementById("btn-ls-bear");
+    const toggleBearOverlay = () => {
+      this.bearOverlayEnabled = !this.bearOverlayEnabled;
+      if (this.lsBearOverlayCanvas) {
+        this.lsBearOverlayCanvas.style.display = this.bearOverlayEnabled ? "block" : "none";
+      }
+      if (bearOverlayBtn) {
+        bearOverlayBtn.classList.toggle("active", this.bearOverlayEnabled);
+        bearOverlayBtn.textContent = `BEAR OVERLAY: ${this.bearOverlayEnabled ? "ON" : "OFF"}`;
+      }
+    };
+    bearOverlayBtn?.addEventListener("click", toggleBearOverlay);
+
     const lsPanel = document.getElementById("panel-lightshow");
     const fsBtn = document.getElementById("btn-lightshow-fullscreen");
     const toggleFullscreen = () => {
@@ -1325,6 +1341,8 @@ class WubApp {
         setTape(true);
       } else if (k === "f") {
         toggleFullscreen();
+      } else if (k === "o") {
+        toggleBearOverlay();
       } else if (k === "1" || k === "2" || k === "3" || k === "4") {
         const stem = STEMS[Number(k) - 1];
         this.engine.setStemKill(stem, !this.engine.isStemKilled(stem));
@@ -2289,6 +2307,9 @@ class WubApp {
         mixFrame.waveform,
         liveMouth
       );
+      if (this.bearOverlayEnabled && this.lsBearOverlayCanvas) {
+        this.tamagotchi.drawOverlayInto(this.lsBearOverlayCanvas);
+      }
     }
 
     requestAnimationFrame((next) => this.frame(next));
