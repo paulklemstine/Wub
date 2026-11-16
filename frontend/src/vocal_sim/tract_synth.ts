@@ -240,12 +240,14 @@ export class VocalTractSynthesizer {
 
   private glottalOsc: OscillatorNode | null = null;
   private subOsc: OscillatorNode | null = null;
+  private subGainNode: GainNode | null = null;
   private vibratoOsc: OscillatorNode | null = null;
   private vibratoGain: GainNode | null = null;
 
   private voicedGain: GainNode | null = null;
   private tiltFilter: BiquadFilterNode | null = null;
   private bodyFilter: BiquadFilterNode | null = null;
+  private bodyGainNode: GainNode | null = null;
 
   // Cascade formant resonators (F1 -> F2 -> F3 -> F4)
   private cascadeFilters: BiquadFilterNode[] = [];
@@ -258,6 +260,7 @@ export class VocalTractSynthesizer {
   private nasalGainNode: GainNode | null = null;
   private oralNotchFilter: BiquadFilterNode | null = null;
   private radiationFilter: BiquadFilterNode | null = null;
+  private hpFilter: BiquadFilterNode | null = null;
 
   // Aspiration + Sibilant frication noise generator
   private noiseSource: AudioBufferSourceNode | null = null;
@@ -291,8 +294,8 @@ export class VocalTractSynthesizer {
     const real = new Float32Array(nHarm);
     const imag = new Float32Array(nHarm);
     for (let k = 1; k < nHarm; k++) {
-      // Natural glottal pulse roll-off (~ -8 dB/octave before spectral tilt filter)
-      const amp = 1.0 / Math.pow(k, 1.22);
+      // Bright harmonic glottal flow derivative spectrum balanced by vocal-tract tilt + radiation
+      const amp = 1.0 / Math.pow(k, 0.72);
       // Alternating phase curvature avoids harsh sawtooth buzz crest factor
       const phase = (k * 0.38) + ((k & 1) ? 0.15 : -0.15);
       real[k] = amp * Math.cos(phase);
@@ -305,14 +308,15 @@ export class VocalTractSynthesizer {
     glottalOsc.frequency.value = this.smoothedF0;
     this.glottalOsc = glottalOsc;
 
-    // Warm chest fundamental reinforcement oscillator
+    // Gentle chest fundamental reinforcement oscillator (dynamically attenuated on bright vowels)
     const subOsc = ctx.createOscillator();
     subOsc.type = "sine";
     subOsc.frequency.value = this.smoothedF0;
     const subGain = ctx.createGain();
-    subGain.gain.value = 0.32;
+    subGain.gain.value = 0.10;
     subOsc.connect(subGain);
     this.subOsc = subOsc;
+    this.subGainNode = subGain;
 
     // Vibrato LFO (5.6 Hz natural singing vibrato)
     const vibratoOsc = ctx.createOscillator();
@@ -386,13 +390,13 @@ export class VocalTractSynthesizer {
       this.cascadeFilters.push(bp);
     }
     const cascadeOutGain = ctx.createGain();
-    cascadeOutGain.gain.value = 0.52;
+    cascadeOutGain.gain.value = 0.55;
     prevCascade.connect(cascadeOutGain);
     this.cascadeOutGain = cascadeOutGain;
 
     // 2. Parallel 4-formant bandpass bank (weighted by 44-section Webster transfer amplitudes)
     const parallelSum = ctx.createGain();
-    parallelSum.gain.value = 0.68;
+    parallelSum.gain.value = 0.85;
     this.parallelFilters = [];
     this.parallelGains = [];
     for (let k = 0; k < 4; k++) {
@@ -409,16 +413,17 @@ export class VocalTractSynthesizer {
       this.parallelGains.push(g);
     }
 
-    // Chest resonance warmth filter (160..320 Hz fundamental body)
+    // Chest resonance warmth filter (280 Hz fundamental body, trimmed on bright belted vocals)
     const bodyFilter = ctx.createBiquadFilter();
     bodyFilter.type = "lowpass";
-    bodyFilter.frequency.value = 310;
-    bodyFilter.Q.value = 1.1;
+    bodyFilter.frequency.value = 280;
+    bodyFilter.Q.value = 0.9;
     const bodyGain = ctx.createGain();
-    bodyGain.gain.value = 0.36;
+    bodyGain.gain.value = 0.06;
     tractEntry.connect(bodyFilter);
     bodyFilter.connect(bodyGain);
     this.bodyFilter = bodyFilter;
+    this.bodyGainNode = bodyGain;
 
     // Nasal velum parallel resonator (245 Hz nasal murmur)
     const nasalFilter = ctx.createBiquadFilter();
@@ -440,20 +445,27 @@ export class VocalTractSynthesizer {
     oralNotchFilter.gain.value = 0.0;
     this.oralNotchFilter = oralNotchFilter;
 
-    // Lip radiation projection filter (boosts 500..3200 Hz as mouth opens)
+    // Lip radiation high-shelf impedance projection (boosts 650+ Hz proportionally to mouth opening & brightness)
     const radiationFilter = ctx.createBiquadFilter();
-    radiationFilter.type = "peaking";
-    radiationFilter.frequency.value = 1450;
-    radiationFilter.Q.value = 0.9;
-    radiationFilter.gain.value = 2.0;
+    radiationFilter.type = "highshelf";
+    radiationFilter.frequency.value = 650;
+    radiationFilter.gain.value = 4.0;
     this.radiationFilter = radiationFilter;
+
+    // Sub-formant high-pass shaping (keeps warm fundamental on dark vowels, clears sub-F1 boom on bright vocals)
+    const hpFilter = ctx.createBiquadFilter();
+    hpFilter.type = "highpass";
+    hpFilter.frequency.value = 180;
+    hpFilter.Q.value = 0.7;
+    this.hpFilter = hpFilter;
 
     cascadeOutGain.connect(oralNotchFilter);
     parallelSum.connect(oralNotchFilter);
     bodyGain.connect(oralNotchFilter);
     oralNotchFilter.connect(radiationFilter);
     nasalGainNode.connect(radiationFilter);
-    radiationFilter.connect(out);
+    radiationFilter.connect(hpFilter);
+    hpFilter.connect(out);
 
     // Front-cavity constriction sibilance / frication path (/s/, /sh/, /f/)
     const fricFilter = ctx.createBiquadFilter();
@@ -516,19 +528,20 @@ export class VocalTractSynthesizer {
       return profile;
     }
 
-    // Track fundamental pitch f0Hz 1:1 from song vocals on voiced frames (larynx still shapes tract length)
+    // Track fundamental pitch f0Hz 1:1 from song vocals on voiced frames (snap quickly on note onset)
     const larynxShift = Math.pow(2, (tractArt.larynx * 2.2) / 12.0);
     if (art.f0Hz > 65 && art.voicing > 0.20) {
       const targetF0 = clamp(art.f0Hz, 70, 820);
-      this.smoothedF0 += (targetF0 - this.smoothedF0) * 0.58;
+      const snap = this.smoothedRms < 0.008 ? 1.0 : 0.82;
+      this.smoothedF0 += (targetF0 - this.smoothedF0) * snap;
     } else {
       const fallbackF0 = clamp((130 + art.pitchNorm * 190) * larynxShift, 85, 520);
       this.smoothedF0 += (fallbackF0 - this.smoothedF0) * 0.20;
     }
 
     if (this.glottalOsc && this.subOsc) {
-      this.glottalOsc.frequency.setTargetAtTime(this.smoothedF0, t, 0.014);
-      this.subOsc.frequency.setTargetAtTime(this.smoothedF0, t, 0.014);
+      this.glottalOsc.frequency.setTargetAtTime(this.smoothedF0, t, 0.010);
+      this.subOsc.frequency.setTargetAtTime(this.smoothedF0, t, 0.010);
     }
 
     // Vibrato depth in Hz (up to ~0.45 semitones when voiced and sustaining)
@@ -538,26 +551,42 @@ export class VocalTractSynthesizer {
       this.vibratoGain.gain.setTargetAtTime(vibHz, t, 0.025);
     }
 
-    // Glottal spectral tilt (tracked from sung track spectral centroid + mouth opening + tension)
+    const centroidDrive = clamp(((art.centroidHz || 1400) - 500) / 3000, 0, 1);
+
+    // Dynamic chest/sub balance: rich fundamental for pitch lock on warm vocals, trimmed on bright singing
+    if (this.subGainNode) {
+      const subLvl = 0.14 * clamp(1.0 - 0.85 * centroidDrive, 0.05, 1.0);
+      this.subGainNode.gain.setTargetAtTime(subLvl, t, tau);
+    }
+    if (this.bodyGainNode) {
+      const bodyLvl = 0.06 * clamp(1.0 - centroidDrive, 0.0, 1.0);
+      this.bodyGainNode.gain.setTargetAtTime(bodyLvl, t, tau);
+    }
+
+    // Glottal spectral tilt (tracked cleanly from sung spectral centroid + mouth opening + tension)
     if (this.tiltFilter) {
-      const centroidDrive = clamp(((art.centroidHz || 1400) - 600) / 3200, 0, 1);
       const cutoffHz = clamp(
-        950 + 2100 * profile.openDrive + 1450 * centroidDrive + 950 * clamp(art.tension, 0, 1),
+        1150 + 2100 * profile.openDrive + 3600 * centroidDrive + 1100 * clamp(art.tension, 0, 1),
         850,
-        6400
+        9200
       );
       this.tiltFilter.frequency.setTargetAtTime(cutoffHz, t, tau);
     }
 
+    if (this.hpFilter) {
+      const hpHz = clamp(130 + 400 * centroidDrive, 120, 560);
+      this.hpFilter.frequency.setTargetAtTime(hpHz, t, tau);
+    }
+
     // Voiced vs. aspirated glottal excitation
-    const voicing = clamp(art.voicing, 0.05, 1.0);
+    const voicing = clamp(art.voicing, 0.04, 1.0);
     const breath = clamp(art.breath, 0.0, 1.0);
     if (this.voicedGain) {
-      const vLvl = clamp(0.25 + 0.85 * voicing, 0.0, 1.1);
+      const vLvl = clamp(0.10 + 0.90 * voicing, 0.08, 1.05);
       this.voicedGain.gain.setTargetAtTime(vLvl, t, tau);
     }
     if (this.aspirationGain) {
-      const aspLvl = clamp((1.0 - voicing) * 0.28 + breath * 0.22, 0.01, 0.45);
+      const aspLvl = clamp((1.0 - voicing) * 0.34 + breath * 0.22, 0.01, 0.45);
       this.aspirationGain.gain.setTargetAtTime(aspLvl, t, tau);
     }
 
@@ -570,8 +599,8 @@ export class VocalTractSynthesizer {
       const cas = this.cascadeFilters[k];
       if (cas) {
         cas.frequency.setTargetAtTime(fHz, t, tau);
-        cas.Q.setTargetAtTime(clamp(qVal * 0.6, 2.5, 10.0), t, tau);
-        cas.gain.setTargetAtTime(clamp(6.0 + gVal * 7.5 - k * 1.2, 2.0, 15.0), t, tau);
+        cas.Q.setTargetAtTime(clamp(qVal * 0.65, 2.5, 11.0), t, tau);
+        cas.gain.setTargetAtTime(clamp(6.0 + gVal * 9.5 - k * 1.0, 2.0, 18.0), t, tau);
       }
 
       const par = this.parallelFilters[k];
@@ -586,13 +615,13 @@ export class VocalTractSynthesizer {
 
     // Nasal coupling & oral anti-resonance
     if (this.nasalGainNode && this.oralNotchFilter) {
-      this.nasalGainNode.gain.setTargetAtTime(profile.nasalGain * 0.55, t, tau);
+      this.nasalGainNode.gain.setTargetAtTime(profile.nasalGain * 0.35, t, tau);
       this.oralNotchFilter.gain.setTargetAtTime(-8.5 * profile.nasalGain, t, tau);
     }
 
-    // Lip radiation presence boost
+    // Lip radiation high-shelf impedance boost (+6 dB/oct oral projection)
     if (this.radiationFilter) {
-      const radDb = -2.5 + 8.5 * profile.openDrive;
+      const radDb = clamp(-3.0 + 7.5 * profile.openDrive + 12.0 * centroidDrive, -4.0, 15.5);
       this.radiationFilter.gain.setTargetAtTime(radDb, t, tau);
     }
 
@@ -600,18 +629,18 @@ export class VocalTractSynthesizer {
     if (this.fricFilter && this.fricGainNode) {
       this.fricFilter.frequency.setTargetAtTime(profile.sibCenterHz, t, tau);
       const fricAmt = clamp(
-        profile.fricGain * (0.25 + 0.75 * breath + 0.45 * (1.0 - voicing)),
+        profile.fricGain * (0.22 + 0.65 * breath + 0.45 * (1.0 - voicing)),
         0.0,
-        0.55
+        0.65
       );
       this.fricGainNode.gain.setTargetAtTime(fricAmt, t, tau);
     }
 
-    // Overall vocal output gain matched to the song's vocal track RMS + mouth opening radiation
-    this.smoothedRms += (art.rms - this.smoothedRms) * 0.55;
-    const radScale = 0.55 + 0.65 * Math.sqrt(profile.openDrive);
-    const outGain = clamp(this.smoothedRms * 2.35 * radScale, 0.0, 1.35);
-    this.outputNode.gain.setTargetAtTime(outGain, t, 0.014);
+    // Overall vocal output gain matched 1:1 to the song's vocal track RMS + mouth opening radiation
+    this.smoothedRms += (art.rms - this.smoothedRms) * 0.65;
+    const radScale = 0.65 + 0.55 * Math.sqrt(profile.openDrive);
+    const outGain = clamp(this.smoothedRms * 3.3 * radScale, 0.0, 1.8);
+    this.outputNode.gain.setTargetAtTime(outGain, t, 0.012);
 
     return profile;
   }
@@ -632,11 +661,13 @@ export class VocalTractSynthesizer {
     }
     this.glottalOsc = null;
     this.subOsc = null;
+    this.subGainNode = null;
     this.vibratoOsc = null;
     this.vibratoGain = null;
     this.voicedGain = null;
     this.tiltFilter = null;
     this.bodyFilter = null;
+    this.bodyGainNode = null;
     this.cascadeFilters = [];
     this.cascadeOutGain = null;
     this.parallelFilters = [];
@@ -645,6 +676,7 @@ export class VocalTractSynthesizer {
     this.nasalGainNode = null;
     this.oralNotchFilter = null;
     this.radiationFilter = null;
+    this.hpFilter = null;
     this.noiseSource = null;
     this.aspirationGain = null;
     this.fricFilter = null;

@@ -243,28 +243,20 @@ def _node_compile_and_sample(count: int) -> Tuple[np.ndarray, np.ndarray, np.nda
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _compute_transfer_spectra(
+def _compute_oral_transfer_grid(
     areas_44: torch.Tensor,
     dx: torch.Tensor,
     lip_area: torch.Tensor,
-    velum: torch.Tensor,
-    min_area: torch.Tensor,
-    min_idx_norm: torch.Tensor,
-    lip_tuck: torch.Tensor,
     freqs_hz: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute vectorized 44-section Webster oral+nasal transfer & frication spectra.
-
-    Returns (|H_vocal(B, F)|, |H_fric(B, F)|) normalized smoothly.
-    """
+) -> torch.Tensor:
+    """Compute pure 44-section Webster oral transfer magnitude |H_oral(B, F)| matching evaluateTractAcoustics."""
     rho = 1.14e-3
     c_snd = 35000.0
     alpha = 0.0028
 
-    # freqs_hz: (F,) -> omega: (1, F)
     w = (2.0 * math.pi * freqs_hz).unsqueeze(0)
-    k = w / c_snd  # (1, F)
-    dx_b = dx.unsqueeze(1)  # (B, 1)
+    k = w / c_snd
+    dx_b = torch.clamp(dx, min=0.2).unsqueeze(1)
     kdx = k * dx_b
     cos_k = torch.cos(kdx)
     sin_k = torch.sin(kdx)
@@ -276,7 +268,7 @@ def _compute_transfer_spectra(
     sinh_re = sinh_a * cos_k
     sinh_im = cosh_a * sin_k
 
-    eff_lip = torch.clamp(lip_area, min=0.04).unsqueeze(1)  # (B, 1)
+    eff_lip = torch.clamp(lip_area, min=0.04).unsqueeze(1)
     r_lip = torch.sqrt(torch.clamp(eff_lip / math.pi, min=0.01))
     L_rad = (8.0 * rho) / (3.0 * (math.pi ** 2) * r_lip)
     p_re = 0.015 * ((rho * c_snd) / eff_lip) * ((w / 6000.0) ** 2)
@@ -284,10 +276,9 @@ def _compute_transfer_spectra(
     u_re = torch.ones_like(p_re)
     u_im = torch.zeros_like(p_re)
 
-    # Traverse lips (43) -> glottis (0)
     clamped_areas = torch.clamp(areas_44, min=0.025)
     for s in range(43, -1, -1):
-        Z = ((rho * c_snd) / clamped_areas[:, s]).unsqueeze(1)  # (B, 1)
+        Z = ((rho * c_snd) / clamped_areas[:, s]).unsqueeze(1)
         su_re = cosh_re * u_re - cosh_im * u_im
         su_im = cosh_re * u_im + cosh_im * u_re
         sp_re = (sinh_re * p_re - sinh_im * p_im) / Z
@@ -303,10 +294,172 @@ def _compute_transfer_spectra(
         p_re, p_im = zsu_re + cp_re, zsu_im + cp_im
 
     u_mag = torch.sqrt(torch.clamp(u_re * u_re + u_im * u_im, min=1e-18))
-    h_oral = torch.clamp(1.0 / u_mag, max=40.0)  # (B, F)
+    return torch.clamp(1.0 / u_mag, max=40.0)
 
-    # Nasal resonator parallel coupling driven smoothly by velum [0..1]:
-    # Adds low ~250 Hz nasal murmur + attenuates oral F1/F2 anti-resonance (~1000 Hz)
+
+def _evaluate_tract_acoustics_batch(
+    art_14: torch.Tensor,
+    areas_44: torch.Tensor,
+    dx: torch.Tensor,
+    lip_area: torch.Tensor,
+    min_area: torch.Tensor,
+    min_idx_norm: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Vectorized PyTorch match to frontend/src/vocal_sim/tract_synth.ts::evaluateTractAcoustics."""
+    dev = art_14.device
+    bsz = art_14.shape[0]
+    n_grid = 80
+    u = torch.linspace(0.0, 1.0, n_grid, device=dev, dtype=torch.float32)
+    freq_grid = 75.0 * ((9200.0 / 75.0) ** u)
+    h_vocal = _compute_oral_transfer_grid(areas_44, dx, lip_area, freq_grid)  # (B, 80)
+
+    is_local_max = torch.zeros_like(h_vocal, dtype=torch.bool)
+    is_local_max[:, 1:-1] = (h_vocal[:, 1:-1] >= h_vocal[:, :-2]) & (h_vocal[:, 1:-1] >= h_vocal[:, 2:])
+
+    bands = (
+        (190.0, 920.0, 520.0, 0.0),
+        (680.0, 2750.0, 1480.0, 260.0),
+        (1850.0, 3850.0, 2650.0, 320.0),
+        (2950.0, 5100.0, 3650.0, 320.0),
+    )
+    f_hz = torch.zeros((bsz, 4), device=dev, dtype=torch.float32)
+    f_q = torch.zeros((bsz, 4), device=dev, dtype=torch.float32)
+    f_gain = torch.zeros((bsz, 4), device=dev, dtype=torch.float32)
+
+    prev_hz = torch.zeros((bsz,), device=dev, dtype=torch.float32)
+    for k, (b_lo, b_hi, fb_hz, min_sp) in enumerate(bands):
+        lo_hz = torch.clamp(prev_hz + min_sp, min=b_lo).unsqueeze(1)  # (B, 1)
+        in_band = (freq_grid.unsqueeze(0) >= lo_hz) & (freq_grid.unsqueeze(0) <= b_hi)
+        loc_mask = in_band & is_local_max
+        has_loc = loc_mask.any(dim=1)
+        loc_scores = torch.where(loc_mask, h_vocal, torch.full_like(h_vocal, -1.0))
+        any_scores = torch.where(in_band, h_vocal, torch.full_like(h_vocal, -1.0))
+        scores = torch.where(has_loc.unsqueeze(1), loc_scores, any_scores)
+        best_val, best_idx = torch.max(scores, dim=1)
+        valid_peak = in_band.any(dim=1) & (best_val > -0.5)
+
+        idx_c = torch.clamp(best_idx, 1, n_grid - 2)
+        y0 = torch.log(torch.clamp(h_vocal.gather(1, (idx_c - 1).unsqueeze(1)).squeeze(1), min=1e-6))
+        y1 = torch.log(torch.clamp(h_vocal.gather(1, idx_c.unsqueeze(1)).squeeze(1), min=1e-6))
+        y2 = torch.log(torch.clamp(h_vocal.gather(1, (idx_c + 1).unsqueeze(1)).squeeze(1), min=1e-6))
+        denom = 2.0 * (2.0 * y1 - y0 - y2)
+        interior = (best_idx > 0) & (best_idx < n_grid - 1) & (denom > 1e-6)
+        delta = torch.where(interior, torch.clamp((y2 - y0) / torch.clamp(denom, min=1e-6), -0.5, 0.5), torch.zeros_like(best_val))
+        f0_g = freq_grid[torch.clamp(best_idx - 1, 0, n_grid - 1)]
+        f2_g = freq_grid[torch.clamp(best_idx + 1, 0, n_grid - 1)]
+        f_peak_raw = freq_grid[best_idx] + delta * 0.5 * (f2_g - f0_g)
+        f_peak = torch.where(
+            valid_peak,
+            torch.clamp(torch.maximum(f_peak_raw, lo_hz.squeeze(1)), max=b_hi),
+            torch.clamp(lo_hz.squeeze(1), min=fb_hz),
+        )
+
+        m2 = h_vocal.gather(1, torch.clamp(best_idx - 2, 0, n_grid - 1).unsqueeze(1)).squeeze(1)
+        p2 = h_vocal.gather(1, torch.clamp(best_idx + 2, 0, n_grid - 1).unsqueeze(1)).squeeze(1)
+        neigh = 0.5 * (m2 + p2)
+        sharp = torch.clamp(best_val / torch.clamp(neigh, min=0.05), 1.0, 5.0)
+        q_val = torch.clamp((4.2 + k * 1.6) + (sharp - 1.0) * 2.2, 3.5, 16.0)
+        g_val = torch.clamp(best_val / 10.0, 0.12, 1.65)
+
+        f_hz[:, k] = f_peak
+        f_q[:, k] = torch.where(valid_peak, q_val, torch.full_like(q_val, 5.5 + k * 1.6))
+        f_gain[:, k] = torch.where(valid_peak, g_val, torch.full_like(g_val, 1.0 if k == 0 else 0.75 if k == 1 else 0.45 if k == 2 else 0.28))
+        prev_hz = f_peak
+
+    jaw_n = torch.clamp(art_14[:, 0], 0.0, 1.0)
+    lip_open_n = torch.clamp((art_14[:, 8] + 0.4) / 1.6, 0.0, 1.0)
+    lip_area_n = torch.clamp(torch.clamp(lip_area, min=0.04) / 4.0, 0.0, 1.0)
+    open_drive = torch.clamp(0.50 * jaw_n + 0.35 * lip_open_n + 0.15 * lip_area_n, 0.02, 1.0)
+    sib_center = 2400.0 + 4900.0 * torch.clamp((min_idx_norm - 0.45) / 0.50, 0.0, 1.0)
+    tightness = torch.clamp((0.36 - min_area) / 0.32, 0.0, 1.0)
+    tuck_amt = torch.clamp((torch.clamp(art_14[:, 11], 0.0, 1.0) - 0.20) / 0.70, 0.0, 1.0)
+    fric_gain = torch.clamp(tightness + 0.65 * tuck_amt, 0.0, 1.2)
+    nasal_gain = torch.clamp(art_14[:, 12], 0.0, 1.0)
+    return f_hz, f_q, f_gain, open_drive, sib_center, fric_gain, nasal_gain
+
+
+def _biquad_resp_torch(
+    ftype: str,
+    f0: torch.Tensor,
+    q_val: torch.Tensor | float,
+    gain_db: torch.Tensor | float,
+    z1: torch.Tensor,
+    z2: torch.Tensor,
+    sr: float = float(TARGET_SR),
+) -> torch.Tensor:
+    """Exact W3C Web Audio BiquadFilterNode complex frequency response on GPU."""
+    f0_c = torch.clamp(f0, 20.0, 0.49 * sr).unsqueeze(1)
+    w0 = (2.0 * math.pi / sr) * f0_c
+    cw = torch.cos(w0)
+    sw = torch.sin(w0)
+    q_t = (torch.clamp(q_val, min=0.05).unsqueeze(1) if isinstance(q_val, torch.Tensor) else max(0.05, float(q_val)))
+    alpha = sw / (2.0 * q_t)
+    z1_r = z1.unsqueeze(0)
+    z2_r = z2.unsqueeze(0)
+    if ftype == "lowpass":
+        b0 = (1.0 - cw) * 0.5
+        b1 = 1.0 - cw
+        b2 = b0
+        a0 = 1.0 + alpha
+        a1 = -2.0 * cw
+        a2 = 1.0 - alpha
+    elif ftype == "highpass":
+        b0 = (1.0 + cw) * 0.5
+        b1 = -(1.0 + cw)
+        b2 = b0
+        a0 = 1.0 + alpha
+        a1 = -2.0 * cw
+        a2 = 1.0 - alpha
+    elif ftype == "bandpass":
+        b0 = alpha
+        b1 = torch.zeros_like(alpha)
+        b2 = -alpha
+        a0 = 1.0 + alpha
+        a1 = -2.0 * cw
+        a2 = 1.0 - alpha
+    elif ftype == "peaking":
+        g_t = (gain_db.unsqueeze(1) if isinstance(gain_db, torch.Tensor) else float(gain_db))
+        A = torch.pow(torch.tensor(10.0, device=f0.device, dtype=torch.float32), g_t / 40.0)
+        b0 = 1.0 + alpha * A
+        b1 = -2.0 * cw
+        b2 = 1.0 - alpha * A
+        a0 = 1.0 + alpha / A
+        a1 = -2.0 * cw
+        a2 = 1.0 - alpha / A
+    elif ftype == "highshelf":
+        g_t = (gain_db.unsqueeze(1) if isinstance(gain_db, torch.Tensor) else float(gain_db))
+        A = torch.pow(torch.tensor(10.0, device=f0.device, dtype=torch.float32), g_t / 40.0)
+        al_s = sw * 0.5 * torch.sqrt(torch.clamp((A + 1.0 / A) * (1.0 / 0.7 - 1.0) + 2.0, min=1e-6))
+        sq_a = 2.0 * torch.sqrt(A) * al_s
+        b0 = A * ((A + 1.0) + (A - 1.0) * cw + sq_a)
+        b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cw)
+        b2 = A * ((A + 1.0) + (A - 1.0) * cw - sq_a)
+        a0 = (A + 1.0) - (A - 1.0) * cw + sq_a
+        a1 = 2.0 * ((A - 1.0) - (A + 1.0) * cw)
+        a2 = (A + 1.0) - (A - 1.0) * cw - sq_a
+    else:
+        raise ValueError(f"Unsupported biquad type: {ftype}")
+    num = b0.to(torch.complex64) + b1.to(torch.complex64) * z1_r + b2.to(torch.complex64) * z2_r
+    den = a0.to(torch.complex64) + a1.to(torch.complex64) * z1_r + a2.to(torch.complex64) * z2_r
+    return num / torch.where(den.abs() > 1e-8, den, torch.ones_like(den))
+
+
+def _compute_transfer_spectra(
+    areas_44: torch.Tensor,
+    dx: torch.Tensor,
+    lip_area: torch.Tensor,
+    velum: torch.Tensor,
+    min_area: torch.Tensor,
+    min_idx_norm: torch.Tensor,
+    lip_tuck: torch.Tensor,
+    freqs_hz: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute vectorized 44-section Webster oral+nasal transfer & frication spectra.
+
+    Returns (|H_vocal(B, F)|, |H_fric(B, F)|) normalized smoothly.
+    """
+    h_oral = _compute_oral_transfer_grid(areas_44, dx, lip_area, freqs_hz)
+
     v = torch.clamp(velum, 0.0, 1.0).unsqueeze(1)
     f_row = freqs_hz.unsqueeze(0)
     nasal_murmur = 2.6 * torch.exp(-0.5 * ((f_row - 245.0) / 115.0) ** 2) + 0.85 * torch.exp(
@@ -317,9 +470,6 @@ def _compute_transfer_spectra(
         0.5 + 0.5 * torch.clamp(h_oral.mean(dim=1, keepdim=True), 0.1, 4.0)
     )
 
-    # Frication / sibilance spectrum controlled by constriction position & teeth obstacle:
-    # Front constrictions (minIdx near lips ~0.75..0.95) -> high 5.5..7.5 kHz /s/ peak;
-    # mid-palatal (~0.55..0.75) -> 2.8..4.5 kHz /sh/; lipTuck -> broad 1.8..6.5 kHz /f/v/.
     sib_center = 2400.0 + 4900.0 * torch.clamp((min_idx_norm - 0.45) / 0.50, 0.0, 1.0)
     sib_center = sib_center.unsqueeze(1)
     tightness = torch.clamp((0.36 - min_area) / 0.32, 0.0, 1.0).unsqueeze(1)
@@ -482,7 +632,7 @@ def synthesize_soundbank(
     min_idx_norm: np.ndarray,
     excitations_per_posture: int,
     dev: torch.device,
-    batch_size: int = 2048,
+    batch_size: int = 512,
     seed: int = 42,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Synthesize real 44.1 kHz vocal sounds for every random tract posture and extract acoustics."""
@@ -505,15 +655,22 @@ def synthesize_soundbank(
 
     n_fft_bins = FFT_SIZE // 2 + 1  # 1025 bins: 0..22050 Hz
     freqs_full = torch.linspace(0.0, TARGET_SR * 0.5, n_fft_bins, device=dev, dtype=torch.float32)
-    freqs_eval = torch.clamp(freqs_full, min=65.0)
+    w_grid = (2.0 * math.pi / float(TARGET_SR)) * freqs_full
+    z1_grid = torch.complex(torch.cos(-w_grid), torch.sin(-w_grid))
+    z2_grid = z1_grid * z1_grid
     t_axis = torch.arange(FFT_SIZE, device=dev, dtype=torch.float32) / float(TARGET_SR)
 
     gen = torch.Generator(device=dev)
     gen.manual_seed(seed + 13)
 
-    harmonics = torch.arange(1, 56, device=dev, dtype=torch.float32).unsqueeze(0)  # (1, 55)
+    harmonics = torch.arange(1, 64, device=dev, dtype=torch.float32)  # (63,)
+    h_amps_base = 1.0 / (harmonics ** 0.72)
+    h_phases_base = harmonics * 0.38 + torch.where((harmonics.to(torch.int64) & 1) == 1, 0.15, -0.15)
+    h_body_base = _biquad_resp_torch("lowpass", torch.tensor([280.0], device=dev), 0.9, 0.0, z1_grid, z2_grid)  # (1, F)
+    h_nasal_base = _biquad_resp_torch("bandpass", torch.tensor([245.0], device=dev), 3.2, 0.0, z1_grid, z2_grid)
 
-    for s in range(0, total_sounds, batch_size):
+    with torch.no_grad():
+      for s in range(0, total_sounds, batch_size):
         e = min(total_sounds, s + batch_size)
         b = e - s
 
@@ -524,85 +681,93 @@ def synthesize_soundbank(
         mina_t = torch.from_numpy(min_a_rep[s:e]).to(dev)
         mini_t = torch.from_numpy(min_i_rep[s:e]).to(dev)
 
-        velum_t = torch.clamp(a_t[:, 12], 0.0, 1.0)
         larynx_t = a_t[:, 13]
         liptuck_t = torch.clamp(a_t[:, 11], 0.0, 1.0)
 
-        # Evaluate 44-section transfer function at all 1025 FFT bins
-        h_vocal, h_fric = _compute_transfer_spectra(
-            ar_t, dx_t, lip_t, velum_t, mina_t, mini_t, liptuck_t, freqs_eval
+        # Exact evaluateTractAcoustics() parameters matching frontend/src/vocal_sim/tract_synth.ts
+        f_hz, f_q, f_gain, open_drive, sib_center, fric_gain, nasal_gain = _evaluate_tract_acoustics_batch(
+            a_t, ar_t, dx_t, lip_t, mina_t, mini_t
         )
 
-        # Sample realistic singing excitation: f0 tied to larynx, volume & radiation tied to mouth opening
-        jaw_t = torch.clamp(a_t[:, 0], 0.0, 1.0)
-        lipo_norm_t = torch.clamp((a_t[:, 8] + 0.4) / 1.6, 0.0, 1.0)
-        open_drive = torch.clamp(0.50 * jaw_t + 0.35 * lipo_norm_t + 0.15 * torch.clamp(lip_t / 4.0, 0.0, 1.0), 0.02, 1.0)
-
+        # Sample realistic singing excitation across full vocal pitch, brightness, and voicing range
         larynx_semis = larynx_t * 6.5
-        log_f0 = torch.empty((b,), device=dev).uniform_(math.log2(105.0), math.log2(520.0), generator=gen)
-        f0_hz = torch.clamp(2.0 ** (log_f0 + larynx_semis / 12.0 * 0.45), 82.0, 720.0)
+        log_f0 = torch.empty((b,), device=dev).uniform_(math.log2(95.0), math.log2(580.0), generator=gen)
+        f0_hz = torch.clamp(2.0 ** (log_f0 + larynx_semis / 12.0 * 0.45), 75.0, 760.0)
 
-        # Tight constrictions (<0.28 cm^2) or high lipTuck produce strong unvoiced frication/breath
         tightness = torch.clamp((0.30 - mina_t) / 0.28, 0.0, 1.0)
         tuck_w = torch.clamp((liptuck_t - 0.25) / 0.65, 0.0, 1.0)
-        is_fric_dom = torch.rand((b,), device=dev, generator=gen) < (0.08 + 0.72 * torch.maximum(tightness, tuck_w))
+        is_fric_dom = torch.rand((b,), device=dev, generator=gen) < (0.08 + 0.65 * torch.maximum(tightness, tuck_w))
 
         voicing_target = torch.where(
             is_fric_dom,
-            torch.empty((b,), device=dev).uniform_(0.0, 0.30, generator=gen),
-            torch.empty((b,), device=dev).uniform_(0.62, 0.98, generator=gen),
+            torch.empty((b,), device=dev).uniform_(0.04, 0.35, generator=gen),
+            torch.empty((b,), device=dev).uniform_(0.48, 0.98, generator=gen),
         )
         breath_amt = torch.clamp(
-            torch.maximum(tightness, tuck_w) * 0.75 + (1.0 - voicing_target) * 0.55 + torch.rand((b,), device=dev, generator=gen) * 0.12,
+            torch.maximum(tightness, tuck_w) * 0.65 + (1.0 - voicing_target) * 0.55 + torch.rand((b,), device=dev, generator=gen) * 0.14,
             0.0,
             1.0,
         )
-        # Brighter glottal source when mouth/jaw is belted open; warmer/softer when closed
-        tilt_exp = torch.clamp(1.68 - 0.55 * open_drive + torch.empty((b,), device=dev).uniform_(-0.18, 0.18, generator=gen), 0.88, 1.95)
+        tension = torch.clamp(0.65 * open_drive + 0.35 * torch.rand((b,), device=dev, generator=gen), 0.0, 1.0)
+        front_drive = torch.clamp((a_t[:, 1] + 1.6) / 3.0, 0.0, 1.0)
+        centroid_drive = torch.clamp(0.55 * open_drive + 0.25 * front_drive + 0.20 * torch.rand((b,), device=dev, generator=gen), 0.0, 1.0)
 
-        # Harmonic glottal source filtered by vocal tract transfer function + mouth opening radiation
+        # Exact VocalTractSynthesizer Web Audio filterbank complex transfer functions
+        tilt_cutoff = torch.clamp(
+            1150.0 + 2100.0 * open_drive + 3600.0 * centroid_drive + 1100.0 * tension, 850.0, 9200.0
+        )
+        H_tilt = _biquad_resp_torch("lowpass", tilt_cutoff, 0.7, 0.0, z1_grid, z2_grid)
+        hp_hz = torch.clamp(130.0 + 400.0 * centroid_drive, 120.0, 560.0)
+        H_hp = _biquad_resp_torch("highpass", hp_hz, 0.7, 0.0, z1_grid, z2_grid)
+        H_cas = torch.ones((b, n_fft_bins), device=dev, dtype=torch.complex64)
+        H_par = torch.zeros((b, n_fft_bins), device=dev, dtype=torch.complex64)
+        for k_f in range(4):
+            fk = f_hz[:, k_f]
+            qk = f_q[:, k_f]
+            gk = f_gain[:, k_f]
+            cas_db = torch.clamp(6.0 + gk * 9.5 - k_f * 1.0, 2.0, 18.0)
+            H_cas = H_cas * _biquad_resp_torch("peaking", fk, torch.clamp(qk * 0.65, 2.5, 11.0), cas_db, z1_grid, z2_grid)
+            sgn = -1.0 if (k_f & 1) == 1 else 1.0
+            par_w = (sgn * gk * (0.65 / (1.0 + k_f * 0.35))).unsqueeze(1).to(torch.complex64)
+            H_par = H_par + par_w * _biquad_resp_torch("bandpass", fk, qk, 0.0, z1_grid, z2_grid)
+
+        body_lvl = (0.06 * torch.clamp(1.0 - centroid_drive, 0.0, 1.0)).unsqueeze(1).to(torch.complex64)
+        H_body = body_lvl * h_body_base
+        H_nas = (nasal_gain * 0.35).unsqueeze(1).to(torch.complex64) * h_nasal_base
+        H_notch = _biquad_resp_torch("peaking", torch.full((b,), 960.0, device=dev), 2.2, -8.5 * nasal_gain, z1_grid, z2_grid)
+        rad_db = torch.clamp(-3.0 + 7.5 * open_drive + 12.0 * centroid_drive, -4.0, 15.5)
+        H_rad = _biquad_resp_torch("highshelf", torch.full((b,), 650.0, device=dev), 0.7, rad_db, z1_grid, z2_grid)
+        H_tract = H_hp * H_rad * (H_notch * (0.55 * H_cas + 0.85 * H_par + H_body) + H_nas)
+        H_voiced = H_tilt * H_tract
+        fric_amt = torch.clamp(fric_gain * (0.22 + 0.65 * breath_amt + 0.45 * (1.0 - voicing_target)), 0.0, 0.65)
+        H_fric = fric_amt.unsqueeze(1).to(torch.complex64) * _biquad_resp_torch("bandpass", sib_center, 2.4, 0.0, z1_grid, z2_grid)
+
+        # Synthesize glottal PeriodicWave + subOsc (63 harmonics) and filter through H_voiced + calibrated noise
         phase0 = torch.empty((b, 1), device=dev).uniform_(0.0, 2.0 * math.pi, generator=gen)
-        harm_freqs = f0_hz.unsqueeze(1) * harmonics  # (B, 55)
-        bin_idx = torch.clamp(
-            torch.round(harm_freqs / (TARGET_SR / float(FFT_SIZE))).to(torch.int64),
-            0,
-            n_fft_bins - 1,
-        )
-        # Mouth opening radiation boost in F1/F2 vocal projection band (500..3200 Hz)
-        f_row = freqs_eval.unsqueeze(0)
-        rad_open_filter = 0.35 + (0.25 + 1.45 * open_drive.unsqueeze(1)) * torch.sigmoid((f_row - 380.0) / 180.0) * torch.exp(
-            -0.5 * ((f_row - 1400.0) / 1850.0) ** 2
-        )
-        h_vocal_rad = h_vocal * rad_open_filter
-        h_gain_at_harm = torch.gather(h_vocal_rad, 1, bin_idx)
+        harm_freqs = f0_hz.unsqueeze(1) * harmonics.unsqueeze(0)  # (B, 63)
         nyq_mask = (harm_freqs < (TARGET_SR * 0.46)).to(torch.float32)
-        harm_amp = (1.0 / (harmonics ** tilt_exp.unsqueeze(1))) * h_gain_at_harm * nyq_mask
-        angles = 2.0 * math.pi * harm_freqs.unsqueeze(2) * t_axis.view(1, 1, -1) + phase0.unsqueeze(2)
-        voiced_wave = torch.sum(harm_amp.unsqueeze(2) * torch.sin(angles), dim=1)  # (B, 2048)
+        harm_amp = h_amps_base.unsqueeze(0) * nyq_mask
+        angles = 2.0 * math.pi * harm_freqs.unsqueeze(2) * t_axis.view(1, 1, -1) + phase0.unsqueeze(2) + h_phases_base.view(1, -1, 1)
+        glottal = torch.sum(harm_amp.unsqueeze(2) * torch.sin(angles), dim=1)
+        g_peak = torch.clamp(torch.amax(torch.abs(glottal), dim=1, keepdim=True), min=1e-6)
+        sub_lvl = (0.14 * torch.clamp(1.0 - 0.85 * centroid_drive, 0.05, 1.0)).unsqueeze(1)
+        glottal_tot = glottal / g_peak + sub_lvl * torch.sin(2.0 * math.pi * f0_hz.unsqueeze(1) * t_axis.view(1, -1) + phase0)
 
-        v_rms = torch.sqrt(torch.mean(voiced_wave * voiced_wave, dim=1, keepdim=True) + 1e-12)
-        voiced_unit = voiced_wave / v_rms
+        v_lvl = torch.clamp(0.10 + 0.90 * voicing_target, 0.08, 1.05).unsqueeze(1)
+        asp_lvl = torch.clamp((1.0 - voicing_target) * 0.34 + breath_amt * 0.22, 0.01, 0.45).unsqueeze(1).to(torch.complex64)
 
-        # Noise source filtered by oral + frication transfer spectra
-        white = torch.randn((b, FFT_SIZE), device=dev, generator=gen)
-        white_spec = torch.fft.rfft(white, dim=1)
-        noise_filter = (0.30 * h_vocal_rad + 3.2 * h_fric)
-        noise_wave = torch.fft.irfft(white_spec * noise_filter, n=FFT_SIZE, dim=1)
-        n_rms = torch.sqrt(torch.mean(noise_wave * noise_wave, dim=1, keepdim=True) + 1e-12)
-        noise_unit = noise_wave / n_rms
+        # Match Web Audio Uniform-pink noise RMS (~0.38) relative to PeriodicWave
+        white = torch.randn((b, FFT_SIZE), device=dev, generator=gen) * 0.38
+        g_spec = torch.fft.rfft(v_lvl * glottal_tot, dim=1)
+        n_spec = torch.fft.rfft(white, dim=1)
+        mixed = torch.fft.irfft(g_spec * H_voiced + n_spec * (asp_lvl * H_tract + H_fric), n=FFT_SIZE, dim=1)
 
-        mix_v = voicing_target.unsqueeze(1)
-        mix_n = (1.0 - mix_v) + breath_amt.unsqueeze(1) * 0.45
-        mixed = mix_v * voiced_unit + mix_n * noise_unit
-
-        # Radiated vocal RMS directly coupled to simulator mouth opening (jaw + lipOpen + lipArea)
         loud_u = torch.clamp(0.72 * open_drive + 0.28 * torch.rand((b,), device=dev, generator=gen), 0.03, 1.0)
         target_rms = (0.004 * ((0.36 / 0.004) ** loud_u)).unsqueeze(1)
         m_rms = torch.sqrt(torch.mean(mixed * mixed, dim=1, keepdim=True) + 1e-12)
         audio_batch = (mixed / m_rms) * target_rms
 
         feats_t, env_t, rms_t = _extract_gpu_features_and_env(audio_batch, TARGET_SR)
-        # Small realistic intra-frame spectral flux sample for natural singing variation
         feats_t[:, 8] = torch.from_numpy(rng.uniform(0.0, 0.35, size=(b,)).astype(np.float32)).to(dev)
 
         out_feats[s:e] = feats_t.cpu().numpy()
@@ -610,6 +775,8 @@ def synthesize_soundbank(
         f0_n = torch.clamp((torch.log2(f0_hz) - math.log2(130.0)) / (math.log2(520.0) - math.log2(130.0)), 0.0, 1.0)
         vib_s = torch.clamp(torch.from_numpy(rng.beta(1.5, 4.5, size=(b,)).astype(np.float32)).to(dev) * voicing_target, 0.0, 1.0)
         out_cues[s:e] = torch.stack([f0_n, voicing_target, breath_amt, vib_s, loud_u, rms_t], dim=1).cpu().numpy()
+        if e == total_sounds or ((s // batch_size) % 32 == 0):
+            print(f"[Soundbank] {e}/{total_sounds} synthesized", flush=True)
 
     return art_rep, out_feats, out_env, out_cues
 
@@ -655,6 +822,20 @@ def main() -> None:
         seed=args.seed,
     )
 
+    with torch.no_grad():
+        pf_hz, pf_q, pf_gain, p_od, p_sib, p_fric, _ = _evaluate_tract_acoustics_batch(
+            torch.from_numpy(art_14).to(dev),
+            torch.from_numpy(areas_44).to(dev),
+            torch.from_numpy(dx).to(dev),
+            torch.from_numpy(lip_area).to(dev),
+            torch.from_numpy(min_area).to(dev),
+            torch.from_numpy(min_idx_norm).to(dev),
+        )
+        prof_1 = torch.cat(
+            [pf_hz, pf_q, pf_gain, p_od.unsqueeze(1), p_sib.unsqueeze(1), p_fric.unsqueeze(1)], dim=1
+        ).cpu().numpy().astype(np.float32)
+    prof_rep = np.repeat(prof_1, args.excitations, axis=0)
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         args.out,
@@ -662,6 +843,7 @@ def main() -> None:
         feats=feats_18.astype(np.float32),
         env=env_32.astype(np.float32),
         cues=cues_6.astype(np.float32),
+        profile=prof_rep,
     )
     print(f"[Soundbank] Saved {len(art_rep)} simulated sounds -> {args.out}")
 

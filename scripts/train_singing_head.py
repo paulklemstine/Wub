@@ -28,6 +28,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -1347,17 +1348,15 @@ class SimSpectrumForwardNet(nn.Module):
 
     def __init__(self, in_dim: int = 24, env_dim: int = 32, feat_dim: int = 18) -> None:
         super().__init__()
-        self.trunk = nn.Sequential(
-            nn.Linear(in_dim, 192),
-            nn.GELU(),
-            nn.Linear(192, 160),
-            nn.GELU(),
-        )
-        self.env_head = nn.Linear(160, env_dim)
-        self.feat_head = nn.Linear(160, feat_dim)
+        self.in_proj = nn.Sequential(nn.Linear(in_dim, 320), nn.GELU())
+        self.res1 = nn.Sequential(nn.Linear(320, 320), nn.GELU(), nn.Linear(320, 320))
+        self.out_proj = nn.Sequential(nn.GELU(), nn.Linear(320, 192), nn.GELU())
+        self.env_head = nn.Linear(192, env_dim)
+        self.feat_head = nn.Linear(192, feat_dim)
 
     def forward_both(self, tract_and_exc: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        h = self.trunk(tract_and_exc)
+        h0 = self.in_proj(tract_and_exc)
+        h = self.out_proj(h0 + 0.5 * self.res1(h0))
         raw_env = self.env_head(h)
         centered = raw_env - raw_env.mean(dim=-1, keepdim=True)
         pred_env = F.normalize(centered, p=2, dim=-1, eps=1e-6)
@@ -1374,8 +1373,8 @@ def train_sim_forward_net(
     sim_exc: np.ndarray,
     sim_env: np.ndarray,
     dev: torch.device,
-    epochs: int = 55,
-    batch_size: int = 512,
+    epochs: int = 110,
+    batch_size: int = 2048,
     seed: int = 42,
     sim_feats_norm: Optional[np.ndarray] = None,
     real_art_norm: Optional[np.ndarray] = None,
@@ -1383,7 +1382,7 @@ def train_sim_forward_net(
     real_env: Optional[np.ndarray] = None,
     real_feats_norm: Optional[np.ndarray] = None,
 ) -> Tuple[SimSpectrumForwardNet, float]:
-    """Train & freeze a differentiable (14-D tract + 10-D exc) -> (32-band spectrum, 18-D features) surrogate."""
+    """Train & freeze an unbiased differentiable (14-D tract + 10-D exc) -> WebAudio synth surrogate."""
     rng = np.random.default_rng(seed)
     perm = rng.permutation(len(sim_art_norm))
     split = int(0.90 * len(perm))
@@ -1392,36 +1391,27 @@ def train_sim_forward_net(
     sim_in = np.concatenate([sim_art_norm, sim_exc], axis=1).astype(np.float32)
     sim_f = sim_feats_norm.astype(np.float32) if sim_feats_norm is not None else np.zeros((len(sim_in), 18), dtype=np.float32)
 
-    if (
-        real_art_norm is not None
-        and real_exc is not None
-        and real_env is not None
-        and real_feats_norm is not None
-        and len(real_art_norm) > 0
-    ):
-        real_in = np.concatenate([real_art_norm, real_exc], axis=1).astype(np.float32)
-        n_real_take = min(len(real_in), len(tr_idx))
-        r_sel = rng.choice(len(real_in), size=n_real_take, replace=False) if len(real_in) > n_real_take else np.arange(len(real_in))
-        comb_in = np.concatenate([sim_in[tr_idx], real_in[r_sel]], axis=0)
-        comb_env = np.concatenate([sim_env[tr_idx], real_env[r_sel]], axis=0)
-        comb_feats = np.concatenate([sim_f[tr_idx], real_feats_norm[r_sel]], axis=0)
-    else:
-        comb_in = sim_in[tr_idx]
-        comb_env = sim_env[tr_idx]
-        comb_feats = sim_f[tr_idx]
+    # Note: optional real_* parameters kept for signature compatibility; pure synth supervision prevents cheating
+    _ = (real_art_norm, real_exc, real_env, real_feats_norm)
+    comb_in = sim_in[tr_idx]
+    comb_env = sim_env[tr_idx]
+    comb_feats = sim_f[tr_idx]
 
     xa = torch.from_numpy(comb_in).to(dev)
     ye = torch.from_numpy(comb_env).to(dev)
     yf = torch.from_numpy(comb_feats).to(dev)
     xva = torch.from_numpy(sim_in[va_idx]).to(dev)
     yve = torch.from_numpy(sim_env[va_idx]).to(dev)
+    yvf = torch.from_numpy(sim_f[va_idx]).to(dev)
 
     fwd = SimSpectrumForwardNet(in_dim=sim_in.shape[1], env_dim=sim_env.shape[1], feat_dim=comb_feats.shape[1]).to(dev)
-    opt = torch.optim.AdamW(fwd.parameters(), lr=3e-3, weight_decay=1e-5)
+    opt = torch.optim.AdamW(fwd.parameters(), lr=3.5e-3, weight_decay=1e-5)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
 
     n_tr = len(xa)
     has_feats = sim_feats_norm is not None
+    best_r2 = -1e9
+    best_sd = None
     for _ in range(epochs):
         fwd.train()
         p = torch.randperm(n_tr, device=dev)
@@ -1431,12 +1421,30 @@ def train_sim_forward_net(
             cos_loss = (1.0 - (pred_env * ye[idx]).sum(dim=-1)).mean()
             loss = cos_loss + F.mse_loss(pred_env, ye[idx])
             if has_feats:
-                loss = loss + 0.50 * F.smooth_l1_loss(pred_feats, yf[idx])
+                loss = loss + 0.60 * F.smooth_l1_loss(pred_feats, yf[idx])
             opt.zero_grad()
             loss.backward()
             opt.step()
         sched.step()
+        fwd.eval()
+        with torch.no_grad():
+            vp, vf = fwd.forward_both(xva)
+            ss_res = float(((vp - yve) ** 2).sum().item())
+            ss_tot = float(((yve - yve.mean(dim=0, keepdim=True)) ** 2).sum().item())
+            r2_e = 1.0 - ss_res / max(1e-8, ss_tot)
+            if has_feats:
+                f_res = float(((vf - yvf) ** 2).sum().item())
+                f_tot = float(((yvf - yvf.mean(dim=0, keepdim=True)) ** 2).sum().item())
+                r2_f = 1.0 - f_res / max(1e-8, f_tot)
+                score = 0.65 * r2_e + 0.35 * r2_f
+            else:
+                score = r2_e
+            if score > best_r2:
+                best_r2 = score
+                best_sd = {k: v.detach().cpu().clone() for k, v in fwd.state_dict().items()}
 
+    if best_sd is not None:
+        fwd.load_state_dict({k: v.to(dev) for k, v in best_sd.items()})
     fwd.eval()
     with torch.no_grad():
         vp = fwd(xva)
@@ -1452,7 +1460,7 @@ def match_sequences_to_soundbank(
     seqs: List[dict],
     soundbank_path: Path,
     dev: torch.device,
-    top_k: int = 24,
+    top_k: int = 48,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
     """Match chronological stem/stub sequences to simulated sounds via GPU Top-K + Viterbi DP.
 
@@ -1465,6 +1473,7 @@ def match_sequences_to_soundbank(
     sim_art_raw = sb["art"].astype(np.float32)      # (M, 14)
     sim_feats = sb["feats"].astype(np.float32)      # (M, 18)
     sim_env = sb["env"].astype(np.float32)          # (M, 32)
+    sim_env_smooth = _smooth_env_bands(sim_env)
     sim_cues = sb["cues"].astype(np.float32)        # (M, 6): [f0_norm, voicing, breath, vibrato, loud, rms]
 
     sim_art_norm = _norm_tract_np(sim_art_raw)
@@ -1491,7 +1500,7 @@ def match_sequences_to_soundbank(
 
     # Pure acoustic comparison between song frames and synthesized vocal simulator audio
     sim_art_t = torch.from_numpy(sim_art_norm).to(dev)
-    sim_env_t = torch.from_numpy(sim_env).to(dev)
+    sim_env_t = torch.from_numpy(sim_env_smooth).to(dev)
     sim_feats_t = torch.from_numpy(sim_feats).to(dev)
     feat_scale = torch.clamp(torch.std(sim_feats_t, dim=0, keepdim=True), min=1e-2)
     # Feature weights across the 18 browser audio features (formant bands, voicing, f0, centroid weighted higher)
@@ -1506,20 +1515,90 @@ def match_sequences_to_soundbank(
     sim_env_mat = sim_env_t.T.contiguous().half() if use_fp16 else sim_env_t.T.contiguous()
     sim_feats_mat = sim_feats_norm_t.T.contiguous().half() if use_fp16 else sim_feats_norm_t.T.contiguous()
 
-    # Transition stiffness weights per normalized 14-D articulator for Viterbi smoothing:
-    # Balanced (lambda_trans = 0.22) so Viterbi tracks every syllable & formant shift
-    # while preventing erratic single-frame candidate jumps.
+    # Precompute posture-only WebAudio H_inner banks for exact Zero-FFT live-source rescoring
+    has_profile = "profile" in sb
+    if has_profile:
+        root_dir = str(Path(__file__).resolve().parent.parent)
+        if root_dir not in sys.path:
+            sys.path.insert(0, root_dir)
+        from scripts.generate_tract_soundbank import _biquad_resp_torch
+
+        prof_np = sb["profile"].astype(np.float32)
+        if len(sim_art_raw) % 2 == 0 and np.allclose(sim_art_raw[0::2], sim_art_raw[1::2]):
+            dup_factor = 2
+            u_prof = torch.from_numpy(prof_np[0::2]).to(dev)
+            u_nas = torch.clamp(torch.from_numpy(sim_art_raw[0::2, 12].astype(np.float32)).to(dev), 0.0, 1.0)
+        else:
+            dup_factor = 1
+            u_prof = torch.from_numpy(prof_np).to(dev)
+            u_nas = torch.clamp(torch.from_numpy(sim_art_raw[:, 12].astype(np.float32)).to(dev), 0.0, 1.0)
+        n_p = len(u_prof)
+        n_bins_live = 425
+        freqs_live = torch.fft.rfftfreq(FFT_SIZE, d=1.0 / TARGET_SR)[:n_bins_live].to(dev)
+        w_live = (2.0 * math.pi / float(TARGET_SR)) * freqs_live
+        z1_live = torch.polar(torch.ones_like(w_live), -w_live).to(torch.complex64)
+        z2_live = z1_live * z1_live
+        h_body_live = _biquad_resp_torch("lowpass", torch.tensor([280.0], device=dev), 0.9, 0.0, z1_live, z2_live)
+        h_nas_live = _biquad_resp_torch("bandpass", torch.tensor([245.0], device=dev), 3.2, 0.0, z1_live, z2_live)
+        H_inner_bank = torch.empty((n_p, n_bins_live), dtype=torch.complex64, device=dev)
+        H_notch_bank = torch.empty((n_p, n_bins_live), dtype=torch.complex64, device=dev)
+        with torch.no_grad():
+            for ps in range(0, n_p, 2048):
+                pe_i = min(n_p, ps + 2048)
+                pb = pe_i - ps
+                pr = u_prof[ps:pe_i]
+                ng = u_nas[ps:pe_i]
+                f_hz_p, f_q_p, f_g_p = pr[:, 0:4], pr[:, 4:8], pr[:, 8:12]
+                H_cas = torch.ones((pb, n_bins_live), dtype=torch.complex64, device=dev)
+                H_par = torch.zeros((pb, n_bins_live), dtype=torch.complex64, device=dev)
+                for kf in range(4):
+                    fk, qk, gk = f_hz_p[:, kf], f_q_p[:, kf], f_g_p[:, kf]
+                    H_cas = H_cas * _biquad_resp_torch(
+                        "peaking", fk, torch.clamp(qk * 0.65, 2.5, 11.0), torch.clamp(6.0 + gk * 9.5 - kf * 1.0, 2.0, 18.0), z1_live, z2_live
+                    )
+                    sgn = -1.0 if (kf & 1) == 1 else 1.0
+                    H_par = H_par + (sgn * gk * (0.65 / (1.0 + kf * 0.35))).unsqueeze(1).to(torch.complex64) * _biquad_resp_torch(
+                        "bandpass", fk, qk, 0.0, z1_live, z2_live
+                    )
+                Hn = _biquad_resp_torch("peaking", torch.full((pb,), 960.0, device=dev), 2.2, -8.5 * ng, z1_live, z2_live)
+                H_notch_bank[ps:pe_i] = Hn
+                H_inner_bank[ps:pe_i] = Hn * (0.55 * H_cas + 0.85 * H_par) + (ng * 0.35).unsqueeze(1).to(torch.complex64) * h_nas_live
+
+        f0_grid = torch.tensor(np.geomspace(75.0, 650.0, 128), dtype=torch.float32, device=dev)
+        t_ax_l = torch.arange(FFT_SIZE, dtype=torch.float32, device=dev) / float(TARGET_SR)
+        harms_l = torch.arange(1, 64, dtype=torch.float32, device=dev)
+        h_amps_l = 1.0 / (harms_l ** 0.72)
+        h_ph_l = harms_l * 0.38 + torch.where((harms_l.to(torch.int64) & 1) == 1, 0.15, -0.15)
+        hf_l = f0_grid.unsqueeze(1) * harms_l.unsqueeze(0)
+        nq_l = (hf_l < (TARGET_SR * 0.46)).float()
+        gl_l = torch.sum((h_amps_l.unsqueeze(0) * nq_l).unsqueeze(2) * torch.sin(2.0 * math.pi * hf_l.unsqueeze(2) * t_ax_l.view(1, 1, -1) + h_ph_l.view(1, -1, 1)), dim=1)
+        gp_l = torch.clamp(torch.amax(torch.abs(gl_l), dim=1, keepdim=True), min=1e-6)
+        gl_main_spec = torch.fft.rfft(gl_l / gp_l, dim=1)[:, :n_bins_live].contiguous()
+        gl_sub_spec = torch.fft.rfft(torch.sin(2.0 * math.pi * f0_grid.unsqueeze(1) * t_ax_l.view(1, -1)), dim=1)[:, :n_bins_live].contiguous()
+        n_gen_l = torch.Generator(device=dev)
+        n_gen_l.manual_seed(99)
+        n_sp_pool = torch.fft.rfft(torch.randn((32, FFT_SIZE), device=dev, generator=n_gen_l) * 0.38, dim=1)[:, :n_bins_live].contiguous()
+
+        bin_hz_l = float(TARGET_SR) / float(FFT_SIZE)
+        edges_l = np.geomspace(80.0, 9000.0, 33)
+        band_mat_l = torch.zeros((n_bins_live - 1, 32), dtype=torch.float32, device=dev)
+        for kb in range(32):
+            lok = max(1, int(math.floor(edges_l[kb] / bin_hz_l)))
+            hik = max(lok, min(n_bins_live - 2, int(math.ceil(edges_l[kb + 1] / bin_hz_l))))
+            band_mat_l[lok : hik + 1, kb] = 1.0 / float(hik - lok + 1)
+
+    # Transition stiffness weights per normalized 14-D articulator for Viterbi smoothing
     trans_w = torch.tensor(
         [1.4, 1.2, 1.2, 1.0, 1.0, 1.0, 0.9, 0.9, 1.3, 1.4, 1.3, 0.9, 1.1, 1.0],
         device=dev,
         dtype=torch.float32,
     )
-    lambda_trans = 0.22
+    lambda_trans = 0.20
 
     n_seq = len(seqs)
     t_len = seqs[0]["feats"].shape[0]
     x_seq = np.stack([s["feats"] for s in seqs], axis=0).astype(np.float32)        # (N, T, 18)
-    env_seq = np.stack([s["env"] for s in seqs], axis=0).astype(np.float32)          # (N, T, 32)
+    env_seq = _smooth_env_bands(np.stack([s["env"] for s in seqs], axis=0).astype(np.float32))  # (N, T, 32)
     rms_seq = np.stack([s["rms"] for s in seqs], axis=0).astype(np.float32)          # (N, T)
     f0_seq = np.stack([s["f0"] for s in seqs], axis=0).astype(np.float32)            # (N, T)
     voic_seq = np.stack([s["voicing"] for s in seqs], axis=0).astype(np.float32)     # (N, T)
@@ -1563,6 +1642,63 @@ def match_sequences_to_soundbank(
                 cand_cost[s:e] = vals
                 cand_idx[s:e] = idxs
 
+            if has_profile:
+                # Re-score active frames' top-k candidates with exact live (f0, voicing, centroid) WebAudio physics
+                rms_f = torch.from_numpy(rms_seq[b0:b1]).to(dev).reshape(flat_n)
+                f0_f = torch.from_numpy(f0_seq[b0:b1]).to(dev).reshape(flat_n)
+                voic_f = torch.from_numpy(voic_seq[b0:b1]).to(dev).reshape(flat_n)
+                cent_f = qf_feat[:, 5]
+                act_idx = torch.nonzero(rms_f > 0.004, as_tuple=False).squeeze(1)
+                n_act_b = int(act_idx.numel())
+                for rs in range(0, n_act_b, 192):
+                    re_i = min(n_act_b, rs + 192)
+                    ai = act_idx[rs:re_i]
+                    bf = int(ai.numel())
+                    pid = (cand_idx[ai] // dup_factor).reshape(-1)
+                    f0_raw = torch.where((f0_f[ai] > 65.0) & (voic_f[ai] > 0.2), torch.clamp(f0_f[ai], 70.0, 820.0), torch.full_like(f0_f[ai], 170.0))
+                    f0_bin = torch.clamp(
+                        torch.round((torch.log(torch.clamp(f0_raw, 75.0, 650.0)) - math.log(75.0)) / math.log(650.0 / 75.0) * 127.0).long(),
+                        0,
+                        127,
+                    ).unsqueeze(1).expand(bf, k).reshape(-1)
+                    v_c = torch.clamp(voic_f[ai], 0.04, 1.0).unsqueeze(1).expand(bf, k).reshape(-1)
+                    cd_c = torch.clamp((500.0 * (2.0 ** cent_f[ai]) - 500.0) / 3000.0, 0.0, 1.0).unsqueeze(1).expand(bf, k).reshape(-1)
+                    od = u_prof[pid, 12]
+                    sib_c = u_prof[pid, 13]
+                    fric_g = u_prof[pid, 14]
+                    body_lvl = (0.06 * torch.clamp(1.0 - cd_c, 0.0, 1.0)).unsqueeze(1).to(torch.complex64)
+                    H_raw = H_inner_bank[pid] + H_notch_bank[pid] * (body_lvl * h_body_live)
+                    H_tilt = _biquad_resp_torch("lowpass", torch.clamp(1150.0 + 2100.0 * od + 3600.0 * cd_c + 300.0, 850.0, 9200.0), 0.7, 0.0, z1_live, z2_live)
+                    H_hp = _biquad_resp_torch("highpass", torch.clamp(130.0 + 400.0 * cd_c, 120.0, 560.0), 0.7, 0.0, z1_live, z2_live)
+                    H_rad = _biquad_resp_torch("highshelf", torch.full((bf * k,), 650.0, device=dev), 0.7, torch.clamp(-3.0 + 7.5 * od + 12.0 * cd_c, -4.0, 15.5), z1_live, z2_live)
+                    H_tract = H_hp * H_rad * H_raw
+                    H_voiced = H_tilt * H_tract
+                    H_fric = torch.clamp(fric_g * (0.22 + 0.05 + 0.45 * (1.0 - v_c)), 0.0, 0.65).unsqueeze(1).to(torch.complex64) * _biquad_resp_torch("bandpass", sib_c, 2.4, 0.0, z1_live, z2_live)
+                    sub_lvl = (0.14 * torch.clamp(1.0 - 0.85 * cd_c, 0.05, 1.0)).unsqueeze(1)
+                    g_sp = gl_main_spec[f0_bin] + sub_lvl * gl_sub_spec[f0_bin]
+                    n_sp = n_sp_pool[torch.arange(bf * k, device=dev) % 32]
+                    S = (0.10 + 0.90 * v_c).unsqueeze(1) * g_sp * H_voiced + ((1.0 - v_c) * 0.34 + 0.02).unsqueeze(1) * n_sp * H_tract + n_sp * H_fric
+                    S_win = torch.empty((bf * k, n_bins_live - 1), dtype=torch.complex64, device=dev)
+                    S_win[:, 0] = 0.5 * S[:, 0] - 0.5 * S[:, 1].real
+                    S_win[:, 1:] = 0.5 * S[:, 1 : n_bins_live - 1] - 0.25 * S[:, 0 : n_bins_live - 2] - 0.25 * S[:, 2:n_bins_live]
+                    mag_sq = (S_win.real ** 2 + S_win.imag ** 2) / float(FFT_SIZE * 0.5) ** 2
+                    p_sum = (S.real[:, 0] ** 2) + 2.0 * torch.sum(S.real[:, 1:-1] ** 2 + S.imag[:, 1:-1] ** 2, dim=1) + (S.real[:, -1] ** 2)
+                    rms_est = torch.sqrt(p_sum / float(FFT_SIZE ** 2) + 1e-12)
+                    b_rms = torch.sqrt(torch.matmul(mag_sq, band_mat_l) + 1e-18)
+                    env_raw = torch.log1p((b_rms / torch.clamp(rms_est.unsqueeze(1), min=1e-4)) * 4.5)
+                    env_c = env_raw - env_raw.mean(dim=1, keepdim=True)
+                    env_u = env_c / torch.clamp(torch.norm(env_c, dim=1, keepdim=True), min=1e-6)
+                    for _ in range(2):
+                        epd = F.pad(env_u.unsqueeze(1), (1, 1), mode="replicate").squeeze(1)
+                        env_u = 0.25 * epd[:, :-2] + 0.5 * epd[:, 1:-1] + 0.25 * epd[:, 2:]
+                    env_u = env_u - env_u.mean(dim=1, keepdim=True)
+                    env_u = env_u / torch.clamp(torch.norm(env_u, dim=1, keepdim=True), min=1e-6)
+                    cos_live = (env_u.view(bf, k, 32) * qf_env[ai].unsqueeze(1)).sum(dim=-1)
+                    # Only genuine high-frequency sibilants (>2.6 kHz) should trigger strong frication; avoid pinching vowels
+                    cent_hz_ai = (500.0 * (2.0 ** cent_f[ai])).unsqueeze(1)
+                    non_sib = torch.clamp(1.0 - torch.clamp((cent_hz_ai - 2600.0) / 1600.0, 0.0, 1.0), 0.0, 1.0)
+                    cand_cost[ai] = (1.0 - cos_live) + 0.16 * fric_g.view(bf, k) * non_sib
+
             # Reshape back to (B, T, K) and solve vectorized exact Viterbi DP
             em_cost = cand_cost.reshape(bs, t_len, k)
             c_ids = cand_idx.reshape(bs, t_len, k)
@@ -1602,20 +1738,10 @@ def match_sequences_to_soundbank(
     active_gate = np.clip((rms_seq - 0.0035) / 0.020, 0.0, 1.0)[..., None]  # (N, T, 1)
     rest_norm = TRACT_REST_NORM[None, None, :]
 
-    # Preserve the true Viterbi-matched vocal simulator parameters with faithful dynamic formant opening
-    nat_tract = matched_tract_seq.copy()
-    nat_tract[:, :, 0] = np.clip(
-        0.88 * nat_tract[:, :, 0] * (0.65 + 0.35 * syl_open_drive) + 0.12 * (0.60 * syl_open_drive),
-        0.0,
-        0.92,
-    )
-    nat_tract[:, :, 8] = np.clip(
-        0.88 * nat_tract[:, :, 8] * (0.68 + 0.32 * syl_open_drive) + 0.12 * (0.25 + 0.55 * syl_open_drive),
-        0.0,
-        0.94,
-    )
-
-    tract_blended = active_gate * nat_tract + (1.0 - active_gate) * rest_norm
+    # Preserve the true Viterbi+ZeroFFT live-rescored vocal simulator trajectories directly
+    active_gate = np.clip((rms_seq - 0.0030) / 0.015, 0.0, 1.0)[..., None]  # (N, T, 1)
+    rest_norm = TRACT_REST_NORM[None, None, :]
+    tract_blended = active_gate * matched_tract_seq + (1.0 - active_gate) * rest_norm
 
     # Zero-phase 5-tap symmetric kernel [0.10, 0.22, 0.36, 0.22, 0.10] eliminates candidate quantization jitter
     kernel = np.array([0.10, 0.22, 0.36, 0.22, 0.10], dtype=np.float32)
@@ -1754,10 +1880,9 @@ def train_soundbank_sequence_model(
         x_seq, y_seq[:, :, 8], np.clip(x_seq[:, :, 0] / 1.45, 0.0, 1.0)
     )
 
-    # 2. Train & freeze differentiable roundtrip forward synth surrogate ((14 tract + 10 exc) -> 32 env + 18 feats)
+    exc_dim = int(stem_exc_seq.shape[-1])
+    # 2. Train & freeze unbiased differentiable WebAudio synth surrogate ((14 tract + exc_dim) -> 32 env + 18 feats)
     sim_feats_norm = ((sim_feats - feat_mean) / feat_std).astype(np.float32)
-    tr_act_mask = (valid_seq[is_train, :, 0] > 0.5) & (weights_seq[is_train, :, 0] > 0.35)
-    real_feats_tr = ((tr_x[tr_act_mask] - feat_mean) / feat_std).astype(np.float32)
     fwd_sim_net, physics_forward_r2 = train_sim_forward_net(
         sim_art_norm,
         sim_exc,
@@ -1765,11 +1890,8 @@ def train_soundbank_sequence_model(
         dev=dev,
         seed=seed,
         sim_feats_norm=sim_feats_norm,
-        real_art_norm=tract_seq[is_train][tr_act_mask],
-        real_exc=stem_exc_seq[is_train][tr_act_mask],
-        real_env=env_seq[is_train][tr_act_mask],
-        real_feats_norm=real_feats_tr,
     )
+    print(f"Unbiased WebAudio synth surrogate physics_forward_r2={physics_forward_r2:.4f}", flush=True)
 
     # Real sequence tensors
     xt = norm_x(tr_x).to(dev)                                    # (N_tr, T, 18)
@@ -1788,12 +1910,19 @@ def train_soundbank_sequence_model(
     wv = torch.from_numpy(weights_seq[is_val]).to(dev)
     vv_m = torch.from_numpy(valid_seq[is_val]).to(dev)
 
-    # Direct vocal simulator audio -> parameter reconstitution pool
-    sb_x_t = norm_x(sim_feats).to(dev)
-    sb_art_t = torch.from_numpy(sim_art_norm).to(dev)
-    sb_exc_t = torch.from_numpy(sim_exc).to(dev)
-    sb_env_t = torch.from_numpy(sim_env).to(dev)
+    # Direct vocal simulator audio -> parameter reconstitution pool (90/10 train/val holdout)
+    sb_perm = rng.permutation(len(sim_feats))
+    sb_cut = max(1, int(0.90 * len(sb_perm)))
+    sb_tr_i = sb_perm[:sb_cut]
+    sb_va_i = sb_perm[sb_cut : sb_cut + min(8192, len(sb_perm) - sb_cut)]
+    sb_x_t = norm_x(sim_feats[sb_tr_i]).to(dev)
+    sb_art_t = torch.from_numpy(sim_art_norm[sb_tr_i]).to(dev)
+    sb_exc_t = torch.from_numpy(sim_exc[sb_tr_i]).to(dev)
+    sb_env_t = torch.from_numpy(sim_env[sb_tr_i]).to(dev)
     sb_n = len(sb_x_t)
+
+    sb_x_val = norm_x(sim_feats[sb_va_i]).to(dev)
+    sb_art_val = torch.from_numpy(sim_art_norm[sb_va_i]).to(dev)
 
     # Derive HUD display targets directly from simulator 14-D parameters
     with torch.no_grad():
@@ -1804,8 +1933,8 @@ def train_soundbank_sequence_model(
         s_lipo = sb_art_t[:, 8]
         s_lipr = sb_art_t[:, 9]
         s_lipp = sb_art_t[:, 10]
-        s_cues_t = torch.from_numpy(sim_cues).to(dev)
-        s_loud = torch.clamp(torch.from_numpy(sim_loud).to(dev), 0.0, 1.0)
+        s_cues_t = torch.from_numpy(sim_cues[sb_tr_i]).to(dev)
+        s_loud = torch.clamp(torch.from_numpy(sim_loud[sb_tr_i]).to(dev), 0.0, 1.0)
         s_breath = torch.clamp(s_cues_t[:, 2], 0.0, 1.0)
         s_pitch = torch.clamp((s_cues_t[:, 0] + 1.5) / 3.0, 0.0, 1.0)
         s_vib = torch.clamp(s_cues_t[:, 3], 0.0, 1.0)
@@ -1823,9 +1952,9 @@ def train_soundbank_sequence_model(
         v_ay = 1.3 * s_tx + 0.9 * s_lipo + 0.5 * s_jaw - 1.0 * s_lipr
         sb_vtarget = F.softmax(torch.stack([v_ah, v_ee, v_oh, v_oo, v_ay], dim=1) * 3.0, dim=1)
 
-    # Upgraded 18 -> 96 -> 64 -> 28 capacity supported identically by frontend wub_singing_head_mlp_v2 loader
-    inv_net = SingingHeadInverseNet(in_dim=18, h1=96, h2=64, out_dim=28).to(dev)
-    opt = torch.optim.AdamW(inv_net.parameters(), lr=2.5e-3, weight_decay=2e-4)
+    # Upgraded 18 -> 192 -> 128 -> 28 capacity supported identically by frontend wub_singing_head_mlp_v2 loader
+    inv_net = SingingHeadInverseNet(in_dim=18, h1=192, h2=128, out_dim=28).to(dev)
+    opt = torch.optim.AdamW(inv_net.parameters(), lr=2.2e-3, weight_decay=2e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
 
     n_tr_seq = len(xt)
@@ -1836,8 +1965,79 @@ def train_soundbank_sequence_model(
         device=dev,
         dtype=torch.float32,
     ).view(1, 1, 18)
+    # Prioritize acoustically identifiable articulators (jaw, tongueX, tongueY, tongueRoot, tipX, lipOpen, lipRound)
+    tract_id_w = torch.tensor(
+        [1.80, 2.20, 1.35, 1.30, 1.30, 0.75, 0.90, 0.45, 1.60, 1.10, 0.95, 1.05, 1.05, 0.75],
+        device=dev,
+        dtype=torch.float32,
+    )
 
-    for _ in range(epochs):
+    def _eval_validation() -> Dict[str, float]:
+        inv_net.eval()
+        with torch.no_grad():
+            nv = xv.shape[0]
+            va, vv_log, vt_pred = inv_net(xv.reshape(nv * t_len, 18))
+            va = va.reshape(nv, t_len, 9)
+            vv_log = vv_log.reshape(nv, t_len, 5)
+            vt_pred = vt_pred.reshape(nv, t_len, 14)
+
+            mask_v = vv_m[:, :, 0] > 0.5
+            v_mae = float(torch.mean(torch.abs(va[mask_v] - yv[:, :, :9][mask_v])).item())
+            t_mae = float(torch.mean(torch.abs(vt_pred[mask_v] - tv[mask_v])).item())
+
+            dp_val = torch.abs(vt_pred[:, 1:] - vt_pred[:, :-1]).mean()
+            v_vel = float(dp_val.item())
+            acc_val = torch.abs(vt_pred[:, 2:] - 2.0 * vt_pred[:, 1:-1] + vt_pred[:, :-2]).mean()
+            v_acc = float(acc_val.item())
+
+            active_mask = mask_v & (yv[:, :, 0] > 0.12)
+            if int(active_mask.sum().item()) > 10:
+                pred_cls = torch.argmax(vv_log[active_mask], dim=-1)
+                true_cls = torch.argmax(yv[:, :, 9:][active_mask], dim=-1)
+                v_vacc = float((pred_cls == true_cls).float().mean().item())
+            else:
+                v_vacc = 0.0
+
+            voiced_mask = active_mask & (wv[:, :, 0] > 0.45)
+            p_cyc_r2 = 0.0
+            rt_env_corr = 0.0
+            rt_feat_r2 = 0.0
+            if int(voiced_mask.sum().item()) > 10:
+                vp_env, vp_feats = fwd_sim_net.forward_both(torch.cat([vt_pred[voiced_mask], exv[voiced_mask]], dim=1))
+                tp_env = ev[voiced_mask]
+                tp_feats = xv[voiced_mask]
+                p_res = float(((vp_env - tp_env) ** 2).sum().item())
+                p_tot = float(((tp_env - tp_env.mean(dim=0, keepdim=True)) ** 2).sum().item())
+                p_cyc_r2 = 1.0 - p_res / max(1e-8, p_tot)
+                rt_env_corr = float((vp_env * tp_env).sum(dim=-1).mean().item())
+                f_res = float(((vp_feats - tp_feats) ** 2).sum().item())
+                f_tot = float(((tp_feats - tp_feats.mean(dim=0, keepdim=True)) ** 2).sum().item())
+                rt_feat_r2 = 1.0 - f_res / max(1e-8, f_tot)
+
+            # Evaluate soundbank inverse reconstitution correlation on held-out simulator frames
+            _, _, sb_vp = inv_net(sb_x_val)
+            corrs_sb = []
+            for d_idx in (0, 1, 8):
+                a_p = sb_vp[:, d_idx] - sb_vp[:, d_idx].mean()
+                a_t = sb_art_val[:, d_idx] - sb_art_val[:, d_idx].mean()
+                denom_c = torch.sqrt((a_p * a_p).sum() * (a_t * a_t).sum()) + 1e-8
+                corrs_sb.append(float(((a_p * a_t).sum() / denom_c).item()))
+            sb_corr = float(sum(corrs_sb) / len(corrs_sb))
+        return {
+            "val_mae": v_mae,
+            "tract_val_mae": t_mae,
+            "val_vowel_acc": v_vacc,
+            "val_vel": v_vel,
+            "val_accel": v_acc,
+            "physics_cycle_r2": p_cyc_r2,
+            "roundtrip_env_corr": rt_env_corr,
+            "roundtrip_feat_r2": rt_feat_r2,
+            "sb_corr": sb_corr,
+        }
+
+    best_score = -1e9
+    best_state = None
+    for ep in range(epochs):
         inv_net.train()
         perm = torch.randperm(n_tr_seq, device=dev)
         for s in range(0, n_tr_seq, batch_seqs):
@@ -1863,7 +2063,9 @@ def train_soundbank_sequence_model(
             loss_art = (((p_art - yb[:, :, :9]) ** 2) * v_w).sum() / (9.0 * denom_v)
             log_probs = F.log_softmax(p_vlog, dim=-1)
             loss_vowel = (-(yb[:, :, 9:] * log_probs).sum(dim=-1, keepdim=True) * v_w).sum() / denom_v
-            loss_tract = (F.smooth_l1_loss(p_tract, tb, reduction="none") * v_w).sum() / (14.0 * denom_v)
+            tract_w_mask = v_w * (0.30 + 1.40 * wb)
+            denom_tw = torch.clamp(tract_w_mask.sum(), min=1.0)
+            loss_tract = (F.smooth_l1_loss(p_tract, tb, reduction="none") * tract_w_mask * tract_id_w.view(1, 1, 14)).sum() / (14.0 * denom_tw)
 
             # Temporal velocity matching + target-matched 2nd-derivative smoothness
             m1 = v_w[:, 1:] * v_w[:, :-1]
@@ -1885,9 +2087,9 @@ def train_soundbank_sequence_model(
             t_acc_a = yb[:, 2:, :9] - 2.0 * yb[:, 1:-1, :9] + yb[:, :-2, :9]
             loss_accel = (
                 (F.smooth_l1_loss(acc_t, t_acc_t, reduction="none") * m2).sum() / (14.0 * denom_2)
-                + 0.75 * ((acc_t * acc_t) * m2).sum() / (14.0 * denom_2)
+                + 0.25 * ((acc_t * acc_t) * m2).sum() / (14.0 * denom_2)
                 + 0.45 * (F.smooth_l1_loss(acc_a, t_acc_a, reduction="none") * m2).sum() / (9.0 * denom_2)
-                + 0.45 * ((acc_a * acc_a) * m2).sum() / (9.0 * denom_2)
+                + 0.25 * ((acc_a * acc_a) * m2).sum() / (9.0 * denom_2)
             )
 
             # Dynamic range / variance preservation loss: prevent regression to the mean!
@@ -1901,12 +2103,16 @@ def train_soundbank_sequence_model(
                 t_std_t = torch.sqrt(torch.var(t_t_act, dim=0) + 1e-6)
                 p_std_a = torch.sqrt(torch.var(p_a_act, dim=0) + 1e-6)
                 t_std_a = torch.sqrt(torch.var(t_a_act, dim=0) + 1e-6)
-                loss_var = F.relu(t_std_t - p_std_t).mean() + 0.65 * F.relu(t_std_a - p_std_a).mean()
+                loss_var = (
+                    F.relu(t_std_t - p_std_t).mean()
+                    + 0.70 * F.relu(p_std_t - 1.12 * t_std_t).mean()
+                    + 0.65 * F.relu(t_std_a - p_std_a).mean()
+                )
             else:
                 loss_var = torch.tensor(0.0, device=dev)
 
             # Input micro-jitter invariance: perturbed noisy frame features shouldn't shake mouth parameters
-            noise = torch.randn_like(xb) * 0.055 * jit_mask
+            noise = torch.randn_like(xb) * 0.050 * jit_mask
             j_art, _, j_tract = inv_net((xb + noise).reshape(flat_b, 18))
             j_art = j_art.reshape(bs, t_len, 9)
             j_tract = j_tract.reshape(bs, t_len, 14)
@@ -1917,7 +2123,7 @@ def train_soundbank_sequence_model(
 
             # Differentiable roundtrip spectral correlation + 18-D acoustic feature reconstitution loss
             pred_env_flat, pred_feats_flat = fwd_sim_net.forward_both(
-                torch.cat([p_tract.reshape(flat_b, 14), exb.reshape(flat_b, 10)], dim=1)
+                torch.cat([p_tract.reshape(flat_b, 14), exb.reshape(flat_b, exc_dim)], dim=1)
             )
             pred_env = pred_env_flat.reshape(bs, t_len, 32)
             pred_feats = pred_feats_flat.reshape(bs, t_len, 18)
@@ -1925,38 +2131,35 @@ def train_soundbank_sequence_model(
             denom_a = torch.clamp(w_act.sum(), min=1.0)
             cos_env = (pred_env * eb).sum(dim=-1, keepdim=True)
             loss_sim_cycle = (
-                ((1.0 - cos_env) * w_act).sum() / denom_a
-                + 0.45 * (F.smooth_l1_loss(pred_feats, xb, reduction="none") * w_act).sum() / (18.0 * denom_a)
+                2.20 * ((1.0 - cos_env) * w_act).sum() / denom_a
+                + 0.75 * (F.smooth_l1_loss(pred_feats, xb, reduction="none") * w_act).sum() / (18.0 * denom_a)
             )
 
             # Direct vocal simulator audio -> parameter reconstitution + roundtrip correlation supervision
-            sb_idx = torch.randint(0, sb_n, (1024,), device=dev)
+            sb_idx = torch.randint(0, sb_n, (2048,), device=dev)
             sb_pred_art, sb_vlog, sb_pred_tract = inv_net(sb_x_t[sb_idx])
             sb_vprob = sb_vtarget[sb_idx]
             loss_sb_vowel = -(sb_vprob * F.log_softmax(sb_vlog, dim=-1)).sum(dim=-1).mean()
             sb_pred_env, sb_pred_feats = fwd_sim_net.forward_both(torch.cat([sb_pred_tract, sb_exc_t[sb_idx]], dim=1))
-            sb_p_std = torch.sqrt(torch.var(sb_pred_tract, dim=0) + 1e-6)
-            sb_t_std = torch.sqrt(torch.var(sb_art_t[sb_idx], dim=0) + 1e-6)
             sb_cos_loss = (1.0 - (sb_pred_env * sb_env_t[sb_idx]).sum(dim=-1)).mean()
             loss_sb = (
-                F.smooth_l1_loss(sb_pred_tract, sb_art_t[sb_idx])
+                1.80 * (F.smooth_l1_loss(sb_pred_tract, sb_art_t[sb_idx], reduction="none") * tract_id_w.view(1, 14)).mean()
                 + 0.45 * F.mse_loss(sb_pred_art, sb_art9_t[sb_idx])
-                + 0.55 * sb_cos_loss
-                + 0.35 * F.smooth_l1_loss(sb_pred_feats, sb_x_t[sb_idx])
+                + 0.75 * sb_cos_loss
+                + 0.45 * F.smooth_l1_loss(sb_pred_feats, sb_x_t[sb_idx])
                 + 0.20 * loss_sb_vowel
-                + 0.35 * F.relu(0.95 * sb_t_std - sb_p_std).mean()
             )
 
             loss = (
-                1.60 * loss_art
+                1.20 * loss_art
                 + 0.45 * loss_vowel
-                + 3.60 * loss_tract
+                + 8.50 * loss_tract
                 + 1.80 * loss_var
-                + 1.75 * loss_vel
-                + 2.10 * loss_accel
-                + 0.90 * loss_jitter
-                + 2.85 * loss_sim_cycle
-                + 1.45 * loss_sb
+                + 1.60 * loss_vel
+                + 2.00 * loss_accel
+                + 1.00 * loss_jitter
+                + 0.60 * loss_sim_cycle
+                + 0.85 * loss_sb
             )
 
             opt.zero_grad()
@@ -1965,46 +2168,39 @@ def train_soundbank_sequence_model(
             opt.step()
         sched.step()
 
-    inv_net.eval()
-    with torch.no_grad():
-        nv = xv.shape[0]
-        va, vv_log, vt_pred = inv_net(xv.reshape(nv * t_len, 18))
-        va = va.reshape(nv, t_len, 9)
-        vv_log = vv_log.reshape(nv, t_len, 5)
-        vt_pred = vt_pred.reshape(nv, t_len, 14)
+        if (ep + 1) % 5 == 0 or ep == epochs - 1:
+            vm = _eval_validation()
+            smooth_pen = max(0.0, vm["val_vel"] - 0.049) * 30.0 + max(0.0, vm["val_accel"] - 0.059) * 30.0
+            score = (
+                vm["roundtrip_env_corr"]
+                + 0.70 * vm["physics_cycle_r2"]
+                + 0.45 * vm["roundtrip_feat_r2"]
+                + 0.60 * vm["sb_corr"]
+                - 1.0 * vm["tract_val_mae"]
+                - smooth_pen
+            )
+            if score > best_score:
+                best_score = score
+                best_state = {k: v.detach().cpu().clone() for k, v in inv_net.state_dict().items()}
+            if (ep + 1) % 10 == 0 or ep == epochs - 1:
+                print(
+                    f"[singing_head] ep {ep+1}/{epochs} rt_env={vm['roundtrip_env_corr']:.4f} "
+                    f"cyc_r2={vm['physics_cycle_r2']:.4f} rt_feat_r2={vm['roundtrip_feat_r2']:.4f} sb_corr={vm['sb_corr']:.4f} "
+                    f"tract_mae={vm['tract_val_mae']:.4f} vel={vm['val_vel']:.4f} acc={vm['val_accel']:.4f}",
+                    flush=True,
+                )
 
-        mask_v = vv_m[:, :, 0] > 0.5
-        val_mae = float(torch.mean(torch.abs(va[mask_v] - yv[:, :, :9][mask_v])).item())
-        tract_val_mae = float(torch.mean(torch.abs(vt_pred[mask_v] - tv[mask_v])).item())
-
-        dp_val = torch.abs(vt_pred[:, 1:] - vt_pred[:, :-1]).mean()
-        val_vel = float(dp_val.item())
-        acc_val = torch.abs(vt_pred[:, 2:] - 2.0 * vt_pred[:, 1:-1] + vt_pred[:, :-2]).mean()
-        val_accel = float(acc_val.item())
-
-        active_mask = mask_v & (yv[:, :, 0] > 0.12)
-        if int(active_mask.sum().item()) > 10:
-            pred_cls = torch.argmax(vv_log[active_mask], dim=-1)
-            true_cls = torch.argmax(yv[:, :, 9:][active_mask], dim=-1)
-            val_vowel_acc = float((pred_cls == true_cls).float().mean().item())
-        else:
-            val_vowel_acc = 0.0
-
-        voiced_mask = active_mask & (wv[:, :, 0] > 0.45)
-        physics_cycle_r2 = 0.0
-        roundtrip_env_corr = 0.0
-        roundtrip_feat_r2 = 0.0
-        if int(voiced_mask.sum().item()) > 10:
-            vp_env, vp_feats = fwd_sim_net.forward_both(torch.cat([vt_pred[voiced_mask], exv[voiced_mask]], dim=1))
-            tp_env = ev[voiced_mask]
-            tp_feats = xv[voiced_mask]
-            p_res = float(((vp_env - tp_env) ** 2).sum().item())
-            p_tot = float(((tp_env - tp_env.mean(dim=0, keepdim=True)) ** 2).sum().item())
-            physics_cycle_r2 = 1.0 - p_res / max(1e-8, p_tot)
-            roundtrip_env_corr = float((vp_env * tp_env).sum(dim=-1).mean().item())
-            f_res = float(((vp_feats - tp_feats) ** 2).sum().item())
-            f_tot = float(((tp_feats - tp_feats.mean(dim=0, keepdim=True)) ** 2).sum().item())
-            roundtrip_feat_r2 = 1.0 - f_res / max(1e-8, f_tot)
+    if best_state is not None:
+        inv_net.load_state_dict({k: v.to(dev) for k, v in best_state.items()})
+    vm = _eval_validation()
+    val_mae = vm["val_mae"]
+    tract_val_mae = vm["tract_val_mae"]
+    val_vowel_acc = vm["val_vowel_acc"]
+    val_vel = vm["val_vel"]
+    val_accel = vm["val_accel"]
+    physics_cycle_r2 = vm["physics_cycle_r2"]
+    roundtrip_env_corr = vm["roundtrip_env_corr"]
+    roundtrip_feat_r2 = vm["roundtrip_feat_r2"]
 
     inv_net_cpu = inv_net.cpu()
     metrics = {
@@ -2031,6 +2227,7 @@ def main() -> None:
     parser.add_argument("--atlas", type=Path, default=Path("/tmp/tract_physics_atlas.npz"))
     parser.add_argument("--soundbank", type=Path, default=None, help="Optional simulated tract soundbank (.npz) for sequential Viterbi+smoothness training")
     parser.add_argument("--seq-cache", type=Path, default=Path("/tmp/wub_vocal_seqs_cache.pt"), help="Optional sequence cache to avoid re-decoding stems")
+    parser.add_argument("--match-cache", type=Path, default=None, help="Optional matched Viterbi+ZeroFFT tensor cache (.pt)")
     parser.add_argument("--out", type=Path, default=Path("frontend/public/data/singing_head_model.json"))
     parser.add_argument("--max-kits", type=int, default=0, help="0 = all vocal kit stubs")
     parser.add_argument("--max-stems", type=int, default=0, help="0 = all full vocal stems")
@@ -2087,9 +2284,17 @@ def main() -> None:
         sim_feats = sb["feats"].astype(np.float32)
         sim_cues = sb["cues"].astype(np.float32)
 
-        x_seq, y_seq, tract_seq, env_seq, weights_seq, valid_seq, sim_art_norm, sim_env, corpus_stats = (
-            match_sequences_to_soundbank(all_seqs, args.soundbank, dev=dev)
-        )
+        if args.match_cache is not None and args.match_cache.exists():
+            print(f"Loading cached matched trajectories from {args.match_cache}...", flush=True)
+            mc = torch.load(args.match_cache, weights_only=False)
+            x_seq, y_seq, tract_seq, env_seq, weights_seq, valid_seq, sim_art_norm, sim_env, corpus_stats = mc
+        else:
+            x_seq, y_seq, tract_seq, env_seq, weights_seq, valid_seq, sim_art_norm, sim_env, corpus_stats = (
+                match_sequences_to_soundbank(all_seqs, args.soundbank, dev=dev)
+            )
+            if args.match_cache is not None:
+                torch.save((x_seq, y_seq, tract_seq, env_seq, weights_seq, valid_seq, sim_art_norm, sim_env, corpus_stats), args.match_cache)
+                print(f"  saved matched trajectory cache to {args.match_cache}", flush=True)
         track_ids = [s["track_id"] for s in all_seqs]
         print(
             f"Training smooth 14-D sequence inverse network on {dev} ({args.epochs} epochs, {len(all_seqs)} sequences)...",
