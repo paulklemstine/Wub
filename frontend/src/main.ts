@@ -993,15 +993,41 @@ class WubApp {
   }
 
   private initLightshowAndDjControls(): void {
-    // 1. Trippy Rave Lightshow (SuperAcid + SpaceTubes)
+    // 1. Trippy Rave Lightshow (All 267 SuperAcid + SpaceTubes scenes)
     const lsCanvas = document.getElementById("lightshow-canvas") as HTMLCanvasElement | null;
     const presetBtns = document.querySelectorAll<HTMLButtonElement>("[data-ls-preset]");
+    const presetSelect = document.getElementById("ls-preset-select") as HTMLSelectElement | null;
+    const presetSearch = document.getElementById("ls-preset-search") as HTMLInputElement | null;
     const syncPresetBtns = (preset: LightshowPresetId) => {
       presetBtns.forEach((b) => b.classList.toggle("active", b.dataset.lsPreset === preset));
+      if (presetSelect && presetSelect.value !== preset) {
+        presetSelect.value = preset;
+      }
+    };
+    const rebuildPresetSelect = (query: string = "") => {
+      if (!presetSelect || !this.lightshow) return;
+      const q = query.trim().toLowerCase();
+      const all = this.lightshow.getPresets();
+      const filtered = q ? all.filter((p) => p.label.toLowerCase().includes(q) || p.id.includes(q)) : all;
+      const cur = this.lightshow.getState().preset;
+      presetSelect.replaceChildren();
+      for (const p of filtered) {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = `${p.role === "fg" ? "★ " : ""}${p.label}`;
+        if (p.id === cur) opt.selected = true;
+        presetSelect.appendChild(opt);
+      }
     };
 
     if (lsCanvas) {
-      this.lightshow = new RaveLightshowPanel(lsCanvas, syncPresetBtns);
+      this.lightshow = new RaveLightshowPanel(lsCanvas, (_presets, activeId) => {
+        if (presetSelect && presetSelect.options.length !== _presets.length && !(presetSearch?.value.trim())) {
+          rebuildPresetSelect("");
+        }
+        syncPresetBtns(activeId);
+      });
+      rebuildPresetSelect("");
       presetBtns.forEach((btn) => {
         btn.addEventListener("click", () => {
           const p = btn.dataset.lsPreset as LightshowPresetId | undefined;
@@ -1010,6 +1036,30 @@ class WubApp {
           syncPresetBtns(p);
         });
       });
+
+      presetSelect?.addEventListener("change", () => {
+        const val = presetSelect.value;
+        if (val && this.lightshow) {
+          this.lightshow.setState({ preset: val });
+          syncPresetBtns(val);
+        }
+      });
+      presetSearch?.addEventListener("input", () => rebuildPresetSelect(presetSearch.value));
+
+      document.getElementById("btn-ls-prev")?.addEventListener("click", () => this.lightshow?.stepPreset(-1));
+      document.getElementById("btn-ls-next")?.addEventListener("click", () => this.lightshow?.stepPreset(1));
+      document.getElementById("btn-ls-rand")?.addEventListener("click", () => this.lightshow?.randomPreset());
+
+      const dualBtn = document.getElementById("btn-ls-dual");
+      if (dualBtn) {
+        dualBtn.addEventListener("click", () => {
+          if (!this.lightshow) return;
+          const next = !this.lightshow.getState().dualLayer;
+          this.lightshow.setState({ dualLayer: next });
+          dualBtn.classList.toggle("active", next);
+          dualBtn.textContent = `2-LAYER: ${next ? "ON" : "OFF"}`;
+        });
+      }
 
       const cortexBtn = document.getElementById("btn-ls-cortex");
       if (cortexBtn) {

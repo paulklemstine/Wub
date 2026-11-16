@@ -1121,6 +1121,23 @@
       grid-template-columns: 1fr;
       gap: 3px;
     }
+    .lightshow-nav-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 3px;
+    }
+    .lightshow-search,
+    .lightshow-select {
+      width: 100%;
+      box-sizing: border-box;
+      background: #0a0f1c;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #e2e8f0;
+      font-family: monospace;
+      font-size: 0.62rem;
+      padding: 3px 4px;
+    }
     .lightshow-fx-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -2725,7 +2742,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.294 <span class="mc-build-num">#294</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.295 <span class="mc-build-num">#295</span></span>
       </div>
       <div id="panel-dock" class="panel-dock" role="toolbar" aria-label="Toggle Front Page Panels">
         <button type="button" class="panel-dock-btn active" data-panel="panel-bear">WUB BEAR</button>
@@ -2933,14 +2950,22 @@
         <div class="lightshow-side" aria-label="Lightshow VJ Controls">
           <button id="btn-ls-bear" class="lightshow-btn" type="button" title="Overlay dancing Wub Creature 2.0 onto Lightshow visuals (O)">BEAR OVERLAY: OFF</button>
           <button id="btn-ls-cortex" class="lightshow-btn active" type="button" title="Auto-rotate presets on song sections">CORTEX VJ: ON</button>
+          <button id="btn-ls-dual" class="lightshow-btn active" type="button" title="Composite FG overlay preset atop BG shader">2-LAYER: ON</button>
+          <div class="lightshow-nav-row">
+            <button id="btn-ls-prev" class="lightshow-btn" type="button" title="Previous SuperAcid scene">◀</button>
+            <button id="btn-ls-rand" class="lightshow-btn" type="button" title="Random SuperAcid scene">🎲</button>
+            <button id="btn-ls-next" class="lightshow-btn" type="button" title="Next SuperAcid scene">▶</button>
+          </div>
+          <input id="ls-preset-search" class="lightshow-search" type="search" placeholder="Search 268 FX..." aria-label="Filter SuperAcid scenes" />
+          <select id="ls-preset-select" class="lightshow-select" aria-label="All 268 SuperAcid Visual Scenes"></select>
           <div class="lightshow-preset-grid" id="ls-preset-btns">
             <button type="button" class="lightshow-btn active" data-ls-preset="acid-warp">ACID WARP</button>
             <button type="button" class="lightshow-btn" data-ls-preset="breathing-mandala">DMT MANDALA</button>
             <button type="button" class="lightshow-btn" data-ls-preset="space-tubes">SPACETUBES</button>
-            <button type="button" class="lightshow-btn" data-ls-preset="burning-julia">BURNING JULIA</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="dmt-hyperspace">DMT HYPERSPACE</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="ego-death">EGO DEATH</button>
             <button type="button" class="lightshow-btn" data-ls-preset="cosmic-serpent">COSMIC SERPENT</button>
-            <button type="button" class="lightshow-btn" data-ls-preset="color-organ">COLOR ORGAN</button>
-            <button type="button" class="lightshow-btn" data-ls-preset="apollonian">APOLLONIAN</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="apollonian-gasket">APOLLONIAN</button>
             <button type="button" class="lightshow-btn" data-ls-preset="acid-smiley">ACID SMILEY</button>
           </div>
           <div class="lightshow-fx-grid">
@@ -3657,7 +3682,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.294 (Build #294 • rev 266092f7f1)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.295 (Build #295 • rev c1ae286364)</span>
     </div>
   </div>
 

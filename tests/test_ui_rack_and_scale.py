@@ -244,8 +244,16 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
     assert "bikiniGroup" in Path("frontend/src/bear_3d_view.ts").read_text(encoding="utf-8")
 
     ls_src = Path("frontend/src/lightshow.ts").read_text(encoding="utf-8")
-    for preset in ("acid-warp", "breathing-mandala", "space-tubes", "burning-julia", "cosmic-serpent"):
+    for preset in ("acid-warp", "breathing-mandala", "space-tubes", "dmt-hyperspace", "ego-death"):
         assert preset in ls_src
+    assert "superacid_presets.json" in ls_src
+
+    import json
+    bundle = json.loads(Path("frontend/public/data/superacid_presets.json").read_text(encoding="utf-8"))
+    assert bundle["count"] >= 260
+    assert len(bundle["presets"]) >= 260
+    for dom_id in ("ls-preset-select", "ls-preset-search", "btn-ls-prev", "btn-ls-rand", "btn-ls-next", "btn-ls-dual"):
+        assert dom_id in html
 
     fx_src = Path("frontend/src/dj_fx_processor.ts").read_text(encoding="utf-8")
     assert "WubDjFxProcessor" in fx_src
