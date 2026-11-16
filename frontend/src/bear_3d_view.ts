@@ -33,6 +33,7 @@ export interface BearVisualConfig {
   showCage: boolean;
   showVisor: boolean;
   showHalo: boolean;
+  showBikini: boolean;
   mouthStyle: BearMouthStyle;
   danceGain: number; // 0.3 .. 2.0
   mouthGain: number; // 0.6 .. 1.8
@@ -42,6 +43,7 @@ export const DEFAULT_BEAR_VISUAL_CONFIG: BearVisualConfig = {
   showCage: true,
   showVisor: true,
   showHalo: true,
+  showBikini: true,
   mouthStyle: "real",
   danceGain: 1.0,
   mouthGain: 1.0,
@@ -338,6 +340,9 @@ export class Bear3DView {
   private visorMesh: THREE.Mesh | null = null;
   private heartMesh: THREE.Mesh | null = null;
   private haloMesh: THREE.Mesh | null = null;
+  private bikiniGroup: THREE.Group | null = null;
+  private earBowGroup: THREE.Group | null = null;
+  private bikiniMat: THREE.MeshPhysicalMaterial | null = null;
   private mandalaFloor: THREE.Group | null = null;
   private mandalaBack: THREE.Group | null = null;
   private moteRing: THREE.Group | null = null;
@@ -695,6 +700,93 @@ export class Bear3DView {
     collar.position.set(0, 0.95, 0.04);
     this.bodyGroup.add(collar);
 
+    // --- Sexy Kawaii Neon Rave Bikini ---
+    const bikini = new THREE.Group();
+    this.bikiniMat = this.track(
+      new THREE.MeshPhysicalMaterial({
+        color: 0xff1a8c,
+        emissive: 0x99004d,
+        emissiveIntensity: 0.65,
+        roughness: 0.16,
+        metalness: 0.25,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.1,
+        side: THREE.DoubleSide,
+      })
+    );
+    const trimMat = this.track(
+      new THREE.MeshStandardMaterial({
+        color: 0x00ffff,
+        emissive: 0x00d8ff,
+        emissiveIntensity: 0.9,
+        roughness: 0.2,
+      })
+    );
+
+    // Triangle bikini top cups + halter straps + center clasp jewel
+    const cupGeo = this.track(new THREE.ConeGeometry(0.28, 0.34, 4, 1));
+    for (const s of [-1, 1]) {
+      const cup = new THREE.Mesh(cupGeo, this.bikiniMat);
+      cup.position.set(s * 0.33, 0.34, 0.72);
+      cup.rotation.set(-0.22, s * 0.36, s * -0.14);
+      cup.scale.set(1.05, 1.0, 0.48);
+      bikini.add(cup);
+
+      const strapGeo = this.track(new THREE.CylinderGeometry(0.02, 0.02, 0.62, 8));
+      const strap = new THREE.Mesh(strapGeo, trimMat);
+      strap.position.set(s * 0.27, 0.68, 0.52);
+      strap.rotation.set(-0.62, 0, s * 0.22);
+      bikini.add(strap);
+    }
+    const bustBandGeo = this.track(new THREE.TorusGeometry(0.84, 0.024, 8, 28));
+    const bustBand = new THREE.Mesh(bustBandGeo, trimMat);
+    bustBand.rotation.x = Math.PI / 2;
+    bustBand.position.set(0, 0.22, 0.02);
+    bikini.add(bustBand);
+
+    const gemGeo = this.track(new THREE.OctahedronGeometry(0.075, 0));
+    const centerGem = new THREE.Mesh(gemGeo, trimMat);
+    centerGem.position.set(0, 0.3, 0.85);
+    bikini.add(centerGem);
+
+    // Low-rise V-cut bikini bottoms + hip waistband + side tie bows
+    const waistBandGeo = this.track(new THREE.TorusGeometry(0.88, 0.028, 8, 30));
+    const waistBand = new THREE.Mesh(waistBandGeo, trimMat);
+    waistBand.rotation.x = Math.PI / 2;
+    waistBand.position.set(0, -0.34, 0.02);
+    bikini.add(waistBand);
+
+    const briefGeo = this.track(new THREE.ConeGeometry(0.46, 0.44, 4, 1));
+    const frontBrief = new THREE.Mesh(briefGeo, this.bikiniMat);
+    frontBrief.position.set(0, -0.52, 0.66);
+    frontBrief.rotation.set(0.42, Math.PI / 4, Math.PI);
+    frontBrief.scale.set(1.25, 1.0, 0.45);
+    bikini.add(frontBrief);
+
+    const backBrief = new THREE.Mesh(briefGeo, this.bikiniMat);
+    backBrief.position.set(0, -0.52, -0.66);
+    backBrief.rotation.set(-0.42, Math.PI / 4, Math.PI);
+    backBrief.scale.set(1.3, 1.0, 0.45);
+    bikini.add(backBrief);
+
+    const bowLoopGeo = this.track(new THREE.ConeGeometry(0.075, 0.16, 8));
+    for (const s of [-1, 1]) {
+      const hipBow = new THREE.Group();
+      hipBow.position.set(s * 0.89, -0.34, 0.08);
+      for (const ls of [-1, 1]) {
+        const loop = new THREE.Mesh(bowLoopGeo, this.bikiniMat);
+        loop.rotation.z = ls * 0.9;
+        loop.position.y = ls * 0.06;
+        hipBow.add(loop);
+      }
+      const knot = new THREE.Mesh(gemGeo, trimMat);
+      knot.scale.set(0.65, 0.65, 0.65);
+      hipBow.add(knot);
+      bikini.add(hipBow);
+    }
+    this.bodyGroup.add(bikini);
+    this.bikiniGroup = bikini;
+
     // --- Limbs (arms + paws, legs + feet) ---
     const limbGeo = this.track(new THREE.CapsuleGeometry(0.24, 0.52, 8, 14));
     const pawPadMat = this.track(
@@ -795,6 +887,22 @@ export class Bear3DView {
     };
     this.leftEar = makeEar(-1);
     this.rightEar = makeEar(1);
+
+    // Kawaii ear ribbon bow on right ear
+    if (this.bikiniMat) {
+      const earBow = new THREE.Group();
+      earBow.position.set(0.18, 0.3, 0.12);
+      earBow.rotation.z = -0.35;
+      const bowLoopGeo = this.track(new THREE.ConeGeometry(0.09, 0.2, 8));
+      for (const ls of [-1, 1]) {
+        const loop = new THREE.Mesh(bowLoopGeo, this.bikiniMat);
+        loop.rotation.z = ls * 1.1;
+        loop.position.x = ls * 0.09;
+        earBow.add(loop);
+      }
+      this.rightEar.add(earBow);
+      this.earBowGroup = earBow;
+    }
 
     // Floating sacred crown halo
     const haloGeo = this.track(new THREE.TorusGeometry(0.76, 0.036, 10, 36));
@@ -1192,6 +1300,15 @@ export class Bear3DView {
     }
     if (this.visorMat) {
       this.visorMat.opacity = vis.showVisor ? 0.16 + 0.3 * tel.mix + (tel.isDrop ? 0.2 : 0) : 0;
+    }
+    if (this.bikiniGroup) {
+      this.bikiniGroup.visible = vis.showBikini;
+    }
+    if (this.earBowGroup) {
+      this.earBowGroup.visible = vis.showBikini;
+    }
+    if (this.bikiniMat) {
+      this.bikiniMat.emissiveIntensity = 0.55 + tel.mix * 0.95 + tel.drumPunch * 0.5;
     }
 
     // Spin mandala rings & orbiting LSD motes

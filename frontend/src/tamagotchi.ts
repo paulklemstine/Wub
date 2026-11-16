@@ -254,7 +254,7 @@ export class TamagotchiAvatar {
   }
 
   private bindVisualControlBar(): void {
-    const toggleVisualBool = (id: string, key: "showCage" | "showVisor" | "showHalo", label: string) => {
+    const toggleVisualBool = (id: string, key: "showCage" | "showVisor" | "showHalo" | "showBikini", label: string) => {
       const btn = document.getElementById(id);
       if (!btn) return;
       const sync = () => {
@@ -271,6 +271,7 @@ export class TamagotchiAvatar {
     toggleVisualBool("btn-bear-cage", "showCage", "CAGE");
     toggleVisualBool("btn-bear-visor", "showVisor", "VISOR");
     toggleVisualBool("btn-bear-halo", "showHalo", "HALO");
+    toggleVisualBool("btn-bear-bikini", "showBikini", "BIKINI");
 
     const mouthStyleBtn = document.getElementById("btn-bear-mouth-style");
     if (mouthStyleBtn) {
@@ -1608,6 +1609,119 @@ export class TamagotchiAvatar {
     ctx.shadowColor = "#fff3b0";
     ctx.stroke();
     ctx.restore();
+
+    // -------------------------------------------------------------------------
+    // 4B. SEXY KAWAII RAVE BIKINI & EAR BOW
+    // -------------------------------------------------------------------------
+    if (vis.showBikini) {
+      ctx.save();
+      const bikPink = ctx.createLinearGradient(cx, cy + 16 * scaleY, cx, cy + 72 * scaleY);
+      bikPink.addColorStop(0.0, "#ff6ec7");
+      bikPink.addColorStop(0.45, "#ff0084");
+      bikPink.addColorStop(1.0, "#c80064");
+      const bikTrim = "#00f6ff";
+      const bikGlow = `rgba(255, 0, 150, ${0.55 + 0.45 * mixEnv})`;
+
+      const drawRibbonBow = (bx: number, by: number, bw: number, bh: number, rot: number) => {
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(rot);
+        ctx.fillStyle = "#ff2ea6";
+        ctx.strokeStyle = bikTrim;
+        ctx.lineWidth = 1.0;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-bw, -bh);
+        ctx.quadraticCurveTo(-bw * 1.15, 0, -bw, bh);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(bw, -bh);
+        ctx.quadraticCurveTo(bw * 1.15, 0, bw, bh);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, Math.max(1.8, bw * 0.28), 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+        ctx.restore();
+      };
+
+      // Halter neck straps & chest string tie
+      ctx.strokeStyle = bikTrim;
+      ctx.lineWidth = 2.0 * baseScale;
+      ctx.shadowBlur = 8 + 8 * mixEnv;
+      ctx.shadowColor = bikGlow;
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(cx + s * 10 * scaleX, cy + 7 * scaleY);
+        ctx.quadraticCurveTo(cx + s * 16 * scaleX, cy + 14 * scaleY, cx + s * 16 * scaleX, cy + 20 * scaleY);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.moveTo(cx - 33 * scaleX, cy + 33 * scaleY);
+      ctx.quadraticCurveTo(cx, cy + 36 * scaleY, cx + 33 * scaleX, cy + 33 * scaleY);
+      ctx.stroke();
+
+      // Contoured glittering triangle bikini cups
+      for (const s of [-1, 1]) {
+        const apexX = cx + s * 15 * scaleX;
+        const apexY = cy + 19 * scaleY;
+        const innerX = cx + s * 2.2 * scaleX;
+        const outerX = cx + s * 27 * scaleX;
+        const baseY = cy + 34.5 * scaleY;
+        ctx.beginPath();
+        ctx.moveTo(apexX, apexY);
+        ctx.quadraticCurveTo(cx + s * 26 * scaleX, cy + 26 * scaleY, outerX, baseY);
+        ctx.quadraticCurveTo(cx + s * 14 * scaleX, cy + 37.5 * scaleY, innerX, baseY - 1.5 * scaleY);
+        ctx.quadraticCurveTo(cx + s * 6 * scaleX, cy + 26 * scaleY, apexX, apexY);
+        ctx.closePath();
+        ctx.fillStyle = bikPink;
+        ctx.fill();
+        ctx.strokeStyle = bikTrim;
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+
+        // Glossy candy shine on cup
+        ctx.beginPath();
+        ctx.ellipse(apexX - s * 2 * scaleX, cy + 27 * scaleY, 4.2 * baseScale, 1.8 * baseScale, s * 0.4, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.58)";
+        ctx.fill();
+      }
+      drawRibbonBow(cx, cy + 32.5 * scaleY, 5.0 * baseScale, 3.2 * baseScale, 0);
+
+      // Low-rise cheeky V-cut bikini bottoms + hip side ties
+      const waistY = cy + 54 * scaleY;
+      const hipW = 35 * scaleX;
+      ctx.beginPath();
+      ctx.moveTo(cx - hipW, waistY);
+      ctx.quadraticCurveTo(cx, waistY + 5.5 * scaleY, cx + hipW, waistY);
+      ctx.quadraticCurveTo(cx + hipW * 0.62, cy + 66 * scaleY, cx + 4.5 * scaleX, cy + 72.5 * scaleY);
+      ctx.quadraticCurveTo(cx, cy + 73.5 * scaleY, cx - 4.5 * scaleX, cy + 72.5 * scaleY);
+      ctx.quadraticCurveTo(cx - hipW * 0.62, cy + 66 * scaleY, cx - hipW, waistY);
+      ctx.closePath();
+      ctx.fillStyle = bikPink;
+      ctx.fill();
+      ctx.strokeStyle = bikTrim;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
+      // Center waistband crystal heart charm + glittering hip tie bows
+      ctx.beginPath();
+      ctx.arc(cx, waistY + 4.2 * scaleY, 2.5 * baseScale, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      const hipFlutter = Math.sin(t * 7.5) * 0.14;
+      drawRibbonBow(cx - hipW, waistY + 1.0 * scaleY, 5.5 * baseScale, 3.6 * baseScale, -0.35 + hipFlutter);
+      drawRibbonBow(cx + hipW, waistY + 1.0 * scaleY, 5.5 * baseScale, 3.6 * baseScale, 0.35 - hipFlutter);
+
+      // Cute matching kawaii bow clip on right ear
+      drawRibbonBow(cx + 38 * scaleX, cy - 60 * scaleY, 7.2 * baseScale, 4.4 * baseScale, 0.42);
+      ctx.restore();
+    }
 
     // -------------------------------------------------------------------------
     // 5. KAWAII PAW BEANS (PINK JELLY PADS ON HANDS & FEET)

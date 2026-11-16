@@ -229,6 +229,7 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
         "btn-bear-cage",
         "btn-bear-visor",
         "btn-bear-halo",
+        "btn-bear-bikini",
         "btn-bear-mouth-style",
         "bear-dance-slider",
         "bear-mouth-slider",
@@ -240,6 +241,7 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
     ):
         assert dom_id in html
     assert "drawOverlayInto" in Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
+    assert "bikiniGroup" in Path("frontend/src/bear_3d_view.ts").read_text(encoding="utf-8")
 
     ls_src = Path("frontend/src/lightshow.ts").read_text(encoding="utf-8")
     for preset in ("acid-warp", "breathing-mandala", "space-tubes", "burning-julia", "cosmic-serpent"):
