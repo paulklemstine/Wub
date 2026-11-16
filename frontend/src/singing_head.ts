@@ -95,6 +95,8 @@ export type SingingHeadInputMode = "vocals" | "mix";
 export interface LiveMouthState {
   art: SingingHeadArticulation;
   tract: Articulators;
+  rawArt?: SingingHeadArticulation;
+  rawTract?: Articulators;
   active: boolean;
 }
 
@@ -145,6 +147,8 @@ export class SingingHeadPanel {
   private smoothedVoicing = 0;
   private lastAudioSec = 0;
   private lastMuted = false;
+  private lastPred: SingingHeadArticulation | null = null;
+  private lastRawTract: Articulators | null = null;
   private modelLoadStarted = false;
 
   // Reusable smoothed articulation snapshot for tract bridge
@@ -378,6 +382,8 @@ export class SingingHeadPanel {
 
     const samples = !isMuted && vocalSamples && vocalSamples.length > 0 ? vocalSamples : this.silentFrame;
     const pred: SingingHeadArticulation = this.inference.infer(samples, sampleRate > 0 ? sampleRate : 44100);
+    this.lastPred = pred;
+    this.lastRawTract = pred.tract ?? null;
 
     // Track fast and slow syllable RMS envelopes so inter-syllable dips close the
     // mouth cleanly while voiced syllables track the reconstructed vocal simulator parameters.
@@ -478,10 +484,14 @@ export class SingingHeadPanel {
   }
 
   public getLiveMouthState(): LiveMouthState {
+    const rawRms = this.lastPred?.rms ?? this.smoothedRms;
+    const rawAp = this.lastPred?.aperture ?? this.aperture;
     return {
       art: this.smoothedArt,
       tract: this.tractArt,
-      active: !this.lastMuted && (this.aperture > 0.04 || this.smoothedRms > 0.012),
+      rawArt: this.lastPred ?? undefined,
+      rawTract: this.lastRawTract ?? undefined,
+      active: !this.lastMuted && (rawRms > 0.0022 || rawAp > 0.025 || this.aperture > 0.025),
     };
   }
 

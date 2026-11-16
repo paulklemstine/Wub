@@ -146,22 +146,24 @@ function updateLipTubeGeometry(
   for (let i = 0; i <= uSegs; i++) {
     const t = i / uSegs; // 0..1 left corner to right corner
     const sx = (t - 0.5) * 2; // -1..1
-    const arcEnv = Math.cos(sx * Math.PI * 0.5); // 0 at corners, 1 center
+    const arcEnv = Math.pow(Math.max(0, Math.cos(sx * Math.PI * 0.5)), 0.92); // 0 at corners, 1 center
     const x = sx * p.halfW;
     // Slight wrap back around the snout curvature
-    const zBase = p.protrude * Math.pow(arcEnv, 1.35) - 0.18 * (sx * sx);
+    const zBase = p.protrude * Math.pow(arcEnv, 1.35) - 0.16 * (sx * sx);
 
     let y: number;
     let r: number;
     if (isUpper) {
-      // Cupid's bow dip at center + raised philtrum peaks
-      const bow = (Math.cos(sx * Math.PI * 2.1) * 0.045 - 0.03) * (1 - 0.6 * p.roundness) * arcEnv;
+      // Sculpted M-shaped Cupid's bow: center tubercle dip + twin philtrum peaks
+      const cleft = Math.exp(-Math.pow(sx * 4.4, 2));
+      const peaks = Math.exp(-Math.pow((Math.abs(sx) - 0.34) * 4.2, 2));
+      const bow = (peaks * 0.052 - cleft * 0.032) * (1 - 0.55 * p.roundness) * arcEnv;
       y = p.upperH * Math.pow(arcEnv, 0.85) + bow;
-      r = p.thick * (0.45 + 0.65 * Math.pow(arcEnv, 0.7));
+      r = p.thick * (0.12 + 0.96 * Math.pow(arcEnv, 0.85));
     } else {
       const tuckDrop = -p.tuck * 0.14 * arcEnv;
-      y = -p.lowerH * Math.pow(arcEnv, 0.88) - 0.02 * arcEnv;
-      r = p.thick * (0.45 + 0.72 * Math.pow(arcEnv, 0.7));
+      y = -p.lowerH * Math.pow(arcEnv, 0.82) - 0.015 * arcEnv;
+      r = p.thick * 1.16 * (0.12 + 1.02 * Math.pow(arcEnv, 0.85));
       czArr[i] = zBase + tuckDrop;
       cxArr[i] = x;
       cyArr[i] = y;
@@ -1004,28 +1006,28 @@ export class Bear3DView {
       this.headGroup.add(cheek);
     }
 
-    // Upper snout/muzzle dome + glossy nose + cute whisker puffs above upper lip
-    const snoutGeo = this.track(new THREE.SphereGeometry(0.56, 22, 18));
+    // Upper snout/muzzle dome + glossy nose + cute whisker puffs cleanly above upper lip
+    const snoutGeo = this.track(new THREE.SphereGeometry(0.52, 22, 18));
     const upperSnout = new THREE.Mesh(snoutGeo, this.muzzleMat);
-    upperSnout.position.set(0, -0.06, 0.76);
-    upperSnout.scale.set(1.16, 0.74, 0.78);
+    upperSnout.position.set(0, 0.01, 0.74);
+    upperSnout.scale.set(1.12, 0.64, 0.72);
     this.headGroup.add(upperSnout);
 
-    const puffGeo = this.track(new THREE.SphereGeometry(0.17, 14, 12));
+    const puffGeo = this.track(new THREE.SphereGeometry(0.16, 14, 12));
     for (const s of [-1, 1]) {
       const puff = new THREE.Mesh(puffGeo, this.muzzleMat);
-      puff.position.set(s * 0.16, -0.02, 1.16);
-      puff.scale.set(1.05, 0.88, 0.75);
+      puff.position.set(s * 0.16, 0.03, 1.12);
+      puff.scale.set(1.05, 0.82, 0.68);
       this.headGroup.add(puff);
     }
 
-    const noseGeo = this.track(new THREE.SphereGeometry(0.145, 16, 12));
+    const noseGeo = this.track(new THREE.SphereGeometry(0.14, 16, 12));
     const nose = new THREE.Mesh(noseGeo, darkMat);
-    nose.position.set(0, 0.08, 1.24);
-    nose.scale.set(1.2, 0.82, 0.9);
+    nose.position.set(0, 0.12, 1.21);
+    nose.scale.set(1.18, 0.8, 0.88);
     this.headGroup.add(nose);
     const noseSpark = new THREE.Mesh(sparkGeo, sparkMat);
-    noseSpark.position.set(-0.04, 0.13, 1.35);
+    noseSpark.position.set(-0.04, 0.16, 1.32);
     this.headGroup.add(noseSpark);
 
     // -------------------------------------------------------------------------
@@ -1033,18 +1035,18 @@ export class Bear3DView {
     // (Lips, teeth rows, articulated 3D tongue, oral cavity & glowing back throat)
     // -------------------------------------------------------------------------
     this.mouthAnchor = new THREE.Group();
-    this.mouthAnchor.position.set(0, -0.18, 1.06);
+    this.mouthAnchor.position.set(0, -0.17, 1.14);
     this.headGroup.add(this.mouthAnchor);
 
-    // Hinged lower chin/jaw cup
+    // Hinged lower chin/jaw cup (set cleanly below lip rim so zero occlusion)
     this.lowerJawGroup = new THREE.Group();
-    this.lowerJawGroup.position.set(0, 0.02, -0.16);
+    this.lowerJawGroup.position.set(0, 0.01, -0.16);
     this.mouthAnchor.add(this.lowerJawGroup);
 
-    const chinGeo = this.track(new THREE.SphereGeometry(0.46, 20, 14));
+    const chinGeo = this.track(new THREE.SphereGeometry(0.42, 20, 14));
     const chinMesh = new THREE.Mesh(chinGeo, this.muzzleMat);
-    chinMesh.position.set(0, -0.22, -0.02);
-    chinMesh.scale.set(1.18, 0.56, 0.85);
+    chinMesh.position.set(0, -0.25, -0.12);
+    chinMesh.scale.set(1.1, 0.5, 0.76);
     this.lowerJawGroup.add(chinMesh);
 
     // Dark oral cavity interior sphere + luminous back pharynx/throat
@@ -1221,8 +1223,11 @@ export class Bear3DView {
         this.throatMat.color.setHex(0x00ffff);
         this.throatMat.emissive.setHex(0x00aaff);
       } else {
-        this.lipMat.color.setHex(0xff4fa8);
-        this.lipMat.emissive.setHex(0x700c45);
+        this.lipMat.color.setHex(0xe00751);
+        this.lipMat.emissive.setHex(0x610022);
+        this.lipMat.roughness = 0.12;
+        this.lipMat.clearcoat = 1.0;
+        this.lipMat.clearcoatRoughness = 0.05;
         this.tongueMat.color.setHex(0xff5599);
         this.tongueMat.emissive.setHex(0x6a093c);
         this.throatMat.color.setHex(0xd93878);
@@ -1330,17 +1335,17 @@ export class Bear3DView {
       this.moteRing.position.y = 1.0 + Math.sin(t * 2.1) * 0.15;
     }
 
-    // 3. REALISTIC SINGING MOUTH ARTICULATION (Lips, Teeth, Tongue, Throat)
+    // 3. REALISTIC SINGING MOUTH ARTICULATION (Zero-latency Head Synth synced!)
     const m = tel.mouth;
-    const art = m?.art;
-    const tract = m?.tract;
+    const art = m?.rawArt ?? m?.art;
+    const tract = m?.rawTract ?? m?.tract;
     const fb = fallbackMouthParams(tel.fallbackVowel, tel.fallbackAperture);
 
     const ap = clamp((m?.active ? art!.aperture : tel.fallbackAperture) * vis.mouthGain, 0, 1);
     const widthNorm = m?.active ? clamp(art!.width, 0, 1) : fb.width;
     const roundNorm = m?.active ? clamp(art!.roundness, 0, 1) : fb.round;
     const jawNorm = m?.active ? clamp(art!.jawDrop, 0, 1) : fb.jaw;
-    const lipOpenExtra = tract ? clamp(tract.lipOpen, -0.25, 0.9) : 0;
+    const lipOpenExtra = tract ? clamp(tract.lipOpen, -0.25, 0.95) : 0;
     const lipRound = tract ? clamp(tract.lipRound, 0, 1) : roundNorm;
     const lipProtrude = tract ? clamp(tract.lipProtrude, -0.35, 1.0) : roundNorm * 0.55;
     const lipTuck = tract ? clamp(tract.lipTuck, 0, 1) : 0;
@@ -1352,19 +1357,19 @@ export class Bear3DView {
     const tongueSides = tract ? clamp(tract.tongueSides, 0, 1) : 0;
     const groove = tract ? clamp(tract.groove, 0, 1) : 0.15;
 
-    const singingGlow = clamp(tel.vocals * 1.3 + ap * 0.65, 0, 1);
+    const singingGlow = clamp(tel.vocals * 1.3 + ap * 0.75, 0, 1);
 
-    // Lip dimensions (bear mouth width ~0.68, open height scales with jaw + lipOpen)
-    const eatDrop = tel.action === "EAT" ? 0.18 * (0.5 + 0.5 * Math.sin(t * 14)) : 0;
-    const halfW = clamp(0.29 + 0.17 * widthNorm - 0.13 * lipRound, 0.14, 0.44);
-    const openTotal = clamp(0.014 + (ap * 0.22 + jawNorm * 0.14 + lipOpenExtra * 0.12 + eatDrop), 0.01, 0.34);
-    const upperH = 0.032 + openTotal * 0.24;
-    const lowerH = 0.018 + openTotal * 0.86;
-    const protrude = 0.02 + lipProtrude * 0.13 + lipRound * 0.08;
+    // Lip dimensions (sculpted lipstick lips with lively jaw & lip excursion)
+    const eatDrop = tel.action === "EAT" ? 0.22 * (0.5 + 0.5 * Math.sin(t * 14)) : 0;
+    const halfW = clamp((0.28 + 0.19 * widthNorm - 0.14 * lipRound) * (0.85 + 0.15 * vis.mouthGain), 0.15, 0.48);
+    const openTotal = clamp(0.012 + (ap * 0.26 + jawNorm * 0.18 + lipOpenExtra * 0.14 + eatDrop), 0.01, 0.42);
+    const upperH = 0.036 + openTotal * 0.22;
+    const lowerH = 0.02 + openTotal * 0.9;
+    const protrude = 0.04 + lipProtrude * 0.15 + lipRound * 0.1;
 
     // Lower jaw drops smoothly with mouth opening
-    this.lowerJawGroup.position.y = 0.02 - openTotal * 0.72;
-    this.lowerJawGroup.rotation.x = 0.06 + openTotal * 1.15;
+    this.lowerJawGroup.position.y = 0.01 - openTotal * 0.76;
+    this.lowerJawGroup.rotation.x = 0.05 + openTotal * 1.22;
 
     if (this.upperLipGeo && this.lowerLipGeo) {
       const lp: LipParams = {
