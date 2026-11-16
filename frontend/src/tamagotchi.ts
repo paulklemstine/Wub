@@ -722,7 +722,7 @@ export class TamagotchiAvatar {
     ctx.clearRect(0, 0, dw, dh);
     const sw = src.width || 280;
     const sh = src.height || 200;
-    const scale = Math.min(dw / sw, dh / sh) * (0.82 + 0.06 * this.mixEnv + 0.04 * this.mixPunch);
+    const scale = Math.min(dw / sw, dh / sh) * (1.06 + 0.06 * this.mixEnv + 0.04 * this.mixPunch);
     const drawW = sw * scale;
     const drawH = sh * scale;
     const dx = (dw - drawW) * 0.5;
@@ -1224,7 +1224,7 @@ export class TamagotchiAvatar {
     // Center coordinates with beat bobbing
     const cx = w * 0.5;
     const bobOffset = (bob ? 3.0 : 0.0) + 2.0 * mixPunch;
-    const cy = h * 0.46 + bobOffset;
+    const cy = h * 0.44 + bobOffset;
 
     // Stage-based color palette
     let mainColor = "#ff77e9";
@@ -1257,7 +1257,7 @@ export class TamagotchiAvatar {
     const drumSquish = Math.min(1.4, env.drums * 1.15 * vis.danceGain);
     const squishY = 1.0 - 0.06 * drumSquish - 0.025 * mixPunch * vis.danceGain + (bob ? -0.02 * vis.danceGain : 0.015);
     const squishX = 1.0 + 0.06 * drumSquish + 0.025 * mixPunch * vis.danceGain - (bob ? -0.02 * vis.danceGain : 0.015);
-    const baseScale = (0.86 + 0.02 * this.stage) * (1.0 + 0.025 * mixEnv);
+    const baseScale = (1.06 + 0.02 * this.stage) * (1.0 + 0.025 * mixEnv);
     const scaleX = baseScale * squishX;
     const scaleY = baseScale * squishY;
 

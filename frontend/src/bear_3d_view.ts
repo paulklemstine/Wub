@@ -434,23 +434,23 @@ export class Bear3DView {
     this.syncPresetButtons();
     this.onPresetChange?.(preset);
     if (!this.camera || !this.controls) return;
-    const d = 7.4;
+    const d = 4.65;
     if (preset === "mouth") {
-      this.camera.position.set(0.18, 2.02, 3.05);
-      this.controls.target.set(0, 1.94, 1.02);
+      this.camera.position.set(0.12, 1.88, 2.38);
+      this.controls.target.set(0, 1.8, 1.05);
     } else if (preset === "front") {
-      this.camera.position.set(0, 1.55, d);
-      this.controls.target.set(0, 1.05, 0);
+      this.camera.position.set(0, 1.25, d);
+      this.controls.target.set(0, 1.02, 0);
     } else if (preset === "side") {
-      this.camera.position.set(6.4, 1.55, 2.1);
-      this.controls.target.set(0, 1.2, 0.2);
+      this.camera.position.set(4.25, 1.25, 1.35);
+      this.controls.target.set(0, 1.08, 0.2);
     } else if (preset === "orbit") {
-      this.camera.position.set(3.2, 2.1, 6.3);
-      this.controls.target.set(0, 1.15, 0);
+      this.camera.position.set(2.2, 1.65, 3.85);
+      this.controls.target.set(0, 1.05, 0);
     } else {
-      // "three" (hero 3/4)
-      this.camera.position.set(2.55, 2.05, 6.25);
-      this.controls.target.set(0, 1.18, 0.15);
+      // "three" (hero 3/4 zoomed to fill screen)
+      this.camera.position.set(1.55, 1.55, 4.15);
+      this.controls.target.set(0, 1.05, 0.1);
     }
     this.controls.update();
   }
@@ -1411,8 +1411,8 @@ export class Bear3DView {
 
     if (this.preset === "orbit") {
       const orbitA = t * 0.55;
-      this.camera.position.set(Math.sin(orbitA) * 6.4, 1.85 + Math.sin(t * 0.9) * 0.45, Math.cos(orbitA) * 6.4);
-      this.controls.target.set(0, 1.15, 0);
+      this.camera.position.set(Math.sin(orbitA) * 4.35, 1.48 + Math.sin(t * 0.9) * 0.35, Math.cos(orbitA) * 4.35);
+      this.controls.target.set(0, 1.05, 0);
     }
 
     this.controls.update();
