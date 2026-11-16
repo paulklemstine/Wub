@@ -207,6 +207,8 @@ export class AudioEngine {
   private vocalTrackAnalyser_: AnalyserNode | null = null;
   private vocalTrackGain_: GainNode | null = null;
   private vocalSynthGain_: GainNode | null = null;
+  private mixTrackSum_: GainNode | null = null;
+  private mixTrackAnalyser_: AnalyserNode | null = null;
   private vocalSynthMode_ = false;
   private timer_: ReturnType<typeof setInterval> | null = null;
   private liveSources_: Map<AudioBufferSourceNode, number> = new Map();
@@ -325,6 +327,15 @@ export class AudioEngine {
     reverbHighpass.connect(reverbReturn);
     reverbReturn.connect(master);
 
+    const mixTrackSum = ctx.createGain();
+    mixTrackSum.gain.value = 0.62;
+    const mixTrackAnalyser = ctx.createAnalyser();
+    mixTrackAnalyser.fftSize = GLUE_ANALYSER_FFT;
+    mixTrackAnalyser.smoothingTimeConstant = 0.8;
+    mixTrackSum.connect(mixTrackAnalyser);
+    this.mixTrackSum_ = mixTrackSum;
+    this.mixTrackAnalyser_ = mixTrackAnalyser;
+
     const buses = {} as Record<StemName, StemBus>;
     for (const stem of STEMS) {
       const input = ctx.createGain();
@@ -352,6 +363,7 @@ export class AudioEngine {
         const synthGain = ctx.createGain();
         synthGain.gain.value = this.vocalSynthMode_ ? 1.0 : 0.0;
         filter.connect(trackAnalyser);
+        filter.connect(mixTrackSum);
         filter.connect(trackGain);
         trackGain.connect(analyser);
         synthGain.connect(analyser);
@@ -360,6 +372,7 @@ export class AudioEngine {
         this.vocalSynthGain_ = synthGain;
       } else {
         filter.connect(analyser);
+        glue.connect(mixTrackSum);
       }
       analyser.connect(glue);
       glue.connect(master);
@@ -687,6 +700,28 @@ export class AudioEngine {
       throw new Error("AudioEngine vocal track analyser not initialised");
     }
     return this.vocalTrackAnalyser_;
+  }
+
+  /**
+   * Dedicated analyser tapping all 4 original track stems (drums + bass +
+   * other + isolated vocal track) before HEAD SYNTH injection so FULL MIX mode
+   * drives the Singing Head cleanly without feedback.
+   */
+  getMixTrackAnalyser(): AnalyserNode {
+    this.ensureCtx();
+    if (this.mixTrackAnalyser_ === null) {
+      throw new Error("AudioEngine mix track analyser not initialised");
+    }
+    return this.mixTrackAnalyser_;
+  }
+
+  /** True when the selected Singing Head analysis source is effectively muted. */
+  isSingingInputMuted(mode: "vocals" | "mix"): boolean {
+    const anySolo = STEMS.some((s) => this.solos_[s]);
+    if (mode === "vocals") {
+      return this.mutes_.vocals || (anySolo && !this.solos_.vocals);
+    }
+    return STEMS.every((s) => this.mutes_[s] || (anySolo && !this.solos_[s]));
   }
 
   /**

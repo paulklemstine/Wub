@@ -230,52 +230,63 @@ export function evaluateTractAcoustics(
   };
 }
 
+import {
+  CHIMERA_ARTIC_LEN,
+  CHIMERA_SOURCE_LEN,
+  STUDIO_MIC_EQ,
+  mapWubToChimeraArrays,
+} from "./chimera_mapping";
+
+let cachedChimeraWasmPromise: Promise<ArrayBuffer> | null = null;
+const registeredContexts = new WeakSet<BaseAudioContext>();
+
+function fetchChimeraWasm(): Promise<ArrayBuffer> {
+  if (cachedChimeraWasmPromise === null) {
+    cachedChimeraWasmPromise = (async () => {
+      const resp = await fetch("./chimera.wasm");
+      if (!resp.ok) {
+        throw new Error(`Failed to fetch chimera.wasm (${resp.status})`);
+      }
+      return await resp.arrayBuffer();
+    })();
+  }
+  return cachedChimeraWasmPromise;
+}
+
 /**
  * Real-time Web Audio synthesizer producing the acoustic output of the Singing Head's
- * reconstructed vocal tract geometry and glottal parameters.
+ * reconstructed vocal tract geometry and glottal parameters via the CHIMERA branched
+ * physical-modeling airway AudioWorklet + Studio-Mic EQ + RMS level lock.
  */
 export class VocalTractSynthesizer {
   private ctx: AudioContext | null = null;
   private outputNode: GainNode | null = null;
+  private workletNode: AudioWorkletNode | null = null;
+  private workletGain: GainNode | null = null;
+  private eqHp: BiquadFilterNode | null = null;
+  private eqPeak: BiquadFilterNode | null = null;
+  private eqShelf: BiquadFilterNode | null = null;
+  private rawAnalyser: AnalyserNode | null = null;
+  private readonly rawScratch = new Float32Array(256);
 
-  private glottalOsc: OscillatorNode | null = null;
-  private subOsc: OscillatorNode | null = null;
-  private subGainNode: GainNode | null = null;
-  private vibratoOsc: OscillatorNode | null = null;
-  private vibratoGain: GainNode | null = null;
-
-  private voicedGain: GainNode | null = null;
-  private tiltFilter: BiquadFilterNode | null = null;
-  private bodyFilter: BiquadFilterNode | null = null;
-  private bodyGainNode: GainNode | null = null;
-
-  // Cascade formant resonators (F1 -> F2 -> F3 -> F4)
-  private cascadeFilters: BiquadFilterNode[] = [];
-  private cascadeOutGain: GainNode | null = null;
-
-  // Parallel formant resonators (F1..F4 + Nasal murmur)
-  private parallelFilters: BiquadFilterNode[] = [];
-  private parallelGains: GainNode[] = [];
-  private nasalFilter: BiquadFilterNode | null = null;
-  private nasalGainNode: GainNode | null = null;
-  private oralNotchFilter: BiquadFilterNode | null = null;
-  private radiationFilter: BiquadFilterNode | null = null;
-  private hpFilter: BiquadFilterNode | null = null;
-
-  // Aspiration + Sibilant frication noise generator
-  private noiseSource: AudioBufferSourceNode | null = null;
-  private aspirationGain: GainNode | null = null;
-  private fricFilter: BiquadFilterNode | null = null;
-  private fricGainNode: GainNode | null = null;
+  private workletReady = false;
+  private workletInitializing = false;
+  private initEpoch = 0;
 
   private readonly hVocalScratch = new Float32Array(N_FREQ_GRID);
   private sectionsScratch: AreaFunction | undefined = undefined;
+  private readonly artic17 = new Float64Array(CHIMERA_ARTIC_LEN);
+  private readonly source12 = new Float64Array(CHIMERA_SOURCE_LEN);
+  private readonly articMsg = new Float32Array(CHIMERA_ARTIC_LEN);
+  private readonly sourceMsg = new Float32Array(CHIMERA_SOURCE_LEN);
+
   private smoothedF0 = 165.0;
   private smoothedRms = 0.0;
+  private smoothedRawRms = 0.14;
   private active = false;
 
   /**
-   * Lazily build and connect the vocal tract synthesizer graph to `destination`.
+   * Lazily build and connect the CHIMERA vocal tract synthesizer graph to `destination`.
    */
   public attach(ctx: AudioContext, destination: AudioNode): void {
     if (this.ctx === ctx && this.outputNode !== null) {
@@ -289,208 +300,95 @@ export class VocalTractSynthesizer {
     out.connect(destination);
     this.outputNode = out;
 
-    // Build custom Rosenberg / LF glottal flow derivative PeriodicWave (64 harmonics)
-    const nHarm = 64;
-    const real = new Float32Array(nHarm);
-    const imag = new Float32Array(nHarm);
-    for (let k = 1; k < nHarm; k++) {
-      // Bright harmonic glottal flow derivative spectrum balanced by vocal-tract tilt + radiation
-      const amp = 1.0 / Math.pow(k, 0.72);
-      // Alternating phase curvature avoids harsh sawtooth buzz crest factor
-      const phase = (k * 0.38) + ((k & 1) ? 0.15 : -0.15);
-      real[k] = amp * Math.cos(phase);
-      imag[k] = amp * Math.sin(phase);
+    // Studio-Mic EQ chain matching offline soundbank feature extraction
+    const eqHp = ctx.createBiquadFilter();
+    eqHp.type = "highpass";
+    eqHp.frequency.value = STUDIO_MIC_EQ.highpassHz;
+    eqHp.Q.value = STUDIO_MIC_EQ.highpassQ;
+    this.eqHp = eqHp;
+
+    const eqPeak = ctx.createBiquadFilter();
+    eqPeak.type = "peaking";
+    eqPeak.frequency.value = STUDIO_MIC_EQ.peakHz;
+    eqPeak.Q.value = STUDIO_MIC_EQ.peakQ;
+    eqPeak.gain.value = STUDIO_MIC_EQ.peakGainDb;
+    this.eqPeak = eqPeak;
+
+    const eqShelf = ctx.createBiquadFilter();
+    eqShelf.type = "highshelf";
+    eqShelf.frequency.value = STUDIO_MIC_EQ.highshelfHz;
+    eqShelf.Q.value = STUDIO_MIC_EQ.highshelfQ;
+    eqShelf.gain.value = STUDIO_MIC_EQ.highshelfGainDb;
+    this.eqShelf = eqShelf;
+
+    const rawAnalyser = ctx.createAnalyser();
+    rawAnalyser.fftSize = 256;
+    rawAnalyser.smoothingTimeConstant = 0.5;
+    this.rawAnalyser = rawAnalyser;
+
+    const wGain = ctx.createGain();
+    wGain.gain.value = 1.0;
+    this.workletGain = wGain;
+
+    wGain.connect(eqHp);
+    eqHp.connect(eqPeak);
+    eqPeak.connect(eqShelf);
+    eqShelf.connect(rawAnalyser);
+    rawAnalyser.connect(out);
+
+    void this.initWorklet(ctx, wGain, ++this.initEpoch);
+  }
+
+  private async initWorklet(
+    ctx: AudioContext,
+    targetNode: AudioNode,
+    epoch: number
+  ): Promise<void> {
+    if (this.workletInitializing || typeof AudioWorkletNode === "undefined" || !ctx.audioWorklet) {
+      return;
     }
-    const glottalWave = ctx.createPeriodicWave(real, imag, { disableNormalization: false });
+    this.workletInitializing = true;
+    try {
+      const wasmPromise = fetchChimeraWasm();
+      if (!registeredContexts.has(ctx)) {
+        await ctx.audioWorklet.addModule("./chimera_worklet.js");
+        registeredContexts.add(ctx);
+      }
+      const wasmBytes = await wasmPromise;
+      if (epoch !== this.initEpoch || this.ctx !== ctx) {
+        return;
+      }
 
-    const glottalOsc = ctx.createOscillator();
-    glottalOsc.setPeriodicWave(glottalWave);
-    glottalOsc.frequency.value = this.smoothedF0;
-    this.glottalOsc = glottalOsc;
-
-    // Gentle chest fundamental reinforcement oscillator (dynamically attenuated on bright vowels)
-    const subOsc = ctx.createOscillator();
-    subOsc.type = "sine";
-    subOsc.frequency.value = this.smoothedF0;
-    const subGain = ctx.createGain();
-    subGain.gain.value = 0.10;
-    subOsc.connect(subGain);
-    this.subOsc = subOsc;
-    this.subGainNode = subGain;
-
-    // Vibrato LFO (5.6 Hz natural singing vibrato)
-    const vibratoOsc = ctx.createOscillator();
-    vibratoOsc.type = "sine";
-    vibratoOsc.frequency.value = 5.6;
-    const vibratoGain = ctx.createGain();
-    vibratoGain.gain.value = 0.0;
-    vibratoOsc.connect(vibratoGain);
-    vibratoGain.connect(glottalOsc.frequency);
-    vibratoGain.connect(subOsc.frequency);
-    this.vibratoOsc = vibratoOsc;
-    this.vibratoGain = vibratoGain;
-
-    // Glottal open-quotient spectral tilt filter (brighter when belting/open, softer when closed)
-    const tiltFilter = ctx.createBiquadFilter();
-    tiltFilter.type = "lowpass";
-    tiltFilter.frequency.value = 2800;
-    tiltFilter.Q.value = 0.7;
-    this.tiltFilter = tiltFilter;
-
-    const voicedGain = ctx.createGain();
-    voicedGain.gain.value = 0.0;
-    this.voicedGain = voicedGain;
-
-    glottalOsc.connect(tiltFilter);
-    subGain.connect(tiltFilter);
-    tiltFilter.connect(voicedGain);
-
-    // Looping 2-second white noise buffer for breath aspiration & consonant frication
-    const noiseLen = Math.floor(ctx.sampleRate * 2.0);
-    const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
-    const noiseData = noiseBuf.getChannelData(0);
-    let b0 = 0;
-    let b1 = 0;
-    for (let i = 0; i < noiseLen; i++) {
-      const w = Math.random() * 2 - 1;
-      // Gently pink-weighted turbulence source
-      b0 = 0.96 * b0 + 0.04 * w;
-      b1 = 0.82 * b1 + 0.18 * w;
-      noiseData[i] = 0.65 * w + 0.35 * (b0 + b1);
+      const node = new AudioWorkletNode(ctx, "wub-chimera-processor", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+      });
+      node.port.onmessage = (ev: MessageEvent<{ type?: string; message?: string }>) => {
+        if (epoch !== this.initEpoch) return;
+        const msg = ev.data;
+        if (msg?.type === "ready") {
+          this.workletReady = true;
+        } else if (msg?.type === "error") {
+          console.warn("[Chimera Worklet]", msg.message);
+        }
+      };
+      node.connect(targetNode);
+      this.workletNode = node;
+      // Copy wasmBytes so the cached ArrayBuffer stays intact across context resets
+      node.port.postMessage({ type: "wasm", bytes: wasmBytes.slice(0) });
+    } catch (err) {
+      console.warn("[Chimera Worklet] failed to initialize:", err);
+    } finally {
+      this.workletInitializing = false;
     }
-    const noiseSource = ctx.createBufferSource();
-    noiseSource.buffer = noiseBuf;
-    noiseSource.loop = true;
-    this.noiseSource = noiseSource;
-
-    const aspirationGain = ctx.createGain();
-    aspirationGain.gain.value = 0.0;
-    noiseSource.connect(aspirationGain);
-    this.aspirationGain = aspirationGain;
-
-    // Sum voiced glottal pulse + glottal aspiration into the vocal tract entry
-    const tractEntry = ctx.createGain();
-    tractEntry.gain.value = 1.0;
-    voicedGain.connect(tractEntry);
-    aspirationGain.connect(tractEntry);
-
-    // 1. Cascade 4-formant resonator chain (F1 -> F2 -> F3 -> F4)
-    const initHz = [520, 1480, 2650, 3650];
-    const initQ = [5.5, 7.5, 9.0, 10.5];
-    let prevCascade: AudioNode = tractEntry;
-    this.cascadeFilters = [];
-    for (let k = 0; k < 4; k++) {
-      const bp = ctx.createBiquadFilter();
-      bp.type = "peaking";
-      bp.frequency.value = initHz[k];
-      bp.Q.value = initQ[k] * 0.65;
-      bp.gain.value = 11.5 - k * 1.5;
-      prevCascade.connect(bp);
-      prevCascade = bp;
-      this.cascadeFilters.push(bp);
-    }
-    const cascadeOutGain = ctx.createGain();
-    cascadeOutGain.gain.value = 0.55;
-    prevCascade.connect(cascadeOutGain);
-    this.cascadeOutGain = cascadeOutGain;
-
-    // 2. Parallel 4-formant bandpass bank (weighted by 44-section Webster transfer amplitudes)
-    const parallelSum = ctx.createGain();
-    parallelSum.gain.value = 0.85;
-    this.parallelFilters = [];
-    this.parallelGains = [];
-    for (let k = 0; k < 4; k++) {
-      const bp = ctx.createBiquadFilter();
-      bp.type = "bandpass";
-      bp.frequency.value = initHz[k];
-      bp.Q.value = initQ[k];
-      const g = ctx.createGain();
-      g.gain.value = 0.5 / (k + 1);
-      tractEntry.connect(bp);
-      bp.connect(g);
-      g.connect(parallelSum);
-      this.parallelFilters.push(bp);
-      this.parallelGains.push(g);
-    }
-
-    // Chest resonance warmth filter (280 Hz fundamental body, trimmed on bright belted vocals)
-    const bodyFilter = ctx.createBiquadFilter();
-    bodyFilter.type = "lowpass";
-    bodyFilter.frequency.value = 280;
-    bodyFilter.Q.value = 0.9;
-    const bodyGain = ctx.createGain();
-    bodyGain.gain.value = 0.06;
-    tractEntry.connect(bodyFilter);
-    bodyFilter.connect(bodyGain);
-    this.bodyFilter = bodyFilter;
-    this.bodyGainNode = bodyGain;
-
-    // Nasal velum parallel resonator (245 Hz nasal murmur)
-    const nasalFilter = ctx.createBiquadFilter();
-    nasalFilter.type = "bandpass";
-    nasalFilter.frequency.value = 245;
-    nasalFilter.Q.value = 3.2;
-    const nasalGainNode = ctx.createGain();
-    nasalGainNode.gain.value = 0.0;
-    tractEntry.connect(nasalFilter);
-    nasalFilter.connect(nasalGainNode);
-    this.nasalFilter = nasalFilter;
-    this.nasalGainNode = nasalGainNode;
-
-    // Oral anti-resonance notch when velum is open (~960 Hz)
-    const oralNotchFilter = ctx.createBiquadFilter();
-    oralNotchFilter.type = "peaking";
-    oralNotchFilter.frequency.value = 960;
-    oralNotchFilter.Q.value = 2.2;
-    oralNotchFilter.gain.value = 0.0;
-    this.oralNotchFilter = oralNotchFilter;
-
-    // Lip radiation high-shelf impedance projection (boosts 650+ Hz proportionally to mouth opening & brightness)
-    const radiationFilter = ctx.createBiquadFilter();
-    radiationFilter.type = "highshelf";
-    radiationFilter.frequency.value = 650;
-    radiationFilter.gain.value = 4.0;
-    this.radiationFilter = radiationFilter;
-
-    // Sub-formant high-pass shaping (keeps warm fundamental on dark vowels, clears sub-F1 boom on bright vocals)
-    const hpFilter = ctx.createBiquadFilter();
-    hpFilter.type = "highpass";
-    hpFilter.frequency.value = 180;
-    hpFilter.Q.value = 0.7;
-    this.hpFilter = hpFilter;
-
-    cascadeOutGain.connect(oralNotchFilter);
-    parallelSum.connect(oralNotchFilter);
-    bodyGain.connect(oralNotchFilter);
-    oralNotchFilter.connect(radiationFilter);
-    nasalGainNode.connect(radiationFilter);
-    radiationFilter.connect(hpFilter);
-    hpFilter.connect(out);
-
-    // Front-cavity constriction sibilance / frication path (/s/, /sh/, /f/)
-    const fricFilter = ctx.createBiquadFilter();
-    fricFilter.type = "bandpass";
-    fricFilter.frequency.value = 4800;
-    fricFilter.Q.value = 2.4;
-    const fricGainNode = ctx.createGain();
-    fricGainNode.gain.value = 0.0;
-    noiseSource.connect(fricFilter);
-    fricFilter.connect(fricGainNode);
-    fricGainNode.connect(out);
-    this.fricFilter = fricFilter;
-    this.fricGainNode = fricGainNode;
-
-    const now = ctx.currentTime;
-    glottalOsc.start(now);
-    subOsc.start(now);
-    vibratoOsc.start(now);
-    noiseSource.start(now);
   }
 
   public setEnabled(enabled: boolean): void {
     this.active = enabled;
     if (!enabled && this.ctx && this.outputNode) {
       this.outputNode.gain.setTargetAtTime(0.0, this.ctx.currentTime, 0.015);
+      this.workletNode?.port.postMessage({ type: "gate", level: 0.0 });
     }
   }
 
@@ -499,8 +397,8 @@ export class VocalTractSynthesizer {
   }
 
   /**
-   * Update the vocal tract synthesizer parameters at 60 FPS from the Singing Head's
-   * live reconstructed vocal tract geometry and glottal state.
+   * Update the CHIMERA vocal tract synthesizer parameters at 60 FPS from the
+   * Singing Head's live reconstructed vocal tract articulators and glottal state.
    */
   public update(
     art: SingingHeadArticulation,
@@ -520,11 +418,13 @@ export class VocalTractSynthesizer {
     }
 
     const t = this.ctx.currentTime;
-    const tau = 0.016; // 16 ms smoothing time constant for zipper-free audio updates
-
-    if (isMuted || art.rms < 0.0025) {
+    const quiet = isMuted || art.rms < 0.0025;
+    if (quiet) {
       this.smoothedRms *= 0.78;
       this.outputNode.gain.setTargetAtTime(0.0, t, 0.018);
+      if (this.workletNode && this.workletReady) {
+        this.workletNode.port.postMessage({ type: "gate", level: 0.0 });
+      }
       return profile;
     }
 
@@ -539,148 +439,73 @@ export class VocalTractSynthesizer {
       this.smoothedF0 += (fallbackF0 - this.smoothedF0) * 0.20;
     }
 
-    if (this.glottalOsc && this.subOsc) {
-      this.glottalOsc.frequency.setTargetAtTime(this.smoothedF0, t, 0.010);
-      this.subOsc.frequency.setTargetAtTime(this.smoothedF0, t, 0.010);
-    }
-
-    // Vibrato depth in Hz (up to ~0.45 semitones when voiced and sustaining)
-    if (this.vibratoGain && this.vibratoOsc) {
-      const vibGate = clamp(art.voicing * Math.max(0, (art.rms - 0.008) * 28), 0, 1);
-      const vibHz = this.smoothedF0 * 0.024 * clamp(art.vibrato, 0, 1) * vibGate;
-      this.vibratoGain.gain.setTargetAtTime(vibHz, t, 0.025);
-    }
-
     const centroidDrive = clamp(((art.centroidHz || 1400) - 500) / 3000, 0, 1);
 
-    // Dynamic chest/sub balance: rich fundamental for pitch lock on warm vocals, trimmed on bright singing
-    if (this.subGainNode) {
-      const subLvl = 0.14 * clamp(1.0 - 0.85 * centroidDrive, 0.05, 1.0);
-      this.subGainNode.gain.setTargetAtTime(subLvl, t, tau);
-    }
-    if (this.bodyGainNode) {
-      const bodyLvl = 0.06 * clamp(1.0 - centroidDrive, 0.0, 1.0);
-      this.bodyGainNode.gain.setTargetAtTime(bodyLvl, t, tau);
+    const mapped = mapWubToChimeraArrays(
+      tractArt,
+      art,
+      isMuted,
+      this.smoothedF0,
+      centroidDrive,
+      this.artic17,
+      this.source12
+    );
+
+    if (this.workletNode && this.workletReady) {
+      for (let i = 0; i < CHIMERA_ARTIC_LEN; i++) this.articMsg[i] = this.artic17[i];
+      for (let i = 0; i < CHIMERA_SOURCE_LEN; i++) this.sourceMsg[i] = this.source12[i];
+      this.workletNode.port.postMessage({
+        type: "params",
+        artic: this.articMsg,
+        source: this.sourceMsg,
+        gate: mapped.gate,
+        femaleMix: mapped.femaleMix,
+      });
     }
 
-    // Glottal spectral tilt (tracked cleanly from sung spectral centroid + mouth opening + tension)
-    if (this.tiltFilter) {
-      const cutoffHz = clamp(
-        1150 + 2100 * profile.openDrive + 3600 * centroidDrive + 1100 * clamp(art.tension, 0, 1),
-        850,
-        9200
-      );
-      this.tiltFilter.frequency.setTargetAtTime(cutoffHz, t, tau);
-    }
-
-    if (this.hpFilter) {
-      const hpHz = clamp(130 + 400 * centroidDrive, 120, 560);
-      this.hpFilter.frequency.setTargetAtTime(hpHz, t, tau);
-    }
-
-    // Voiced vs. aspirated glottal excitation
-    const voicing = clamp(art.voicing, 0.04, 1.0);
-    const breath = clamp(art.breath, 0.0, 1.0);
-    if (this.voicedGain) {
-      const vLvl = clamp(0.10 + 0.90 * voicing, 0.08, 1.05);
-      this.voicedGain.gain.setTargetAtTime(vLvl, t, tau);
-    }
-    if (this.aspirationGain) {
-      const aspLvl = clamp((1.0 - voicing) * 0.34 + breath * 0.22, 0.01, 0.45);
-      this.aspirationGain.gain.setTargetAtTime(aspLvl, t, tau);
-    }
-
-    // Update 4 cascade & parallel formant filters from the 44-section Webster solution
-    for (let k = 0; k < 4; k++) {
-      const fHz = profile.formantHz[k];
-      const qVal = profile.formantQ[k];
-      const gVal = profile.formantGain[k];
-
-      const cas = this.cascadeFilters[k];
-      if (cas) {
-        cas.frequency.setTargetAtTime(fHz, t, tau);
-        cas.Q.setTargetAtTime(clamp(qVal * 0.65, 2.5, 11.0), t, tau);
-        cas.gain.setTargetAtTime(clamp(6.0 + gVal * 9.5 - k * 1.0, 2.0, 18.0), t, tau);
+    // Dynamic RMS matching so Chimera's waveguide output tracks the song's vocal RMS 1:1
+    if (this.rawAnalyser) {
+      this.rawAnalyser.getFloatTimeDomainData(this.rawScratch);
+      let sq = 0;
+      for (let i = 0; i < this.rawScratch.length; i++) {
+        const s = this.rawScratch[i];
+        sq += s * s;
       }
-
-      const par = this.parallelFilters[k];
-      const parG = this.parallelGains[k];
-      if (par && parG) {
-        par.frequency.setTargetAtTime(fHz, t, tau);
-        par.Q.setTargetAtTime(qVal, t, tau);
-        const sign = (k & 1) === 1 ? -1 : 1; // Alternating signs reduce inter-formant phase cancellation
-        parG.gain.setTargetAtTime(sign * gVal * (0.65 / (1 + k * 0.35)), t, tau);
+      const instRawRms = Math.sqrt(sq / this.rawScratch.length);
+      if (instRawRms > 0.005) {
+        this.smoothedRawRms += (instRawRms - this.smoothedRawRms) * 0.25;
       }
     }
 
-    // Nasal coupling & oral anti-resonance
-    if (this.nasalGainNode && this.oralNotchFilter) {
-      this.nasalGainNode.gain.setTargetAtTime(profile.nasalGain * 0.35, t, tau);
-      this.oralNotchFilter.gain.setTargetAtTime(-8.5 * profile.nasalGain, t, tau);
-    }
-
-    // Lip radiation high-shelf impedance boost (+6 dB/oct oral projection)
-    if (this.radiationFilter) {
-      const radDb = clamp(-3.0 + 7.5 * profile.openDrive + 12.0 * centroidDrive, -4.0, 15.5);
-      this.radiationFilter.gain.setTargetAtTime(radDb, t, tau);
-    }
-
-    // Sibilance / frication turbulence (/s/, /sh/, /f/)
-    if (this.fricFilter && this.fricGainNode) {
-      this.fricFilter.frequency.setTargetAtTime(profile.sibCenterHz, t, tau);
-      const fricAmt = clamp(
-        profile.fricGain * (0.22 + 0.65 * breath + 0.45 * (1.0 - voicing)),
-        0.0,
-        0.65
-      );
-      this.fricGainNode.gain.setTargetAtTime(fricAmt, t, tau);
-    }
-
-    // Overall vocal output gain matched 1:1 to the song's vocal track RMS + mouth opening radiation
     this.smoothedRms += (art.rms - this.smoothedRms) * 0.65;
-    const radScale = 0.65 + 0.55 * Math.sqrt(profile.openDrive);
-    const outGain = clamp(this.smoothedRms * 3.3 * radScale, 0.0, 1.8);
-    this.outputNode.gain.setTargetAtTime(outGain, t, 0.012);
+    const radScale = 0.72 + 0.45 * Math.sqrt(mapped.openDrive);
+    const matchedGain = clamp(
+      (this.smoothedRms / Math.max(0.025, this.smoothedRawRms)) * radScale,
+      0.0,
+      2.8
+    );
+    this.outputNode.gain.setTargetAtTime(matchedGain, t, 0.012);
 
     return profile;
   }
 
   public dispose(): void {
+    this.initEpoch++;
+    this.workletReady = false;
+    this.workletInitializing = false;
     try {
-      this.glottalOsc?.stop();
-      this.subOsc?.stop();
-      this.vibratoOsc?.stop();
-      this.noiseSource?.stop();
-    } catch {
-      // Ignore if already stopped
-    }
-    try {
+      this.workletNode?.port.postMessage({ type: "gate", level: 0.0 });
+      this.workletNode?.disconnect();
       this.outputNode?.disconnect();
     } catch {
-      // Ignore
+      // Ignore already disconnected nodes
     }
-    this.glottalOsc = null;
-    this.subOsc = null;
-    this.subGainNode = null;
-    this.vibratoOsc = null;
-    this.vibratoGain = null;
-    this.voicedGain = null;
-    this.tiltFilter = null;
-    this.bodyFilter = null;
-    this.bodyGainNode = null;
-    this.cascadeFilters = [];
-    this.cascadeOutGain = null;
-    this.parallelFilters = [];
-    this.parallelGains = [];
-    this.nasalFilter = null;
-    this.nasalGainNode = null;
-    this.oralNotchFilter = null;
-    this.radiationFilter = null;
-    this.hpFilter = null;
-    this.noiseSource = null;
-    this.aspirationGain = null;
-    this.fricFilter = null;
-    this.fricGainNode = null;
+    this.workletNode = null;
+    this.workletGain = null;
+    this.eqHp = null;
+    this.eqPeak = null;
+    this.eqShelf = null;
+    this.rawAnalyser = null;
     this.outputNode = null;
     this.ctx = null;
   }

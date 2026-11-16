@@ -333,6 +333,8 @@ def test_singing_head_bottom_of_page_dom_wiring() -> None:
     for token in (
         'id="sh-audio-track"',
         'id="sh-audio-synth"',
+        'id="sh-input-vocals"',
+        'id="sh-input-mix"',
         'id="sh-mode-side"',
         'id="sh-mode-3d"',
         'data-sh-field="pressure"',

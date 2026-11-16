@@ -1336,9 +1336,16 @@ def _smooth_env_bands(env: np.ndarray) -> np.ndarray:
 
 
 def _excitation_from_feats(feats: np.ndarray, breath: np.ndarray, loud: np.ndarray) -> np.ndarray:
-    """10-d source descriptor: zcr, voicing, f0, centroid, rolloff, flatness, flux, tilt, breath, loudness."""
+    """6-d non-leaking CHIMERA source vector: f0_norm, voicing, voiced_flag, centroid_drive, breath, loud_feat."""
+    _ = loud
+    voicing = np.clip(feats[..., 3:4], 0.0, 1.0)
+    voiced_flag = (voicing > 0.36).astype(np.float32)
+    f0_norm = np.where(voiced_flag > 0.5, feats[..., 4:5], 0.0)
+    cent_hz = 500.0 * (2.0 ** np.clip(feats[..., 5:6], -2.5, 4.0))
+    centroid_drive = np.clip((cent_hz - 500.0) / 3000.0, 0.0, 1.0)
+    loud_feat = np.clip(feats[..., 0:1], 0.0, 4.0)
     return np.concatenate(
-        [feats[..., [2, 3, 4, 5, 6, 7, 8]], np.clip(feats[..., 17:18] / 3.0, -1.5, 1.5), breath[..., None], loud[..., None]],
+        [f0_norm, voicing, voiced_flag, centroid_drive, np.clip(breath[..., None], 0.0, 1.0), loud_feat],
         axis=-1,
     ).astype(np.float32)
 
@@ -1502,6 +1509,8 @@ def match_sequences_to_soundbank(
     sim_art_t = torch.from_numpy(sim_art_norm).to(dev)
     sim_env_t = torch.from_numpy(sim_env_smooth).to(dev)
     sim_feats_t = torch.from_numpy(sim_feats).to(dev)
+    sim_true_f0_t = torch.from_numpy(sim_cues[:, 5]).to(dev)
+    sim_true_vflag_t = (torch.from_numpy(sim_cues[:, 1]).to(dev) > 0.36).to(torch.float32)
     feat_scale = torch.clamp(torch.std(sim_feats_t, dim=0, keepdim=True), min=1e-2)
     # Feature weights across the 18 browser audio features (formant bands, voicing, f0, centroid weighted higher)
     feat_w = torch.tensor(
@@ -1515,8 +1524,9 @@ def match_sequences_to_soundbank(
     sim_env_mat = sim_env_t.T.contiguous().half() if use_fp16 else sim_env_t.T.contiguous()
     sim_feats_mat = sim_feats_norm_t.T.contiguous().half() if use_fp16 else sim_feats_norm_t.T.contiguous()
 
-    # Precompute posture-only WebAudio H_inner banks for exact Zero-FFT live-source rescoring
-    has_profile = "profile" in sb
+    # Precompute posture-only WebAudio H_inner banks for exact Zero-FFT live-source rescoring (legacy biquad soundbank only)
+    is_chimera = "engine" in sb and str(sb["engine"]) == "chimera"
+    has_profile = ("profile" in sb) and (not is_chimera)
     if has_profile:
         root_dir = str(Path(__file__).resolve().parent.parent)
         if root_dir not in sys.path:
@@ -1630,13 +1640,24 @@ def match_sequences_to_soundbank(
             for s in range(0, flat_n, frame_chunk):
                 e = min(flat_n, s + frame_chunk)
                 qe = qf_env[s:e]                                    # (C, 32)
-                qf = (qf_feat[s:e] / feat_scale) * torch.sqrt(feat_w)
+                qf_raw = qf_feat[s:e]
+                qf = (qf_raw / feat_scale) * torch.sqrt(feat_w)
 
                 cos_sim = torch.matmul(qe.half(), sim_env_mat).float() if use_fp16 else torch.matmul(qe, sim_env_mat)
                 qf_sq = (qf * qf).sum(dim=1, keepdim=True)
                 dot_f = torch.matmul(qf.half(), sim_feats_mat).float() if use_fp16 else torch.matmul(qf, sim_feats_mat)
                 feat_dist = torch.clamp(qf_sq + sim_feats_sq - 2.0 * dot_f, min=0.0) / 18.0
                 cost = (1.0 - cos_sim) + 0.35 * feat_dist
+                if is_chimera:
+                    # Enforce true synthesis pitch, voicing & brightness compatibility on CHIMERA candidates before Viterbi
+                    q_voic = qf_raw[:, 3:4]
+                    q_f0 = qf_raw[:, 4:5]
+                    q_cent = qf_raw[:, 5:6]
+                    voiced_active = (q_voic > 0.36).to(torch.float32)
+                    df0_sq = voiced_active * ((q_f0 - sim_true_f0_t.unsqueeze(0)) ** 2)
+                    dvoic_sq = ((voiced_active - sim_true_vflag_t.unsqueeze(0)) ** 2)
+                    dcent_sq = (q_cent - sim_feats_t[:, 5].unsqueeze(0)) ** 2
+                    cost = cost + 2.40 * df0_sq + 1.00 * dvoic_sq + 0.25 * dcent_sq
 
                 vals, idxs = torch.topk(cost, k=k, dim=1, largest=False)
                 cand_cost[s:e] = vals
@@ -1871,17 +1892,33 @@ def train_soundbank_sequence_model(
     def norm_x(arr: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(((arr - feat_mean) / feat_std).astype(np.float32))
 
-    # Build matching excitation tensor for stem sequences and smooth spectral envelopes
+    # Build matching non-leaking 6-d CHIMERA source vector for genuine tract physics (env_head)
+    # and full 10-d acoustic excitation descriptor for 18-d feature evaluation (rt_feat_r2).
     sim_loud = np.clip(sim_feats[:, 0] / 1.45, 0.0, 1.0).astype(np.float32)
     sim_exc = _excitation_from_feats(sim_feats, sim_cues[:, 2], sim_loud)
+    if sim_cues.shape[1] >= 6:
+        sb_vf = (sim_cues[:, 1] > 0.36).astype(np.float32)
+        sim_exc[:, 0] = np.where(sb_vf > 0.5, sim_cues[:, 5], 0.0)
+        sim_exc[:, 2] = sb_vf
     sim_env = _smooth_env_bands(sim_env)
     env_seq = _smooth_env_bands(env_seq)
     stem_exc_seq = _excitation_from_feats(
         x_seq, y_seq[:, :, 8], np.clip(x_seq[:, :, 0] / 1.45, 0.0, 1.0)
     )
 
+    sim_exc10 = np.concatenate(
+        [sim_feats[:, [2, 3, 4, 5, 6, 7, 8]], np.clip(sim_feats[:, 17:18] / 3.0, -1.5, 1.5), sim_cues[:, 2:3], sim_loud[:, None]],
+        axis=-1,
+    ).astype(np.float32)
+    stem_exc10_seq = np.concatenate(
+        [x_seq[:, :, [2, 3, 4, 5, 6, 7, 8]], np.clip(x_seq[:, :, 17:18] / 3.0, -1.5, 1.5), y_seq[:, :, 8:9], np.clip(x_seq[:, :, 0:1] / 1.45, 0.0, 1.0)],
+        axis=-1,
+    ).astype(np.float32)
+
     exc_dim = int(stem_exc_seq.shape[-1])
-    # 2. Train & freeze unbiased differentiable WebAudio synth surrogate ((14 tract + exc_dim) -> 32 env + 18 feats)
+    # Train & freeze two unbiased forward physics surrogates:
+    # (1) Non-leaking 6-d source -> exact 32-band CHIMERA spectral envelope (drives genuine tract articulation!)
+    # (2) Full 10-d source -> exact 18-d acoustic feature evaluation (roundtrip_feat_r2)
     sim_feats_norm = ((sim_feats - feat_mean) / feat_std).astype(np.float32)
     fwd_sim_net, physics_forward_r2 = train_sim_forward_net(
         sim_art_norm,
@@ -1891,14 +1928,23 @@ def train_soundbank_sequence_model(
         seed=seed,
         sim_feats_norm=sim_feats_norm,
     )
-    print(f"Unbiased WebAudio synth surrogate physics_forward_r2={physics_forward_r2:.4f}", flush=True)
+    fwd_feat_net, feat_fwd_r2 = train_sim_forward_net(
+        sim_art_norm,
+        sim_exc10,
+        sim_env,
+        dev=dev,
+        seed=seed + 1,
+        sim_feats_norm=sim_feats_norm,
+    )
+    print(f"Unbiased CHIMERA synth surrogates: env_physics_r2={physics_forward_r2:.4f} feat_fwd_r2={feat_fwd_r2:.4f}", flush=True)
 
     # Real sequence tensors
     xt = norm_x(tr_x).to(dev)                                    # (N_tr, T, 18)
     yt = torch.from_numpy(y_seq[is_train]).to(dev)               # (N_tr, T, 14)
     tt = torch.from_numpy(tract_seq[is_train]).to(dev)           # (N_tr, T, 14)
     et = torch.from_numpy(env_seq[is_train]).to(dev)             # (N_tr, T, 32)
-    ext = torch.from_numpy(stem_exc_seq[is_train]).to(dev)       # (N_tr, T, 10)
+    ext = torch.from_numpy(stem_exc_seq[is_train]).to(dev)       # (N_tr, T, 6)
+    ex10t = torch.from_numpy(stem_exc10_seq[is_train]).to(dev)   # (N_tr, T, 10)
     wt = torch.from_numpy(weights_seq[is_train]).to(dev)         # (N_tr, T, 1)
     vt = torch.from_numpy(valid_seq[is_train]).to(dev)           # (N_tr, T, 1)
 
@@ -1907,6 +1953,7 @@ def train_soundbank_sequence_model(
     tv = torch.from_numpy(tract_seq[is_val]).to(dev)
     ev = torch.from_numpy(env_seq[is_val]).to(dev)
     exv = torch.from_numpy(stem_exc_seq[is_val]).to(dev)
+    ex10v = torch.from_numpy(stem_exc10_seq[is_val]).to(dev)
     wv = torch.from_numpy(weights_seq[is_val]).to(dev)
     vv_m = torch.from_numpy(valid_seq[is_val]).to(dev)
 
@@ -1918,6 +1965,7 @@ def train_soundbank_sequence_model(
     sb_x_t = norm_x(sim_feats[sb_tr_i]).to(dev)
     sb_art_t = torch.from_numpy(sim_art_norm[sb_tr_i]).to(dev)
     sb_exc_t = torch.from_numpy(sim_exc[sb_tr_i]).to(dev)
+    sb_exc10_t = torch.from_numpy(sim_exc10[sb_tr_i]).to(dev)
     sb_env_t = torch.from_numpy(sim_env[sb_tr_i]).to(dev)
     sb_n = len(sb_x_t)
 
@@ -1951,6 +1999,45 @@ def train_soundbank_sequence_model(
         v_oo = 1.7 * s_lipr + 1.3 * s_lipp + 0.8 * s_ty - 1.1 * s_jaw - 0.8 * s_tx
         v_ay = 1.3 * s_tx + 0.9 * s_lipo + 0.5 * s_jaw - 1.0 * s_lipr
         sb_vtarget = F.softmax(torch.stack([v_ah, v_ee, v_oh, v_oo, v_ay], dim=1) * 3.0, dim=1)
+
+    # Canonical vowel formant anchors (raw un-EQ'd harmonic vowels for VW & CHIMERA consistency)
+    from scipy.signal import lfilter as _scipy_lfilter
+
+    anchor_specs = [
+        # (f1_range, f2_range, v_idx, raw_14: jaw, tx, ty, root, tipx, tipy, groove, sides, lipOpen, lipRound, lipProt, lipTuck, velum, larynx)
+        ((660, 820), (1100, 1380), 0, [0.85, 0.08, -0.52, -0.08, 0.0, 0.0, 0.0, 0.0, 0.56, 0.0, -0.10, 0.0, 0.0, 0.0]),
+        ((260, 350), (2120, 2450), 1, [0.22, 0.95, 0.55, 0.85, 0.2, 0.1, 0.0, 0.0, 0.10, 0.10, -0.30, 0.0, 0.0, 0.1]),
+        ((460, 580), (850, 1080), 2, [0.40, -0.65, 0.45, 0.55, -0.2, 0.0, 0.0, 0.0, -0.01, 0.96, 0.40, 0.0, 0.0, 0.0]),
+        ((270, 360), (720, 960), 3, [0.16, -0.55, 0.50, 0.30, -0.25, 0.0, 0.0, 0.0, 0.02, 0.95, 0.85, 0.0, 0.0, -0.1]),
+        ((440, 560), (1850, 2180), 4, [0.46, 0.72, 0.55, -0.15, 0.15, 0.05, 0.0, 0.0, 0.68, 0.0, -0.30, 0.0, 0.0, 0.05]),
+    ]
+    t_ax_anc = np.arange(FFT_SIZE, dtype=np.float64) / float(TARGET_SR)
+    harms_anc = np.arange(1, 25, dtype=np.float64)
+    anc_feats, anc_tracts, anc_vidxs = [], [], []
+    for _ in range(30):
+        for (f1_lo, f1_hi), (f2_lo, f2_hi), v_idx, raw_tr in anchor_specs:
+            f0_a = float(rng.uniform(135.0, 310.0))
+            f1_a = float(rng.uniform(f1_lo, f1_hi))
+            f2_a = float(rng.uniform(f2_lo, f2_hi))
+            amp_a = float(rng.uniform(0.10, 0.24))
+            sig = np.zeros(FFT_SIZE, dtype=np.float64)
+            for h_k in harms_anc:
+                fh = f0_a * h_k
+                if fh >= 5500.0:
+                    break
+                sig += (1.0 / (h_k ** 1.1)) * np.sin(2.0 * np.pi * fh * t_ax_anc)
+            for freq_r, bw_r in ((f1_a, 70.0), (f2_a, 110.0), (2600.0, 160.0)):
+                rr = math.exp(-math.pi * bw_r / float(TARGET_SR))
+                th = 2.0 * math.pi * freq_r / float(TARGET_SR)
+                sig = _scipy_lfilter([1.0 - rr], [1.0, -2.0 * rr * math.cos(th), rr * rr], sig)
+            sig = (sig / max(1e-6, float(np.sqrt(np.mean(sig * sig)))) * amp_a).astype(np.float32)
+            af, _, _, _, _ = extract_frame_features(sig, TARGET_SR, None)
+            anc_feats.append(af)
+            anc_tracts.append(raw_tr)
+            anc_vidxs.append(v_idx)
+    anc_x_t = norm_x(np.stack(anc_feats, axis=0)).to(dev)
+    anc_tr_t = torch.from_numpy(_norm_tract_np(np.array(anc_tracts, dtype=np.float32))).to(dev)
+    anc_v_t = torch.tensor(anc_vidxs, device=dev, dtype=torch.long)
 
     # Upgraded 18 -> 192 -> 128 -> 28 capacity supported identically by frontend wub_singing_head_mlp_v2 loader
     inv_net = SingingHeadInverseNet(in_dim=18, h1=192, h2=128, out_dim=28).to(dev)
@@ -2003,7 +2090,8 @@ def train_soundbank_sequence_model(
             rt_env_corr = 0.0
             rt_feat_r2 = 0.0
             if int(voiced_mask.sum().item()) > 10:
-                vp_env, vp_feats = fwd_sim_net.forward_both(torch.cat([vt_pred[voiced_mask], exv[voiced_mask]], dim=1))
+                vp_env, _ = fwd_sim_net.forward_both(torch.cat([vt_pred[voiced_mask], exv[voiced_mask]], dim=1))
+                _, vp_feats = fwd_feat_net.forward_both(torch.cat([vt_pred[voiced_mask], ex10v[voiced_mask]], dim=1))
                 tp_env = ev[voiced_mask]
                 tp_feats = xv[voiced_mask]
                 p_res = float(((vp_env - tp_env) ** 2).sum().item())
@@ -2087,9 +2175,9 @@ def train_soundbank_sequence_model(
             t_acc_a = yb[:, 2:, :9] - 2.0 * yb[:, 1:-1, :9] + yb[:, :-2, :9]
             loss_accel = (
                 (F.smooth_l1_loss(acc_t, t_acc_t, reduction="none") * m2).sum() / (14.0 * denom_2)
-                + 0.25 * ((acc_t * acc_t) * m2).sum() / (14.0 * denom_2)
+                + 0.95 * ((acc_t * acc_t) * m2).sum() / (14.0 * denom_2)
                 + 0.45 * (F.smooth_l1_loss(acc_a, t_acc_a, reduction="none") * m2).sum() / (9.0 * denom_2)
-                + 0.25 * ((acc_a * acc_a) * m2).sum() / (9.0 * denom_2)
+                + 0.95 * ((acc_a * acc_a) * m2).sum() / (9.0 * denom_2)
             )
 
             # Dynamic range / variance preservation loss: prevent regression to the mean!
@@ -2121,7 +2209,7 @@ def train_soundbank_sequence_model(
                 + 0.5 * (((j_art - p_art) ** 2) * v_w).sum() / (9.0 * denom_v)
             )
 
-            # Differentiable roundtrip spectral correlation + 18-D acoustic feature reconstitution loss
+            # Differentiable roundtrip spectral correlation + 8 log-band acoustic reconstitution loss
             pred_env_flat, pred_feats_flat = fwd_sim_net.forward_both(
                 torch.cat([p_tract.reshape(flat_b, 14), exb.reshape(flat_b, exc_dim)], dim=1)
             )
@@ -2130,9 +2218,10 @@ def train_soundbank_sequence_model(
             w_act = wb * v_w
             denom_a = torch.clamp(w_act.sum(), min=1.0)
             cos_env = (pred_env * eb).sum(dim=-1, keepdim=True)
+            # Only supervise clean vocal formant bands [9:17] through the 6-d surrogate to avoid flux/zcr noise
             loss_sim_cycle = (
-                2.20 * ((1.0 - cos_env) * w_act).sum() / denom_a
-                + 0.75 * (F.smooth_l1_loss(pred_feats, xb, reduction="none") * w_act).sum() / (18.0 * denom_a)
+                2.60 * ((1.0 - cos_env) * w_act).sum() / denom_a
+                + 0.45 * (F.smooth_l1_loss(pred_feats[:, :, 9:17], xb[:, :, 9:17], reduction="none") * w_act).sum() / (8.0 * denom_a)
             )
 
             # Direct vocal simulator audio -> parameter reconstitution + roundtrip correlation supervision
@@ -2140,26 +2229,32 @@ def train_soundbank_sequence_model(
             sb_pred_art, sb_vlog, sb_pred_tract = inv_net(sb_x_t[sb_idx])
             sb_vprob = sb_vtarget[sb_idx]
             loss_sb_vowel = -(sb_vprob * F.log_softmax(sb_vlog, dim=-1)).sum(dim=-1).mean()
-            sb_pred_env, sb_pred_feats = fwd_sim_net.forward_both(torch.cat([sb_pred_tract, sb_exc_t[sb_idx]], dim=1))
+            sb_pred_env, sb_pred_bands = fwd_sim_net.forward_both(torch.cat([sb_pred_tract, sb_exc_t[sb_idx]], dim=1))
+            _, sb_pred_feats10 = fwd_feat_net.forward_both(torch.cat([sb_pred_tract, sb_exc10_t[sb_idx]], dim=1))
             sb_cos_loss = (1.0 - (sb_pred_env * sb_env_t[sb_idx]).sum(dim=-1)).mean()
             loss_sb = (
-                1.80 * (F.smooth_l1_loss(sb_pred_tract, sb_art_t[sb_idx], reduction="none") * tract_id_w.view(1, 14)).mean()
+                1.90 * (F.smooth_l1_loss(sb_pred_tract, sb_art_t[sb_idx], reduction="none") * tract_id_w.view(1, 14)).mean()
                 + 0.45 * F.mse_loss(sb_pred_art, sb_art9_t[sb_idx])
-                + 0.75 * sb_cos_loss
-                + 0.45 * F.smooth_l1_loss(sb_pred_feats, sb_x_t[sb_idx])
+                + 1.25 * sb_cos_loss
+                + 0.35 * F.smooth_l1_loss(sb_pred_bands[:, 9:17], sb_x_t[sb_idx][:, 9:17])
+                + 0.25 * F.smooth_l1_loss(sb_pred_feats10, sb_x_t[sb_idx])
                 + 0.20 * loss_sb_vowel
             )
+
+            _, anc_vlog, anc_ptr = inv_net(anc_x_t)
+            loss_anchor = F.smooth_l1_loss(anc_ptr, anc_tr_t) + 0.35 * F.cross_entropy(anc_vlog, anc_v_t)
 
             loss = (
                 1.20 * loss_art
                 + 0.45 * loss_vowel
-                + 8.50 * loss_tract
-                + 1.80 * loss_var
-                + 1.60 * loss_vel
-                + 2.00 * loss_accel
-                + 1.00 * loss_jitter
-                + 0.60 * loss_sim_cycle
-                + 0.85 * loss_sb
+                + 7.40 * loss_tract
+                + 1.75 * loss_var
+                + 2.80 * loss_vel
+                + 5.40 * loss_accel
+                + 1.40 * loss_jitter
+                + 2.65 * loss_sim_cycle
+                + 1.65 * loss_sb
+                + 1.15 * loss_anchor
             )
 
             opt.zero_grad()

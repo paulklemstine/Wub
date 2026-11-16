@@ -90,6 +90,7 @@ function hzToNoteName(hz: number): string {
 
 export type SingingHeadViewMode = "side" | "3d";
 export type SingingHeadAudioMode = "track" | "synth";
+export type SingingHeadInputMode = "vocals" | "mix";
 
 export class SingingHeadPanel {
   private canvas: HTMLCanvasElement | null = null;
@@ -101,6 +102,7 @@ export class SingingHeadPanel {
 
   private audioEngine: AudioEngine | null = null;
   private audioSourceMode: SingingHeadAudioMode = "track";
+  private inputMode: SingingHeadInputMode = "vocals";
   private readonly tractSynth = new VocalTractSynthesizer();
 
   private readonly inference = new SingingHeadInference();
@@ -245,11 +247,27 @@ export class SingingHeadPanel {
     return this.audioSourceMode;
   }
 
+  public setInputMode(mode: SingingHeadInputMode): void {
+    this.inputMode = mode;
+    const isMix = mode === "mix";
+    document.getElementById("sh-input-vocals")?.classList.toggle("active", !isMix);
+    document.getElementById("sh-input-mix")?.classList.toggle("active", isMix);
+  }
+
+  public getInputMode(): SingingHeadInputMode {
+    return this.inputMode;
+  }
+
   private bindToolbarControls(): void {
     const audioTrackBtn = document.getElementById("sh-audio-track");
     const audioSynthBtn = document.getElementById("sh-audio-synth");
     audioTrackBtn?.addEventListener("click", () => this.setAudioSourceMode("track"));
     audioSynthBtn?.addEventListener("click", () => this.setAudioSourceMode("synth"));
+
+    const inputVocalsBtn = document.getElementById("sh-input-vocals");
+    const inputMixBtn = document.getElementById("sh-input-mix");
+    inputVocalsBtn?.addEventListener("click", () => this.setInputMode("vocals"));
+    inputMixBtn?.addEventListener("click", () => this.setInputMode("mix"));
 
     const sideBtn = document.getElementById("sh-mode-side");
     const view3dBtn = document.getElementById("sh-mode-3d");

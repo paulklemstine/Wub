@@ -1468,20 +1468,43 @@ class WubApp {
     }
   }
 
-  /** Unquantized float32 vocal waveform + sample rate for the Singing Head articulator. */
-  private vocalFloatFrame(): { samples: Float32Array | null; sampleRate: number } {
+  /** Unquantized float32 waveform + sample rate + meter level for the Singing Head input stream. */
+  private singingHeadInputFrame(mode: "vocals" | "mix"): {
+    samples: Float32Array | null;
+    sampleRate: number;
+    level: number;
+    muted: boolean;
+  } {
     try {
-      const analyser = this.engine.getVocalTrackAnalyser();
+      const analyser = mode === "mix"
+        ? this.engine.getMixTrackAnalyser()
+        : this.engine.getVocalTrackAnalyser();
       if (this.vocalFloatScratch === null || this.vocalFloatScratch.length !== analyser.fftSize) {
         this.vocalFloatScratch = new Float32Array(analyser.fftSize);
       }
       analyser.getFloatTimeDomainData(this.vocalFloatScratch);
+      let sq = 0;
+      for (let i = 0; i < this.vocalFloatScratch.length; i++) {
+        const v = this.vocalFloatScratch[i];
+        sq += v * v;
+      }
+      const rms = Math.sqrt(sq / Math.max(1, this.vocalFloatScratch.length));
+      const level = mode === "mix"
+        ? Math.min(1, rms * 2.2)
+        : this.analyserLevel("vocals");
       return {
         samples: this.vocalFloatScratch,
         sampleRate: analyser.context.sampleRate,
+        level,
+        muted: this.engine.isSingingInputMuted(mode),
       };
     } catch {
-      return { samples: null, sampleRate: 44100 };
+      return {
+        samples: null,
+        sampleRate: 44100,
+        level: 0,
+        muted: this.engine.isSingingInputMuted(mode),
+      };
     }
   }
 
@@ -1834,14 +1857,14 @@ class WubApp {
     }
 
     if (this.singingHead !== null) {
-      const vocalFrame = this.vocalFloatFrame();
+      const shFrame = this.singingHeadInputFrame(this.singingHead.getInputMode());
       this.singingHead.update(
         this.lastGrooveboxMeta,
         audioNow,
-        vocalFrame.samples,
-        vocalFrame.sampleRate,
-        this.analyserLevel("vocals"),
-        this.engine.isMuted("vocals"),
+        shFrame.samples,
+        shFrame.sampleRate,
+        shFrame.level,
+        shFrame.muted,
         this.bpm
       );
     }

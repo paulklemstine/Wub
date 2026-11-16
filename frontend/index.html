@@ -2347,7 +2347,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.287 <span class="mc-build-num">#287</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.288 <span class="mc-build-num">#288</span></span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
@@ -3083,7 +3083,11 @@
       <div class="singing-head-toolbar" role="toolbar" aria-label="Singing Head View Controls">
         <div class="sh-btn-group" role="group" aria-label="Vocal Instrument Audio Source">
           <button type="button" id="sh-audio-track" class="sh-btn active" title="Use the song's audio track slice as the vocal instrument audio">🎵 TRACK AUDIO</button>
-          <button type="button" id="sh-audio-synth" class="sh-btn amber" title="Play the vocal synthesizer's output generated from the Singing Head parameters">🗣️ HEAD SYNTH</button>
+          <button type="button" id="sh-audio-synth" class="sh-btn amber" title="Play the CHIMERA vocal synthesizer output driven by the Singing Head parameters">🗣️ HEAD SYNTH</button>
+        </div>
+        <div class="sh-btn-group" role="group" aria-label="Singing Head Analysis Input">
+          <button type="button" id="sh-input-vocals" class="sh-btn active" title="Drive the Singing Head strictly from the isolated vocal track">🎤 VOCAL STEM</button>
+          <button type="button" id="sh-input-mix" class="sh-btn amber" title="Drive the Singing Head from the full 4-stem track mix (feedback-free)">🎛️ FULL MIX</button>
         </div>
         <div class="sh-btn-group">
           <button type="button" id="sh-mode-side" class="sh-btn active" title="Mid-sagittal Side View Head">SIDE VIEW</button>
@@ -3112,7 +3116,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.287 (Build #287 • rev de9eeb1257)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.288 (Build #288 • rev 2c464053c7)</span>
     </div>
   </div>
 

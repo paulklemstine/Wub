@@ -623,7 +623,7 @@ def _extract_gpu_features_and_env(
     return feats, env_32, rms
 
 
-def synthesize_soundbank(
+def synthesize_biquad_soundbank(
     art_14: np.ndarray,
     areas_44: np.ndarray,
     dx: np.ndarray,
@@ -635,7 +635,7 @@ def synthesize_soundbank(
     batch_size: int = 512,
     seed: int = 42,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Synthesize real 44.1 kHz vocal sounds for every random tract posture and extract acoustics."""
+    """Legacy Biquad soundbank synthesizer retained for offline comparison."""
     rng = np.random.default_rng(seed)
     n_postures = len(art_14)
     total_sounds = n_postures * excitations_per_posture
@@ -781,11 +781,298 @@ def synthesize_soundbank(
     return art_rep, out_feats, out_env, out_cues
 
 
+NODE_CHIMERA_RENDER_SCRIPT = r"""
+const fs = require('fs');
+const wasmPath = process.argv[2];
+const inBinPath = process.argv[3];
+const outBinPath = process.argv[4];
+const sr = parseFloat(process.argv[5] || '44100');
+
+const IN_STRIDE = 21;
+const FFT_SIZE = 2048;
+const WARMUP = 2048;
+
+const ARTIC_BOUNDS = [
+  [0.0, 2.2],    // Jaw (u[0])
+  [1.3, 4.6],    // TbX (u[1])
+  [5.0, 8.8],    // TbY (u[2])
+  [-0.9, 0.9],   // Root (u[3])
+  [4.2, 7.6],    // TtX (u[4])
+  [5.2, 10.2],   // TtY (u[5])
+];
+
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+function lerp(u, lo, hi) { return lo + clamp(u, 0, 1) * (hi - lo); }
+
+(async () => {
+  const wasmBytes = fs.readFileSync(wasmPath);
+  const { instance } = await WebAssembly.instantiate(wasmBytes, {});
+  const x = instance.exports;
+
+  const rawIn = fs.readFileSync(inBinPath);
+  const inputs = new Float32Array(rawIn.buffer, rawIn.byteOffset, rawIn.byteLength / 4);
+  const nItems = Math.floor(inputs.length / IN_STRIDE);
+
+  // One preallocated handle per quantized femaleMix bucket (0.0, 0.5, 1.0)
+  const voices = [0.0, 0.5, 1.0].map((fem) => {
+    const h = x.engine_new(sr);
+    x.engine_set_body(h, fem, 0.0);
+    return h;
+  });
+
+  const outBuf = new Float32Array(nItems * FFT_SIZE);
+
+  for (let j = 0; j < nItems; j++) {
+    const off = j * IN_STRIDE;
+    const fem = inputs[off + 20];
+    const h = fem < 0.25 ? voices[0] : fem < 0.75 ? voices[1] : voices[2];
+
+    // Write 17 Chimera articulators
+    const aVals = new Float64Array(x.memory.buffer, x.engine_values(h), 32);
+    aVals.fill(NaN);
+    aVals[0] = lerp(inputs[off + 0], 0.08, 1.95);   // Jaw
+    aVals[1] = clamp(1.05 + 2.85 * clamp(inputs[off + 1], 0, 1) - 0.48 * clamp(inputs[off + 0], 0, 1) - 0.55 * clamp(inputs[off + 9], 0, 1), 1.20, 3.82); // TbX
+    aVals[2] = lerp(inputs[off + 2], 5.15, 7.95);   // TbY
+    aVals[3] = lerp(inputs[off + 4], 4.80, 7.10);   // TtX
+    aVals[4] = lerp(inputs[off + 5], 5.30, 8.10);   // TtY
+    aVals[5] = 0.0;
+    aVals[6] = lerp(inputs[off + 3], -0.75, 0.75);  // Root
+    aVals[7] = Math.max(-0.15, lerp(inputs[off + 8], 0.15, 2.05) - 0.35 * clamp(inputs[off + 9], 0, 1));  // LipAp
+    aVals[8] = lerp(inputs[off + 10], -0.15, 1.40); // LipProt
+    aVals[9] = 1.0 - clamp(inputs[off + 9], 0, 1);  // LipWidth
+    aVals[10] = clamp(inputs[off + 11], 0, 1) * 0.85; // Labiodental
+    aVals[11] = lerp(inputs[off + 12], -0.18, 0.95);// Velum
+    aVals[12] = lerp(inputs[off + 13], -1.10, 1.10);// Larynx
+    aVals[13] = clamp(inputs[off + 6], 0, 1) * 0.55;// Epilarynx
+    aVals[14] = 0.0;
+    aVals[15] = clamp(inputs[off + 7], 0, 1);       // Lateral
+    aVals[16] = 0.0;
+    x.engine_set_artic(h, 2);
+
+    // Write 12 Chimera source parameters
+    const sVals = new Float64Array(x.memory.buffer, x.engine_values(h), 32);
+    sVals.fill(NaN);
+    sVals[0] = clamp(inputs[off + 14], 65.0, 820.0); // f0
+    sVals[1] = 0.002;                                // glide
+    sVals[2] = clamp(inputs[off + 15], 2.5, 16.0);   // pressure
+    sVals[3] = clamp(inputs[off + 16], 0.0, 1.0);    // breathiness
+    sVals[4] = clamp(inputs[off + 17], 0.0, 1.0);    // tension
+    sVals[5] = 0.0;
+    sVals[6] = 0.08;
+    sVals[7] = 0.0;
+    sVals[8] = 5.5;
+    sVals[9] = 0.0;
+    sVals[10] = inputs[off + 19] > 0.5 ? 1.0 : 0.0;  // voiced
+    sVals[11] = clamp(inputs[off + 18], 0.0, 1.0);   // brightness
+    x.engine_set_source(h);
+    x.engine_set_gate(h, 1.0);
+
+    // Render WARMUP + FFT_SIZE samples in 128-sample chunks
+    const total = WARMUP + FFT_SIZE;
+    for (let pos = 0; pos < total; pos += 128) {
+      const ptr = x.engine_render(h, 128);
+      if (pos >= WARMUP) {
+        const rendered = new Float32Array(x.memory.buffer, ptr, 128);
+        outBuf.set(rendered, j * FFT_SIZE + (pos - WARMUP));
+      }
+    }
+  }
+
+  for (const h of voices) x.engine_free(h);
+  fs.writeFileSync(outBinPath, Buffer.from(outBuf.buffer, outBuf.byteOffset, outBuf.byteLength));
+})();
+"""
+
+
+TRACT_BOUNDS_NP = np.array(
+    [
+        [0.0, 1.0],
+        [-1.6, 1.4],
+        [-1.6, 1.6],
+        [-1.2, 1.2],
+        [-1.2, 1.4],
+        [-0.6, 2.2],
+        [0.0, 1.0],
+        [0.0, 1.0],
+        [-0.4, 1.2],
+        [0.0, 1.0],
+        [-0.6, 1.0],
+        [0.0, 1.0],
+        [0.0, 1.0],
+        [-1.5, 1.2],
+    ],
+    dtype=np.float32,
+)
+
+
+def _apply_studio_mic_eq_torch(waves: torch.Tensor, sr: int = TARGET_SR) -> torch.Tensor:
+    """Apply Studio-Mic EQ (110Hz HP -> 2800Hz +4.5dB peak -> 1200Hz +3dB highshelf)."""
+    dev = waves.device
+    n = waves.shape[1]
+    freqs = torch.fft.rfftfreq(n, d=1.0 / float(sr)).to(dev)
+    w = (2.0 * math.pi / float(sr)) * freqs
+    z1 = torch.complex(torch.cos(-w), torch.sin(-w))
+    z2 = z1 * z1
+    h_hp = _biquad_resp_torch("highpass", torch.tensor([110.0], device=dev), 0.7, 0.0, z1, z2, sr=float(sr))
+    h_pk = _biquad_resp_torch("peaking", torch.tensor([2800.0], device=dev), 0.8, 4.5, z1, z2, sr=float(sr))
+    h_sh = _biquad_resp_torch("highshelf", torch.tensor([1200.0], device=dev), 0.7, 3.0, z1, z2, sr=float(sr))
+    h_eq = (h_hp * h_pk * h_sh).squeeze(0).unsqueeze(0)
+    spec = torch.fft.rfft(waves, dim=1) * h_eq
+    return torch.fft.irfft(spec, n=n, dim=1)
+
+
+def _render_chimera_waveforms(
+    inputs_21: np.ndarray,
+    chimera_bin: Path | None = None,
+) -> np.ndarray:
+    """Render (N, 2048) real CHIMERA audio via native soundbank_gen binary or Node+chimera.wasm."""
+    n_items = len(inputs_21)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="wub_chimera_sb_"))
+    try:
+        in_path = tmp_dir / "in.bin"
+        out_path = tmp_dir / "out.bin"
+        inputs_21.astype(np.float32).tofile(in_path)
+
+        native_bin = chimera_bin
+        if native_bin is None:
+            env_bin = os.environ.get("WUB_CHIMERA_BIN")
+            if env_bin:
+                native_bin = Path(env_bin)
+            else:
+                default_bin = Path("/tmp/chimera-vocal-synth/target/release/examples/soundbank_gen")
+                if default_bin.exists():
+                    native_bin = default_bin
+
+        if native_bin is not None and native_bin.exists():
+            subprocess.run([str(native_bin), str(in_path), str(out_path), str(TARGET_SR)], check=True)
+        else:
+            wasm_path = ROOT / "frontend/public/chimera.wasm"
+            if not wasm_path.exists():
+                raise FileNotFoundError(f"Missing {wasm_path} and no native soundbank_gen binary available")
+            node_env = os.environ.copy()
+            nvm_node = sorted((Path.home() / ".nvm/versions/node").glob("*/bin"))
+            if nvm_node:
+                node_env["PATH"] = f"{nvm_node[-1]}:{node_env.get('PATH', '')}"
+            js_path = tmp_dir / "render_chimera.js"
+            js_path.write_text(NODE_CHIMERA_RENDER_SCRIPT, encoding="utf-8")
+            subprocess.run(
+                ["node", str(js_path), str(wasm_path), str(in_path), str(out_path), str(TARGET_SR)],
+                check=True,
+                env=node_env,
+            )
+
+        waves = np.fromfile(out_path, dtype=np.float32).reshape(n_items, FFT_SIZE).copy()
+        return waves
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def synthesize_soundbank(
+    art_14: np.ndarray,
+    areas_44: np.ndarray,
+    dx: np.ndarray,
+    lip_area: np.ndarray,
+    min_area: np.ndarray,
+    min_idx_norm: np.ndarray,
+    excitations_per_posture: int,
+    dev: torch.device,
+    batch_size: int = 512,
+    seed: int = 42,
+    chimera_bin: Path | None = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Synthesize real 44.1 kHz CHIMERA vocal waveforms for random tract postures and extract acoustics."""
+    rng = np.random.default_rng(seed)
+    n_postures = len(art_14)
+    total_sounds = n_postures * excitations_per_posture
+
+    art_rep = np.repeat(art_14, excitations_per_posture, axis=0).astype(np.float32)
+    min_a_rep = np.repeat(min_area, excitations_per_posture, axis=0).astype(np.float32)
+
+    lo = TRACT_BOUNDS_NP[:, 0][None, :]
+    hi = TRACT_BOUNDS_NP[:, 1][None, :]
+    u14 = np.clip((art_rep - lo) / np.maximum(1e-6, hi - lo), 0.0, 1.0).astype(np.float32)
+
+    lip_open_n = np.clip((art_rep[:, 8] + 0.4) / 1.6, 0.0, 1.0)
+    open_drive = np.clip(0.50 * u14[:, 0] + 0.35 * lip_open_n + 0.15 * (1.0 - 0.4 * u14[:, 9]), 0.02, 1.0)
+
+    larynx_semis = art_rep[:, 13] * 6.5
+    log_f0 = rng.uniform(math.log2(95.0), math.log2(580.0), size=total_sounds).astype(np.float32)
+    f0_hz = np.clip(2.0 ** (log_f0 + (larynx_semis / 12.0) * 0.45), 75.0, 760.0).astype(np.float32)
+
+    tightness = np.clip((0.30 - min_a_rep) / 0.28, 0.0, 1.0)
+    liptuck = np.clip(art_rep[:, 11], 0.0, 1.0)
+    tuck_w = np.clip((liptuck - 0.25) / 0.65, 0.0, 1.0)
+    is_fric = rng.random(total_sounds) < (0.10 + 0.55 * np.maximum(tightness, tuck_w))
+    voiced_flag = np.where(is_fric, 0.0, 1.0).astype(np.float32)
+    voiced_target = np.where(
+        is_fric,
+        rng.uniform(0.06, 0.35, size=total_sounds),
+        rng.uniform(0.40, 0.98, size=total_sounds),
+    ).astype(np.float32)
+    front_drive = np.clip((art_rep[:, 1] + 1.6) / 3.0, 0.0, 1.0)
+    centroid_drive = np.clip(0.50 * open_drive + 0.25 * front_drive + rng.uniform(-0.15, 0.25, size=total_sounds), 0.0, 1.0).astype(np.float32)
+    loud_u = np.clip(0.72 * open_drive + 0.28 * rng.random(total_sounds), 0.03, 1.0).astype(np.float32)
+    target_rms = (0.004 * ((0.36 / 0.004) ** loud_u)).astype(np.float32)
+    energy_drive = np.clip(np.sqrt(np.clip(target_rms * 6.5, 0.0, 1.0)), 0.0, 1.0).astype(np.float32)
+
+    tension = np.clip(0.60 * open_drive + 0.40 * rng.random(total_sounds), 0.05, 0.98).astype(np.float32)
+    breath_raw = np.clip(np.maximum(tightness, tuck_w) * 0.55 + (1.0 - voiced_target) * 0.50, 0.0, 0.90).astype(np.float32)
+    # Match chimera_mapping.ts deterministic glottal/body rules closely
+    breath_amt = np.clip(0.02 + 0.68 * (1.0 - voiced_target) + 0.25 * breath_raw + 0.22 * centroid_drive, 0.01, 0.96).astype(np.float32)
+    bright = np.clip(0.08 + 0.78 * centroid_drive + 0.14 * tension, 0.02, 1.0).astype(np.float32)
+    pressure = np.clip(4.2 + 6.8 * tension + 3.2 * energy_drive, 2.8, 15.5).astype(np.float32)
+    f0_mix = np.clip((f0_hz - 135.0) / 145.0, 0.0, 1.0)
+    female_mix = np.clip(0.75 * f0_mix + 0.25 * centroid_drive, 0.0, 1.0).astype(np.float32)
+
+    inputs_21 = np.zeros((total_sounds, 21), dtype=np.float32)
+    inputs_21[:, 0:14] = u14
+    inputs_21[:, 14] = f0_hz
+    inputs_21[:, 15] = pressure
+    inputs_21[:, 16] = breath_amt
+    inputs_21[:, 17] = tension
+    inputs_21[:, 18] = bright
+    inputs_21[:, 19] = voiced_flag
+    inputs_21[:, 20] = female_mix
+
+    # Use explicit WUB_CHIMERA_BIN or passed chimera_bin if provided; default to Node+WASM for exact browser parity on small test batches
+    use_native = chimera_bin is not None or (os.environ.get("WUB_CHIMERA_BIN") is not None) or (total_sounds >= 1024)
+    raw_waves = _render_chimera_waveforms(inputs_21, chimera_bin=chimera_bin if use_native else Path("/nonexistent"))
+
+    out_feats = np.zeros((total_sounds, 18), dtype=np.float32)
+    out_env = np.zeros((total_sounds, 32), dtype=np.float32)
+    out_cues = np.zeros((total_sounds, 6), dtype=np.float32)
+
+    with torch.no_grad():
+        for s in range(0, total_sounds, batch_size):
+            e = min(total_sounds, s + batch_size)
+            b = e - s
+            w_t = torch.from_numpy(raw_waves[s:e]).to(dev)
+            w_eq = _apply_studio_mic_eq_torch(w_t, TARGET_SR)
+            w_rms = torch.sqrt(torch.mean(w_eq * w_eq, dim=1, keepdim=True) + 1e-12)
+            t_rms = torch.from_numpy(target_rms[s:e]).to(dev).unsqueeze(1)
+            audio_batch = (w_eq / w_rms) * t_rms
+
+            feats_t, env_t, rms_t = _extract_gpu_features_and_env(audio_batch, TARGET_SR)
+            feats_t[:, 8] = torch.from_numpy(rng.uniform(0.0, 0.35, size=(b,)).astype(np.float32)).to(dev)
+
+            out_feats[s:e] = feats_t.cpu().numpy()
+            out_env[s:e] = env_t.cpu().numpy()
+            f0_n = np.clip((np.log2(f0_hz[s:e]) - math.log2(130.0)) / (math.log2(520.0) - math.log2(130.0)), 0.0, 1.0)
+            vib_s = np.clip(rng.beta(1.5, 4.5, size=(b,)).astype(np.float32) * voiced_target[s:e], 0.0, 1.0)
+            true_f0_log = np.clip(np.log2(f0_hz[s:e] / 220.0), -1.5, 1.5).astype(np.float32)
+            out_cues[s:e] = np.stack([f0_n, voiced_target[s:e], breath_amt[s:e], vib_s, loud_u[s:e], true_f0_log], axis=1)
+            if e == total_sounds or ((s // batch_size) % 32 == 0):
+                print(f"[Soundbank-CHIMERA] {e}/{total_sounds} synthesized", flush=True)
+
+    return art_rep, out_feats, out_env, out_cues
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate Voice Workshop simulator random soundbank.")
-    parser.add_argument("--postures", type=int, default=65536, help="Number of random 14-D tract postures.")
+    parser = argparse.ArgumentParser(description="Generate Voice Workshop CHIMERA simulator random soundbank.")
+    parser.add_argument("--postures", type=int, default=32768, help="Number of random 14-D tract postures.")
     parser.add_argument("--excitations", type=int, default=2, help="Synthesized sounds per posture.")
-    parser.add_argument("--out", type=Path, default=Path("/tmp/wub_soundbank.npz"))
+    parser.add_argument("--chimera-bin", type=Path, default=None, help="Path to native soundbank_gen binary.")
+    parser.add_argument("--out", type=Path, default=Path("/tmp/wub_soundbank_chimera.npz"))
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -808,7 +1095,7 @@ def main() -> None:
     min_idx_norm = min_idx_norm[valid]
 
     print(
-        f"[Soundbank] Synthesizing {len(art_14) * args.excitations} real 44.1kHz vocal waveforms on {dev}..."
+        f"[Soundbank] Synthesizing {len(art_14) * args.excitations} real 44.1kHz CHIMERA vocal waveforms on {dev}..."
     )
     art_rep, feats_18, env_32, cues_6 = synthesize_soundbank(
         art_14=art_14,
@@ -820,21 +1107,8 @@ def main() -> None:
         excitations_per_posture=args.excitations,
         dev=dev,
         seed=args.seed,
+        chimera_bin=args.chimera_bin,
     )
-
-    with torch.no_grad():
-        pf_hz, pf_q, pf_gain, p_od, p_sib, p_fric, _ = _evaluate_tract_acoustics_batch(
-            torch.from_numpy(art_14).to(dev),
-            torch.from_numpy(areas_44).to(dev),
-            torch.from_numpy(dx).to(dev),
-            torch.from_numpy(lip_area).to(dev),
-            torch.from_numpy(min_area).to(dev),
-            torch.from_numpy(min_idx_norm).to(dev),
-        )
-        prof_1 = torch.cat(
-            [pf_hz, pf_q, pf_gain, p_od.unsqueeze(1), p_sib.unsqueeze(1), p_fric.unsqueeze(1)], dim=1
-        ).cpu().numpy().astype(np.float32)
-    prof_rep = np.repeat(prof_1, args.excitations, axis=0)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -843,9 +1117,9 @@ def main() -> None:
         feats=feats_18.astype(np.float32),
         env=env_32.astype(np.float32),
         cues=cues_6.astype(np.float32),
-        profile=prof_rep,
+        engine=np.array("chimera"),
     )
-    print(f"[Soundbank] Saved {len(art_rep)} simulated sounds -> {args.out}")
+    print(f"[Soundbank] Saved {len(art_rep)} CHIMERA simulated sounds -> {args.out}")
 
 
 if __name__ == "__main__":
