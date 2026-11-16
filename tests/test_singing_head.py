@@ -227,6 +227,13 @@ def test_shipped_singing_head_model_and_responses() -> None:
     assert data["corpus_stats"].get("roundtrip_env_corr", 0.0) > 0.80
     assert data["corpus_stats"].get("roundtrip_feat_r2", 0.0) > 0.50
 
+    ch = data.get("chimera_head")
+    assert ch is not None and ch["format"] == "wub_chimera_head_v1"
+    assert ch["in_dim"] == 50 and ch["out_dim"] == 21
+    assert ch["stats"]["real_env_cos"] > 0.78
+    for key in ("w1", "b1", "w2", "b2", "w3", "b3"):
+        assert np.all(np.isfinite(np.array(ch["weights"][key], dtype=np.float64)))
+
     for key in ("w1", "b1", "w2", "b2", "w3", "b3"):
         arr = np.array(data["weights"][key], dtype=np.float64)
         assert np.all(np.isfinite(arr))
@@ -521,6 +528,7 @@ def test_python_typescript_14d_parity(tmp_path: Path) -> None:
         art: [pred.aperture, pred.width, pred.roundness, pred.jawDrop, pred.tongueHeight, pred.pitchNorm, pred.vibrato, pred.tension, pred.breath],
         vowelProbs: Array.from(pred.vowelProbs),
         tract: types.ARTICULATOR_KEYS.map((k) => pred.tract[k]),
+        chimeraOk: Boolean(pred.chimera && pred.chimera.u14.length === 14 && Number.isFinite(pred.chimera.pressure) && Number.isFinite(pred.chimera.f0HzPred)),
       };
       const tArt = bridge.articulationToTract(pred, 0.0, { ...types.DEFAULT_ARTICULATORS });
       const geom = geomMod.computeGeometry(tArt, an, teeth);
@@ -544,6 +552,7 @@ def test_python_typescript_14d_parity(tmp_path: Path) -> None:
 
     max_diff = 0.0
     for name in probes:
+        assert ts_out[name]["chimeraOk"] is True
         for field in ("art", "vowelProbs", "tract"):
             diff = float(np.max(np.abs(np.array(py_out[name][field]) - np.array(ts_out[name][field]))))
             max_diff = max(max_diff, diff)

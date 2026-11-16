@@ -450,7 +450,8 @@ export class SingingHeadPanel {
     if (this.audioSourceMode === "synth" && this.audioEngine && this.audioEngine.ready) {
       const target = this.audioEngine.getVocalSynthTarget();
       this.tractSynth.attach(target.ctx, target.destination);
-      this.tractSynth.update(this.smoothedArt, this.tractArt, this.tractGeom, isMuted);
+      // Drive HEAD SYNTH directly from low-latency inferred controls (avoid 40-140ms visual spring smear)
+      this.tractSynth.update(pred, pred.tract ?? this.tractArt, this.tractGeom, isMuted);
     }
 
     // Header live telemetry readout

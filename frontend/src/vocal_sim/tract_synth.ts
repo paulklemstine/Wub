@@ -234,6 +234,7 @@ import {
   CHIMERA_ARTIC_LEN,
   CHIMERA_SOURCE_LEN,
   STUDIO_MIC_EQ,
+  mapChimeraParamsToArrays,
   mapWubToChimeraArrays,
 } from "./chimera_mapping";
 
@@ -428,28 +429,34 @@ export class VocalTractSynthesizer {
       return profile;
     }
 
-    // Track fundamental pitch f0Hz 1:1 from song vocals on voiced frames (snap quickly on note onset)
-    const larynxShift = Math.pow(2, (tractArt.larynx * 2.2) / 12.0);
-    if (art.f0Hz > 65 && art.voicing > 0.20) {
-      const targetF0 = clamp(art.f0Hz, 70, 820);
-      const snap = this.smoothedRms < 0.008 ? 1.0 : 0.82;
+    // Track fundamental pitch matching training regime (use measured pred.f0Hz when voiced, else neural f0HzPred)
+    const ch = art.chimera;
+    if (art.f0Hz > 65 && art.voicing > 0.30) {
+      const targetF0 = clamp(art.f0Hz, 70, 760);
+      const ratio = targetF0 / Math.max(40, this.smoothedF0);
+      const snap = this.smoothedRms < 0.008 || ratio > 1.09 || ratio < 0.917 ? 1.0 : 0.85;
       this.smoothedF0 += (targetF0 - this.smoothedF0) * snap;
+    } else if (ch && ch.f0HzPred > 65) {
+      this.smoothedF0 += (clamp(ch.f0HzPred, 70, 760) - this.smoothedF0) * 0.65;
     } else {
+      const larynxShift = Math.pow(2, (tractArt.larynx * 2.2) / 12.0);
       const fallbackF0 = clamp((130 + art.pitchNorm * 190) * larynxShift, 85, 520);
-      this.smoothedF0 += (fallbackF0 - this.smoothedF0) * 0.20;
+      this.smoothedF0 += (fallbackF0 - this.smoothedF0) * 0.25;
     }
 
     const centroidDrive = clamp(((art.centroidHz || 1400) - 500) / 3000, 0, 1);
 
-    const mapped = mapWubToChimeraArrays(
-      tractArt,
-      art,
-      isMuted,
-      this.smoothedF0,
-      centroidDrive,
-      this.artic17,
-      this.source12
-    );
+    const mapped = ch
+      ? mapChimeraParamsToArrays(ch, art, isMuted, this.smoothedF0, this.artic17, this.source12)
+      : mapWubToChimeraArrays(
+          tractArt,
+          art,
+          isMuted,
+          this.smoothedF0,
+          centroidDrive,
+          this.artic17,
+          this.source12
+        );
 
     if (this.workletNode && this.workletReady) {
       for (let i = 0; i < CHIMERA_ARTIC_LEN; i++) this.articMsg[i] = this.artic17[i];
@@ -463,7 +470,7 @@ export class VocalTractSynthesizer {
       });
     }
 
-    // Dynamic RMS matching so Chimera's waveguide output tracks the song's vocal RMS 1:1
+    // Dynamic RMS matching so CHIMERA's waveguide output tracks the track audio's exact envelope
     if (this.rawAnalyser) {
       this.rawAnalyser.getFloatTimeDomainData(this.rawScratch);
       let sq = 0;
@@ -472,19 +479,19 @@ export class VocalTractSynthesizer {
         sq += s * s;
       }
       const instRawRms = Math.sqrt(sq / this.rawScratch.length);
-      if (instRawRms > 0.005) {
-        this.smoothedRawRms += (instRawRms - this.smoothedRawRms) * 0.25;
+      if (instRawRms > 0.004) {
+        this.smoothedRawRms += (instRawRms - this.smoothedRawRms) * 0.35;
       }
     }
 
-    this.smoothedRms += (art.rms - this.smoothedRms) * 0.65;
-    const radScale = 0.72 + 0.45 * Math.sqrt(mapped.openDrive);
+    const rmsAlpha = art.rms > this.smoothedRms ? 0.90 : 0.65;
+    this.smoothedRms += (art.rms - this.smoothedRms) * rmsAlpha;
     const matchedGain = clamp(
-      (this.smoothedRms / Math.max(0.025, this.smoothedRawRms)) * radScale,
+      this.smoothedRms / Math.max(0.02, this.smoothedRawRms),
       0.0,
-      2.8
+      3.0
     );
-    this.outputNode.gain.setTargetAtTime(matchedGain, t, 0.012);
+    this.outputNode.gain.setTargetAtTime(matchedGain, t, 0.007);
 
     return profile;
   }

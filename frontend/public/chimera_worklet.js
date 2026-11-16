@@ -119,29 +119,14 @@ class WubChimeraProcessor extends AudioWorkletProcessor {
     const h = this.h;
 
     try {
-      // Optional slow body-bucket transition with short mute fade
-      if (
-        this.pendingBody !== this.activeBody &&
-        (this.clockSec - this.pendingBodySince >= BODY_SWITCH_HOLD_SEC || this.gate <= 0.01)
-      ) {
-        x.engine_set_body(h, this.pendingBody, 0.0);
-        this.activeBody = this.pendingBody;
-        this.fadeQuantaLeft = BODY_FADE_QUANTUMS;
-      }
-
       this.applyTargetsToEngine();
 
       // engine_render expects <= 4096 samples (typically 128)
       const ptr = x.engine_render(h, n);
       const rendered = new Float32Array(x.memory.buffer, ptr, n);
-      const envGain =
-        this.fadeQuantaLeft > 0
-          ? 1.0 - (this.fadeQuantaLeft-- / (BODY_FADE_QUANTUMS + 1))
-          : 1.0;
-
       for (let i = 0; i < n; i++) {
         const s = rendered[i];
-        out[i] = Number.isFinite(s) ? s * envGain : 0.0;
+        out[i] = Number.isFinite(s) ? s : 0.0;
       }
 
       // Duplicate mono output to right channel if stereo output exists

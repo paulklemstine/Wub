@@ -29,6 +29,40 @@ const BANDS_HZ: readonly (readonly [number, number])[] = [
   [5000, 9000],
 ];
 
+export interface ChimeraHeadWeights {
+  version: number;
+  format: string;
+  in_dim: number;
+  hidden_dim: number;
+  out_dim: number;
+  x_mean: number[];
+  x_std: number[];
+  stats?: Record<string, number>;
+  weights: {
+    w1: number[][];
+    b1: number[];
+    w2: number[][];
+    b2: number[];
+    w3: number[][];
+    b3: number[];
+  };
+}
+
+export interface ChimeraControlParams {
+  /** 14 normalized [0..1] CHIMERA articulators matching ArticKey bounds. */
+  u14: readonly number[];
+  pressure: number;
+  breath: number;
+  tension: number;
+  brightness: number;
+  voicedProb: number;
+  roughness: number;
+  /** Neural fundamental frequency estimate (Hz) for unvoiced/polyphonic fallback. */
+  f0HzPred: number;
+  /** Octave-protected NSDF fundamental frequency (Hz, 0 if unvoiced). */
+  nsdfF0Hz: number;
+}
+
 export interface SingingHeadModelWeights {
   version: number;
   format: string;
@@ -64,6 +98,7 @@ export interface SingingHeadModelWeights {
     w3: number[][];
     b3: number[];
   };
+  chimera_head?: ChimeraHeadWeights;
 }
 
 export interface SingingHeadArticulation {
@@ -80,6 +115,8 @@ export interface SingingHeadArticulation {
   topVowel: SingingVowel;
   /** All 14 reverse-trained Voice Workshop mouth & throat articulators (when available / inferred). */
   tract?: Articulators;
+  /** 21-D direct CHIMERA vocal tract + glottal source controls from 50-D spectrum (when loaded). */
+  chimera?: ChimeraControlParams;
   rms: number;
   f0Hz: number;
   voicing: number;
@@ -163,15 +200,28 @@ export class SingingHeadInference {
   private prevNormMagLen = 0;
 
   private readonly features = new Float32Array(18);
+  private readonly env32 = new Float32Array(32);
+  private readonly envScratchA = new Float64Array(32);
+  private readonly envScratchB = new Float64Array(32);
+  private readonly envEdgesHz = new Float64Array(33);
+  private readonly nsdf = new Float64Array(SINGING_FFT_SIZE >> 1);
   private readonly xNorm = new Float64Array(18);
+  private readonly xNorm50 = new Float64Array(50);
   private h1 = new Float64Array(64);
   private h2 = new Float64Array(48);
+  private ch1 = new Float64Array(256);
+  private ch2 = new Float64Array(256);
+  private chOut = new Float64Array(21);
+  private readonly chimeraU14 = new Array<number>(14).fill(0);
   private rawOut = new Float64Array(28);
   private readonly vowelProbs = new Float64Array(5);
 
   constructor() {
     for (let i = 0; i < SINGING_FFT_SIZE; i++) {
       this.hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (SINGING_FFT_SIZE - 1));
+    }
+    for (let k = 0; k <= 32; k++) {
+      this.envEdgesHz[k] = 80.0 * Math.pow(9000.0 / 80.0, k / 32);
     }
   }
 
@@ -181,6 +231,12 @@ export class SingingHeadInference {
       if (this.h1.length < model.weights.b1.length) this.h1 = new Float64Array(model.weights.b1.length);
       if (this.h2.length < model.weights.b2.length) this.h2 = new Float64Array(model.weights.b2.length);
       if (this.rawOut.length < model.weights.b3.length) this.rawOut = new Float64Array(model.weights.b3.length);
+      if (model.chimera_head) {
+        const ch = model.chimera_head;
+        if (this.ch1.length < ch.weights.b1.length) this.ch1 = new Float64Array(ch.weights.b1.length);
+        if (this.ch2.length < ch.weights.b2.length) this.ch2 = new Float64Array(ch.weights.b2.length);
+        if (this.chOut.length < ch.weights.b3.length) this.chOut = new Float64Array(ch.weights.b3.length);
+      }
     }
   }
 
@@ -204,8 +260,10 @@ export class SingingHeadInference {
     sampleRate: number
   ): {
     features: Float32Array;
+    env32: Float32Array;
     rms: number;
     f0Hz: number;
+    nsdfF0Hz: number;
     voicing: number;
     centroidHz: number;
   } {
@@ -260,15 +318,26 @@ export class SingingHeadInference {
 
     let bestLag = 0;
     let bestVal = 0;
+    let nsdfF0Hz = 0;
     if (power > 1e-6) {
       const minLag = Math.max(8, Math.floor(srDec / 800));
       const maxLag = Math.min(m - 1, Math.ceil(srDec / 80));
       const invPower = 1 / Math.max(1e-9, power);
+      let nsdfMax = 0;
+      let prefixEnergy = 0;
+      for (let i = 0; i < m; i++) prefixEnergy += this.decimated[i] * this.decimated[i];
+
       for (let lag = minLag; lag <= maxLag; lag++) {
         const len = m - lag;
         let acc = 0;
+        let eLeft = 0;
+        let eRight = 0;
         for (let i = 0; i < len; i++) {
-          acc += this.decimated[i] * this.decimated[i + lag];
+          const a = this.decimated[i];
+          const b = this.decimated[i + lag];
+          acc += a * b;
+          eLeft += a * a;
+          eRight += b * b;
         }
         const corr = acc * invPower;
         const denom = Math.max(0.01, 1 - lag / m);
@@ -277,7 +346,51 @@ export class SingingHeadInference {
           bestVal = score;
           bestLag = lag;
         }
+        const nVal = (2 * acc) / Math.max(1e-9, eLeft + eRight);
+        this.nsdf[lag] = nVal;
+        if (nVal > nsdfMax) nsdfMax = nVal;
       }
+
+      const nsdfMinLag = Math.max(8, Math.floor(srDec / 580));
+      // McLeod NSDF first-peak selection (>= 0.97 * globalMax) fixes octave-halving without jumping 2x/4x up on harmonics
+      if (nsdfMax > 0.36 && rms > 0.006) {
+        const thresh = 0.97 * nsdfMax;
+        let chosenLag = 0;
+        let inPos = false;
+        let peakVal = -1;
+        let peakLag = 0;
+        for (let lag = nsdfMinLag; lag <= maxLag; lag++) {
+          const v = this.nsdf[lag];
+          if (v > 0) {
+            if (!inPos) {
+              inPos = true;
+              peakVal = v;
+              peakLag = lag;
+            } else if (v > peakVal) {
+              peakVal = v;
+              peakLag = lag;
+            }
+          } else if (inPos) {
+            if (peakVal >= thresh) {
+              chosenLag = peakLag;
+              break;
+            }
+            inPos = false;
+          }
+        }
+        if (chosenLag === 0 && inPos && peakVal >= thresh) chosenLag = peakLag;
+        if (chosenLag > minLag && chosenLag < maxLag) {
+          const y0 = this.nsdf[chosenLag - 1];
+          const y1 = this.nsdf[chosenLag];
+          const y2 = this.nsdf[chosenLag + 1];
+          const den = 2 * (2 * y1 - y0 - y2);
+          const delta = Math.abs(den) > 1e-6 ? clamp((y2 - y0) / den, -0.5, 0.5) : 0;
+          nsdfF0Hz = srDec / Math.max(1, chosenLag + delta);
+        } else if (chosenLag > 0) {
+          nsdfF0Hz = srDec / chosenLag;
+        }
+      }
+      void prefixEnergy;
     }
 
     const voicing = clamp(bestVal, 0, 1);
@@ -396,14 +509,61 @@ export class SingingHeadInference {
     bands[8] = flux;
     bands[17] = (bands[9] + bands[10] + bands[11]) - (bands[13] + bands[14] + bands[15]);
 
-    return { features: this.features, rms, f0Hz, voicing, centroidHz };
+    // Exact 32-band L2-normalized log spectral envelope (80..9000 Hz) matching _compute_env_32_batch + _smooth_env_bands
+    const rmsSafe = Math.max(1e-4, rms);
+    const eA = this.envScratchA;
+    const eB = this.envScratchB;
+    let eMean = 0;
+    for (let kb = 0; kb < 32; kb++) {
+      const loK = Math.max(1, Math.floor(this.envEdgesHz[kb] / binHz));
+      const hiK = Math.max(loK, Math.min(halfN - 1, Math.ceil(this.envEdgesHz[kb + 1] / binHz)));
+      let sSq = 0;
+      for (let k = loK; k <= hiK; k++) sSq += this.magSq[k];
+      const bRms = Math.sqrt(sSq / (hiK - loK + 1) + 1e-18);
+      const val = Math.log1p((bRms / rmsSafe) * 4.5);
+      eA[kb] = val;
+      eMean += val;
+    }
+    eMean /= 32;
+    let nSq = 0;
+    for (let kb = 0; kb < 32; kb++) {
+      const v = eA[kb] - eMean;
+      eA[kb] = v;
+      nSq += v * v;
+    }
+    let invN = 1 / Math.max(1e-6, Math.sqrt(nSq));
+    for (let kb = 0; kb < 32; kb++) eA[kb] *= invN;
+
+    for (let pass = 0; pass < 2; pass++) {
+      for (let kb = 0; kb < 32; kb++) {
+        const l = eA[kb === 0 ? 0 : kb - 1];
+        const r = eA[kb === 31 ? 31 : kb + 1];
+        eB[kb] = 0.25 * l + 0.5 * eA[kb] + 0.25 * r;
+      }
+      for (let kb = 0; kb < 32; kb++) eA[kb] = eB[kb];
+    }
+    eMean = 0;
+    for (let kb = 0; kb < 32; kb++) eMean += eA[kb];
+    eMean /= 32;
+    nSq = 0;
+    for (let kb = 0; kb < 32; kb++) {
+      const v = eA[kb] - eMean;
+      eA[kb] = v;
+      nSq += v * v;
+    }
+    invN = 1 / Math.max(1e-6, Math.sqrt(nSq));
+    for (let kb = 0; kb < 32; kb++) {
+      this.env32[kb] = eA[kb] * invN;
+    }
+
+    return { features: this.features, env32: this.env32, rms, f0Hz, nsdfF0Hz, voicing, centroidHz };
   }
 
   /**
    * Run reverse-trained MLP forward pass (or analytical fallback before model loads).
    */
   public infer(samples: Float32Array, sampleRate: number): SingingHeadArticulation {
-    const { features, rms, f0Hz, voicing, centroidHz } = this.extractFeatures(samples, sampleRate);
+    const { features, env32, rms, f0Hz, nsdfF0Hz, voicing, centroidHz } = this.extractFeatures(samples, sampleRate);
 
     if (this.model !== null) {
       const { feature_mean, feature_std, weights, tract_ranges } = this.model;
@@ -488,6 +648,60 @@ export class SingingHeadInference {
         tract = outTract;
       }
 
+      let chimera: ChimeraControlParams | undefined;
+      if (this.model.chimera_head) {
+        const ch = this.model.chimera_head;
+        const cw = ch.weights;
+        for (let i = 0; i < 18; i++) {
+          this.xNorm50[i] = (features[i] - ch.x_mean[i]) / Math.max(1e-4, ch.x_std[i]);
+        }
+        for (let i = 0; i < 32; i++) {
+          this.xNorm50[18 + i] = (env32[i] - ch.x_mean[18 + i]) / Math.max(1e-4, ch.x_std[18 + i]);
+        }
+        const ch1Dim = cw.b1.length;
+        const ch2Dim = cw.b2.length;
+        const cOutDim = cw.b3.length;
+        for (let j = 0; j < ch1Dim; j++) {
+          const row = cw.w1[j];
+          let acc = cw.b1[j];
+          for (let i = 0; i < 50; i++) acc += row[i] * this.xNorm50[i];
+          this.ch1[j] = gelu(acc);
+        }
+        for (let j = 0; j < ch2Dim; j++) {
+          const row = cw.w2[j];
+          let acc = cw.b2[j];
+          for (let i = 0; i < ch1Dim; i++) acc += row[i] * this.ch1[i];
+          this.ch2[j] = gelu(this.ch1[j] + acc);
+        }
+        for (let j = 0; j < cOutDim; j++) {
+          const row = cw.w3[j];
+          let acc = cw.b3[j];
+          for (let i = 0; i < ch2Dim; i++) acc += row[i] * this.ch2[i];
+          this.chOut[j] = acc;
+        }
+        for (let k = 0; k < 14; k++) {
+          this.chimeraU14[k] = sigmoid(this.chOut[k]);
+        }
+        const prsN = sigmoid(this.chOut[14]);
+        const brN = sigmoid(this.chOut[15]);
+        const tensN = sigmoid(this.chOut[16]);
+        const brtN = sigmoid(this.chOut[17]);
+        const vProb = sigmoid(this.chOut[18]);
+        const roughNorm = 0.40 * sigmoid(this.chOut[19]);
+        const f0LogPred = 1.5 * Math.tanh(this.chOut[20]);
+        chimera = {
+          u14: this.chimeraU14.slice(),
+          pressure: 2.8 + prsN * (15.5 - 2.8),
+          breath: brN * 0.96,
+          tension: 0.04 + tensN * (0.96 - 0.04),
+          brightness: 0.02 + brtN * (1.0 - 0.02),
+          voicedProb: vProb,
+          roughness: roughNorm * 0.55,
+          f0HzPred: clamp(220.0 * Math.pow(2, f0LogPred), 70, 760),
+          nsdfF0Hz,
+        };
+      }
+
       return {
         aperture,
         width,
@@ -507,6 +721,7 @@ export class SingingHeadInference {
         ],
         topVowel: SINGING_VOWELS[bestK],
         tract,
+        chimera,
         rms,
         f0Hz,
         voicing,
