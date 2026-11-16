@@ -521,7 +521,7 @@ def main() -> None:
             good = pool
         return random.choice(good)[0] if good else None
 
-    x_rows, y_rows, teacher_rows, track_rows, bars_rows = [], [], [], [], []
+    x_rows, y_rows, teacher_rows, track_rows, bars_rows, eng_rows = [], [], [], [], [], []
     teacher_batch_a, teacher_batch_b, teacher_meta = [], [], []
     example_target = args.max_examples if args.max_examples > 0 else 10 ** 12
     stop = False
@@ -537,20 +537,21 @@ def main() -> None:
         with torch.no_grad():
             logits, _ = mix_judge.score_pairs(a, b, batch=256)
         logits = logits.float().cpu().numpy()
-        for logit, (x, y, track, bars) in zip(logits, teacher_meta):
+        for logit, (x, y, track, bars, is_eng) in zip(logits, teacher_meta):
             x_rows.append(x)
             y_rows.append(y)
             teacher_rows.append(float(logit))
             track_rows.append(track)
             bars_rows.append(bars)
+            eng_rows.append(bool(is_eng))
         teacher_batch_a.clear()
         teacher_batch_b.clear()
         teacher_meta.clear()
 
-    def add_example(x, y, cur_rows, cand_rows, track, next_bars):
+    def add_example(x, y, cur_rows, cand_rows, track, next_bars, is_eng: bool = True):
         teacher_batch_a.append(mix_rows(cur_rows, mels))
         teacher_batch_b.append(mix_rows(cand_rows, mels))
-        teacher_meta.append((x, float(y), track, int(next_bars)))
+        teacher_meta.append((x, float(y), track, int(next_bars), bool(is_eng)))
         if len(teacher_batch_a) >= 384:
             flush_teacher()
 
@@ -590,24 +591,32 @@ def main() -> None:
                     cur_bars = current_phrases * 4
                     next_bars = next_phrases * 4
 
-                    # Positive: the real next run start for every stem.  The
-                    # change mask says which stems are being "swapped" into it.
-                    pos_state = state_for(states, {stem: next_phrase["id"] for stem in STEMS})
-                    for subset in random.sample(SUBSETS, min(args.pos_subsets, len(SUBSETS))):
+                    # Engine-shaped positives: held stems stay on `cur` (half) or
+                    # advance to `next_phrase` (half, matching holdEntry ?? cur),
+                    # while ONLY the subset stems transition to `next_phrase`.
+                    for sub_idx, subset in enumerate(random.sample(SUBSETS, min(args.pos_subsets, len(SUBSETS)))):
+                        hold_at_cur = (sub_idx % 2 == 0)
+                        held_id = cur["id"] if hold_at_cur else next_phrase["id"]
+                        pos_map = {stem: held_id for stem in STEMS}
+                        pos_rows = {stem: row_of[held_id] for stem in STEMS}
+                        for s_ch in subset:
+                            pos_map[s_ch] = next_phrase["id"]
+                            pos_rows[s_ch] = row_of[next_phrase["id"]]
+                        pos_state = state_for(states, pos_map)
                         x = transition_vector(
                             prev_state, cur_state, pos_state, subset,
                             target_section, target_energy, cur_bars, next_bars,
                         )
-                        add_example(x, 1.0, cur_rows, next_rows, kit["track_id"], next_bars)
+                        add_example(x, 1.0, cur_rows, pos_rows, kit["track_id"], next_bars, is_eng=True)
                         if example_count() >= example_target:
                             stop = True
                             break
                     if stop:
                         break
 
-                    # Negatives: held stems continue to the real next phrase,
+                    # Engine-shaped negatives: held stems stay on `cur` or `next_phrase`,
                     # the subset moves to donor run starts from other tracks.
-                    for subset in random.sample(SUBSETS, min(args.neg_subsets, len(SUBSETS))):
+                    for sub_idx, subset in enumerate(random.sample(SUBSETS, min(args.neg_subsets, len(SUBSETS)))):
                         exclude = {kit["track_id"], meta[next_phrase["id"]]["track_id"]}
                         donors = {}
                         for stem in subset:
@@ -619,8 +628,10 @@ def main() -> None:
                             exclude.add(meta[donor]["track_id"])
                         if not donors:
                             continue
-                        cand_map = {stem: next_phrase["id"] for stem in STEMS}
-                        cand_rows = dict(next_rows)
+                        hold_at_cur = (sub_idx % 2 == 0)
+                        held_id = cur["id"] if hold_at_cur else next_phrase["id"]
+                        cand_map = {stem: held_id for stem in STEMS}
+                        cand_rows = {stem: row_of[held_id] for stem in STEMS}
                         for stem, donor in donors.items():
                             cand_map[stem] = donor
                             cand_rows[stem] = row_of[donor]
@@ -629,7 +640,7 @@ def main() -> None:
                             prev_state, cur_state, cand_state, subset,
                             target_section, target_energy, cur_bars, next_bars,
                         )
-                        add_example(x, 0.0, cur_rows, cand_rows, kit["track_id"], next_bars)
+                        add_example(x, 0.0, cur_rows, cand_rows, kit["track_id"], next_bars, is_eng=True)
                         if example_count() >= example_target:
                             stop = True
                             break
@@ -648,6 +659,7 @@ def main() -> None:
     t = np.asarray(teacher_rows, dtype=np.float32)
     tracks = np.asarray(track_rows)
     bars = np.asarray(bars_rows, dtype=np.int32)
+    eng = np.asarray(eng_rows, dtype=bool)
     print(f"[joint] examples={len(y)} pos={int(y.sum())} neg={int((y == 0).sum())} input={x.shape[1]}", flush=True)
     print("[joint] by next block: " + " ".join(
         f"{b} bars={int((bars == b).sum())}" for b in BLOCK_BARS
@@ -710,7 +722,7 @@ def main() -> None:
             tb = tb.to(device)
             opt.zero_grad(set_to_none=True)
             logits = model(xb)
-            loss = bce(logits, yb) + 0.5 * mse(logits, tb)
+            loss = bce(logits, yb) + 0.5 * mse(logits, tb.clamp(-4.0, 4.0))
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step()
@@ -751,16 +763,19 @@ def main() -> None:
     val_y = y[val_mask]
     val_t = t[val_mask]
     val_bars = bars[val_mask]
-    pos = v[val_y > 0.5]
-    threshold = float(np.percentile(pos, 20)) if len(pos) else 0.5
+    val_eng = eng[val_mask] if len(eng) == len(y) else np.ones_like(val_y, dtype=bool)
+    pos = v[val_eng & (val_y > 0.5)] if (val_eng & (val_y > 0.5)).any() else v[val_y > 0.5]
+    threshold = float(np.percentile(pos, 25)) if len(pos) else 0.5
     thresholds = {"default": threshold}
     block_auc = {}
     for block_len in BLOCK_BARS:
         mask = val_bars == block_len
         if mask.sum() < 10 or len(np.unique(val_y[mask])) < 2:
             continue
-        positives = v[mask & (val_y > 0.5)]
-        block_threshold = (float(np.percentile(positives, 20))
+        positives = v[mask & val_eng & (val_y > 0.5)]
+        if len(positives) == 0:
+            positives = v[mask & (val_y > 0.5)]
+        block_threshold = (float(np.percentile(positives, 25))
                            if len(positives) else threshold)
         thresholds[str(block_len)] = block_threshold
         block_auc[str(block_len)] = {

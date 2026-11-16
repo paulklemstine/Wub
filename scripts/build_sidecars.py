@@ -484,10 +484,10 @@ def build_progression_sidecars(manifest: dict, dataset: dict, out_dir: Path, dev
         "mlp": {
             "feat_mean": [round(float(x), 6) for x in feat_mean.tolist()],
             "feat_std": [round(float(x), 6) for x in feat_std.tolist()],
-            "fc1_weight": sd["0.weight"].numpy().astype(np.float32).tolist(),
-            "fc1_bias": sd["0.bias"].numpy().astype(np.float32).tolist(),
-            "fc2_weight": sd["2.weight"].numpy().astype(np.float32).tolist(),
-            "fc2_bias": sd["2.bias"].numpy().astype(np.float32).tolist(),
+            "fc1_weight": sd["0.weight"].detach().cpu().numpy().astype(np.float32).tolist(),
+            "fc1_bias": sd["0.bias"].detach().cpu().numpy().astype(np.float32).tolist(),
+            "fc2_weight": sd["2.weight"].detach().cpu().numpy().astype(np.float32).tolist(),
+            "fc2_bias": sd["2.bias"].detach().cpu().numpy().astype(np.float32).tolist(),
         },
         "metrics": {"val_ce": best_loss, "val_top1": best_acc},
     }
@@ -632,13 +632,15 @@ def build_rhythm_and_vocal_sidecars(manifest: dict, onsets_dir: Path, out_dir: P
         ia, ib = STEMS.index(sa), STEMS.index(sb)
 
         def _make_split(indices: np.ndarray, n_neg_mult: int = 3):
+            # Filter out silent/near-silent stem pairs so LogisticRegression
+            # learns genuine rhythmic lock instead of fitting zero-activity noise.
+            active_mask = (grids[indices, ia].mean(axis=1) >= 0.02) & (grids[indices, ib].mean(axis=1) >= 0.02)
+            active_idx = indices[active_mask] if active_mask.sum() >= 20 else indices
             xs, ys = [], []
-            for p_i in indices:
-                # positive: real same phrase if both stems non-silent (or any)
+            for p_i in active_idx:
                 xs.append(rhythm_pair_features(grids[p_i, ia], flux[p_i, ia], grids[p_i, ib], flux[p_i, ib]))
                 ys.append(1)
-                # cross-song negatives
-                cand = indices[tids_arr[indices] != tids_arr[p_i]]
+                cand = active_idx[tids_arr[active_idx] != tids_arr[p_i]]
                 if len(cand) > 0:
                     negs = rng.choice(cand, size=min(n_neg_mult, len(cand)), replace=False)
                     for n_i in negs:
@@ -646,14 +648,14 @@ def build_rhythm_and_vocal_sidecars(manifest: dict, onsets_dir: Path, out_dir: P
                         ys.append(0)
             return np.stack(xs), np.asarray(ys, dtype=np.int64)
 
-        X_tr, y_tr = _make_split(tr_idx, 3)
-        X_va, y_va = _make_split(va_idx, 3)
+        X_tr, y_tr = _make_split(tr_idx, 4)
+        X_va, y_va = _make_split(va_idx, 4)
         mean = X_tr.mean(axis=0)
         std = X_tr.std(axis=0)
         std[std < 1e-6] = 1.0
         X_tr_n = (X_tr - mean) / std
         X_va_n = (X_va - mean) / std
-        clf = LogisticRegression(C=0.5, max_iter=500, random_state=SEED)
+        clf = LogisticRegression(C=0.25, max_iter=800, class_weight="balanced", random_state=SEED)
         clf.fit(X_tr_n, y_tr)
         val_prob = clf.predict_proba(X_va_n)[:, 1]
         auc = float(roc_auc_score(y_va, val_prob)) if len(np.unique(y_va)) > 1 else 0.5

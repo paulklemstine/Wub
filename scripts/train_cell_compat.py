@@ -109,17 +109,25 @@ def build_cell_feature_vector(
 class CellCompatNet(nn.Module):
     """Joint vertical 4-stem mix compatibility + horizontal arrangement scorer."""
 
-    def __init__(self, input_dim: int = 24, embed_dim: int = 32, arr_ctx_dim: int = 8) -> None:
+    def __init__(
+        self,
+        input_dim: int = 24,
+        embed_dim: int = 32,
+        arr_ctx_dim: int = 8,
+        enc_hidden: int = 48,
+        mix_hidden: int = 64,
+        arr_hidden: int = 48,
+    ) -> None:
         super().__init__()
         self.input_dim = input_dim
         self.embed_dim = embed_dim
         self.arr_ctx_dim = arr_ctx_dim
-        self.enc_fc1 = nn.Linear(input_dim, 48)
-        self.enc_fc2 = nn.Linear(48, embed_dim)
-        self.mix_fc1 = nn.Linear(embed_dim * 4, 64)
-        self.mix_fc2 = nn.Linear(64, 1)
-        self.arr_fc1 = nn.Linear(embed_dim * 2 + arr_ctx_dim, 48)
-        self.arr_fc2 = nn.Linear(48, 1)
+        self.enc_fc1 = nn.Linear(input_dim, enc_hidden)
+        self.enc_fc2 = nn.Linear(enc_hidden, embed_dim)
+        self.mix_fc1 = nn.Linear(embed_dim * 4, mix_hidden)
+        self.mix_fc2 = nn.Linear(mix_hidden, 1)
+        self.arr_fc1 = nn.Linear(embed_dim * 2 + arr_ctx_dim, arr_hidden)
+        self.arr_fc2 = nn.Linear(arr_hidden, 1)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         h = F.gelu(self.enc_fc1(x))
@@ -567,7 +575,21 @@ def build_training_dataset(
             if theory >= 0.62:
                 xs.append(vec)
                 ys.append(min(0.98, 0.46 + 0.57 * theory))
-        elif mode < 0.48:
+        elif mode < 0.52:
+            # Realistic cross-song hard negative/calibration pair graded by real theory score
+            q_cells = {st: dict(rng.choice(pools[st])) for st in STEMS}
+            vec, theory = _score_and_featurize_quartet(
+                q_cells,
+                tgt_root,
+                rel_root,
+                tgt_q,
+                allow_relative=False,
+                override_shift=rng.choice((3, 4, 5, 6)) if rng.random() < 0.5 else None,
+            )
+            if theory < 0.58:
+                xs.append(vec)
+                ys.append(max(0.05, min(0.42, 0.65 * theory)))
+        elif mode < 0.68:
             # Hard negative A: major vs minor 3rd harmonic clash + large transpose
             q_cells = {st: dict(rng.choice(pools[st])) for st in STEMS}
             clash_q = "major" if tgt_q == "minor" else "minor"
@@ -586,7 +608,7 @@ def build_training_dataset(
             )
             xs.append(vec)
             ys.append(0.04)
-        elif mode < 0.66:
+        elif mode < 0.84:
             # Hard negative B: kick-bass 16th-note rub collision
             q_cells = {st: dict(rng.choice(pools[st])) for st in STEMS}
             q_cells["drums"] = dict(q_cells["drums"])
@@ -753,7 +775,7 @@ def build_transition_dataset(
         is_bound = rng.random() < 0.22
 
         roll = rng.random()
-        if roll < 0.24:
+        if roll < 0.22:
             # Cross-song essential continuation with smooth head/tail seam & pocket
             c0 = dict(rng.choice(ess_by_stem[st]))
             c1 = dict(rng.choice(ess_by_stem[st]))
@@ -784,7 +806,30 @@ def build_transition_dataset(
                     seam_score=seam_s, rms_seam_delta=rms_d,
                 ))
                 ys.append(min(0.92, 0.74 + 0.18 * seam_s))
-        elif roll < 0.50:
+        elif roll < 0.44:
+            # Realistic mismatched cross-track bar splice graded by true seam & harmony
+            c0 = dict(rng.choice(all_by_stem[st]))
+            c1 = dict(rng.choice(all_by_stem[st]))
+            seam_s = score_bar_seam_continuity(c0, c1, st, is_contiguous=False, is_section_boundary=is_bound)
+            rms_d = abs(float(c0.get("tr", c0["purity"])) - float(c1.get("hr", c1["purity"])))
+            px, _, _ = _featurize_single_cell(c0, tgt_root, 0, tgt_qual)
+            nx, n_pen, _ = _featurize_single_cell(c1, tgt_root, 0, tgt_qual)
+            if seam_s < 0.62 or n_pen > 0.20:
+                score = max(0.05, min(0.45, 0.45 * seam_s * (1.0 - 0.5 * n_pen)))
+                prev_xs.append(px)
+                next_xs.append(nx)
+                ctxs.append(_build_arr_ctx(
+                    b_pos,
+                    is_bound,
+                    float(c0.get("essential_score", 0.45)),
+                    float(c1.get("essential_score", 0.45)),
+                    c0["purity"],
+                    c1["purity"],
+                    seam_score=seam_s,
+                    rms_seam_delta=rms_d,
+                ))
+                ys.append(score)
+        elif roll < 0.62:
             # Hard negative 1: jumpy mid-phrase cross-song splice (loudness/spectral/harmonic jump)
             c0 = dict(rng.choice(all_by_stem[st]))
             c1 = dict(rng.choice(all_by_stem[st]))
@@ -892,6 +937,9 @@ def main() -> None:
     parser.add_argument("--arr-samples", type=int, default=64000)
     parser.add_argument("--max-proc-tracks", type=int, default=3000)
     parser.add_argument("--workers", type=int, default=min(12, os.cpu_count() or 4))
+    parser.add_argument("--enc-hidden", type=int, default=96)
+    parser.add_argument("--mix-hidden", type=int, default=128)
+    parser.add_argument("--arr-hidden", type=int, default=96)
     parser.add_argument("--device", type=str, default="auto")
     args = parser.parse_args()
 
@@ -914,40 +962,68 @@ def main() -> None:
         f"mean_fid={stats['mean_reconstitution_fidelity']:.4f})"
     )
 
-    x_all, y_all = build_training_dataset(quartets, samples_target=args.samples)
-    ap_all, an_all, ac_all, ay_all = build_transition_dataset(trans_pairs, samples_target=args.arr_samples)
-
-    rng_np = np.random.default_rng(42)
-    idx_m = np.arange(len(x_all))
-    rng_np.shuffle(idx_m)
-    x_all, y_all = x_all[idx_m], y_all[idx_m]
-
-    idx_a = np.arange(len(ay_all))
-    rng_np.shuffle(idx_a)
-    ap_all, an_all, ac_all, ay_all = ap_all[idx_a], an_all[idx_a], ac_all[idx_a], ay_all[idx_a]
-
-    n_val_m = max(512, int(0.15 * len(x_all)))
-    x_train, y_train = torch.from_numpy(x_all[n_val_m:]), torch.from_numpy(y_all[n_val_m:])
-    x_val, y_val = torch.from_numpy(x_all[:n_val_m]).to(device), y_all[:n_val_m]
-
-    n_val_a = max(512, int(0.15 * len(ay_all)))
-    ap_train, an_train, ac_train, ay_train = (
-        torch.from_numpy(ap_all[n_val_a:]),
-        torch.from_numpy(an_all[n_val_a:]),
-        torch.from_numpy(ac_all[n_val_a:]),
-        torch.from_numpy(ay_all[n_val_a:]),
+    # Strict track-disjoint train/val split so held-out AUCs measure real song generalization.
+    all_tids = sorted(
+        {str(q.get("track_id", "")) for q in quartets if q.get("track_id")}
+        | {str(tp.get("track_id", "")) for tp in trans_pairs if tp.get("track_id")}
     )
-    ap_val = torch.from_numpy(ap_all[:n_val_a]).to(device)
-    an_val = torch.from_numpy(an_all[:n_val_a]).to(device)
-    ac_val = torch.from_numpy(ac_all[:n_val_a]).to(device)
-    ay_val = ay_all[:n_val_a]
+    rng_split = np.random.default_rng(42)
+    perm_tids = list(all_tids)
+    rng_split.shuffle(perm_tids)
+    n_val_tracks = max(2, int(round(0.15 * len(perm_tids))))
+    val_tracks = set(perm_tids[:n_val_tracks])
+
+    q_train = [q for q in quartets if str(q.get("track_id", "")) not in val_tracks]
+    q_val = [q for q in quartets if str(q.get("track_id", "")) in val_tracks]
+    if not q_val or not q_train:
+        q_train, q_val = quartets, quartets
+
+    tp_train = [tp for tp in trans_pairs if str(tp.get("track_id", "")) not in val_tracks]
+    tp_val = [tp for tp in trans_pairs if str(tp.get("track_id", "")) in val_tracks]
+    if not tp_val or not tp_train:
+        tp_train, tp_val = trans_pairs, trans_pairs
+
+    val_samples_m = max(1024, int(round(args.samples * 0.18)))
+    train_samples_m = max(2048, args.samples - val_samples_m)
+    val_samples_a = max(1024, int(round(args.arr_samples * 0.18)))
+    train_samples_a = max(2048, args.arr_samples - val_samples_a)
+
+    x_tr_raw, y_tr_raw = build_training_dataset(q_train, seed=42, samples_target=train_samples_m)
+    x_va_raw, y_va_raw = build_training_dataset(q_val, seed=1042, samples_target=val_samples_m)
+    ap_tr_raw, an_tr_raw, ac_tr_raw, ay_tr_raw = build_transition_dataset(tp_train, seed=101, samples_target=train_samples_a)
+    ap_va_raw, an_va_raw, ac_va_raw, ay_va_raw = build_transition_dataset(tp_val, seed=1101, samples_target=val_samples_a)
+
+    print(
+        f"Track-disjoint split: train_tracks={len(all_tids) - len(val_tracks)} val_tracks={len(val_tracks)} | "
+        f"mix train={len(x_tr_raw)} val={len(x_va_raw)} | arr train={len(ay_tr_raw)} val={len(ay_va_raw)}"
+    )
+
+    x_train, y_train = torch.from_numpy(x_tr_raw), torch.from_numpy(y_tr_raw)
+    x_val, y_val = torch.from_numpy(x_va_raw).to(device), y_va_raw
+
+    ap_train = torch.from_numpy(ap_tr_raw)
+    an_train = torch.from_numpy(an_tr_raw)
+    ac_train = torch.from_numpy(ac_tr_raw)
+    ay_train = torch.from_numpy(ay_tr_raw)
+    ap_val = torch.from_numpy(ap_va_raw).to(device)
+    an_val = torch.from_numpy(an_va_raw).to(device)
+    ac_val = torch.from_numpy(ac_va_raw).to(device)
+    ay_val = ay_va_raw
 
     mix_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=args.batch_size, shuffle=True)
     arr_loader = DataLoader(
         TensorDataset(ap_train, an_train, ac_train, ay_train), batch_size=args.batch_size, shuffle=True
     )
 
-    model = CellCompatNet().to(device)
+    model = CellCompatNet()
+    if args.enc_hidden != 48 or args.mix_hidden != 64 or args.arr_hidden != 48:
+        model.enc_fc1 = nn.Linear(24, args.enc_hidden)
+        model.enc_fc2 = nn.Linear(args.enc_hidden, 32)
+        model.mix_fc1 = nn.Linear(32 * 4, args.mix_hidden)
+        model.mix_fc2 = nn.Linear(args.mix_hidden, 1)
+        model.arr_fc1 = nn.Linear(32 * 2 + 8, args.arr_hidden)
+        model.arr_fc2 = nn.Linear(args.arr_hidden, 1)
+    model = model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
@@ -1023,10 +1099,10 @@ def main() -> None:
     out_doc = model.export_json_dict(
         val_auc=best_auc,
         val_acc=best_acc,
-        sample_count=len(x_all),
+        sample_count=len(x_tr_raw) + len(x_va_raw),
         arr_val_auc=best_arr_auc,
         arr_val_acc=best_arr_acc,
-        arr_sample_count=len(ay_all),
+        arr_sample_count=len(ay_tr_raw) + len(ay_va_raw),
         essential_slices_mined=stats["essential_slices_mined"],
         tracks_mined=stats["tracks_mined"],
         mean_reconstitution_fidelity=stats["mean_reconstitution_fidelity"],

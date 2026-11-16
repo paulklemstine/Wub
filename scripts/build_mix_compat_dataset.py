@@ -550,8 +550,8 @@ class RenderEmbedTeacher:
         self.k = k
         self.raw_cache: OrderedDict[tuple[str, str], np.ndarray] = OrderedDict()
         self.audio_cache: OrderedDict[tuple[str, str, int], list] = OrderedDict()
-        self.max_raw_cache = 3000
-        self.max_audio_cache = 4000
+        self.max_raw_cache = 12000
+        self.max_audio_cache = 8000
         self.bank_mean: np.ndarray | None = None
         self.sim_lo: float = -0.1
         self.sim_hi: float = 0.85
@@ -561,7 +561,7 @@ class RenderEmbedTeacher:
             try:
                 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
                 from scripts.ears_embed import MertEncoder, MERT_SR
-                enc = MertEncoder(device=device)
+                enc = MertEncoder(device=device, fp16=str(device).startswith("cuda"))
                 enc._load()  # probe: lazy weight load
                 self.encoder = enc
                 self.encoder_kind = "mert"
@@ -577,12 +577,13 @@ class RenderEmbedTeacher:
         rkey = (pid, stem)
         if rkey in self.raw_cache:
             self.raw_cache.move_to_end(rkey)
-            return self.raw_cache[rkey]
+            cached = self.raw_cache[rkey]
+            return None if cached is None else cached.astype(np.float32)
         rel = (item["phrase"].get("stems") or {}).get(stem, {}).get("file")
         if not rel:
             return None
         x = _load_mono(self.kits_dir / rel, sr=self.sr)
-        self.raw_cache[rkey] = x
+        self.raw_cache[rkey] = x.astype(np.float16) if x is not None else None
         if len(self.raw_cache) > self.max_raw_cache:
             self.raw_cache.popitem(last=False)
         return x
@@ -618,10 +619,10 @@ class RenderEmbedTeacher:
         mix = _mix_bar(segs_by_stem, bar, target_len)
         if self.encoder is not None:
             try:
-                # MertEncoder.embed expects list of 24k mono arrays
+                # MertEncoder.embed expects (waves, batch_size) at 24kHz mono
                 import torch
                 with torch.no_grad():
-                    vec = self.encoder.embed([mix.astype(np.float32)])[0]
+                    vec = self.encoder.embed([mix.astype(np.float32)], batch_size=1)[0]
                 v = np.asarray(vec, dtype=np.float32).reshape(-1)
                 n = float(np.linalg.norm(v) + 1e-8)
                 return (v / n).astype(np.float32)
@@ -635,8 +636,8 @@ class RenderEmbedTeacher:
             return self.sr  # ~1s bar fallback
         return int(np.median(lens))
 
-    def embed_mix_phrase(self, mix_items: dict) -> np.ndarray:
-        """Mean bar embedding for a 4-stem mix shifted into the drums session key."""
+    def _render_phrase_bars(self, mix_items: dict) -> list[np.ndarray]:
+        """Render 4 pitch-aligned, tempo-normalized mono bar mixes for one 4-stem combo."""
         session_key = (mix_items["drums"].get("kit") or {}).get("key", "")
         segs_by_stem = {}
         for s in STEMS:
@@ -645,22 +646,53 @@ class RenderEmbedTeacher:
             )
             segs_by_stem[s] = self._bars_for(mix_items[s], s, semitones=sh)
         tlen = self._target_len(segs_by_stem)
-        embs = [self.embed_mix(segs_by_stem, b, tlen) for b in range(BARS_PER_PHRASE)]
-        v = np.mean(np.stack(embs, axis=0), axis=0)
+        return [_mix_bar(segs_by_stem, b, tlen).astype(np.float32) for b in range(BARS_PER_PHRASE)]
+
+    def embed_mix_phrase(self, mix_items: dict) -> np.ndarray:
+        """Mean bar embedding for a 4-stem mix shifted into the drums session key."""
+        bars = self._render_phrase_bars(mix_items)
+        if self.encoder is not None:
+            import torch
+            with torch.no_grad():
+                embs = self.encoder.embed(bars, batch_size=BARS_PER_PHRASE)
+        else:
+            embs = np.stack([_spectral_embed(b, sr=self.sr) for b in bars], axis=0)
+        v = np.mean(np.asarray(embs, dtype=np.float32), axis=0)
         n = float(np.linalg.norm(v) + 1e-8)
         return (v / n).astype(np.float32)
 
+    def embed_mix_phrases_batch(self, items_list: list[dict], batch_bars: int = 48) -> np.ndarray:
+        """Render and batch-embed many 4-stem mixes in parallel across bars."""
+        all_bars: list[np.ndarray] = []
+        for mix_items in items_list:
+            all_bars.extend(self._render_phrase_bars(mix_items))
+        if not all_bars:
+            return np.zeros((0, 768 if self.encoder is not None else 128), np.float32)
+        if self.encoder is not None:
+            import torch
+            with torch.no_grad():
+                bar_embs = self.encoder.embed(all_bars, batch_size=batch_bars)
+        else:
+            bar_embs = np.stack([_spectral_embed(b, sr=self.sr) for b in all_bars], axis=0)
+        bar_embs = np.asarray(bar_embs, dtype=np.float32).reshape(len(items_list), BARS_PER_PHRASE, -1)
+        out = bar_embs.mean(axis=1)
+        norms = np.linalg.norm(out, axis=1, keepdims=True) + 1e-8
+        return (out / norms).astype(np.float32)
+
     def build_real_bank(self, real_items: list, max_items: int = 0) -> np.ndarray:
         items = real_items if not max_items else real_items[:max_items]
-        bank = []
-        for i, item in enumerate(items):
-            mix = {s: item for s in STEMS}
-            bank.append(self.embed_mix_phrase(mix))
-            if (i + 1) % 200 == 0:
-                log(f"[mix-compat] real bank {i+1}/{len(items)}")
-        if not bank:
+        bank_chunks = []
+        chunk_sz = 32
+        for start in range(0, len(items), chunk_sz):
+            sub_items = items[start : start + chunk_sz]
+            mixes = [{s: it for s in STEMS} for it in sub_items]
+            bank_chunks.append(self.embed_mix_phrases_batch(mixes))
+            done = min(len(items), start + chunk_sz)
+            if done % 256 < chunk_sz or done == len(items):
+                log(f"[mix-compat] real bank {done}/{len(items)}")
+        if not bank_chunks:
             return np.zeros((0, 128), np.float32)
-        arr = np.stack(bank, axis=0).astype(np.float32)
+        arr = np.concatenate(bank_chunks, axis=0).astype(np.float32)
         # Center against bank mean so positive-orthant DC bias does not collapse cosines
         self.bank_mean = arr.mean(axis=0, keepdims=True)
         centered = arr - self.bank_mean
@@ -837,38 +869,47 @@ def build_dataset(args):
         log(f"[mix-compat] building real-mix manifold bank n={real_bank_n} (encoder={teacher.encoder_kind})")
         bank = teacher.build_real_bank(pos_items, max_items=real_bank_n)
         teacher_limit = int(getattr(args, "teacher_limit", 0))
+        to_grade = examples[:teacher_limit] if teacher_limit else examples
         graded = 0
-        for idx, ex in enumerate(examples):
-            if teacher_limit and graded >= teacher_limit:
-                break
+        chunk_sz = 32
+        for cstart in range(0, len(to_grade), chunk_sz):
+            sub_exs = to_grade[cstart : cstart + chunk_sz]
+            chunk_pairs = []
+            for ex in sub_exs:
+                mix_items = {s: ex["_item"] for s in STEMS} if ex["kind"] == "real" else ex.get("_mix")
+                if mix_items:
+                    chunk_pairs.append((ex, mix_items))
+            if not chunk_pairs:
+                continue
             try:
-                if ex["kind"] == "real":
-                    mix_items = {s: ex["_item"] for s in STEMS}
-                else:
-                    mix_items = ex.get("_mix")
-                if not mix_items:
-                    continue
-                emb = teacher.embed_mix_phrase(mix_items)
-                mscore = teacher.manifold_score(emb, bank)
-                ex["teacher_manifold"] = mscore
-                # rhythm-prioritized blend: heuristic rhythm/min-bar stays dominant,
-                # manifold score (closeness to real songs) refines "song-like" fit.
-                h = float(ex["label"])
-                ex["label_heuristic"] = h
-                ex["label"] = float(max(0.0, min(1.0, 0.55 * h + 0.45 * mscore)))
-                if ex["kind"] == "real":
-                    ex["label"] = float(max(ex["label"], 0.90))
-                # Shift per-bar targets to preserve per-bar contrast while matching blended label
-                per = ex.get("per_bar") or [ex["label"]] * BARS_PER_PHRASE
-                per_mean = sum(float(v) for v in per) / max(1, len(per))
-                delta = ex["label"] - per_mean
-                ex["per_bar"] = [float(max(0.0, min(1.0, float(v) + delta))) for v in per]
-                graded += 1
+                embs = teacher.embed_mix_phrases_batch([m for _, m in chunk_pairs])
             except Exception as e:
                 if graded < 5:
-                    log(f"[mix-compat] teacher warn {e}")
-            if graded and graded % 500 == 0:
-                log(f"[mix-compat] teacher graded {graded}")
+                    log(f"[mix-compat] teacher batch warn {e}; falling back per-item")
+                embs = None
+            for i_item, (ex, mix_items) in enumerate(chunk_pairs):
+                try:
+                    emb = embs[i_item] if embs is not None else teacher.embed_mix_phrase(mix_items)
+                    mscore = teacher.manifold_score(emb, bank)
+                    ex["teacher_manifold"] = mscore
+                    # rhythm-prioritized blend: heuristic rhythm/min-bar stays dominant,
+                    # manifold score (closeness to real songs) refines "song-like" fit.
+                    h = float(ex["label"])
+                    ex["label_heuristic"] = h
+                    ex["label"] = float(max(0.0, min(1.0, 0.55 * h + 0.45 * mscore)))
+                    if ex["kind"] == "real":
+                        ex["label"] = float(max(ex["label"], 0.90))
+                    # Shift per-bar targets to preserve per-bar contrast while matching blended label
+                    per = ex.get("per_bar") or [ex["label"]] * BARS_PER_PHRASE
+                    per_mean = sum(float(v) for v in per) / max(1, len(per))
+                    delta = ex["label"] - per_mean
+                    ex["per_bar"] = [float(max(0.0, min(1.0, float(v) + delta))) for v in per]
+                    graded += 1
+                except Exception as e:
+                    if graded < 5:
+                        log(f"[mix-compat] teacher warn {e}")
+            if graded and graded % 1024 < chunk_sz:
+                log(f"[mix-compat] teacher graded {graded}/{len(to_grade)}")
         grading = f"render+embed_teacher_v1 (encoder={teacher.encoder_kind}, bank={bank.shape[0]}, graded={graded}) blended 0.55*heuristic_rhythm + 0.45*manifold"
         teacher_info = {"enabled": True, "encoder": teacher.encoder_kind, "bank": int(bank.shape[0]), "graded": graded}
         log(f"[mix-compat] {grading}")

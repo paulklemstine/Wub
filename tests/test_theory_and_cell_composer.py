@@ -187,7 +187,16 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
     assert cc["val_auc"] >= 0.90
 
     # Rebuild PyTorch weights and check good quartet > clashing/muddy quartet
-    net = CellCompatNet(cc["input_dim"], cc["embed_dim"])
+    enc_hidden = len(cc["enc_b1"])
+    mix_hidden = len(cc["mix_b1"])
+    arr_hidden = len(cc["arr_b1"]) if cc["format"] == "cell_compat_v2" else 48
+    net = CellCompatNet(
+        cc["input_dim"],
+        cc["embed_dim"],
+        enc_hidden=enc_hidden,
+        mix_hidden=mix_hidden,
+        arr_hidden=arr_hidden,
+    )
     with torch.no_grad():
         net.enc_fc1.weight.copy_(torch.tensor(cc["enc_w1"], dtype=torch.float32))
         net.enc_fc1.bias.copy_(torch.tensor(cc["enc_b1"], dtype=torch.float32))
@@ -235,7 +244,7 @@ def test_shipped_cell_assets_and_model_behavior() -> None:
         assert cc["arr_val_auc"] >= 0.85
         assert cc["tracks_mined"] >= 1500
         assert cc["essential_slices_mined"] > 10000
-        assert len(cc["arr_w1"]) == 48 and len(cc["arr_w1"][0]) == 72
+        assert len(cc["arr_w1"]) == arr_hidden and arr_hidden >= 48 and len(cc["arr_w1"][0]) == 72
 
         prev_v = torch.tensor(
             build_cell_feature_vector("other", 0.82, other_good_m, 0, "minor", 0, "minor", False, False, "AAAB"),
