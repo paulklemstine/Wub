@@ -1259,11 +1259,12 @@
     }
     .tamagotchi-actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 6px;
       justify-content: space-between;
     }
     .tamagotchi-btn {
-      flex: 1;
+      flex: 1 1 auto;
       background: linear-gradient(180deg, #1e2636 0%, #131822 100%);
       border: 1px solid #334155;
       border-radius: 4px;
@@ -1284,6 +1285,66 @@
     .tamagotchi-btn:active {
       transform: translateY(1px);
       box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+    }
+    .tamagotchi-btn.active {
+      background: linear-gradient(180deg, #00c8ff 0%, #9b00ff 100%);
+      border-color: #ff77e9;
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(0, 255, 255, 0.55);
+    }
+    .bear3d-host {
+      position: relative;
+      width: 100%;
+      height: 220px;
+      z-index: 1;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .bear3d-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+    .bear3d-canvas:active {
+      cursor: grabbing;
+    }
+    .bear3d-hud {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      display: flex;
+      gap: 4px;
+      z-index: 3;
+    }
+    .bear3d-cam-btn {
+      background: rgba(12, 8, 28, 0.76);
+      border: 1px solid rgba(0, 240, 255, 0.45);
+      border-radius: 4px;
+      color: #a5f3fc;
+      font-family: monospace;
+      font-size: 0.62rem;
+      font-weight: 800;
+      padding: 2px 5px;
+      cursor: pointer;
+    }
+    .bear3d-cam-btn.active,
+    .bear3d-cam-btn:hover {
+      background: rgba(255, 0, 200, 0.42);
+      border-color: #ff77e9;
+      color: #ffffff;
+    }
+    .bear3d-status {
+      position: absolute;
+      inset: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ff77e9;
+      font-family: monospace;
+      font-size: 0.72rem;
+      text-align: center;
+      pointer-events: none;
     }
 
     /* Status Bar */
@@ -2347,7 +2408,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.289 <span class="mc-build-num">#289</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.290 <span class="mc-build-num">#290</span></span>
       </div>
       <div id="transport">
         <button id="btn-play" type="button">Play</button>
@@ -2396,6 +2457,7 @@
         <div class="tamagotchi-screen">
           <div class="tamagotchi-scanlines"></div>
           <canvas id="tamagotchi-canvas" class="tamagotchi-canvas" width="280" height="200" aria-label="Wub Kawaii Gummi Bear Audio Reactive Body Loop"></canvas>
+          <div id="tamagotchi-3d-host" class="bear3d-host" style="display: none;" aria-label="Wub Electro-Animatronic Techno Dance Bear 2.0 3D View"></div>
           <div id="tamagotchi-lyric-bar" class="tamagotchi-lyric-bar"></div>
           <pre id="tamagotchi-ascii" class="tamagotchi-ascii" style="display: none;" aria-label="Tamagotchi ASCII Face"></pre>
         </div>
@@ -2409,6 +2471,8 @@
             <button id="btn-tamagotchi-pet" class="tamagotchi-btn" type="button" title="Praise & Pet Wub Gummi Bear">PET ♥</button>
             <button id="btn-tamagotchi-feed" class="tamagotchi-btn" type="button" title="Feed Juicy Audio Slice Snack">SNACK 🍕</button>
             <button id="btn-tamagotchi-hype" class="tamagotchi-btn" type="button" title="Hype up the dance bounce energy">HYPE ⚡</button>
+            <button id="btn-tamagotchi-3d" class="tamagotchi-btn" type="button" title="Toggle 2D / 3D Electro-Animatronic Camera View">3D CAM</button>
+            <button id="btn-tamagotchi-cam" class="tamagotchi-btn" type="button" title="Cycle 3D Camera Angle" style="display: none;">CAM: 3/4 HERO</button>
           </div>
         </div>
       </div>
@@ -3116,7 +3180,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.289 (Build #289 • rev 9c6143a324)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.290 (Build #290 • rev 67d024b7ae)</span>
     </div>
   </div>
 

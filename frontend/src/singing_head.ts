@@ -92,6 +92,12 @@ export type SingingHeadViewMode = "side" | "3d";
 export type SingingHeadAudioMode = "track" | "synth";
 export type SingingHeadInputMode = "vocals" | "mix";
 
+export interface LiveMouthState {
+  art: SingingHeadArticulation;
+  tract: Articulators;
+  active: boolean;
+}
+
 export class SingingHeadPanel {
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
@@ -138,6 +144,7 @@ export class SingingHeadPanel {
   private slowRms = 0;
   private smoothedVoicing = 0;
   private lastAudioSec = 0;
+  private lastMuted = false;
   private modelLoadStarted = false;
 
   // Reusable smoothed articulation snapshot for tract bridge
@@ -367,6 +374,7 @@ export class SingingHeadPanel {
         ? Math.min(0.08, Math.max(0.001, audioNow - this.lastAudioSec))
         : 0.016;
     this.lastAudioSec = audioNow;
+    this.lastMuted = isMuted;
 
     const samples = !isMuted && vocalSamples && vocalSamples.length > 0 ? vocalSamples : this.silentFrame;
     const pred: SingingHeadArticulation = this.inference.infer(samples, sampleRate > 0 ? sampleRate : 44100);
@@ -467,6 +475,14 @@ export class SingingHeadPanel {
     }
 
     this.render(meta, samples, vocalLevel, isMuted, bpm, dt);
+  }
+
+  public getLiveMouthState(): LiveMouthState {
+    return {
+      art: this.smoothedArt,
+      tract: this.tractArt,
+      active: !this.lastMuted && (this.aperture > 0.04 || this.smoothedRms > 0.012),
+    };
   }
 
   private render(

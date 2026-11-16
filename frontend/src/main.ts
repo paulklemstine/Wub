@@ -1826,6 +1826,19 @@ class WubApp {
       });
     }
 
+    if (this.singingHead !== null) {
+      const shFrame = this.singingHeadInputFrame(this.singingHead.getInputMode());
+      this.singingHead.update(
+        this.lastGrooveboxMeta,
+        audioNow,
+        shFrame.samples,
+        shFrame.sampleRate,
+        shFrame.level,
+        shFrame.muted,
+        this.bpm
+      );
+    }
+
     if (this.tamagotchi !== null) {
       const drumsLvl = this.analyserLevel("drums");
       const bassLvl = this.analyserLevel("bass");
@@ -1838,6 +1851,7 @@ class WubApp {
       const drumWaveform = this.stemWaveform("drums");
       const bassWaveform = this.stemWaveform("bass");
       const otherWaveform = this.stemWaveform("other");
+      const liveMouth = this.singingHead ? this.singingHead.getLiveMouthState() : null;
       this.tamagotchi.update(
         this.lastGrooveboxMeta,
         audioNow,
@@ -1852,20 +1866,8 @@ class WubApp {
         bassLvl,
         otherWaveform,
         otherLvl,
-        mixFrame.waveform
-      );
-    }
-
-    if (this.singingHead !== null) {
-      const shFrame = this.singingHeadInputFrame(this.singingHead.getInputMode());
-      this.singingHead.update(
-        this.lastGrooveboxMeta,
-        audioNow,
-        shFrame.samples,
-        shFrame.sampleRate,
-        shFrame.level,
-        shFrame.muted,
-        this.bpm
+        mixFrame.waveform,
+        liveMouth
       );
     }
 

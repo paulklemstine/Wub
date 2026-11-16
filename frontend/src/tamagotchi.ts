@@ -4,6 +4,12 @@
 // -----------------------------------------------------------------------------
 
 import type { GrooveboxMeta } from "./main";
+import {
+  Bear3DView,
+  BEAR_CAMERA_LABELS,
+  type BearCameraPreset,
+} from "./bear_3d_view";
+import type { LiveMouthState } from "./singing_head";
 
 export type TamagotchiStage = 1 | 2 | 3 | 4;
 
@@ -174,6 +180,14 @@ export class TamagotchiAvatar {
   private mixPunch: number = 0;
   private otherTone: number = 0;
 
+  // Live Singing Head oral articulators + 3D Camera stage
+  private liveMouth: LiveMouthState | null = null;
+  private host3dEl: HTMLElement | null = null;
+  private bear3dView: Bear3DView | null = null;
+  private view3dActive: boolean = false;
+  private btn3dToggleEl: HTMLElement | null = null;
+  private btn3dCamEl: HTMLElement | null = null;
+
   constructor() {
     this.loadState();
   }
@@ -207,7 +221,56 @@ export class TamagotchiAvatar {
     const btnHype = document.getElementById("btn-tamagotchi-hype");
     if (btnHype) btnHype.addEventListener("click", () => this.hype());
 
+    this.host3dEl = document.getElementById("tamagotchi-3d-host");
+    this.btn3dToggleEl = document.getElementById("btn-tamagotchi-3d");
+    this.btn3dCamEl = document.getElementById("btn-tamagotchi-cam");
+    if (this.host3dEl && !this.bear3dView) {
+      this.bear3dView = new Bear3DView(this.host3dEl, (preset) => {
+        this.sync3DButtons(preset);
+      });
+    }
+    if (this.btn3dToggleEl) {
+      this.btn3dToggleEl.addEventListener("click", () => this.toggle3DMode());
+    }
+    if (this.btn3dCamEl) {
+      this.btn3dCamEl.addEventListener("click", () => this.cycle3DCamera());
+    }
+    this.sync3DButtons(this.bear3dView?.getCameraPreset() ?? "three");
+
     this.render();
+  }
+
+  public set3DMode(active: boolean): void {
+    this.view3dActive = active && Boolean(this.bear3dView);
+    if (this.canvasEl) {
+      this.canvasEl.style.display = this.view3dActive ? "none" : "block";
+    }
+    this.bear3dView?.setActive(this.view3dActive);
+    this.sync3DButtons(this.bear3dView?.getCameraPreset() ?? "three");
+  }
+
+  public toggle3DMode(): void {
+    this.set3DMode(!this.view3dActive);
+  }
+
+  public cycle3DCamera(): void {
+    if (!this.view3dActive) {
+      this.set3DMode(true);
+      return;
+    }
+    const next = this.bear3dView?.cycleCameraPreset() ?? "three";
+    this.sync3DButtons(next);
+  }
+
+  private sync3DButtons(preset: BearCameraPreset): void {
+    if (this.btn3dToggleEl) {
+      this.btn3dToggleEl.textContent = this.view3dActive ? "2D VIEW" : "3D CAM";
+      this.btn3dToggleEl.classList.toggle("active", this.view3dActive);
+    }
+    if (this.btn3dCamEl) {
+      this.btn3dCamEl.style.display = this.view3dActive ? "inline-flex" : "none";
+      this.btn3dCamEl.textContent = `CAM: ${BEAR_CAMERA_LABELS[preset]}`;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -400,8 +463,10 @@ export class TamagotchiAvatar {
     bassLevel?: number,
     otherWaveform?: Uint8Array | null,
     otherLevel?: number,
-    masterWaveform?: Uint8Array | null
+    masterWaveform?: Uint8Array | null,
+    liveMouth?: LiveMouthState | null
   ): void {
+    this.liveMouth = liveMouth ?? null;
     const dt = this.lastRenderSec > 0 ? Math.max(0.001, audioNow - this.lastRenderSec) : 0.016;
     this.lastRenderSec = audioNow;
 
@@ -540,6 +605,29 @@ export class TamagotchiAvatar {
       vocalsLevel ?? 0,
       rmsLevel
     );
+    if (this.view3dActive && this.bear3dView) {
+      const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
+      const vowel = this.vocalVowelFormant || meta?.vocalVowel || "AH";
+      this.bear3dView.renderFrame({
+        stage: this.stage,
+        bpm,
+        drums: this.stemEnv.drums,
+        bass: this.stemEnv.bass,
+        other: this.stemEnv.other,
+        vocals: this.stemEnv.vocals,
+        mix: this.mixEnv,
+        drumPunch: this.stemPunch.drums,
+        bassPunch: this.stemPunch.bass,
+        otherPunch: this.stemPunch.other,
+        mixPunch: this.mixPunch,
+        isBlinking: this.isBlinking,
+        isDrop: sec === "DROP",
+        action: this.temporaryAction,
+        mouth: this.liveMouth,
+        fallbackAperture: mouthAperture,
+        fallbackVowel: vowel,
+      });
+    }
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel);
     this.updateDashboard();
   }
@@ -1084,6 +1172,30 @@ export class TamagotchiAvatar {
     ctx.beginPath();
     ctx.arc(cx, cy + 4 * scaleY, haloR, 0, Math.PI * 2);
     ctx.fill();
+
+    // DMT / LSD sacred-geometry mandala ring pulsing behind the electro bear
+    const mandalaR = (84 + 14 * mixEnv + 6 * mixPunch) * baseScale;
+    const hexSides = 6;
+    ctx.translate(cx, cy + 2 * scaleY);
+    ctx.rotate(t * 0.35);
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = 1.1;
+    ctx.globalAlpha = 0.14 + 0.26 * mixEnv;
+    for (let layer = 0; layer < 2; layer++) {
+      ctx.save();
+      ctx.rotate(layer * (Math.PI / hexSides) - t * layer * 0.55);
+      const rLayer = mandalaR * (layer === 0 ? 1.0 : 0.82);
+      ctx.beginPath();
+      for (let k = 0; k <= hexSides; k++) {
+        const a = (k / hexSides) * Math.PI * 2;
+        const hx = Math.cos(a) * rLayer;
+        const hy = Math.sin(a) * rLayer;
+        if (k === 0) ctx.moveTo(hx, hy);
+        else ctx.lineTo(hx, hy);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
     ctx.restore();
 
 
@@ -1582,104 +1694,285 @@ export class TamagotchiAvatar {
 
     // -------------------------------------------------------------------------
     // 12. THE LIVE VOCAL WAVEFORM AUDIO REACTIVE MOUTH
+    //     Realistic visible singing mouth copied onto the Wub bear's face:
+    //     sculpted upper/lower lips, pearl teeth rows, articulated tongue, dark
+    //     oral cavity, and glowing back throat/uvula driven by Singing Head.
     // -------------------------------------------------------------------------
-    const mouthY = cy + 1 * scaleY
+    const lm = this.liveMouth;
+    const lmActive = Boolean(lm?.active);
+    const mouthY = cy + 2.2 * scaleY
       // Pitch lift: higher F0 rides the mouth up a touch (subtle, ±2px).
       + (this.vocalF0Hz > 0
-        ? Math.max(-0.35, Math.min(0.55, (this.vocalF0Hz - 220) / 700)) * 4 * scaleY
+        ? Math.max(-0.35, Math.min(0.55, (this.vocalF0Hz - 220) / 700)) * 3.5 * scaleY
         : 0);
-    // v200 aperture: raw fast-follower only (slow envelopes damped syllable
-    // attacks and read as a tired mouth).
-    const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
-    // Carried out of the singing branch so teeth can draw after fill/stroke.
-    let mouthCurW = 0;
-    let mouthCurH = 0;
-    let mouthUpVowel = "AH";
+    // v200 aperture: raw fast-follower blended with live Singing Head jaw/aperture.
+    const mouthAperture = Math.max(
+      0,
+      Math.min(1, Math.max(this.smoothedVocalAmp * 2.2, lmActive ? lm!.art.aperture : 0))
+    );
+    const activeSing = isSinging || lmActive || vocalsLevel >= 0.006;
+
+    const mouthSteps = 64;
+    const mouthGlow = activeSing ? "#ffea00" : "#ff77e9";
 
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    const mouthSteps = 64;
-    const mouthColor = isSinging ? "#ffff00" : "#ff0077";
-    const mouthGlow = isSinging ? "#ffea00" : "#ff77e9";
+    if (!activeSing) {
+      // Resting sculpted closed bear lips + subtle kawaii w-smile & lip sheen
+      const breathe = Math.sin(t * 2.5) * 0.7;
+      const rx = (8.5 + breathe) * scaleX;
+      const ry = (3.4 + breathe * 0.35) * scaleY;
 
-    ctx.shadowBlur = isSinging ? (14 + 18 * mouthAperture) : 8;
-    ctx.shadowColor = mouthGlow;
-    ctx.strokeStyle = mouthColor;
-    ctx.fillStyle = isSinging ? "rgba(255, 234, 0, 0.22)" : "rgba(255, 105, 180, 0.15)";
-    ctx.lineWidth = 2.4;
-
-    ctx.beginPath();
-    if (!isSinging && vocalsLevel < 0.006) {
-      // Resting cute kawaii bear smile ( ᵕ ‿ ᵕ ) / w-shape
-      const breathe = Math.sin(t * 2.5) * 1.0;
-      const rx = 6.5 + breathe;
-      const ry = 3.2 + breathe * 0.4;
+      // Full lip cushion silhouette
+      ctx.beginPath();
       for (let j = 0; j <= mouthSteps; j++) {
         const phi = (j / mouthSteps) * Math.PI * 2;
+        const bow = Math.sin(phi) < 0 ? -0.9 * Math.cos(phi * 2) : 0;
         const mx = cx + rx * Math.cos(phi);
-        const my = mouthY + ry * Math.sin(phi) + 1.2 * Math.pow(Math.cos(phi), 2);
+        const my = mouthY + ry * Math.sin(phi) + bow + 0.9 * Math.pow(Math.cos(phi), 2);
         if (j === 0) ctx.moveTo(mx, my);
         else ctx.lineTo(mx, my);
       }
+      ctx.closePath();
+      const restLipGrad = ctx.createLinearGradient(cx, mouthY - ry, cx, mouthY + ry);
+      restLipGrad.addColorStop(0.0, "#ff77b7");
+      restLipGrad.addColorStop(0.5, "#d81b60");
+      restLipGrad.addColorStop(1.0, "#ff4da6");
+      ctx.fillStyle = restLipGrad;
+      ctx.shadowBlur = 7;
+      ctx.shadowColor = mouthGlow;
+      ctx.fill();
+
+      // Cute inner lip seam ( ᵕ ‿ ᵕ )
+      ctx.beginPath();
+      ctx.moveTo(cx - rx * 0.88, mouthY - 0.4 * scaleY);
+      ctx.quadraticCurveTo(cx - rx * 0.38, mouthY + 2.6 * scaleY, cx, mouthY + 0.3 * scaleY);
+      ctx.quadraticCurveTo(cx + rx * 0.38, mouthY + 2.6 * scaleY, cx + rx * 0.88, mouthY - 0.4 * scaleY);
+      ctx.strokeStyle = "#4a0623";
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      // Specular gloss dash on lower lip
+      ctx.beginPath();
+      ctx.ellipse(cx, mouthY + ry * 0.58, rx * 0.34, 1.0 * scaleY, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.52)";
+      ctx.fill();
     } else {
-      // Live Audio Waveform Voice Instrument Singing Mini Loop!
-      let baseW = 12;
-      let baseH = 10;
-      const upVowel = (vowel || "AH").toUpperCase();
-      mouthUpVowel = upVowel;
-      if (upVowel === "EE") { baseW = 15; baseH = 5; }
-      else if (upVowel === "OH") { baseW = 9; baseH = 14; }
-      else if (upVowel === "OO") { baseW = 7; baseH = 7; }
-      else if (upVowel === "AY") { baseW = 14; baseH = 9; }
-      // Front vowels (high F2) open wide; back/round vowels stay narrow.
+      // Derive visible mouth parameters from Singing Head articulators + live F1/F2/vowel fallback
+      const art = lm?.art;
+      const tract = lm?.tract;
+      const upVowel = ((art && lmActive ? art.topVowel : vowel) || "AH").toUpperCase();
+
+      let baseW = 14.5;
+      let baseH = 11.5;
+      if (upVowel === "EE") { baseW = 17.5; baseH = 6.2; }
+      else if (upVowel === "OH") { baseW = 10.5; baseH = 15.0; }
+      else if (upVowel === "OO") { baseW = 8.2; baseH = 8.4; }
+      else if (upVowel === "AY") { baseW = 16.0; baseH = 10.2; }
+
       if (this.vocalF2 > 500) {
-        baseW *= Math.max(0.6, Math.min(1.45, 0.78 + (this.vocalF2 - 1200) / 1400));
+        baseW *= Math.max(0.65, Math.min(1.4, 0.82 + (this.vocalF2 - 1200) / 1450));
       }
 
-      // Vibrato: F0 wobble (~5 Hz) breathes the mouth size.
-      const vibWobble = 1 + Math.sin(t * Math.PI * 2 * 5.0)
-        * Math.min(0.18, this.vocalVibratoSemis * 0.18);
-      const curW = baseW * (0.6 + 0.9 * mouthAperture) * vibWobble;
-      const curH = baseH * (0.6 + 1.1 * mouthAperture) * vibWobble;
-      mouthCurW = curW;
-      mouthCurH = curH;
+      const artW = lmActive && art
+        ? 9.5 + 9.5 * art.width - 5.2 * (tract?.lipRound ?? art.roundness)
+        : baseW;
+      const artH = lmActive && art
+        ? 4.0 + 13.0 * Math.max(art.aperture, art.jawDrop * 0.88) + Math.max(0, tract?.lipOpen ?? 0) * 4.5
+        : baseH * (0.55 + 0.95 * mouthAperture);
 
+      const vibWobble = 1 + Math.sin(t * Math.PI * 2 * 5.0)
+        * Math.min(0.16, this.vocalVibratoSemis * 0.16);
+      const curW = Math.max(6.5, (lmActive ? artW : baseW * (0.6 + 0.8 * mouthAperture)) * vibWobble) * scaleX;
+      const curH = Math.max(3.6, artH * vibWobble) * scaleY;
+
+      const lipRound = tract ? Math.max(0, Math.min(1, tract.lipRound)) : (art?.roundness ?? (upVowel === "OO" || upVowel === "OH" ? 0.85 : 0.15));
+      const lipTuck = tract ? Math.max(0, Math.min(1, tract.lipTuck)) : 0;
+      const velumOpen = tract ? Math.max(0, Math.min(1, tract.velum)) : 0.25;
+      const tX = tract ? Math.max(-1.4, Math.min(1.4, tract.tongueX)) : (upVowel === "EE" ? 0.7 : upVowel === "OH" ? -0.5 : 0);
+      const tY = tract ? Math.max(-1.2, Math.min(1.3, tract.tongueY)) : (upVowel === "EE" || upVowel === "OO" ? 0.75 : upVowel === "AH" ? -0.45 : 0.1);
+      const tipLift = tract ? Math.max(-0.8, Math.min(1.2, tract.tipY)) : (upVowel === "EE" ? 0.4 : 0);
+
+      // Compute inner cavity perimeter (64 steps with subtle acoustic waveform ripple)
+      const innerPts: { x: number; y: number }[] = [];
+      const outerPts: { x: number; y: number }[] = [];
+      const lipThickX = (2.6 + 1.4 * lipRound) * scaleX;
+      const lipThickY = (2.9 + 1.4 * lipRound) * scaleY;
       const waveLen = waveform ? waveform.length : 0;
+
       for (let j = 0; j <= mouthSteps; j++) {
         const phi = (j / mouthSteps) * Math.PI * 2;
+        const cosP = Math.cos(phi);
+        const sinP = Math.sin(phi);
         let sampleNorm = 0;
         if (waveform && waveLen > 0) {
           const wIdx = Math.floor((j / mouthSteps) * (waveLen - 1));
           sampleNorm = (waveform[wIdx] - 128) / 128.0;
         } else {
-          sampleNorm = Math.sin(phi * 3.0 + t * 14.0) * 0.4;
+          sampleNorm = Math.sin(phi * 3.0 + t * 14.0) * 0.3;
         }
 
-        const rad = Math.sqrt(Math.pow(curW * Math.cos(phi), 2) + Math.pow(curH * Math.sin(phi), 2));
-        const waveDisp = sampleNorm * (5.5 * mouthAperture + 1.2);
-        const mx = cx + (rad + waveDisp * 0.7) * Math.cos(phi);
-        const my = mouthY + (rad + waveDisp) * Math.sin(phi);
+        // Cupid's bow dip on top center, fuller rounded cushion on lower lip
+        const bowDip = sinP < 0
+          ? (-1.6 * (1 - 0.65 * lipRound) * Math.cos(cosP * Math.PI * 1.6)) * scaleY
+          : (0.7 * (1 - lipTuck * 0.7) * Math.pow(Math.abs(sinP), 1.3)) * scaleY;
+        const rad = Math.sqrt(Math.pow(curW * cosP, 2) + Math.pow(curH * sinP, 2));
+        const waveDisp = sampleNorm * (2.6 * mouthAperture + 0.55);
 
-        if (j === 0) ctx.moveTo(mx, my);
-        else ctx.lineTo(mx, my);
+        const ix = cx + (rad + waveDisp * 0.5) * cosP;
+        const iy = mouthY + (rad + waveDisp * 0.65) * sinP + bowDip * 0.45;
+        innerPts.push({ x: ix, y: iy });
+
+        const ox = cx + (rad + lipThickX + waveDisp * 0.5) * cosP;
+        const oy = mouthY + (rad + lipThickY * (sinP > 0 ? 1.18 : 0.92) + waveDisp * 0.65) * sinP + bowDip;
+        outerPts.push({ x: ox, y: oy });
       }
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    // Teeth flash on wide/front vowels (EE/AY/AH): a bright bar clipped to
-    // the mouth interior reads as "showing teeth mid-phoneme".
-    if (isSinging && mouthAperture > 0.25 && mouthCurW > 0
-      && (mouthUpVowel === "EE" || mouthUpVowel === "AY" || mouthUpVowel === "AH")) {
+
+      const traceLoop = (pts: { x: number; y: number }[]) => {
+        ctx.beginPath();
+        for (let i = 0; i < pts.length; i++) {
+          if (i === 0) ctx.moveTo(pts[i].x, pts[i].y);
+          else ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        ctx.closePath();
+      };
+
+      // A) Dark Oral Cavity + Glowing Back Throat (Pharynx / Soft Palate / Uvula)
+      ctx.save();
+      traceLoop(innerPts);
+      ctx.clip();
+
+      const throatGrad = ctx.createRadialGradient(
+        cx, mouthY - curH * 0.08, curH * 0.08,
+        cx, mouthY, Math.max(curW, curH) * 1.25
+      );
+      throatGrad.addColorStop(0.0, `rgba(255, 64, 136, ${0.42 + 0.52 * mouthAperture})`);
+      throatGrad.addColorStop(0.45, "#6b0830");
+      throatGrad.addColorStop(1.0, "#14020b");
+      ctx.fillStyle = throatGrad;
+      ctx.fillRect(cx - curW * 1.4, mouthY - curH * 1.4, curW * 2.8, curH * 2.8);
+
+      // Soft palate faucial arches & dangling uvula at the back of the throat
+      if (curH > 4.5) {
+        const uvulaY = mouthY - curH * (0.28 - velumOpen * 0.14);
+        const uvSway = Math.sin(t * 22) * 1.1 * mouthAperture;
+        ctx.strokeStyle = "rgba(255, 110, 170, 0.55)";
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(cx, uvulaY + curH * 0.15, curW * 0.44, Math.PI * 1.15, Math.PI * 1.85);
+        ctx.stroke();
+
+        ctx.fillStyle = `rgba(255, 120, 180, ${0.72 + 0.25 * mouthAperture})`;
+        ctx.beginPath();
+        ctx.ellipse(cx + uvSway, uvulaY, 1.9 * scaleX, 3.1 * scaleY, uvSway * 0.08, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // B) Articulated Shaded Tongue Body & Tip
+      const tongueCenterY = mouthY + curH * (0.48 - 0.34 * tY - 0.14 * tipLift);
+      const tongueCenterX = cx + tX * curW * 0.12;
+      const tongueW = curW * 0.78;
+      const tongueH = Math.max(3.5, curH * 0.56);
+      const tongueGrad = ctx.createRadialGradient(
+        tongueCenterX, tongueCenterY - tongueH * 0.3, 1,
+        tongueCenterX, tongueCenterY, tongueW
+      );
+      tongueGrad.addColorStop(0.0, "#ff9ac2");
+      tongueGrad.addColorStop(0.55, "#f04286");
+      tongueGrad.addColorStop(1.0, "#9e144b");
+      ctx.fillStyle = tongueGrad;
+      ctx.beginPath();
+      ctx.ellipse(tongueCenterX, tongueCenterY + tongueH * 0.22, tongueW, tongueH, 0, Math.PI, Math.PI * 2);
+      ctx.ellipse(tongueCenterX, tongueCenterY + tongueH * 0.22, tongueW, tongueH * 0.65, 0, 0, Math.PI);
+      ctx.fill();
+
+      // Tongue dorsal groove highlight
+      ctx.strokeStyle = "rgba(120, 10, 50, 0.55)";
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.moveTo(tongueCenterX, tongueCenterY - tongueH * 0.42);
+      ctx.lineTo(tongueCenterX, tongueCenterY + tongueH * 0.18);
+      ctx.stroke();
+
+      // C) Upper & Lower Pearl Teeth Rows inside the open mouth
+      const toothVis = Math.max(0, Math.min(1, (curH - 3.6) / 6.0));
+      if (toothVis > 0.05) {
+        const toothCount = 6;
+        const archW = curW * 1.48;
+        const cellW = archW / toothCount;
+        const startX = cx - archW * 0.5;
+        const upperToothH = Math.max(2.0, curH * 0.24) * toothVis;
+        const upperY = mouthY - curH * 0.96;
+
+        ctx.fillStyle = "rgba(255, 250, 248, 0.94)";
+        ctx.strokeStyle = "rgba(205, 195, 215, 0.65)";
+        ctx.lineWidth = 0.7;
+        for (let k = 0; k < toothCount; k++) {
+          const tx = startX + k * cellW + 0.6;
+          const tw = Math.max(1.8, cellW - 1.2);
+          ctx.beginPath();
+          ctx.roundRect(tx, upperY, tw, upperToothH, [0, 0, 1.5, 1.5]);
+          ctx.fill();
+          ctx.stroke();
+        }
+
+        // Lower teeth row peeks above lower lip during wide jaw / front open vowels
+        if (curH > 6.5 && lipTuck < 0.45) {
+          const lowerToothH = Math.max(1.6, curH * 0.18) * toothVis;
+          const lowerY = mouthY + curH * 0.96 - lowerToothH;
+          for (let k = 0; k < toothCount; k++) {
+            const tx = startX + k * cellW + 0.9;
+            const tw = Math.max(1.5, cellW - 1.8);
+            ctx.beginPath();
+            ctx.roundRect(tx, lowerY, tw, lowerToothH, [1.4, 1.4, 0, 0]);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+      }
+      ctx.restore();
+
+      // D) Sculpted 3D Lip Cushion Ring (Even-Odd fill between outerPts & innerPts)
       ctx.save();
       ctx.beginPath();
-      ctx.ellipse(cx, mouthY, mouthCurW * 0.85, mouthCurH * 0.7, 0, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
-      ctx.fillRect(cx - mouthCurW * 0.7, mouthY - mouthCurH * 0.62,
-        mouthCurW * 1.4, Math.max(2, mouthCurH * 0.28));
+      for (let i = 0; i < outerPts.length; i++) {
+        if (i === 0) ctx.moveTo(outerPts[i].x, outerPts[i].y);
+        else ctx.lineTo(outerPts[i].x, outerPts[i].y);
+      }
+      ctx.closePath();
+      for (let i = innerPts.length - 1; i >= 0; i--) {
+        if (i === innerPts.length - 1) ctx.moveTo(innerPts[i].x, innerPts[i].y);
+        else ctx.lineTo(innerPts[i].x, innerPts[i].y);
+      }
+      ctx.closePath();
+
+      const lipGrad = ctx.createLinearGradient(cx, mouthY - curH - lipThickY, cx, mouthY + curH + lipThickY);
+      lipGrad.addColorStop(0.0, "#ff80c4");
+      lipGrad.addColorStop(0.35, "#ff2a85");
+      lipGrad.addColorStop(0.68, "#c2105e");
+      lipGrad.addColorStop(1.0, "#ff5eb3");
+      ctx.fillStyle = lipGrad;
+      ctx.shadowBlur = 12 + 16 * mouthAperture;
+      ctx.shadowColor = mouthGlow;
+      ctx.fill("evenodd");
+
+      // Crisp cyber-neon rim outline + glossy wet lower-lip highlight
+      traceLoop(outerPts);
+      ctx.strokeStyle = isSinging ? "rgba(255, 235, 110, 0.85)" : "rgba(255, 130, 210, 0.78)";
+      ctx.lineWidth = 1.15;
+      ctx.stroke();
+
+      traceLoop(innerPts);
+      ctx.strokeStyle = "#4d0420";
+      ctx.lineWidth = 1.05;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.ellipse(cx, mouthY + curH + lipThickY * 0.48, curW * 0.42, 1.15 * scaleY, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.56)";
+      ctx.fill();
       ctx.restore();
     }
     ctx.restore();

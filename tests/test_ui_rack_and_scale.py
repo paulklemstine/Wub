@@ -152,3 +152,36 @@ def test_client_ml_sequencer_song_and_slice_continuity():
     assert "isLongLoop" in ae_content
 
 
+def test_bear_realistic_mouth_and_3d_camera():
+    """Verify Wub Bear 2.0 realistic singing mouth (lips/teeth/tongue/throat) and 3D camera."""
+    bear3d_path = Path("frontend/src/bear_3d_view.ts")
+    assert bear3d_path.exists(), "frontend/src/bear_3d_view.ts must exist"
+    bear3d = bear3d_path.read_text(encoding="utf-8")
+    for token in (
+        "Bear3DView",
+        "OrbitControls",
+        "upperLipGeo",
+        "lowerLipGeo",
+        "tongueGeo",
+        "upperTeeth",
+        "lowerTeeth",
+        "throatMesh",
+        "uvulaMesh",
+        "setCameraPreset",
+    ):
+        assert token in bear3d
+
+    tg = Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
+    assert "Bear3DView" in tg
+    assert "getLiveMouthState" in Path("frontend/src/singing_head.ts").read_text(encoding="utf-8")
+    assert "liveMouth" in tg
+    assert "uvulaY" in tg
+    assert "tongueCenterY" in tg
+    assert "lipGrad" in tg
+
+    html = Path("frontend/index.html").read_text(encoding="utf-8")
+    for dom_id in ("tamagotchi-3d-host", "btn-tamagotchi-3d", "btn-tamagotchi-cam"):
+        assert dom_id in html
+
+
+
