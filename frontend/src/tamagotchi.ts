@@ -7,7 +7,10 @@ import type { GrooveboxMeta } from "./main";
 import {
   Bear3DView,
   BEAR_CAMERA_LABELS,
+  DEFAULT_BEAR_VISUAL_CONFIG,
   type BearCameraPreset,
+  type BearMouthStyle,
+  type BearVisualConfig,
 } from "./bear_3d_view";
 import type { LiveMouthState } from "./singing_head";
 
@@ -187,6 +190,7 @@ export class TamagotchiAvatar {
   private view3dActive: boolean = false;
   private btn3dToggleEl: HTMLElement | null = null;
   private btn3dCamEl: HTMLElement | null = null;
+  private visualConfig: BearVisualConfig = { ...DEFAULT_BEAR_VISUAL_CONFIG };
 
   constructor() {
     this.loadState();
@@ -236,8 +240,75 @@ export class TamagotchiAvatar {
       this.btn3dCamEl.addEventListener("click", () => this.cycle3DCamera());
     }
     this.sync3DButtons(this.bear3dView?.getCameraPreset() ?? "three");
+    this.bindVisualControlBar();
 
     this.render();
+  }
+
+  public getVisualConfig(): BearVisualConfig {
+    return { ...this.visualConfig };
+  }
+
+  public setVisualConfig(patch: Partial<BearVisualConfig>): void {
+    this.visualConfig = { ...this.visualConfig, ...patch };
+  }
+
+  private bindVisualControlBar(): void {
+    const toggleVisualBool = (id: string, key: "showCage" | "showVisor" | "showHalo", label: string) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      const sync = () => {
+        const on = this.visualConfig[key];
+        btn.classList.toggle("active", on);
+        btn.textContent = `${label}: ${on ? "ON" : "OFF"}`;
+      };
+      sync();
+      btn.addEventListener("click", () => {
+        this.visualConfig[key] = !this.visualConfig[key];
+        sync();
+      });
+    };
+    toggleVisualBool("btn-bear-cage", "showCage", "CAGE");
+    toggleVisualBool("btn-bear-visor", "showVisor", "VISOR");
+    toggleVisualBool("btn-bear-halo", "showHalo", "HALO");
+
+    const mouthStyleBtn = document.getElementById("btn-bear-mouth-style");
+    if (mouthStyleBtn) {
+      const styles: BearMouthStyle[] = ["real", "acid", "cyber"];
+      const syncMouth = () => {
+        mouthStyleBtn.textContent = `MOUTH: ${this.visualConfig.mouthStyle.toUpperCase()}`;
+      };
+      syncMouth();
+      mouthStyleBtn.addEventListener("click", () => {
+        const idx = styles.indexOf(this.visualConfig.mouthStyle);
+        this.visualConfig.mouthStyle = styles[(idx + 1) % styles.length];
+        syncMouth();
+      });
+    }
+
+    const danceSlider = document.getElementById("bear-dance-slider") as HTMLInputElement | null;
+    const danceVal = document.getElementById("bear-dance-val");
+    if (danceSlider) {
+      danceSlider.addEventListener("input", () => {
+        const v = Number(danceSlider.value);
+        if (Number.isFinite(v)) {
+          this.visualConfig.danceGain = Math.max(0.3, Math.min(2.0, v));
+          if (danceVal) danceVal.textContent = `${Math.round(v * 100)}%`;
+        }
+      });
+    }
+
+    const mouthSlider = document.getElementById("bear-mouth-slider") as HTMLInputElement | null;
+    const mouthVal = document.getElementById("bear-mouth-val");
+    if (mouthSlider) {
+      mouthSlider.addEventListener("input", () => {
+        const v = Number(mouthSlider.value);
+        if (Number.isFinite(v)) {
+          this.visualConfig.mouthGain = Math.max(0.6, Math.min(1.8, v));
+          if (mouthVal) mouthVal.textContent = `${Math.round(v * 100)}%`;
+        }
+      });
+    }
   }
 
   public set3DMode(active: boolean): void {
@@ -626,6 +697,7 @@ export class TamagotchiAvatar {
         mouth: this.liveMouth,
         fallbackAperture: mouthAperture,
         fallbackVowel: vowel,
+        visual: this.visualConfig,
       });
     }
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel);
@@ -1152,9 +1224,10 @@ export class TamagotchiAvatar {
     // -------------------------------------------------------------------------
     // 1. KAWAII GUMMI BEAR DYNAMICS (SQUISH & STRETCH BOUNCE)
     // -------------------------------------------------------------------------
-    const drumSquish = Math.min(1.2, env.drums * 1.15);
-    const squishY = 1.0 - 0.06 * drumSquish - 0.025 * mixPunch + (bob ? -0.02 : 0.015);
-    const squishX = 1.0 + 0.06 * drumSquish + 0.025 * mixPunch - (bob ? -0.02 : 0.015);
+    const vis = this.visualConfig;
+    const drumSquish = Math.min(1.4, env.drums * 1.15 * vis.danceGain);
+    const squishY = 1.0 - 0.06 * drumSquish - 0.025 * mixPunch * vis.danceGain + (bob ? -0.02 * vis.danceGain : 0.015);
+    const squishX = 1.0 + 0.06 * drumSquish + 0.025 * mixPunch * vis.danceGain - (bob ? -0.02 * vis.danceGain : 0.015);
     const baseScale = (0.86 + 0.02 * this.stage) * (1.0 + 0.025 * mixEnv);
     const scaleX = baseScale * squishX;
     const scaleY = baseScale * squishY;
@@ -1174,27 +1247,29 @@ export class TamagotchiAvatar {
     ctx.fill();
 
     // DMT / LSD sacred-geometry mandala ring pulsing behind the electro bear
-    const mandalaR = (84 + 14 * mixEnv + 6 * mixPunch) * baseScale;
-    const hexSides = 6;
-    ctx.translate(cx, cy + 2 * scaleY);
-    ctx.rotate(t * 0.35);
-    ctx.strokeStyle = accentColor;
-    ctx.lineWidth = 1.1;
-    ctx.globalAlpha = 0.14 + 0.26 * mixEnv;
-    for (let layer = 0; layer < 2; layer++) {
-      ctx.save();
-      ctx.rotate(layer * (Math.PI / hexSides) - t * layer * 0.55);
-      const rLayer = mandalaR * (layer === 0 ? 1.0 : 0.82);
-      ctx.beginPath();
-      for (let k = 0; k <= hexSides; k++) {
-        const a = (k / hexSides) * Math.PI * 2;
-        const hx = Math.cos(a) * rLayer;
-        const hy = Math.sin(a) * rLayer;
-        if (k === 0) ctx.moveTo(hx, hy);
-        else ctx.lineTo(hx, hy);
+    if (vis.showHalo) {
+      const mandalaR = (84 + 14 * mixEnv + 6 * mixPunch) * baseScale;
+      const hexSides = 6;
+      ctx.translate(cx, cy + 2 * scaleY);
+      ctx.rotate(t * 0.35);
+      ctx.strokeStyle = accentColor;
+      ctx.lineWidth = 1.1;
+      ctx.globalAlpha = 0.14 + 0.26 * mixEnv;
+      for (let layer = 0; layer < 2; layer++) {
+        ctx.save();
+        ctx.rotate(layer * (Math.PI / hexSides) - t * layer * 0.55);
+        const rLayer = mandalaR * (layer === 0 ? 1.0 : 0.82);
+        ctx.beginPath();
+        for (let k = 0; k <= hexSides; k++) {
+          const a = (k / hexSides) * Math.PI * 2;
+          const hx = Math.cos(a) * rLayer;
+          const hy = Math.sin(a) * rLayer;
+          if (k === 0) ctx.moveTo(hx, hy);
+          else ctx.lineTo(hx, hy);
+        }
+        ctx.stroke();
+        ctx.restore();
       }
-      ctx.stroke();
-      ctx.restore();
     }
     ctx.restore();
 
@@ -1785,8 +1860,8 @@ export class TamagotchiAvatar {
 
       const vibWobble = 1 + Math.sin(t * Math.PI * 2 * 5.0)
         * Math.min(0.16, this.vocalVibratoSemis * 0.16);
-      const curW = Math.max(6.5, (lmActive ? artW : baseW * (0.6 + 0.8 * mouthAperture)) * vibWobble) * scaleX;
-      const curH = Math.max(3.6, artH * vibWobble) * scaleY;
+      const curW = Math.max(6.5, (lmActive ? artW : baseW * (0.6 + 0.8 * mouthAperture)) * vibWobble) * scaleX * (0.75 + 0.25 * vis.mouthGain);
+      const curH = Math.max(3.6, artH * vibWobble) * scaleY * vis.mouthGain;
 
       const lipRound = tract ? Math.max(0, Math.min(1, tract.lipRound)) : (art?.roundness ?? (upVowel === "OO" || upVowel === "OH" ? 0.85 : 0.15));
       const lipTuck = tract ? Math.max(0, Math.min(1, tract.lipTuck)) : 0;
@@ -1879,9 +1954,19 @@ export class TamagotchiAvatar {
         tongueCenterX, tongueCenterY - tongueH * 0.3, 1,
         tongueCenterX, tongueCenterY, tongueW
       );
-      tongueGrad.addColorStop(0.0, "#ff9ac2");
-      tongueGrad.addColorStop(0.55, "#f04286");
-      tongueGrad.addColorStop(1.0, "#9e144b");
+      if (vis.mouthStyle === "acid") {
+        tongueGrad.addColorStop(0.0, "#a5f3fc");
+        tongueGrad.addColorStop(0.55, "#00f0ff");
+        tongueGrad.addColorStop(1.0, "#0055ff");
+      } else if (vis.mouthStyle === "cyber") {
+        tongueGrad.addColorStop(0.0, "#f5d0fe");
+        tongueGrad.addColorStop(0.55, "#ff00e6");
+        tongueGrad.addColorStop(1.0, "#5b0099");
+      } else {
+        tongueGrad.addColorStop(0.0, "#ff9ac2");
+        tongueGrad.addColorStop(0.55, "#f04286");
+        tongueGrad.addColorStop(1.0, "#9e144b");
+      }
       ctx.fillStyle = tongueGrad;
       ctx.beginPath();
       ctx.ellipse(tongueCenterX, tongueCenterY + tongueH * 0.22, tongueW, tongueH, 0, Math.PI, Math.PI * 2);
@@ -1949,10 +2034,22 @@ export class TamagotchiAvatar {
       ctx.closePath();
 
       const lipGrad = ctx.createLinearGradient(cx, mouthY - curH - lipThickY, cx, mouthY + curH + lipThickY);
-      lipGrad.addColorStop(0.0, "#ff80c4");
-      lipGrad.addColorStop(0.35, "#ff2a85");
-      lipGrad.addColorStop(0.68, "#c2105e");
-      lipGrad.addColorStop(1.0, "#ff5eb3");
+      if (vis.mouthStyle === "acid") {
+        lipGrad.addColorStop(0.0, "#d9ff66");
+        lipGrad.addColorStop(0.35, "#a3ff00");
+        lipGrad.addColorStop(0.68, "#00aa55");
+        lipGrad.addColorStop(1.0, "#70ff99");
+      } else if (vis.mouthStyle === "cyber") {
+        lipGrad.addColorStop(0.0, "#7df9ff");
+        lipGrad.addColorStop(0.35, "#00d4ff");
+        lipGrad.addColorStop(0.68, "#4c1d95");
+        lipGrad.addColorStop(1.0, "#ff77e9");
+      } else {
+        lipGrad.addColorStop(0.0, "#ff80c4");
+        lipGrad.addColorStop(0.35, "#ff2a85");
+        lipGrad.addColorStop(0.68, "#c2105e");
+        lipGrad.addColorStop(1.0, "#ff5eb3");
+      }
       ctx.fillStyle = lipGrad;
       ctx.shadowBlur = 12 + 16 * mouthAperture;
       ctx.shadowColor = mouthGlow;

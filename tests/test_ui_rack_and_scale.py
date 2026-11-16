@@ -184,4 +184,68 @@ def test_bear_realistic_mouth_and_3d_camera():
         assert dom_id in html
 
 
+def test_super_rave_box_panels_dj_fx_and_lightshow():
+    """Verify toggleable minimized secondary drawers, 3 hero panels, Bear 2.0 visual controls,
+    DJ Control Surface FX rack, and SuperAcid Lightshow panel with Fullscreen."""
+    html = Path("frontend/index.html").read_text(encoding="utf-8")
+    # 3 Hero Panels visible at load (not panel-minimized)
+    for hero_id in ("panel-bear", "panel-dj-surface", "panel-lightshow"):
+        assert f'id="{hero_id}"' in html
+        assert f'data-panel="{hero_id}"' in html
+
+    # All secondary drawers start minimized at load and are toggleable
+    for drawer_id in (
+        "groovebox-panel",
+        "trippy-sequencer-rack",
+        "structure-panel",
+        "trip-panel",
+        "decks",
+        "stages",
+        "singing-head-panel",
+    ):
+        assert f'data-panel="{drawer_id}"' in html
+        assert "panel-minimized" in html.split(f'id="{drawer_id}"')[1].split(">")[0]
+
+    # Transport moved into DJ Control Surface + DJ FX & Lightshow controls present
+    dj_section = html.split('id="panel-dj-surface"')[1].split('id="panel-lightshow"')[0]
+    for dom_id in (
+        "btn-play",
+        "btn-stop",
+        "nebula-canvas",
+        "dj-filter-slider",
+        "dj-echo-slider",
+        "dj-reverb-slider",
+        "dj-acid-slider",
+        "dj-crush-slider",
+        "btn-dj-tapestop",
+        "btn-macro-buildup",
+        "btn-macro-drop",
+        "btn-macro-break",
+        "btn-macro-reset",
+    ):
+        assert dom_id in dj_section
+
+    for dom_id in (
+        "btn-bear-cage",
+        "btn-bear-visor",
+        "btn-bear-halo",
+        "btn-bear-mouth-style",
+        "bear-dance-slider",
+        "bear-mouth-slider",
+        "lightshow-canvas",
+        "btn-lightshow-fullscreen",
+        "btn-ls-cortex",
+    ):
+        assert dom_id in html
+
+    ls_src = Path("frontend/src/lightshow.ts").read_text(encoding="utf-8")
+    for preset in ("acid-warp", "breathing-mandala", "space-tubes", "burning-julia", "cosmic-serpent"):
+        assert preset in ls_src
+
+    fx_src = Path("frontend/src/dj_fx_processor.ts").read_text(encoding="utf-8")
+    assert "WubDjFxProcessor" in fx_src
+    assert "attachDjFxWorklet" in fx_src
+
+
+
 

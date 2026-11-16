@@ -27,6 +27,26 @@ export const BEAR_CAMERA_LABELS: Record<BearCameraPreset, string> = {
   orbit: "AUTO ORBIT",
 };
 
+export type BearMouthStyle = "real" | "acid" | "cyber";
+
+export interface BearVisualConfig {
+  showCage: boolean;
+  showVisor: boolean;
+  showHalo: boolean;
+  mouthStyle: BearMouthStyle;
+  danceGain: number; // 0.3 .. 2.0
+  mouthGain: number; // 0.6 .. 1.8
+}
+
+export const DEFAULT_BEAR_VISUAL_CONFIG: BearVisualConfig = {
+  showCage: true,
+  showVisor: true,
+  showHalo: true,
+  mouthStyle: "real",
+  danceGain: 1.0,
+  mouthGain: 1.0,
+};
+
 export interface Bear3DTelemetry {
   stage: 1 | 2 | 3 | 4;
   bpm: number;
@@ -45,6 +65,7 @@ export interface Bear3DTelemetry {
   mouth: LiveMouthState | null;
   fallbackAperture: number;
   fallbackVowel: string;
+  visual?: BearVisualConfig;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -1059,6 +1080,8 @@ export class Bear3DView {
     this.phase += dt * beatHz * Math.PI;
     const t = nowMs / 1000;
 
+    const vis = tel.visual ?? DEFAULT_BEAR_VISUAL_CONFIG;
+
     // 1. DMT / LSD psychedelic stage palette sweep per creature stage
     const baseHue = ((tel.stage - 1) * 0.2 + t * 0.07 + tel.mix * 0.12) % 1;
     if (this.gummiMat) {
@@ -1069,9 +1092,34 @@ export class Bear3DView {
       this.gummiMat.emissiveIntensity = 0.45 + tel.mix * 0.75 + tel.drumPunch * 0.35;
     }
     if (this.cageMat) {
+      this.cageMat.visible = vis.showCage;
       this.tmpColor.setHSL((baseHue + 0.5) % 1, 1.0, 0.58);
       this.cageMat.color.copy(this.tmpColor);
-      this.cageMat.opacity = 0.2 + 0.32 * tel.mix + 0.25 * tel.drumPunch;
+      this.cageMat.opacity = vis.showCage ? 0.2 + 0.32 * tel.mix + 0.25 * tel.drumPunch : 0;
+    }
+    if (this.lipMat && this.tongueMat && this.throatMat) {
+      if (vis.mouthStyle === "acid") {
+        this.lipMat.color.setHex(0xb8ff00);
+        this.lipMat.emissive.setHex(0x00ffaa);
+        this.tongueMat.color.setHex(0x00ffff);
+        this.tongueMat.emissive.setHex(0x0066ff);
+        this.throatMat.color.setHex(0x9d00ff);
+        this.throatMat.emissive.setHex(0xd900ff);
+      } else if (vis.mouthStyle === "cyber") {
+        this.lipMat.color.setHex(0x00f0ff);
+        this.lipMat.emissive.setHex(0x0088ff);
+        this.tongueMat.color.setHex(0xff00c8);
+        this.tongueMat.emissive.setHex(0x6600aa);
+        this.throatMat.color.setHex(0x00ffff);
+        this.throatMat.emissive.setHex(0x00aaff);
+      } else {
+        this.lipMat.color.setHex(0xff4fa8);
+        this.lipMat.emissive.setHex(0x700c45);
+        this.tongueMat.color.setHex(0xff5599);
+        this.tongueMat.emissive.setHex(0x6a093c);
+        this.throatMat.color.setHex(0xd93878);
+        this.throatMat.emissive.setHex(0xff2266);
+      }
     }
     if (this.discoKeyLight && this.discoRimLight) {
       this.tmpColor.setHSL((t * 0.18) % 1, 1.0, 0.55);
@@ -1083,10 +1131,10 @@ export class Bear3DView {
     }
 
     // 2. Techno Dance Bounce (squash & stretch + hype/eat/pet animations)
-    const hypeBoost = tel.action === "HYPE" ? 1.75 : 1.0;
+    const hypeBoost = (tel.action === "HYPE" ? 1.75 : 1.0) * vis.danceGain;
     const danceGroove = Math.sin(this.phase) * (0.08 + 0.12 * tel.drums) * hypeBoost;
-    const bounceY = Math.abs(Math.sin(this.phase)) * (0.09 + 0.14 * tel.drumPunch + 0.08 * tel.bass);
-    const squash = clamp(tel.drumPunch * 0.12 + tel.drums * 0.07, 0, 0.18);
+    const bounceY = Math.abs(Math.sin(this.phase)) * (0.09 + 0.14 * tel.drumPunch + 0.08 * tel.bass) * vis.danceGain;
+    const squash = clamp((tel.drumPunch * 0.12 + tel.drums * 0.07) * vis.danceGain, 0, 0.22);
     this.bodyGroup.position.set(Math.sin(this.phase * 0.5) * 0.09 * hypeBoost, bounceY, 0);
     this.bodyGroup.scale.set(1 + squash * 0.65, 1 - squash * 0.5, 1 + squash * 0.65);
     this.bodyGroup.rotation.y = Math.sin(this.phase * 0.5) * 0.18 * hypeBoost;
@@ -1120,8 +1168,12 @@ export class Bear3DView {
     this.leftEar.rotation.z = 0.42 + earWig;
     this.rightEar.rotation.z = -0.42 - earWig;
     if (this.haloMesh) {
+      this.haloMesh.visible = vis.showHalo;
       this.haloMesh.position.y = 1.32 + Math.sin(t * 3.4) * 0.06;
       this.haloMesh.rotation.z = t * 1.1;
+    }
+    if (this.visorMesh) {
+      this.visorMesh.visible = vis.showVisor;
     }
 
     // Eyes react to drums (left) + bass (right) + blink squash
@@ -1139,21 +1191,24 @@ export class Bear3DView {
       this.rightPupil.scale.set(1 / Math.sqrt(rs), 1.05 / Math.sqrt(rs), 0.5);
     }
     if (this.visorMat) {
-      this.visorMat.opacity = 0.16 + 0.3 * tel.mix + (tel.isDrop ? 0.2 : 0);
+      this.visorMat.opacity = vis.showVisor ? 0.16 + 0.3 * tel.mix + (tel.isDrop ? 0.2 : 0) : 0;
     }
 
     // Spin mandala rings & orbiting LSD motes
     if (this.mandalaFloor) {
+      this.mandalaFloor.visible = vis.showHalo;
       this.mandalaFloor.rotation.y = t * 0.35;
       const ms = 1 + tel.bass * 0.12;
       this.mandalaFloor.scale.set(ms, 1, ms);
     }
     if (this.mandalaBack) {
+      this.mandalaBack.visible = vis.showHalo;
       this.mandalaBack.rotation.z = -t * 0.48;
       const bs = 1 + tel.mix * 0.18;
       this.mandalaBack.scale.set(bs, bs, 1);
     }
     if (this.moteRing) {
+      this.moteRing.visible = vis.showHalo;
       this.moteRing.rotation.y = t * 0.65;
       this.moteRing.position.y = 1.0 + Math.sin(t * 2.1) * 0.15;
     }
@@ -1164,7 +1219,7 @@ export class Bear3DView {
     const tract = m?.tract;
     const fb = fallbackMouthParams(tel.fallbackVowel, tel.fallbackAperture);
 
-    const ap = m?.active ? clamp(art!.aperture, 0, 1) : clamp(tel.fallbackAperture, 0, 1);
+    const ap = clamp((m?.active ? art!.aperture : tel.fallbackAperture) * vis.mouthGain, 0, 1);
     const widthNorm = m?.active ? clamp(art!.width, 0, 1) : fb.width;
     const roundNorm = m?.active ? clamp(art!.roundness, 0, 1) : fb.round;
     const jawNorm = m?.active ? clamp(art!.jawDrop, 0, 1) : fb.jaw;

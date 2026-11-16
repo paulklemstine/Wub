@@ -833,20 +833,327 @@
     /* --- HERO STAGE: Wub creature under transport, nebula below it --- */
     #hero-stages {
       display: grid;
-      grid-template-columns: 1fr;
-      gap: 16px;
-      margin-top: 16px;
+      grid-template-columns: minmax(290px, 1.0fr) minmax(360px, 1.38fr) minmax(300px, 1.12fr);
+      gap: 14px;
+      margin-top: 12px;
+      align-items: stretch;
+    }
+    @media (max-width: 1180px) {
+      #hero-stages {
+        grid-template-columns: 1fr;
+      }
     }
     #hero-stages .tamagotchi-card {
-      max-width: 480px;
       width: 100%;
-      justify-self: center;
     }
     #hero-stages canvas.stage {
       width: 100%;
       height: auto;
       background: #06070a;
       display: block;
+    }
+
+    /* --- PANEL TOGGLE DOCK & MINIMIZED DRAWERS --- */
+    .panel-minimized {
+      display: none !important;
+    }
+    .panel-dock {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      align-items: center;
+    }
+    .panel-dock-btn {
+      background: rgba(15, 21, 35, 0.92);
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #94a3b8;
+      font-family: monospace;
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 4px 8px;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: all 0.14s ease;
+    }
+    .panel-dock-btn:hover {
+      border-color: var(--neon-cyan);
+      color: #ffffff;
+    }
+    .panel-dock-btn.active {
+      background: linear-gradient(180deg, rgba(0, 229, 255, 0.25) 0%, rgba(155, 0, 255, 0.25) 100%);
+      border-color: var(--neon-cyan);
+      color: #e0f7ff;
+      box-shadow: 0 0 8px rgba(0, 229, 255, 0.32);
+    }
+    .panel-min-btn {
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid #334155;
+      border-radius: 3px;
+      color: #94a3b8;
+      font-family: monospace;
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 1px 6px;
+      cursor: pointer;
+    }
+    .panel-min-btn:hover {
+      border-color: var(--neon-cyan);
+      color: #ffffff;
+    }
+
+    /* --- BEAR 2.0 VISUAL CONTROL STRIP --- */
+    .bear-visual-strip {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #1e293b;
+    }
+    .bear-visual-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .bear-visual-sliders {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      font-family: monospace;
+      font-size: 0.66rem;
+      color: #94a3b8;
+    }
+    .bear-visual-sliders label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .bear-visual-sliders input[type="range"] {
+      flex: 1;
+      min-width: 0;
+      accent-color: var(--neon-pink);
+    }
+
+    /* --- DJ CONTROL SURFACE (HEART OF KG-505) --- */
+    .dj-surface-body {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      flex: 1;
+    }
+    .dj-transport-strip {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      background: #0a0f18;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .dj-transport-strip #transport {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+    }
+    .dj-stem-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .dj-stem-cell {
+      background: #0b101a;
+      border: 1px solid #242d3d;
+      border-radius: 6px;
+      padding: 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .dj-stem-title {
+      font-family: monospace;
+      font-size: 0.68rem;
+      font-weight: 800;
+      text-align: center;
+      letter-spacing: 0.06em;
+    }
+    .dj-stem-btns {
+      display: flex;
+      gap: 3px;
+    }
+    .dj-mini-btn {
+      flex: 1;
+      background: #161d2b;
+      border: 1px solid #334155;
+      border-radius: 3px;
+      color: #cbd5e1;
+      font-family: monospace;
+      font-size: 0.60rem;
+      font-weight: 800;
+      padding: 3px 2px;
+      cursor: pointer;
+    }
+    .dj-mini-btn:hover { border-color: #38bdf8; color: #fff; }
+    .dj-mini-btn.kill.active {
+      background: #dc2626;
+      border-color: #ff6b6b;
+      color: #fff;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+    }
+    .dj-mini-btn.echo.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+      box-shadow: 0 0 8px rgba(56, 189, 248, 0.65);
+    }
+    .dj-fx-rack {
+      background: #090d16;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .dj-fx-knobs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px 8px;
+      font-family: monospace;
+      font-size: 0.66rem;
+      color: #cbd5e1;
+    }
+    .dj-fx-knobs label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .dj-fx-knob-head {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 700;
+    }
+    .dj-fx-knob-head span:last-child { color: var(--neon-cyan); }
+    .dj-fx-knobs input[type="range"] {
+      width: 100%;
+      accent-color: var(--neon-cyan);
+    }
+    .dj-pad-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .dj-pad {
+      flex: 1 1 auto;
+      background: linear-gradient(180deg, #1d2536 0%, #101521 100%);
+      border: 1px solid #334155;
+      border-radius: 5px;
+      color: #e2e8f0;
+      font-family: monospace;
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 6px 6px;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.1s ease;
+    }
+    .dj-pad:hover { border-color: var(--neon-pink); color: #fff; }
+    .dj-pad.active {
+      background: linear-gradient(180deg, #ff0088 0%, #9b00ff 100%);
+      border-color: #ffea00;
+      color: #fff;
+      box-shadow: 0 0 12px rgba(255, 0, 150, 0.75);
+    }
+    .dj-pad.macro { border-color: #475569; color: #ffea00; }
+    .dj-pad.macro:hover { border-color: #ffea00; background: #1f2937; }
+
+    /* --- TRIPPY RAVE LIGHTSHOW OUTPUT PANEL --- */
+    .lightshow-body {
+      display: grid;
+      grid-template-columns: 1fr 124px;
+      gap: 8px;
+      padding: 8px;
+      flex: 1;
+      min-height: 320px;
+    }
+    @media (max-width: 640px) {
+      .lightshow-body {
+        grid-template-columns: 1fr;
+      }
+    }
+    .lightshow-stage-wrap {
+      position: relative;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #04010a;
+      border: 1px solid #2e1065;
+      min-height: 280px;
+    }
+    #lightshow-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .lightshow-side {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-family: monospace;
+      font-size: 0.64rem;
+      color: #cbd5e1;
+      overflow-y: auto;
+    }
+    .lightshow-preset-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 3px;
+    }
+    .lightshow-fx-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3px;
+    }
+    .lightshow-btn {
+      background: #131826;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #94a3b8;
+      font-family: monospace;
+      font-size: 0.61rem;
+      font-weight: 800;
+      padding: 4px 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .lightshow-btn:hover { border-color: var(--neon-cyan); color: #fff; }
+    .lightshow-btn.active {
+      background: linear-gradient(180deg, rgba(255, 0, 200, 0.38) 0%, rgba(0, 229, 255, 0.25) 100%);
+      border-color: #ff77e9;
+      color: #fff;
+      box-shadow: 0 0 8px rgba(255, 0, 200, 0.45);
+    }
+    .lightshow-sliders label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: 4px;
+    }
+    .lightshow-sliders input[type="range"] {
+      width: 100%;
+      accent-color: #ff00e6;
+    }
+    #panel-lightshow:fullscreen {
+      background: #000;
+      border: none;
+      width: 100vw;
+      height: 100vh;
+    }
+    #panel-lightshow:fullscreen .lightshow-body {
+      height: calc(100vh - 42px);
+      grid-template-columns: 1fr 150px;
     }
     /* --- STUDIO RACK VISUALIZERS --- */
     #stages {
@@ -2408,50 +2715,32 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.290 <span class="mc-build-num">#290</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.291 <span class="mc-build-num">#291</span></span>
       </div>
-      <div id="transport">
-        <button id="btn-play" type="button">Play</button>
-        <button id="btn-stop" type="button">Stop</button>
-        <button id="btn-song-mode" class="active" type="button" title="Toggle structured Song Mode (verse/chorus recall + progressions) vs Infinite DJ Morph">MODE: SONG</button>
-        <!-- BACKLIT MC-505 LCD MATRIX SCREEN -->
-        <div id="master" aria-label="Master controls">
-          <label>TEMPO
-            <input id="bpm-slider" type="range" min="80" max="175" step="1" value="96" />
-            <span id="bpm-value">96 BPM</span>
-          </label>
-          <label>KEY
-            <select id="key-select">
-              <option value="C" selected>C MAJOR</option>
-              <option value="G">G MAJOR</option>
-              <option value="D">D MAJOR</option>
-              <option value="A">A MAJOR</option>
-              <option value="E">E MAJOR</option>
-              <option value="B">B MAJOR</option>
-              <option value="F#">F# MAJOR</option>
-              <option value="F">F MAJOR</option>
-              <option value="Bb">Bb MAJOR</option>
-              <option value="Eb">Eb MAJOR</option>
-              <option value="Am">A MINOR</option>
-              <option value="Em">E MINOR</option>
-              <option value="Dm">D MINOR</option>
-            </select>
-          </label>
-        </div>
-        <label class="genre-label" for="mb-genre-select">GENRE</label>
-        <select id="mb-genre-select" multiple size="4" aria-label="MusicBrainz genre: ctrl/cmd+click to multi-select; none = all genres" title="MusicBrainz genres. Select one, several (Ctrl/Cmd+click), or none for all (default).">
-        </select>
+      <div id="panel-dock" class="panel-dock" role="toolbar" aria-label="Toggle Front Page Panels">
+        <button type="button" class="panel-dock-btn active" data-panel="panel-bear">WUB BEAR</button>
+        <button type="button" class="panel-dock-btn active" data-panel="panel-dj-surface">DJ SURFACE</button>
+        <button type="button" class="panel-dock-btn active" data-panel="panel-lightshow">LIGHT SHOW</button>
+        <button type="button" class="panel-dock-btn" data-panel="groovebox-panel">SEQUENCER</button>
+        <button type="button" class="panel-dock-btn" data-panel="trippy-sequencer-rack">MODULAR RACK</button>
+        <button type="button" class="panel-dock-btn" data-panel="structure-panel">ARRANGEMENT</button>
+        <button type="button" class="panel-dock-btn" data-panel="trip-panel">BG TRIP</button>
+        <button type="button" class="panel-dock-btn" data-panel="decks">STEM DECKS</button>
+        <button type="button" class="panel-dock-btn" data-panel="stages">WAVEFORMS</button>
+        <button type="button" class="panel-dock-btn" data-panel="singing-head-panel">VOCAL HEAD</button>
       </div>
-
     </header>
 
-  <!-- HERO STAGE: Wub creature right under transport, nebula below it -->
-  <section id="hero-stages" aria-label="Wub creature and nebula">
-    <!-- Panel 3: Neural ASCII Tamagotchi Avatar ("WubGotchi") -->
-    <div class="stage-card tamagotchi-card">
+  <!-- HERO STAGE: 1) Wub Creature 2.0 + Visual Controls, 2) DJ Control Surface + 4-Voice Nebula, 3) SuperAcid Rave Lightshow -->
+  <section id="hero-stages" aria-label="Wub Creature, DJ Control Surface, and Rave Lightshow">
+    <!-- HERO 1: WUB CREATURE 2.0 + BEAR VISUAL CONTROLS -->
+    <div id="panel-bear" class="stage-card tamagotchi-card">
       <div class="stage-header">
-        <span style="color: #ff77e9;">WUB</span>
-        <span id="tamagotchi-stage-badge">LVL 1 • GUMMI CUB</span>
+        <span style="color: #ff77e9;">WUB BEAR 2.0</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span id="tamagotchi-stage-badge">LVL 1 • GUMMI CUB</span>
+          <button type="button" class="panel-min-btn" data-panel-min="panel-bear" title="Minimize panel">–</button>
+        </div>
       </div>
       <div class="tamagotchi-container">
         <div class="tamagotchi-screen">
@@ -2474,19 +2763,194 @@
             <button id="btn-tamagotchi-3d" class="tamagotchi-btn" type="button" title="Toggle 2D / 3D Electro-Animatronic Camera View">3D CAM</button>
             <button id="btn-tamagotchi-cam" class="tamagotchi-btn" type="button" title="Cycle 3D Camera Angle" style="display: none;">CAM: 3/4 HERO</button>
           </div>
+          <div class="bear-visual-strip" aria-label="Wub Creature 2.0 Visual Controls">
+            <div class="bear-visual-toggles">
+              <button id="btn-bear-cage" class="tamagotchi-btn active" type="button">CAGE: ON</button>
+              <button id="btn-bear-visor" class="tamagotchi-btn active" type="button">VISOR: ON</button>
+              <button id="btn-bear-halo" class="tamagotchi-btn active" type="button">HALO: ON</button>
+              <button id="btn-bear-mouth-style" class="tamagotchi-btn" type="button">MOUTH: REAL</button>
+            </div>
+            <div class="bear-visual-sliders">
+              <label>DANCE <input id="bear-dance-slider" type="range" min="0.3" max="2.0" step="0.05" value="1.0" /><span id="bear-dance-val">100%</span></label>
+              <label>MOUTH <input id="bear-mouth-slider" type="range" min="0.6" max="1.8" step="0.05" value="1.0" /><span id="bear-mouth-val">100%</span></label>
+            </div>
+          </div>
         </div>
       </div>
     </div>
-    <div class="stage-card">
+
+    <!-- HERO 2: DJ CONTROL SURFACE (TRANSPORT + 4-VOICE NEBULA RETICLES + GROOVEBOX FX) -->
+    <div id="panel-dj-surface" class="stage-card">
       <div class="stage-header">
-        <span>TIMBRE NEBULA</span>
+        <span style="color: var(--neon-cyan);">DJ CONTROL SURFACE</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span>4-STEM NEBULA + FX</span>
+          <button type="button" class="panel-min-btn" data-panel-min="panel-dj-surface" title="Minimize panel">–</button>
+        </div>
       </div>
-      <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
+      <div class="dj-surface-body">
+        <div class="dj-transport-strip">
+          <div id="transport">
+            <button id="btn-play" type="button">Play</button>
+            <button id="btn-stop" type="button">Stop</button>
+            <button id="btn-song-mode" class="active" type="button" title="Toggle structured Song Mode vs Infinite DJ Morph">MODE: SONG</button>
+            <button id="btn-tap-tempo" type="button" title="Tap tempo to set BPM">TAP</button>
+            <button id="btn-bpm-half" type="button" title="Half BPM (0.5x)">×½</button>
+            <button id="btn-bpm-double" type="button" title="Double BPM (2x)">×2</button>
+            <div id="master" aria-label="Master controls">
+              <label>TEMPO
+                <input id="bpm-slider" type="range" min="80" max="175" step="1" value="96" />
+                <span id="bpm-value">96 BPM</span>
+              </label>
+              <label>KEY
+                <select id="key-select">
+                  <option value="C" selected>C MAJOR</option>
+                  <option value="G">G MAJOR</option>
+                  <option value="D">D MAJOR</option>
+                  <option value="A">A MAJOR</option>
+                  <option value="E">E MAJOR</option>
+                  <option value="B">B MAJOR</option>
+                  <option value="F#">F# MAJOR</option>
+                  <option value="F">F MAJOR</option>
+                  <option value="Bb">Bb MAJOR</option>
+                  <option value="Eb">Eb MAJOR</option>
+                  <option value="Am">A MINOR</option>
+                  <option value="Em">E MINOR</option>
+                  <option value="Dm">D MINOR</option>
+                </select>
+              </label>
+            </div>
+            <label class="genre-label" for="mb-genre-select">GENRE</label>
+            <select id="mb-genre-select" multiple size="2" aria-label="MusicBrainz genre: ctrl/cmd+click to multi-select; none = all genres" title="MusicBrainz genres. Select one, several (Ctrl/Cmd+click), or none for all (default)."></select>
+          </div>
+        </div>
+
+        <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
+
+        <!-- 4-Stem DJ Performance Strip: Kill / Echo / Morph -->
+        <div class="dj-stem-strip" aria-label="4-Stem DJ Controls">
+          <div class="dj-stem-cell" style="border-color: rgba(255, 60, 172, 0.4);">
+            <div class="dj-stem-title" style="color: #ff3cac;">DRUMS</div>
+            <div class="dj-stem-btns">
+              <button type="button" class="dj-mini-btn kill" data-dj-kill="drums">KILL</button>
+              <button type="button" class="dj-mini-btn echo" data-dj-echo="drums">ECHO</button>
+              <button type="button" class="dj-mini-btn" data-dj-morph="drums">MORPH</button>
+            </div>
+          </div>
+          <div class="dj-stem-cell" style="border-color: rgba(0, 229, 255, 0.4);">
+            <div class="dj-stem-title" style="color: #00e5ff;">BASS</div>
+            <div class="dj-stem-btns">
+              <button type="button" class="dj-mini-btn kill" data-dj-kill="bass">KILL</button>
+              <button type="button" class="dj-mini-btn echo" data-dj-echo="bass">ECHO</button>
+              <button type="button" class="dj-mini-btn" data-dj-morph="bass">MORPH</button>
+            </div>
+          </div>
+          <div class="dj-stem-cell" style="border-color: rgba(255, 196, 0, 0.4);">
+            <div class="dj-stem-title" style="color: #ffc400;">VOCALS</div>
+            <div class="dj-stem-btns">
+              <button type="button" class="dj-mini-btn kill" data-dj-kill="vocals">KILL</button>
+              <button type="button" class="dj-mini-btn echo" data-dj-echo="vocals">ECHO</button>
+              <button type="button" class="dj-mini-btn" data-dj-morph="vocals">MORPH</button>
+            </div>
+          </div>
+          <div class="dj-stem-cell" style="border-color: rgba(0, 255, 170, 0.4);">
+            <div class="dj-stem-title" style="color: #00ffaa;">OTHER</div>
+            <div class="dj-stem-btns">
+              <button type="button" class="dj-mini-btn kill" data-dj-kill="other">KILL</button>
+              <button type="button" class="dj-mini-btn echo" data-dj-echo="other">ECHO</button>
+              <button type="button" class="dj-mini-btn" data-dj-morph="other">MORPH</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Groovebox DJ Audio FX Rack -->
+        <div class="dj-fx-rack" aria-label="Groovebox Performance FX">
+          <div class="dj-fx-knobs">
+            <label>
+              <div class="dj-fx-knob-head"><span>FILTER LPF/HPF</span><span id="dj-filter-val">CENTER</span></div>
+              <input id="dj-filter-slider" type="range" min="-1" max="1" step="0.02" value="0" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>RESONANCE Q</span><span id="dj-filter-q-val">2.2</span></div>
+              <input id="dj-filter-q-slider" type="range" min="0.7" max="12" step="0.1" value="2.2" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>DUB ECHO</span><span id="dj-echo-val">0%</span></div>
+              <input id="dj-echo-slider" type="range" min="0" max="1" step="0.02" value="0" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>REVERB WASH</span><span id="dj-reverb-val">0%</span></div>
+              <input id="dj-reverb-slider" type="range" min="0" max="1" step="0.02" value="0" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>ACID 303</span><span id="dj-acid-val">0%</span></div>
+              <input id="dj-acid-slider" type="range" min="0" max="1" step="0.02" value="0" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>BIT CRUSH</span><span id="dj-crush-val">0%</span></div>
+              <input id="dj-crush-slider" type="range" min="0" max="1" step="0.02" value="0" />
+            </label>
+          </div>
+          <div class="dj-pad-grid">
+            <button type="button" class="dj-pad" data-dj-roll="1" title="Hold for 1/4 beat stutter roll (Q)">ROLL 1/4</button>
+            <button type="button" class="dj-pad" data-dj-roll="0.5" title="Hold for 1/8 beat stutter roll (W)">ROLL 1/8</button>
+            <button type="button" class="dj-pad" data-dj-roll="0.25" title="Hold for 1/16 beat stutter roll (E)">ROLL 1/16</button>
+            <button type="button" class="dj-pad" id="btn-dj-tapestop" title="Hold for Vinyl Tape-Stop Brake (T)">TAPE STOP</button>
+            <button type="button" class="dj-pad macro" id="btn-macro-buildup" title="Engage auto buildup tension">BUILDUP</button>
+            <button type="button" class="dj-pad macro" id="btn-macro-drop" title="Drop impact snap + strobe flash">DROP!</button>
+            <button type="button" class="dj-pad macro" id="btn-macro-break" title="Drums kill + lush dub reverb breakdown">BREAK</button>
+            <button type="button" class="dj-pad macro" id="btn-macro-reset" title="Reset all DJ performance FX">RESET FX</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HERO 3: TRIPPY RAVE LIGHTSHOW OUTPUT (SuperAcid + SpaceTubes) -->
+    <div id="panel-lightshow" class="stage-card lightshow-card">
+      <div class="stage-header">
+        <span style="color: #ffe600;">RAVE LIGHTSHOW</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <button id="btn-lightshow-fullscreen" class="panel-min-btn" type="button" title="Toggle Fullscreen Lightshow (F)">FULLSCREEN ⛶</button>
+          <button type="button" class="panel-min-btn" data-panel-min="panel-lightshow" title="Minimize panel">–</button>
+        </div>
+      </div>
+      <div class="lightshow-body">
+        <div class="lightshow-stage-wrap">
+          <canvas id="lightshow-canvas" width="640" height="400" aria-label="SuperAcid & SpaceTubes Rave Lightshow Output"></canvas>
+        </div>
+        <div class="lightshow-side" aria-label="Lightshow VJ Controls">
+          <button id="btn-ls-cortex" class="lightshow-btn active" type="button" title="Auto-rotate presets on song sections">CORTEX VJ: ON</button>
+          <div class="lightshow-preset-grid" id="ls-preset-btns">
+            <button type="button" class="lightshow-btn active" data-ls-preset="acid-warp">ACID WARP</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="breathing-mandala">DMT MANDALA</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="space-tubes">SPACETUBES</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="burning-julia">BURNING JULIA</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="cosmic-serpent">COSMIC SERPENT</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="color-organ">COLOR ORGAN</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="apollonian">APOLLONIAN</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="acid-smiley">ACID SMILEY</button>
+          </div>
+          <div class="lightshow-fx-grid">
+            <button type="button" class="lightshow-btn active" id="btn-ls-bloom">BLOOM</button>
+            <button type="button" class="lightshow-btn active" id="btn-ls-trails">TRAILS</button>
+            <button type="button" class="lightshow-btn active" id="btn-ls-chroma">CHROMA</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-glitch">GLITCH</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-kaleido">KALEID</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-strobe">STROBE</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-palette">PALETTE</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-blackout">BLACKOUT</button>
+          </div>
+          <div class="lightshow-sliders">
+            <label>GAIN <input id="ls-intensity-slider" type="range" min="0.3" max="2.2" step="0.05" value="1.25" /></label>
+            <label>SPEED <input id="ls-speed-slider" type="range" min="0.2" max="2.5" step="0.05" value="1.05" /></label>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
     <!-- MC-505 MULTI-PATTERN SEQUENCER PANEL -->
-    <section id="groovebox-panel" aria-label="Groovebox Sequencer">
+    <section id="groovebox-panel" class="panel-minimized" aria-label="Groovebox Sequencer">
       <div class="gb-header-row">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
           <span class="gb-title">SEQUENCER</span>
@@ -2560,7 +3024,7 @@
     </section>
 
     <!-- NEON TRIPPY MODULAR SEQUENCER RACK -->
-    <section id="trippy-sequencer-rack" class="trippy-rack-chassis" aria-label="Neon Modular Sequencer Rack">
+    <section id="trippy-sequencer-rack" class="trippy-rack-chassis panel-minimized" aria-label="Neon Modular Sequencer Rack">
       <!-- Top Rack Rails & Branding -->
       <div class="rack-ears">
         <span class="rack-bolt">✛</span>
@@ -2880,7 +3344,7 @@
     </section>
 
     <!-- SONG ARRANGEMENT & PATTERN MATRIX PANEL -->
-    <section id="structure-panel" aria-label="Song Structure and Patterns">
+    <section id="structure-panel" class="panel-minimized" aria-label="Song Structure and Patterns">
       <div class="struct-header">
         <div class="struct-title">
           <span class="struct-icon"></span>
@@ -3000,7 +3464,7 @@
     </section>
 
     <!-- PSYCHEDELIC LIGHT SHOW CONTROLLER -->
-    <section id="trip-panel" aria-label="Psychedelic Light Show Controller">
+    <section id="trip-panel" class="panel-minimized" aria-label="Psychedelic Light Show Controller">
       <div class="trip-header">
         <div class="trip-title">
           <span class="trip-led"></span>
@@ -3047,7 +3511,7 @@
     </section>
 
     <!-- 4-STEM HARDWARE MIXER DECKS -->
-    <section id="decks" aria-label="Stem decks">
+    <section id="decks" class="panel-minimized" aria-label="Stem decks">
       <div class="deck" id="deck-drums">
         <h2>Drums</h2>
         <div class="row toggles">
@@ -3123,7 +3587,7 @@
     </section>
 
     <!-- STUDIO RACK VISUALIZERS -->
-    <section id="stages" aria-label="Visualizers">
+    <section id="stages" class="panel-minimized" aria-label="Visualizers">
       <div class="stage-card">
         <div class="stage-header">
           <span>STEM WAVEFORMS</span>
@@ -3139,7 +3603,7 @@
     </section>
 
     <!-- NEURAL SINGING HEAD (BOTTOM STAGE) -->
-    <section id="singing-head-panel" class="stage-card" aria-label="Singing Head Vocal Articulator">
+    <section id="singing-head-panel" class="stage-card panel-minimized" aria-label="Singing Head Vocal Articulator">
       <div class="stage-header">
         <span style="color: var(--neon-cyan);">VOCAL ARTICULATOR</span>
         <span id="singing-head-status">STANDBY</span>
@@ -3180,7 +3644,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.290 (Build #290 • rev 67d024b7ae)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.291 (Build #291 • rev ee59c39299)</span>
     </div>
   </div>
 

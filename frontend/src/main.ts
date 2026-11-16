@@ -20,6 +20,7 @@ import { ClientGrooveboxConductor } from "./client_ml_sequencer";
 import { TamagotchiAvatar } from "./tamagotchi";
 import { SingingHeadPanel } from "./singing_head";
 import { TransitionProbe } from "./transition_probe";
+import { RaveLightshowPanel, type LightshowPresetId } from "./lightshow";
 
 export interface StemState {
   stem: StemName;
@@ -200,6 +201,9 @@ class WubApp {
   private ringsCtx: CanvasRenderingContext2D | null = null;
   private masterCtx: CanvasRenderingContext2D | null = null;
   private psychedelicBg: PsychedelicBackground | null = null;
+  private lightshow: RaveLightshowPanel | null = null;
+  private tapTimestamps: number[] = [];
+  private macroBuildupTimer: ReturnType<typeof setInterval> | null = null;
 
   private states: Record<StemName, StemState> = {
     drums: { stem: "drums", mute: false, solo: false, volume: 1, chaos: 0.1, synthBlend: 0.0 },
@@ -330,6 +334,8 @@ class WubApp {
     this.bindGrooveboxCycleControls();
     this.bindPlaybackModeControls();
     this.bindKitControls();
+    this.bindPanelDock();
+    this.initLightshowAndDjControls();
 
     // Initialize Autonomous In-Browser ML Sequencer
     try {
@@ -940,6 +946,399 @@ class WubApp {
         this.setStatus("NEXT KIT queued — bridge starts on the next 4-bar boundary.");
       });
     }
+  }
+
+  private bindPanelDock(): void {
+    const setPanelVisible = (panelId: string, visible: boolean) => {
+      const panel = document.getElementById(panelId);
+      if (!panel) return;
+      panel.classList.toggle("panel-minimized", !visible);
+      const dockBtn = document.querySelector<HTMLButtonElement>(`.panel-dock-btn[data-panel="${panelId}"]`);
+      if (dockBtn) {
+        dockBtn.classList.toggle("active", visible);
+        dockBtn.setAttribute("aria-pressed", String(visible));
+      }
+      if (visible) {
+        requestAnimationFrame(() => {
+          this.nebula?.resize();
+          window.dispatchEvent(new Event("resize"));
+        });
+      }
+    };
+
+    document.querySelectorAll<HTMLButtonElement>(".panel-dock-btn[data-panel]").forEach((btn) => {
+      const id = btn.dataset.panel;
+      if (!id) return;
+      const panel = document.getElementById(id);
+      if (panel) {
+        const isVis = !panel.classList.contains("panel-minimized");
+        btn.classList.toggle("active", isVis);
+        btn.setAttribute("aria-pressed", String(isVis));
+      }
+      btn.addEventListener("click", () => {
+        const target = document.getElementById(id);
+        if (!target) return;
+        const nextVis = target.classList.contains("panel-minimized");
+        setPanelVisible(id, nextVis);
+      });
+    });
+
+    document.querySelectorAll<HTMLButtonElement>("[data-panel-min]").forEach((btn) => {
+      const id = btn.dataset.panelMin;
+      if (!id) return;
+      btn.addEventListener("click", () => setPanelVisible(id, false));
+    });
+  }
+
+  private initLightshowAndDjControls(): void {
+    // 1. Trippy Rave Lightshow (SuperAcid + SpaceTubes)
+    const lsCanvas = document.getElementById("lightshow-canvas") as HTMLCanvasElement | null;
+    const presetBtns = document.querySelectorAll<HTMLButtonElement>("[data-ls-preset]");
+    const syncPresetBtns = (preset: LightshowPresetId) => {
+      presetBtns.forEach((b) => b.classList.toggle("active", b.dataset.lsPreset === preset));
+    };
+
+    if (lsCanvas) {
+      this.lightshow = new RaveLightshowPanel(lsCanvas, syncPresetBtns);
+      presetBtns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const p = btn.dataset.lsPreset as LightshowPresetId | undefined;
+          if (!p || !this.lightshow) return;
+          this.lightshow.setState({ preset: p });
+          syncPresetBtns(p);
+        });
+      });
+
+      const cortexBtn = document.getElementById("btn-ls-cortex");
+      if (cortexBtn) {
+        cortexBtn.addEventListener("click", () => {
+          if (!this.lightshow) return;
+          const next = !this.lightshow.getState().cortexAuto;
+          this.lightshow.setState({ cortexAuto: next });
+          cortexBtn.classList.toggle("active", next);
+          cortexBtn.textContent = `CORTEX VJ: ${next ? "ON" : "OFF"}`;
+        });
+      }
+
+      const wireLsBool = (
+        id: string,
+        key: "fxBloom" | "fxTrails" | "fxChroma" | "fxGlitch" | "fxKaleido" | "fxStrobe" | "blackout"
+      ) => {
+        const b = document.getElementById(id);
+        if (!b) return;
+        b.addEventListener("click", () => {
+          if (!this.lightshow) return;
+          const next = !this.lightshow.getState()[key];
+          this.lightshow.setState({ [key]: next });
+          b.classList.toggle("active", next);
+        });
+      };
+      wireLsBool("btn-ls-bloom", "fxBloom");
+      wireLsBool("btn-ls-trails", "fxTrails");
+      wireLsBool("btn-ls-chroma", "fxChroma");
+      wireLsBool("btn-ls-glitch", "fxGlitch");
+      wireLsBool("btn-ls-kaleido", "fxKaleido");
+      wireLsBool("btn-ls-strobe", "fxStrobe");
+      wireLsBool("btn-ls-blackout", "blackout");
+
+      document.getElementById("btn-ls-palette")?.addEventListener("click", () => {
+        if (!this.lightshow) return;
+        const cur = this.lightshow.getState().palette;
+        this.lightshow.setState({ palette: (cur + 1) % 4 });
+      });
+
+      const lsGain = document.getElementById("ls-intensity-slider") as HTMLInputElement | null;
+      lsGain?.addEventListener("input", () => {
+        this.lightshow?.setState({ intensity: Number(lsGain.value) || 1.25 });
+      });
+      const lsSpd = document.getElementById("ls-speed-slider") as HTMLInputElement | null;
+      lsSpd?.addEventListener("input", () => {
+        this.lightshow?.setState({ speed: Number(lsSpd.value) || 1.05 });
+      });
+    }
+
+    const lsPanel = document.getElementById("panel-lightshow");
+    const fsBtn = document.getElementById("btn-lightshow-fullscreen");
+    const toggleFullscreen = () => {
+      if (!lsPanel) return;
+      if (document.fullscreenElement === lsPanel) {
+        void document.exitFullscreen?.();
+      } else {
+        void lsPanel.requestFullscreen?.();
+      }
+    };
+    fsBtn?.addEventListener("click", toggleFullscreen);
+    document.addEventListener("fullscreenchange", () => {
+      if (fsBtn && lsPanel) {
+        fsBtn.textContent = document.fullscreenElement === lsPanel ? "EXIT ✕" : "FULLSCREEN ⛶";
+      }
+    });
+
+    // 2. DJ Control Surface Transport Helpers (Tap Tempo, 0.5x / 2x)
+    const applyBpmImmediate = (newBpm: number) => {
+      const clamped = Math.max(60, Math.min(200, Math.round(newBpm)));
+      this.bpm = clamped;
+      const s = document.getElementById("bpm-slider") as HTMLInputElement | null;
+      const v = document.getElementById("bpm-value");
+      if (s) s.value = String(Math.max(80, Math.min(175, clamped)));
+      if (v) v.textContent = `${clamped} BPM`;
+      localStorage.setItem("wub_bpm", String(clamped));
+      this.engine.setTargetBpm(clamped);
+      this.clientConductor?.setBpm(clamped);
+    };
+
+    document.getElementById("btn-tap-tempo")?.addEventListener("click", () => {
+      const now = performance.now();
+      if (this.tapTimestamps.length > 0 && now - this.tapTimestamps[this.tapTimestamps.length - 1] > 2200) {
+        this.tapTimestamps = [];
+      }
+      this.tapTimestamps.push(now);
+      if (this.tapTimestamps.length > 5) this.tapTimestamps.shift();
+      if (this.tapTimestamps.length >= 2) {
+        let sum = 0;
+        for (let i = 1; i < this.tapTimestamps.length; i++) {
+          sum += this.tapTimestamps[i] - this.tapTimestamps[i - 1];
+        }
+        const avgMs = sum / (this.tapTimestamps.length - 1);
+        if (avgMs > 250 && avgMs < 1500) {
+          applyBpmImmediate(60000 / avgMs);
+        }
+      }
+    });
+    document.getElementById("btn-bpm-half")?.addEventListener("click", () => applyBpmImmediate(this.bpm * 0.5));
+    document.getElementById("btn-bpm-double")?.addEventListener("click", () => applyBpmImmediate(this.bpm * 2.0));
+
+    // 3. Per-Stem DJ Strip (Kill / Echo Throw / Morph)
+    const killBtns = document.querySelectorAll<HTMLButtonElement>("[data-dj-kill]");
+    const syncKillBtns = () => {
+      killBtns.forEach((b) => {
+        const s = b.dataset.djKill as StemName | undefined;
+        if (s) b.classList.toggle("active", this.engine.isStemKilled(s));
+      });
+    };
+    killBtns.forEach((btn) => {
+      const stem = btn.dataset.djKill as StemName | undefined;
+      if (!stem) return;
+      btn.addEventListener("click", () => {
+        this.engine.setStemKill(stem, !this.engine.isStemKilled(stem));
+        syncKillBtns();
+      });
+    });
+
+    const echoThrowBtns = document.querySelectorAll<HTMLButtonElement>("[data-dj-echo]");
+    const syncEchoBtns = () => {
+      echoThrowBtns.forEach((b) => {
+        const s = b.dataset.djEcho as StemName | undefined;
+        if (s) b.classList.toggle("active", this.engine.isStemEchoThrow(s));
+      });
+    };
+    echoThrowBtns.forEach((btn) => {
+      const stem = btn.dataset.djEcho as StemName | undefined;
+      if (!stem) return;
+      btn.addEventListener("click", () => {
+        this.engine.setStemEchoThrow(stem, !this.engine.isStemEchoThrow(stem));
+        syncEchoBtns();
+      });
+    });
+
+    document.querySelectorAll<HTMLButtonElement>("[data-dj-morph]").forEach((btn) => {
+      const stem = btn.dataset.djMorph as StemName | undefined;
+      if (!stem) return;
+      btn.addEventListener("click", () => {
+        btn.classList.add("active");
+        setTimeout(() => btn.classList.remove("active"), 300);
+        const pts = this.clientConductor?.getKitNebulaPoints().filter((p) => p.stem === stem) ?? [];
+        if (pts.length > 0 && this.clientConductor) {
+          const pick = pts[Math.floor(Math.random() * pts.length)];
+          this.nebula?.setReticleTarget(stem, pick.x, pick.y, 0.25);
+          this.clientConductor.setReticleSteering(stem, pick.x, pick.y, true);
+        } else {
+          this.clientConductor?.rerollStem(stem);
+        }
+        this.setStatus(`⚡ Morphing ${stem.toUpperCase()} onto a fresh compatible groove...`);
+      });
+    });
+
+    // 4. Groovebox DJ Audio FX Knobs & Momentary Performance Pads
+    const filterSlider = document.getElementById("dj-filter-slider") as HTMLInputElement | null;
+    const filterVal = document.getElementById("dj-filter-val");
+    const filterQSlider = document.getElementById("dj-filter-q-slider") as HTMLInputElement | null;
+    const filterQVal = document.getElementById("dj-filter-q-val");
+    const echoSlider = document.getElementById("dj-echo-slider") as HTMLInputElement | null;
+    const echoVal = document.getElementById("dj-echo-val");
+    const reverbSlider = document.getElementById("dj-reverb-slider") as HTMLInputElement | null;
+    const reverbVal = document.getElementById("dj-reverb-val");
+    const acidSlider = document.getElementById("dj-acid-slider") as HTMLInputElement | null;
+    const acidVal = document.getElementById("dj-acid-val");
+    const crushSlider = document.getElementById("dj-crush-slider") as HTMLInputElement | null;
+    const crushVal = document.getElementById("dj-crush-val");
+
+    const syncDjFxUI = () => {
+      const st = this.engine.getDjFxState();
+      if (filterSlider) filterSlider.value = String(st.filterSweep);
+      if (filterVal) {
+        filterVal.textContent =
+          Math.abs(st.filterSweep) < 0.03
+            ? "CENTER"
+            : st.filterSweep < 0
+              ? `LPF ${Math.round(-st.filterSweep * 100)}%`
+              : `HPF ${Math.round(st.filterSweep * 100)}%`;
+      }
+      if (filterQSlider) filterQSlider.value = String(st.filterQ);
+      if (filterQVal) filterQVal.textContent = st.filterQ.toFixed(1);
+      if (echoSlider) echoSlider.value = String(st.dubEcho);
+      if (echoVal) echoVal.textContent = `${Math.round(st.dubEcho * 100)}%`;
+      if (reverbSlider) reverbSlider.value = String(st.reverbWash);
+      if (reverbVal) reverbVal.textContent = `${Math.round(st.reverbWash * 100)}%`;
+      if (acidSlider) acidSlider.value = String(st.acidDrive);
+      if (acidVal) acidVal.textContent = `${Math.round(st.acidDrive * 100)}%`;
+      if (crushSlider) crushSlider.value = String(st.crush);
+      if (crushVal) crushVal.textContent = `${Math.round(st.crush * 100)}%`;
+      syncKillBtns();
+      syncEchoBtns();
+    };
+
+    filterSlider?.addEventListener("input", () => {
+      this.engine.setDjFilter(Number(filterSlider.value));
+      syncDjFxUI();
+    });
+    filterSlider?.addEventListener("dblclick", () => {
+      this.engine.setDjFilter(0);
+      syncDjFxUI();
+    });
+    filterQSlider?.addEventListener("input", () => {
+      this.engine.setDjFilter(this.engine.getDjFxState().filterSweep, Number(filterQSlider.value));
+      syncDjFxUI();
+    });
+    echoSlider?.addEventListener("input", () => {
+      this.engine.setDjDubEcho(Number(echoSlider.value));
+      syncDjFxUI();
+    });
+    reverbSlider?.addEventListener("input", () => {
+      this.engine.setDjReverbWash(Number(reverbSlider.value));
+      syncDjFxUI();
+    });
+    acidSlider?.addEventListener("input", () => {
+      this.engine.setDjAcid(Number(acidSlider.value));
+      syncDjFxUI();
+    });
+    crushSlider?.addEventListener("input", () => {
+      this.engine.setDjCrush(Number(crushSlider.value));
+      syncDjFxUI();
+    });
+
+    const rollBtns = document.querySelectorAll<HTMLButtonElement>("[data-dj-roll]");
+    const engageRoll = (beats: number) => {
+      this.engine.setDjRoll(beats);
+      rollBtns.forEach((b) => b.classList.toggle("active", Number(b.dataset.djRoll) === beats && beats > 0));
+    };
+    rollBtns.forEach((btn) => {
+      const beats = Number(btn.dataset.djRoll || 0);
+      btn.addEventListener("pointerdown", () => engageRoll(beats));
+      const stopRoll = () => {
+        if (this.engine.getDjFxState().rollBeats === beats) engageRoll(0);
+      };
+      btn.addEventListener("pointerup", stopRoll);
+      btn.addEventListener("pointerleave", stopRoll);
+      btn.addEventListener("pointercancel", stopRoll);
+    });
+
+    const tapeBtn = document.getElementById("btn-dj-tapestop");
+    const setTape = (on: boolean) => {
+      this.engine.setDjTapeStop(on);
+      tapeBtn?.classList.toggle("active", on);
+    };
+    tapeBtn?.addEventListener("pointerdown", () => setTape(true));
+    tapeBtn?.addEventListener("pointerup", () => setTape(false));
+    tapeBtn?.addEventListener("pointerleave", () => setTape(false));
+    tapeBtn?.addEventListener("pointercancel", () => setTape(false));
+
+    // Scene Performance Macros
+    const clearBuildupTimer = () => {
+      if (this.macroBuildupTimer !== null) {
+        clearInterval(this.macroBuildupTimer);
+        this.macroBuildupTimer = null;
+      }
+    };
+    document.getElementById("btn-macro-buildup")?.addEventListener("click", () => {
+      clearBuildupTimer();
+      let p = 0;
+      this.macroBuildupTimer = setInterval(() => {
+        p = Math.min(1, p + 0.08);
+        this.engine.setDjFilter(p * 0.72, 4.5);
+        this.engine.setDjReverbWash(p * 0.65);
+        this.engine.setDjDubEcho(p * 0.45);
+        if (p > 0.72) engageRoll(0.5);
+        syncDjFxUI();
+        if (p >= 1) clearBuildupTimer();
+      }, 90);
+      this.setStatus("🔥 BUILDUP MACRO: HPF + Echo/Reverb rising...");
+    });
+    document.getElementById("btn-macro-drop")?.addEventListener("click", () => {
+      clearBuildupTimer();
+      this.engine.resetDjFx();
+      engageRoll(0);
+      setTape(false);
+      this.lightshow?.pulseStrobeBriefly(360);
+      syncDjFxUI();
+      this.setStatus("⚡ DROP IMPACT: Full frequency slam!");
+    });
+    document.getElementById("btn-macro-break")?.addEventListener("click", () => {
+      clearBuildupTimer();
+      this.engine.setStemKill("drums", true);
+      this.engine.setDjFilter(-0.22, 2.8);
+      this.engine.setDjDubEcho(0.68);
+      this.engine.setDjReverbWash(0.75);
+      syncDjFxUI();
+      this.setStatus("🌌 BREAKDOWN SPACE: Drums killed + Dub/Reverb wash");
+    });
+    document.getElementById("btn-macro-reset")?.addEventListener("click", () => {
+      clearBuildupTimer();
+      this.engine.resetDjFx();
+      engageRoll(0);
+      setTape(false);
+      syncDjFxUI();
+      this.setStatus("DJ FX reset cleanly.");
+    });
+
+    // Keyboard Hotkeys (Space=Play/Stop, Q/W/E=Rolls, T=TapeStop, 1-4=Stem Kills, F=Fullscreen)
+    const isTypingTarget = (ev: KeyboardEvent): boolean => {
+      const t = ev.target as HTMLElement | null;
+      if (!t) return false;
+      const tag = t.tagName;
+      return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+    };
+    window.addEventListener("keydown", (ev) => {
+      if (isTypingTarget(ev) || ev.repeat) return;
+      const k = ev.key.toLowerCase();
+      if (ev.code === "Space") {
+        ev.preventDefault();
+        if (this.playing) void this.stop();
+        else void this.play();
+      } else if (k === "q") {
+        engageRoll(1);
+      } else if (k === "w") {
+        engageRoll(0.5);
+      } else if (k === "e") {
+        engageRoll(0.25);
+      } else if (k === "t") {
+        setTape(true);
+      } else if (k === "f") {
+        toggleFullscreen();
+      } else if (k === "1" || k === "2" || k === "3" || k === "4") {
+        const stem = STEMS[Number(k) - 1];
+        this.engine.setStemKill(stem, !this.engine.isStemKilled(stem));
+        syncKillBtns();
+      }
+    });
+    window.addEventListener("keyup", (ev) => {
+      const k = ev.key.toLowerCase();
+      if (k === "q" || k === "w" || k === "e") {
+        engageRoll(0);
+      } else if (k === "t") {
+        setTape(false);
+      }
+    });
   }
 
   /** MusicBrainz genre multi-select next to the style select.  Options come
@@ -1823,6 +2222,27 @@ class WubApp {
         midLevel: combinedMid,
         trebleLevel: combinedTreble,
         masterLevel: masterLvl,
+      });
+    }
+
+    if (this.lightshow !== null) {
+      const drumsLvl = this.analyserLevel("drums");
+      const bassLvl = this.analyserLevel("bass");
+      const vocalsLvl = this.analyserLevel("vocals");
+      const otherLvl = this.analyserLevel("other");
+      const mixLvl = Math.max(drumsLvl, bassLvl, vocalsLvl, otherLvl);
+      const glue = this.engine.glueState();
+      this.lightshow.render({
+        timeSec: t,
+        bpm: this.bpm,
+        section: this.lastGrooveboxMeta?.section ?? "GROOVE_A",
+        drums: drumsLvl,
+        bass: bassLvl,
+        other: otherLvl,
+        vocals: vocalsLvl,
+        mix: mixLvl,
+        drumPunch: glue.drumTransient ? 1.0 : drumsLvl * 0.6,
+        freqBins: this.masterFreqScratch,
       });
     }
 
