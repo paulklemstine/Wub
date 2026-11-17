@@ -45,25 +45,27 @@ export interface GummiLoopVertex {
 }
 
 /**
- * Builds the smooth closed Catmull-Rom parametric loop for the floating circular
- * Wub Bear head contour (body outline removed: round cheeks, bear ears, curved chin).
+ * Builds the smooth closed Catmull-Rom parametric loop for the floating kawaii
+ * HEART head of the Wub Creature (two round top lobes, a soft central notch and
+ * a tapered bottom point — no ears, no circular orb).
  * Outward unit normals are precomputed for seamless audio-reactive wave displacement.
  */
-function buildGummiBearPoints(): GummiLoopVertex[] {
+function buildGummiHeartPoints(): GummiLoopVertex[] {
   const halfPts: [number, number][] = [
-    [0.0, -42.0],     // 0: top head center dip
-    [13.0, -43.5],    // 1: top head slope
-    [22.0, -45.5],    // 2: inner ear base
-    [28.5, -58.5],    // 3: inner ear curve
-    [38.5, -60.5],    // 4: ear peak
-    [46.5, -51.5],    // 5: ear outer round
-    [43.0, -37.5],    // 6: outer ear base
-    [47.0, -23.0],    // 7: upper temple
-    [50.0, -5.0],     // 8: round cheek outer edge
-    [47.0, 14.0],     // 9: lower cheek round
-    [37.0, 30.0],     // 10: lower jaw curve
-    [21.0, 41.0],     // 11: chin side
-    [0.0, 45.0],      // 12: circular chin center
+    [0.0, -34.0],     // 0: soft central heart notch (top dip)
+    [11.0, -40.0],    // 1: notch shoulder
+    [21.0, -47.5],    // 2: inner lobe swell
+    [31.0, -52.0],    // 3: left lobe crown
+    [41.0, -49.5],    // 4: outer lobe round
+    [48.0, -40.0],    // 5: upper heart side
+    [51.0, -28.0],    // 6: widest cheek line
+    [50.0, -14.0],    // 7: cheek
+    [46.0, 0.0],      // 8: lower cheek
+    [39.5, 14.0],     // 9: jaw taper
+    [30.5, 27.5],     // 10: chin taper
+    [19.5, 39.0],     // 11: lower point slope
+    [9.5, 47.5],      // 12: tip shoulder
+    [0.0, 52.0],      // 13: rounded bottom heart point
   ];
 
   const leftPts: [number, number][] = [];
@@ -105,7 +107,7 @@ function buildGummiBearPoints(): GummiLoopVertex[] {
   return result;
 }
 
-const GUMMI_BEAR_LOOP_POINTS: GummiLoopVertex[] = buildGummiBearPoints();
+const GUMMI_HEART_LOOP_POINTS: GummiLoopVertex[] = buildGummiHeartPoints();
 
 export type VocalTimbre =
   | "SOULFUL"   // Warm rich diva / house / chest singing
@@ -1227,7 +1229,7 @@ export class TamagotchiAvatar {
       0.40 + env.other * 1.55 + punch.other * 2.0 + mixPunch * 0.35
     )) % 1;
 
-    // Center coordinates with beat bobbing for the floating circle head
+    // Center coordinates with beat bobbing for the floating kawaii heart head
     const cx = w * 0.5;
     const bobOffset = (bob ? 3.5 : 0.0) + 2.4 * mixPunch;
     const cy = h * 0.54 + bobOffset;
@@ -1257,13 +1259,16 @@ export class TamagotchiAvatar {
     }
 
     // -------------------------------------------------------------------------
-    // 1. KAWAII GUMMI BEAR DYNAMICS (SQUISH & STRETCH BOUNCE)
+    // 1. KAWAII HEART DYNAMICS (SQUISH, STRETCH & LUB-DUB BEAT THUMP)
     // -------------------------------------------------------------------------
     const vis = this.visualConfig;
     const drumSquish = Math.min(1.4, env.drums * 1.15 * vis.danceGain);
     const squishY = 1.0 - 0.06 * drumSquish - 0.025 * mixPunch * vis.danceGain + (bob ? -0.02 * vis.danceGain : 0.015);
     const squishX = 1.0 + 0.06 * drumSquish + 0.025 * mixPunch * vis.danceGain - (bob ? -0.02 * vis.danceGain : 0.015);
-    const baseScale = (1.34 + 0.02 * this.stage) * (1.0 + 0.025 * mixEnv);
+    // Real heartbeat thump: pads/chords drive heartBeatPhase, and the whole
+    // heart swells on the systole then relaxes, so it reads as a living heart.
+    const beatThump = Math.pow(Math.max(0, Math.sin(this.heartBeatPhase * Math.PI * 2)), 6);
+    const baseScale = (1.34 + 0.02 * this.stage) * (1.0 + 0.025 * mixEnv) * (1.0 + 0.045 * beatThump);
     const scaleX = baseScale * squishX;
     const scaleY = baseScale * squishY;
 
@@ -1310,13 +1315,13 @@ export class TamagotchiAvatar {
 
 
     // -------------------------------------------------------------------------
-    // 2. THE AUDIO REACTIVE RING LOOP (CREATURE ROUND ORB OUTLINE & WHOLE GUMMI BEAR BODY)
+    // 2. THE AUDIO REACTIVE KAWAII HEART LOOP (HEART OUTLINE, NO EARS)
     // -------------------------------------------------------------------------
-    const N = GUMMI_BEAR_LOOP_POINTS.length;
+    const N = GUMMI_HEART_LOOP_POINTS.length;
     const displacedPoints: { x: number; y: number }[] = new Array(N);
 
     for (let i = 0; i < N; i++) {
-      const pt = GUMMI_BEAR_LOOP_POINTS[i];
+      const pt = GUMMI_HEART_LOOP_POINTS[i];
 
       // Full-mix body shaping: a short smoothed window of the master waveform
       // literally pushes the silhouette in and out with the summed four stems.
@@ -1394,7 +1399,7 @@ export class TamagotchiAvatar {
     ctx.lineJoin = "round";
     ctx.beginPath();
     for (let i = 0; i < N; i++) {
-      const pt = GUMMI_BEAR_LOOP_POINTS[i];
+      const pt = GUMMI_HEART_LOOP_POINTS[i];
       const p = displacedPoints[i];
       const auraDist = 3.2;
       const ax = p.x + pt.nx * auraDist;
@@ -1411,7 +1416,7 @@ export class TamagotchiAvatar {
     ctx.globalAlpha = 0.30 + 0.45 * mixEnv + 0.10 * mixPunch;
     ctx.stroke();
 
-    // 2C. Main Radiant Gummi Bear Perimeter (Neon Bloom Pass)
+    // 2C. Main Radiant Kawaii Heart Perimeter (Neon Bloom Pass)
     ctx.beginPath();
     for (let i = 0; i < N; i++) {
       const p = displacedPoints[i];
@@ -1437,53 +1442,40 @@ export class TamagotchiAvatar {
     ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 3. CUTE INNER EAR CUSHIONS (AUDIO REACTIVE WIGGLE)
+    // 3. KAWAII HEART LOBE GEL CUSHIONS (AUDIO REACTIVE VOCAL SHIMMER)
     // -------------------------------------------------------------------------
     ctx.save();
     const vocalPulse = 1 + 0.20 * Math.min(1.4, env.vocals * 1.5) + 0.10 * punch.vocals;
-    const earPadW = 6.8 * baseScale * vocalPulse;
-    const earPadH = 8.0 * baseScale * vocalPulse;
-    const earWiggle = Math.sin(t * 14.0) * (env.vocals * 2.8 + punch.vocals * 1.5);
+    const lobeW = 14.0 * baseScale * vocalPulse;
+    const lobeH = 11.5 * baseScale * vocalPulse;
+    const lobeSway = Math.sin(t * 6.2) * (env.vocals * 1.4 + punch.vocals * 0.8);
 
-    // Left Inner Ear Pad
-    ctx.save();
-    ctx.translate(cx - 32 * scaleX, cy - 48 * scaleY + earWiggle);
-    ctx.rotate(-0.25);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, earPadW, earPadH, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 160, 210, 0.55)";
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = "#ff77e9";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255, 230, 245, 0.75)";
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
-    ctx.restore();
-
-    // Right Inner Ear Pad
-    ctx.save();
-    ctx.translate(cx + 32 * scaleX, cy - 48 * scaleY - earWiggle);
-    ctx.rotate(0.25);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, earPadW, earPadH, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 160, 210, 0.55)";
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = "#ff77e9";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255, 230, 245, 0.75)";
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
-    ctx.restore();
+    // Soft candy-gel shine sitting inside each round heart lobe.
+    for (const side of [-1, 1]) {
+      const lx = cx + side * 26 * scaleX;
+      const ly = cy - 40 * scaleY + lobeSway * side;
+      const lobeGrad = ctx.createRadialGradient(
+        lx - lobeW * 0.25, ly - lobeH * 0.35, 1,
+        lx, ly, lobeW
+      );
+      lobeGrad.addColorStop(0.0, `rgba(255, 245, 252, ${0.34 + 0.32 * mixEnv})`);
+      lobeGrad.addColorStop(0.55, `rgba(255, 150, 220, ${0.16 + 0.24 * env.vocals})`);
+      lobeGrad.addColorStop(1.0, "rgba(255, 90, 190, 0)");
+      ctx.fillStyle = lobeGrad;
+      ctx.beginPath();
+      ctx.ellipse(lx, ly, lobeW, lobeH, side * -0.28, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 4. KAWAII EAR RIBBON BOW (HEAD ACCESSORY, NO BODY)
+    // 4. KAWAII LOBE RIBBON BOW (HEART ACCESSORY, NO BODY)
     // -------------------------------------------------------------------------
     if (vis.showBikini) {
       ctx.save();
       const bikTrim = "#00f6ff";
-      const bx = cx + 38 * scaleX;
-      const by = cy - 54 * scaleY;
+      const bx = cx + 35 * scaleX;
+      const by = cy - 51 * scaleY;
       const bw = 7.4 * baseScale;
       const bh = 4.5 * baseScale;
       ctx.translate(bx, by);
@@ -1514,7 +1506,7 @@ export class TamagotchiAvatar {
       ctx.restore();
     }
 
-    // 5. Floating rave motes orbiting the circle head (full-mix shimmer).
+    // 5. Floating rave motes orbiting the kawaii heart head (full-mix shimmer).
     ctx.save();
     for (let k = 0; k < 7; k++) {
       const a = t * (0.36 + k * 0.04) + k * (Math.PI * 2 / 7);
@@ -1541,22 +1533,41 @@ export class TamagotchiAvatar {
     ctx.lineWidth = 2.2;
     ctx.lineCap = "round";
 
-    // Forehead shine arc
+    // Twin heart-lobe shine arcs (the classic kawaii glossy heart highlight)
     ctx.beginPath();
-    ctx.arc(cx - 12 * scaleX, cy - 28 * scaleY, 14 * scaleX, 1.15 * Math.PI, 1.65 * Math.PI);
+    ctx.arc(cx - 27 * scaleX, cy - 40 * scaleY, 9 * scaleX, 1.12 * Math.PI, 1.68 * Math.PI);
     ctx.stroke();
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.arc(cx + 25 * scaleX, cy - 40 * scaleY, 6.5 * scaleX, 1.18 * Math.PI, 1.72 * Math.PI);
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+    ctx.lineWidth = 2.2;
 
-    // Ear gloss dots
+    // Lobe crown gloss dots
     ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
     ctx.beginPath();
-    ctx.arc(cx - 36 * scaleX, cy - 53 * scaleY, 2.2, 0, Math.PI * 2);
-    ctx.arc(cx + 36 * scaleX, cy - 53 * scaleY, 2.2, 0, Math.PI * 2);
+    ctx.arc(cx - 36 * scaleX, cy - 47 * scaleY, 2.2, 0, Math.PI * 2);
+    ctx.arc(cx + 36 * scaleX, cy - 47 * scaleY, 2.2, 0, Math.PI * 2);
     ctx.fill();
 
     // Chubby cheek gloss pills
     ctx.beginPath();
     ctx.arc(cx - 34 * scaleX, cy - 6 * scaleY, 2.0, 0, Math.PI * 2);
     ctx.arc(cx + 34 * scaleX, cy - 6 * scaleY, 2.0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Soft inner cleft shimmer at the top notch of the heart
+    const cleftGrad = ctx.createRadialGradient(
+      cx, cy - 33 * scaleY, 0.5,
+      cx, cy - 33 * scaleY, 9 * baseScale
+    );
+    cleftGrad.addColorStop(0.0, `rgba(255, 255, 255, ${0.22 + 0.34 * mixEnv})`);
+    cleftGrad.addColorStop(1.0, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = cleftGrad;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - 33 * scaleY, 9 * baseScale, 4.5 * baseScale, 0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.restore();

@@ -78,21 +78,27 @@ def test_tamagotchi_live_vocal_waveform_mouth():
     assert ".rave-mouth" in html_content
 
 
-def test_tamagotchi_round_orb_creature():
-    """Verify that the wub creature has a round orb outline instead of ears."""
+def test_tamagotchi_kawaii_heart_creature():
+    """Verify that the wub creature head is an audio-reactive kawaii heart (no round orb, no ears)."""
     tg_path = Path("frontend/src/tamagotchi.ts")
     assert tg_path.exists(), "frontend/src/tamagotchi.ts must exist"
     content = tg_path.read_text(encoding="utf-8")
 
-    # Round Orb stages and outline
+    # Heart-shaped stage progression and contour builder
     assert "RAVE ORB" in content
     assert "DISCO ORB" in content
     assert "CYBER ORB" in content
     assert "ASTRAL ORB" in content
-    assert "CREATURE ROUND ORB OUTLINE" in content
+    assert "KAWAII HEART LOOP" in content
+    assert "buildGummiHeartPoints" in content
+    assert "GUMMI_HEART_LOOP_POINTS" in content
+    # Live lub-dub heartbeat thump driven by the four-stem mix
+    assert "beatThump" in content
+    assert "heartBeatPhase" in content
     assert "rave-orb" in content
 
-    # Cat ears replaced
+    # Bear ears are gone for good
+    assert "INNER EAR CUSHIONS" not in content
     assert "leftEarPeak" not in content
     assert "rightEarPeak" not in content
     assert "foreheadDip" not in content
