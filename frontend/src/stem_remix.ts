@@ -14,7 +14,6 @@ import {
   concatStereoRun,
   isContiguousFullPhrase,
   mixToMono,
-  splitChannels,
   type SliceSpec,
 } from "./kit_pcm";
 import type { StemName } from "./types";
@@ -414,8 +413,7 @@ class KitAudioWorkerLoader {
       worker.onmessage = (ev: MessageEvent) => this.onMessage(ev);
       worker.onerror = () => {
         console.warn("[StemRemix] kit audio worker error; main-thread decode from here");
-        this.ok = false;
-        this.failAll();
+        this.dispose();
       };
       worker.postMessage({ type: "init", sampleRate });
       this.worker = worker;
@@ -493,6 +491,7 @@ class KitAudioWorkerLoader {
         }
       }
       pending.resolve(null);
+      if (!this.ok) this.dispose();
     }
   }
 
@@ -504,6 +503,18 @@ class KitAudioWorkerLoader {
     this.pending.clear();
   }
 
+  /** Warm decoded phrases without concatenating or transferring PCM. */
+  warm(items: WorkerRunItem[]): boolean {
+    if (!this.ok || !this.worker) return false;
+    try {
+      this.worker.postMessage({ type: "warm", items });
+      return true;
+    } catch {
+      this.dispose();
+      return false;
+    }
+  }
+
   load(items: WorkerRunItem[], slices?: SliceSpec[], crossfadeMs?: number): Promise<LoadedStemRun | null> {
     if (!this.ok || !this.worker) return Promise.resolve(null);
     return new Promise<LoadedStemRun | null>((resolve) => {
@@ -511,7 +522,7 @@ class KitAudioWorkerLoader {
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) {
           console.warn("[StemRemix] kit audio worker load timed out; main-thread decode from here");
-          this.ok = false;
+          this.dispose();
           resolve(null);
         }
       }, 5000);
@@ -2361,15 +2372,14 @@ export class StemRemixPlayer {
       const when = this.nextBlockAt;
       const { result, tasks } = this.beginBlock(when, section);
       this.lastResult = result;
-      // One block of prefetch lead is handled by begin/finish above; also
-      // warm the NEXT-next block's most likely phrases (same-track run
-      // continuations) so a cache-miss on a subsequent boundary (parallel
-      // fetch + decode on the main thread) cannot stall the downbeat.
-      // Fire-and-forget; loadAudio failures warm-nothing (run fails later).
-      void this.prefetchAhead(tasks);
+      // One block of prefetch lead is handled by begin/finish above.
+      // Warm successors only after the boundary-critical loads have finished.
+      // Use the playback cache, without assembling/transferring unused runs.
       this.preparing = true;
       this.preparingBlock = { startAt: when, bars: result.blockBars };
-      void this.finishBlock(tasks, when).finally(() => {
+      void this.finishBlock(tasks, when).then(() => {
+        void this.prefetchAhead(tasks);
+      }).finally(() => {
         this.preparing = false;
         this.preparingBlock = null;
       });
@@ -2394,9 +2404,12 @@ export class StemRemixPlayer {
         const key = `${next.phrase.id}:${next.stem}`;
         if (!seen.has(key)) {
           seen.add(key);
-          void this.loadAudio(next).catch(() => {
-            // Warming only; a failed warm leaves the normal load path.
-          });
+          const item = this.workerItem(next);
+          if (!item || !this.audioWorker.warm([item])) {
+            await this.loadAudio(next).catch(() => {
+              // Warming only; a failed warm leaves the normal load path.
+            });
+          }
         }
         entry = next;
       }
@@ -3102,6 +3115,7 @@ export class StemRemixPlayer {
   } | null {
     const ranker = this.jointRanker;
     if (!ranker?.ready) return null;
+    ranker.beginBatch();
     const nextBlockBars = phrases * 4;
     const threshold = ranker.thresholdFor(nextBlockBars);
     const budget = movementBudgetAt(startBar, nextBlockBars);
@@ -4051,7 +4065,18 @@ export class StemRemixPlayer {
     return `${entry.phrase.id}:${entry.stem}`;
   }
 
-  private async loadAudio(entry: StemPoolEntry): Promise<LoadedStemAudio> {
+  private readonly audioLoads = new Map<string, Promise<LoadedStemAudio>>();
+
+  private loadAudio(entry: StemPoolEntry): Promise<LoadedStemAudio> {
+    const key = this.cacheKey(entry);
+    const pending = this.audioLoads.get(key);
+    if (pending) return pending;
+    const load = this.loadAudioUncached(entry).finally(() => this.audioLoads.delete(key));
+    this.audioLoads.set(key, load);
+    return load;
+  }
+
+  private async loadAudioUncached(entry: StemPoolEntry): Promise<LoadedStemAudio> {
     const key = this.cacheKey(entry);
     const cached = this.cache.get(key);
     if (cached) {
@@ -4061,13 +4086,13 @@ export class StemRemixPlayer {
     }
     const asset = entry.phrase.stems?.[entry.stem];
     if (!asset) throw new Error("missing stem asset");
-    const mainRes = await fetch(`${this.baseUrl}/${asset.file}`);
+    const mainRes = await fetch(`${this.baseUrl}/${asset.file}`, { signal: AbortSignal.timeout(5000) });
     if (!mainRes.ok) throw new Error(`stem ${mainRes.status} ${asset.file}`);
     const main = await this.engine.decodeAudio(await mainRes.arrayBuffer());
     let pre: AudioBuffer | null = null;
     if (asset.pre_roll?.file) {
       try {
-        const preRes = await fetch(`${this.baseUrl}/${asset.pre_roll.file}`);
+        const preRes = await fetch(`${this.baseUrl}/${asset.pre_roll.file}`, { signal: AbortSignal.timeout(1500) });
         if (preRes.ok) pre = await this.engine.decodeAudio(await preRes.arrayBuffer());
       } catch {
         // A missing tail must not block the phrase.
@@ -4086,6 +4111,18 @@ export class StemRemixPlayer {
     return loaded;
   }
 
+  private workerItem(entry: StemPoolEntry): WorkerRunItem | null {
+    const asset = entry.phrase.stems?.[entry.stem];
+    if (!asset?.file) return null;
+    return {
+      key: this.cacheKey(entry),
+      url: new URL(`${this.baseUrl}/${asset.file}`, document.baseURI).toString(),
+      preUrl: asset.pre_roll?.file
+        ? new URL(`${this.baseUrl}/${asset.pre_roll.file}`, document.baseURI).toString()
+        : null,
+    };
+  }
+
   /** Decode every phrase in a run: worker first, main-thread fallback. */
   private async loadRunAudio(
     run: readonly StemPoolEntry[],
@@ -4095,20 +4132,12 @@ export class StemRemixPlayer {
     if (this.audioWorker.ok) {
       const items: WorkerRunItem[] = [];
       for (const entry of run) {
-        const asset = entry.phrase.stems?.[entry.stem];
-        if (!asset?.file) {
-          // Same semantics as the old throw path: a missing asset fails the
-          // run before any worker round-trip.
+        const item = this.workerItem(entry);
+        if (!item) {
           this.failedKits.add(entry.kit.track_id);
           return null;
         }
-        items.push({
-          key: this.cacheKey(entry),
-          url: new URL(`${this.baseUrl}/${asset.file}`, document.baseURI).toString(),
-          preUrl: asset.pre_roll?.file
-            ? new URL(`${this.baseUrl}/${asset.pre_roll.file}`, document.baseURI).toString()
-            : null,
-        });
+        items.push(item);
       }
       const loaded = await this.audioWorker.load(items, slices, crossfadeMs);
       if (loaded) return loaded;
@@ -4120,6 +4149,8 @@ export class StemRemixPlayer {
     }
     return this.loadRunAudioMain(run, slices, crossfadeMs);
   }
+
+  private pcmAssembly: Promise<unknown> = Promise.resolve();
 
   /** Main-thread fallback: fetch + decode through the audio cache, then
    *  concat or slice-assemble into one PCM run (the pre-worker path, kept for coverage). */
@@ -4140,12 +4171,22 @@ export class StemRemixPlayer {
     if (audios.some((audio) => audio === null)) return null;
     const loaded = audios as LoadedStemAudio[];
     const sampleRate = loaded[0]?.main.sampleRate ?? ENGINE_SAMPLE_RATE;
-    const pairs = loaded.map((audio) => splitChannels(audio.main));
-    const prePair = loaded[0]?.pre ? splitChannels(loaded[0].pre) : null;
-    if (slices && slices.length > 0) {
-      return assembleSlicedStereoRun(pairs, prePair, slices, sampleRate, crossfadeMs);
-    }
-    return concatStereoRun(pairs, prePair, sampleRate);
+    const assembly = this.pcmAssembly.catch(() => {}).then(async () => {
+      await yieldToMain();
+      // These helpers only read channels; concat owns the outgoing buffers.
+      const channels = (buffer: AudioBuffer): [Float32Array, Float32Array] => [
+        buffer.getChannelData(0),
+        buffer.getChannelData(buffer.numberOfChannels > 1 ? 1 : 0),
+      ];
+      const pairs = loaded.map((audio) => channels(audio.main));
+      const prePair = loaded[0]?.pre ? channels(loaded[0].pre) : null;
+      if (slices && slices.length > 0) {
+        return assembleSlicedStereoRun(pairs, prePair, slices, sampleRate, crossfadeMs);
+      }
+      return concatStereoRun(pairs, prePair, sampleRate);
+    });
+    this.pcmAssembly = assembly;
+    return assembly;
   }
 
   /** Two reusable voices per stem: one playing, one being prepared. */
@@ -4193,7 +4234,7 @@ export class StemRemixPlayer {
     try {
       const previous = this.current[stem];
       const voice = await this.getVoice(stem, previous?.voice);
-      await voice.loadSamples(audio.samples);
+      await voice.loadSamples(audio.samples, true);
       const preDur = audio.preDur;
       const rate = this.effectiveEntryRate(first);
       // Normal scheduling: the pre-roll starts preDur/rate before the
@@ -4412,7 +4453,7 @@ export class StemRemixPlayer {
       const previous = this.current[stem];
       const voice = await this.getVoice(stem, previous?.voice);
       const rate = this.effectiveEntryRate(runEntry);
-      await voice.loadSamples(audio.samples);
+      await voice.loadSamples(audio.samples, true);
       const preDur = audio.preDur;
       const crossfadeSec = Math.max(0.02, STEM_FADE_IN[stem], preDur / rate);
       let startAt = at;

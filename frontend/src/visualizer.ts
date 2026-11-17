@@ -41,7 +41,7 @@ export function drawWaveformAnalysis(
   state: WaveformAnalysisState,
 ): void {
   const canvas = ctx2d.canvas;
-  const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? Math.min(1.5, window.devicePixelRatio) : 1;
   const cssW = canvas.clientWidth > 0 ? canvas.clientWidth : canvas.width;
   const cssH = canvas.clientHeight > 0 ? canvas.clientHeight : canvas.height;
   const wantW = Math.max(1, Math.round(cssW * dpr));
@@ -307,7 +307,7 @@ export function drawMasterAnalysis(
   state: MasterAnalysisState,
 ): void {
   const canvas = ctx2d.canvas;
-  const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? Math.min(1.5, window.devicePixelRatio) : 1;
   const cssW = canvas.clientWidth > 0 ? canvas.clientWidth : canvas.width;
   const cssH = canvas.clientHeight > 0 ? canvas.clientHeight : canvas.height;
   const wantW = Math.max(1, Math.round(cssW * dpr));
@@ -535,7 +535,7 @@ export function drawRings(
   opts: RingsOptions = {},
 ): void {
   const canvas = ctx2d.canvas;
-  const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? Math.min(1.5, window.devicePixelRatio) : 1;
   const cssW = canvas.clientWidth > 0 ? canvas.clientWidth : canvas.width;
   const cssH = canvas.clientHeight > 0 ? canvas.clientHeight : canvas.height;
   const wantW = Math.max(1, Math.round(cssW * dpr));
@@ -665,6 +665,8 @@ export class NebulaRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private points: NebulaPoint[] = [];
+  private readonly pointLayer = document.createElement("canvas");
+  private pointLayerDirty = true;
   private alphas: number[] = [];
   private highlightPoints: NebulaPoint[] = [];
   private reticleMap: Record<StemName, { x: number; y: number }> = {
@@ -824,7 +826,7 @@ export class NebulaRenderer {
   /** Sync backing store to CSS size x devicePixelRatio. Call on layout. */
   resize(): void {
     const canvas = this.canvas;
-    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? Math.min(1.5, window.devicePixelRatio) : 1;
     const cssW = canvas.clientWidth > 0 ? canvas.clientWidth : canvas.width;
     const cssH = canvas.clientHeight > 0 ? canvas.clientHeight : canvas.height;
     const wantW = Math.max(1, Math.round(cssW * dpr));
@@ -832,11 +834,13 @@ export class NebulaRenderer {
     if (canvas.width !== wantW || canvas.height !== wantH) {
       canvas.width = wantW;
       canvas.height = wantH;
+      this.pointLayerDirty = true;
     }
   }
 
   /** Replace the scatter set; coordinates are clamped to 0..1. */
   setPoints(points: NebulaPoint[]): void {
+    this.pointLayerDirty = true;
     this.points = points.map((p) => ({ stem: p.stem, trackId: p.trackId, x: clamp01(p.x), y: clamp01(p.y) }));
     // Density estimate on a coarse grid; denser cells render more opaque.
     const counts = new Float32Array(GRID_N * GRID_N);
@@ -909,7 +913,7 @@ export class NebulaRenderer {
     const canvas = this.canvas;
     const ctx = this.ctx;
     this.resize();
-    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? Math.min(1.5, window.devicePixelRatio) : 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const rect = canvas.getBoundingClientRect();
     const w = rect.width > 0 ? rect.width : canvas.width / dpr;
@@ -996,29 +1000,34 @@ export class NebulaRenderer {
       ctx.stroke();
     }
 
-    // Scatter points as additive glowing stardust with a gentle twinkle.
-    // The pool is now the whole 2,565-phrase bank (x4 stems), so use cheap
-    // fillRects for the faint cloud (arc+beginPath per point at 60fps
-    // janks); the active-kit highlight below stays as bright rings.
+    // Cache stationary points; animate highlights and reticles independently.
+    if (this.pointLayerDirty) {
+      this.pointLayer.width = canvas.width;
+      this.pointLayer.height = canvas.height;
+      const layer = this.pointLayer.getContext("2d");
+      if (layer) {
+        layer.setTransform(dpr, 0, 0, dpr, 0, 0);
+        layer.globalCompositeOperation = "lighter";
+        let lastStem: string | null = null;
+        for (let i = 0; i < this.points.length; i++) {
+          const p = this.points[i];
+          if (p.stem !== lastStem) {
+            layer.fillStyle = STEM_COLORS[p.stem];
+            lastStem = p.stem;
+          }
+          const density = this.alphas[i] ?? 0.5;
+          layer.globalAlpha = 0.26 + 0.22 * density;
+          const size = 1.2 + density * 1.8;
+          layer.fillRect(p.x * w - size / 2, p.y * h - size / 2, size, size);
+        }
+        this.pointLayerDirty = false;
+      }
+    }
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
-    // Points arrive grouped by stem (see StemRemixPlayer.points()), so only
-    // four fillStyle assignments are needed per frame.
-    let lastStem: string | null = null;
-    for (let i = 0; i < this.points.length; i++) {
-      const p = this.points[i];
-      if (p.stem !== lastStem) {
-        ctx.fillStyle = STEM_COLORS[p.stem];
-        lastStem = p.stem;
-      }
-      const density = this.alphas[i] ?? 0.5;
-      const twinkle = 0.72 + 0.28 * Math.sin(t * 1.7 + i * 2.39996);
-      ctx.globalAlpha = (0.26 + 0.22 * density) * twinkle;
-      const size = 1.2 + density * 1.8;
-      ctx.fillRect(p.x * w - size / 2, p.y * h - size / 2, size, size);
-    }
+    ctx.globalAlpha = 0.80 + 0.12 * Math.sin(t * 1.7);
+    ctx.drawImage(this.pointLayer, 0, 0, w, h);
     ctx.restore();
-    ctx.globalAlpha = 1;
 
     // Active-kit highlight: larger, full-alpha points with bright rings.
     if (this.highlightPoints.length > 0) {

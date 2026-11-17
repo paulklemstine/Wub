@@ -186,12 +186,16 @@ export class StretchVoice {
   }
 
   /**
-   * Load a run already concatenated in the kit audio worker (the transferable
-   * per-channel PCM from decode+concat off the main thread).  Only the
-   * addBuffers clone remains on the main thread.
+   * Load a run already concatenated by the kit audio loader.
+   * Transfer fresh run buffers to the worklet to avoid a second multi-MB copy.
+   * Callers retaining PCM can keep the default non-consuming behavior.
    */
-  async loadSamples(samples: Float32Array | Float32Array[]): Promise<void> {
-    await this.node.addBuffers(Array.isArray(samples) ? samples : [samples]);
+  async loadSamples(samples: Float32Array | Float32Array[], transferOwnership = false): Promise<void> {
+    const channels = Array.isArray(samples) ? samples : [samples];
+    const transfer = transferOwnership
+      ? [...new Set(channels.map((channel) => channel.buffer))]
+      : undefined;
+    await this.node.addBuffers(channels, transfer);
   }
 
   /** Schedule the prepared phrase/run. Must be called after `load`. */

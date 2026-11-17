@@ -456,7 +456,7 @@ export class PsychedelicBackground {
     const cssW = Math.max(1, window.innerWidth);
     const cssH = Math.max(1, window.innerHeight);
     const budgetScale = Math.sqrt(this.maxPixels / (cssW * cssH));
-    const scale = Math.min(this.renderScale, Math.max(this.minScale, budgetScale));
+    const scale = Math.min(this.renderScale, budgetScale);
     const w = Math.max(1, Math.round(cssW * scale));
     const h = Math.max(1, Math.round(cssH * scale));
     if (this.canvas.width !== w || this.canvas.height !== h) {

@@ -6,6 +6,7 @@
 // current/next block length (4/8/16 bars).  The weights and per-phrase
 // features are produced by scripts/build_joint_ranker.py.  Older 400-d models
 // (stemDim 84) still load: the per-stem width is derived from feature_dim.
+import { CachedDense } from "./cached_dense";
 import type { StemName } from "./types";
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
@@ -57,6 +58,12 @@ export class JointRanker {
   private b3: Float32Array | null = null;
   private mean: Float32Array | null = null;
   private std: Float32Array | null = null;
+  private firstLayer = new CachedDense(INPUT_DIM, STATE_DIM, STEM_DIM);
+
+  beginBatch(): void {
+    this.firstLayer.clear();
+  }
+
   private inputDimValue = INPUT_DIM;
   private stateDimValue = STATE_DIM;
   private stemDimValue = STEM_DIM;
@@ -136,6 +143,7 @@ export class JointRanker {
       this.stemDimValue = stemDim;
       this.inputDimValue = manifest.input_dim;
       this.inputScratch = new Float32Array(manifest.input_dim);
+      this.firstLayer = new CachedDense(manifest.input_dim, stateDim, stemDim);
       this.rowOf.clear();
       manifest.phrase_ids.forEach((id, index) => this.rowOf.set(id, index));
       const w = manifest.weights;
@@ -251,12 +259,7 @@ export class JointRanker {
     const w1 = this.w1;
     const b1 = this.b1;
     const h1 = this.h1Scratch;
-    for (let j = 0; j < 256; j++) {
-      let sum = b1[j];
-      const offset = j * this.inputDimValue;
-      for (let i = 0; i < this.inputDimValue; i++) sum += w1[offset + i] * input[i];
-      h1[j] = sum > 0 ? sum : 0;
-    }
+    this.firstLayer.evaluate(input, w1, b1, h1);
     const w2 = this.w2;
     const b2 = this.b2;
     const h2 = this.h2Scratch;

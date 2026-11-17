@@ -38,6 +38,8 @@ interface CacheEntry {
 
 const CACHE_LIMIT = 24;
 const cache = new Map<string, CacheEntry>();
+const loading = new Map<string, Promise<CacheEntry>>();
+let decodeContext: OfflineAudioContext | null = null;
 let sampleRate = 44100;
 
 interface Host {
@@ -66,17 +68,25 @@ function cacheSet(key: string, entry: CacheEntry): void {
 }
 
 async function decodeStereo(url: string): Promise<[Float32Array, Float32Array]> {
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`stem ${res.status} ${url}`);
   const bytes = await res.arrayBuffer();
   // Length is ignored by decodeAudioData; it decodes to this context's rate.
-  const ctx = new OfflineAudioContext(2, Math.max(1, sampleRate), sampleRate);
+  const ctx = decodeContext ??= new OfflineAudioContext(2, 1, sampleRate);
   const audio = await ctx.decodeAudioData(bytes);
   // Preserve the source's stereo image; mono assets stay dual-mono.
   return splitChannels(audio);
 }
 
-async function loadItem(item: PoolItem): Promise<{ stereo: [Float32Array, Float32Array]; pre: [Float32Array, Float32Array] | null }> {
+function loadItem(item: PoolItem): Promise<CacheEntry> {
+  const pending = loading.get(item.key);
+  if (pending) return pending;
+  const load = loadItemUncached(item).finally(() => loading.delete(item.key));
+  loading.set(item.key, load);
+  return load;
+}
+
+async function loadItemUncached(item: PoolItem): Promise<CacheEntry> {
   const cached = cacheGet(item.key);
   if (cached) return cached;
   const stereo = await decodeStereo(item.url);
@@ -133,6 +143,11 @@ async function handleLoad(
     if (typeof msg.sampleRate === "number" && msg.sampleRate > 0) {
       sampleRate = msg.sampleRate;
     }
+    return;
+  }
+  if (msg.type === "warm" && Array.isArray(msg.items)) {
+    // No PCM assembly or return transfer for speculative cache warming.
+    void Promise.all(msg.items.map(loadItem)).catch(() => { /* best effort */ });
     return;
   }
   if (msg.type === "load" && typeof msg.id === "number" && Array.isArray(msg.items)) {

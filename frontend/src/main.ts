@@ -1933,7 +1933,12 @@ class WubApp {
 
   // -- render loop ---------------------------------------------------------
 
+  private lastVisualFrame = -Infinity;
+  private readonly frameLevels = new Map<StemName, number>();
+
   private analyserLevel(stem: StemName): number {
+    const cached = this.frameLevels.get(stem);
+    if (cached !== undefined) return cached;
     try {
       const analyser = this.engine.getAnalyser(stem);
       const n = analyser.fftSize;
@@ -1948,7 +1953,9 @@ class WubApp {
         const v = (scratch[i] - 128) / 128;
         sum += v * v;
       }
-      return Math.min(1, Math.sqrt(sum / scratch.length) * 2.5);
+      const level = Math.min(1, Math.sqrt(sum / scratch.length) * 2.5);
+      this.frameLevels.set(stem, level);
+      return level;
     } catch {
       return 0;
     }
@@ -2072,6 +2079,15 @@ class WubApp {
   }
 
   private frame(_t: number): void {
+    // Bound visual/FFT work on high-refresh displays and hidden tabs.
+    if (document.hidden || _t - this.lastVisualFrame < 1000 / 60 - 1) {
+      requestAnimationFrame((next) => this.frame(next));
+      return;
+    }
+    // Preserve the remainder so 144 Hz does not collapse to a 48 FPS cadence.
+    const elapsed = _t - this.lastVisualFrame;
+    this.lastVisualFrame = _t - (Number.isFinite(elapsed) ? elapsed % (1000 / 60) : 0);
+    this.frameLevels.clear();
     const t = visualNow();
     const audioNow = this.engine.now();
     // Shared glue bus: vocal ducking and kick/bass sidechain, control-rate
