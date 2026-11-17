@@ -892,6 +892,11 @@ class WubApp {
   }
 
   private bindFeedbackControls(): void {
+    document.getElementById("btn-save-listening")?.addEventListener("click", () => {
+      const exporter = (window as unknown as { __wubSliceFlowExport?: () => void }).__wubSliceFlowExport;
+      if (exporter) exporter();
+      else this.setStatus("Start a listening session before saving it.");
+    });
     const btns = document.querySelectorAll<HTMLButtonElement>(".thumb-btn");
     btns.forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -1083,6 +1088,9 @@ class WubApp {
 
       const dualBtn = document.getElementById("btn-ls-dual");
       if (dualBtn) {
+        const dualOn = this.lightshow?.getState().dualLayer ?? false;
+        dualBtn.classList.toggle("active", dualOn);
+        dualBtn.textContent = `2-LAYER: ${dualOn ? "ON" : "OFF"}`;
         dualBtn.addEventListener("click", () => {
           if (!this.lightshow) return;
           const next = !this.lightshow.getState().dualLayer;
@@ -1935,6 +1943,11 @@ class WubApp {
 
   private lastVisualFrame = -Infinity;
   private readonly frameLevels = new Map<StemName, number>();
+  // Adaptive visual budget: audio/UI stay on every frame, but the heavy
+  // 2D/3D painters alternate when the browser cannot keep up.
+  private frameIntervalEma = 1000 / 60;
+  private visualDegraded = false;
+  private visualTick = 0;
 
   private analyserLevel(stem: StemName): number {
     const cached = this.frameLevels.get(stem);
@@ -2085,9 +2098,21 @@ class WubApp {
       return;
     }
     // Preserve the remainder so 144 Hz does not collapse to a 48 FPS cadence.
-    const elapsed = _t - this.lastVisualFrame;
-    this.lastVisualFrame = _t - (Number.isFinite(elapsed) ? elapsed % (1000 / 60) : 0);
+    const elapsedRaw = _t - this.lastVisualFrame;
+    const elapsed = Number.isFinite(elapsedRaw) ? elapsedRaw : 1000 / 60;
+    this.lastVisualFrame = _t - (elapsed % (1000 / 60));
     this.frameLevels.clear();
+
+    // If the compositor cannot sustain ~60 fps, alternate the heavy painters
+    // instead of asking every one of them for a full frame at once.  Audio,
+    // scheduling, the UI event queue and the glue bus still run every frame.
+    this.frameIntervalEma = this.frameIntervalEma * 0.85 + Math.min(50, elapsed) * 0.15;
+    if (!this.visualDegraded && this.frameIntervalEma > 21) this.visualDegraded = true;
+    else if (this.visualDegraded && this.frameIntervalEma < 17) this.visualDegraded = false;
+    const phase = this.visualTick++ & 1;
+    const paintA = !this.visualDegraded || phase === 0;
+    const paintB = !this.visualDegraded || phase === 1;
+
     const t = visualNow();
     const audioNow = this.engine.now();
     // Shared glue bus: vocal ducking and kick/bass sidechain, control-rate
@@ -2253,7 +2278,7 @@ class WubApp {
     while (this.ringEvents.length > 0 && t - this.ringEvents[0].atSec > RING_WINDOW_SEC) {
       this.ringEvents.shift();
     }
-    if (this.ringsCtx !== null) {
+    if (this.ringsCtx !== null && paintA) {
       const stemsData = {} as Record<StemName, WaveformStemData>;
       for (const stem of STEMS) {
         let time = this.timeScratch.get(stem);
@@ -2292,7 +2317,7 @@ class WubApp {
         playheadProgress,
       });
     }
-    if (this.masterCtx !== null) {
+    if (this.masterCtx !== null && paintB) {
       let time = this.masterTimeScratch;
       let freq = this.masterFreqScratch;
       let level = 0;
@@ -2327,7 +2352,7 @@ class WubApp {
         playheadProgress,
       });
     }
-    if (this.nebula !== null) {
+    if (this.nebula !== null && paintA) {
       this.nebula.render({
         timeSec: t,
         bpm: this.bpm,
@@ -2340,7 +2365,7 @@ class WubApp {
         activeTitle: (this.lastGrooveboxMeta as any)?.activeTrackTitle || this.lastGrooveboxMeta?.vocalSongTitle,
       });
     }
-    if (this.psychedelicBg !== null && this.psychedelicBg.getState().enabled) {
+    if (this.psychedelicBg !== null && this.psychedelicBg.getState().enabled && paintA) {
       const drumsLvl = this.analyserLevel("drums");
       const bassLvl = this.analyserLevel("bass");
       const vocalsLvl = this.analyserLevel("vocals");
@@ -2358,7 +2383,7 @@ class WubApp {
       });
     }
 
-    if (this.lightshow !== null && !document.hidden && this.lightshowPanelVisible()) {
+    if (this.lightshow !== null && !document.hidden && this.lightshowPanelVisible() && paintA) {
       const drumsLvl = this.analyserLevel("drums");
       const bassLvl = this.analyserLevel("bass");
       const vocalsLvl = this.analyserLevel("vocals");
@@ -2379,7 +2404,7 @@ class WubApp {
       });
     }
 
-    if (this.singingHead !== null) {
+    if (this.singingHead !== null && paintB) {
       const shFrame = this.singingHeadInputFrame(this.singingHead.getInputMode());
       this.singingHead.update(
         this.lastGrooveboxMeta,
@@ -2392,7 +2417,7 @@ class WubApp {
       );
     }
 
-    if (this.tamagotchi !== null) {
+    if (this.tamagotchi !== null && paintB) {
       const drumsLvl = this.analyserLevel("drums");
       const bassLvl = this.analyserLevel("bass");
       const vocalsLvl = this.analyserLevel("vocals");

@@ -303,7 +303,9 @@ export class RaveLightshowPanel {
     enabled: true,
     preset: "acid-warp",
     fgPreset: "cosmic-serpent",
-    dualLayer: true,
+    // Two full shader scenes per frame doubled fill-rate for a layer most
+    // sessions never notice. Opt in with the 2-LAYER button when wanted.
+    dualLayer: false,
     cortexAuto: true,
     intensity: 1.25,
     speed: 1.05,

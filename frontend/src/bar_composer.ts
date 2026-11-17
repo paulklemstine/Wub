@@ -176,6 +176,14 @@ export class BarComposer {
     return this.index?.phrases[phraseId]?.[stem] ?? null;
   }
 
+  /** Commit only accepted audio; rejected proposals must not become context. */
+  commitBoundary(stem: StemName, phraseId: string, srcBar: number, semitones: number, section: string): void {
+    const meta = this.getPhraseMeta(phraseId, stem);
+    if (!meta) return;
+    this.lastBlockTail[stem] = { meta, srcBar, semitones,
+      quality: meta.q[srcBar] ?? "mono", role: meta.er?.[srcBar] ?? "A", section };
+  }
+
   private pickMotifSchema(
     kitSection: string,
     stem: StemName,
@@ -639,6 +647,7 @@ export class BarComposer {
     isBridgeBlock: boolean;
     pinnedStems: Set<StemName>;
     compatScorer?: CellCompatScorer;
+    commit?: boolean;
   }): ComposedBlockPlan<TEntry> {
     const {
       baseEntries,
@@ -1113,7 +1122,7 @@ export class BarComposer {
           arrCount++;
         }
       }
-      if (tailCell) {
+      if (tailCell && args.commit !== false) {
         this.lastBlockTail[stem] = {
           meta: tailCell.meta,
           srcBar: tailCell.srcBar,

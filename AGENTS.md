@@ -76,6 +76,18 @@ When making changes to this codebase, you must adhere strictly to these non-nego
   This guarantees that slices never shift by more than 6 semitones (half an octave), preserving natural acoustic timbre while maintaining perfect musical harmony.
 
 ### 7. Kit Playback Invariants
+
+**Final slice-flow path (when `slice_flow` sidecar is enabled):** The rules below
+for the fixed drumless bridge and 16-bar refresh describe the no-model fallback
+and joint *proposals*. The final post-composer critic may retain a foundation for
+60–120 seconds and staggers accepted source changes across a cluster handoff.
+The 104-bar timing grid remains; the final eight bars do not forcibly remove
+drums/bass. Preserve the slice library, evaluate the final cuts, commit only
+accepted boundary context, and keep sliced plans intact in recovery/fallback.
+See `docs/SLICE_FLOW.md`. Do not restore unconditional all-stem reset behavior
+on the learned path. Audio clock, pooled voices, lazy loading and pin invariants
+still apply.
+
 **Legacy single-kit mode** (older manifests without `clusters`):
 - **Never resample, time-stretch, or repitch a kit phrase.** `scheduleSlice`
   must use `rate: 1.0`; the kit's key is the session key.

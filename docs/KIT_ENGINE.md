@@ -707,3 +707,13 @@ reports stem-track changes and max hold; `window.__wubGlueState()` reports the
 live vocal/kick duck gains. The probe is diagnostic only: it never gates audio
 and never writes UI. Seam metrics are session-dependent; compare a candidate
 build against a baseline recorded on the same bank and cluster.
+
+
+## Final slice-flow critic and development planner
+
+The active cell-composition path now gates its final assembled slice plans with
+a trained acoustic critic and a patient development policy. See
+[SLICE_FLOW.md](SLICE_FLOW.md) for training, validation, optional-model fallback,
+listening traces, and the blind A/B feedback loop. With a valid sidecar, the
+104-bar handoff retains timing but no longer forces a drumless reset; accepted
+foundation continuations can span cluster changes.

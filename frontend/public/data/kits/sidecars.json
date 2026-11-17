@@ -11,5 +11,6 @@
   "vocal_mix": true,
   "section_model": true,
   "cell_index": true,
-  "cell_compat": true
+  "cell_compat": true,
+  "slice_flow": true
 }

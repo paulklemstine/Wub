@@ -781,6 +781,9 @@ def main() -> None:
         "progression_context": True,
         "vocal_mix": True,
         "section_model": True,
+        "cell_index": (out_dir / "cell_index.json").exists(),
+        "cell_compat": (out_dir / "cell_compat.json").exists(),
+        "slice_flow": (out_dir / "slice_flow.json").exists() and (out_dir / "slice_flow_features.f32").exists(),
     }
     (out_dir / "sidecars.json").write_text(json.dumps(sidecars_flag, indent=2) + "\n")
     summary = {"arc": arc_res, "progression": prog_res, "rhythm_vocal": rhy_res, "syntax": syn_res}

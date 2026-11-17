@@ -216,3 +216,24 @@ nebula.render({...frame,timeSec:4});
 assert.equal(nebula.pointLayer.fills, 20010);
 """
     subprocess.run(["node", "-e", script, str(module)], check=True, capture_output=True, text=True)
+
+
+def test_visual_budget_staggers_heavy_painters():
+    """Audio stays on every frame; heavy 2D/3D painters alternate under load."""
+    source = (ROOT / "frontend/src/main.ts").read_text(encoding="utf-8")
+    assert "frameIntervalEma" in source
+    assert "visualDegraded" in source
+    assert "const paintA" in source and "const paintB" in source
+    assert source.count("&& paintA") >= 4
+    assert source.count("&& paintB") >= 3
+    # The audio clock and glue bus must never be staggered.
+    assert "this.engine.updateGlue(audioNow);" in source
+    assert "this.transitionProbe.update(audioNow, this.engine);" in source
+
+
+def test_lightshow_dual_layer_starts_off():
+    source = (ROOT / "frontend/src/lightshow.ts").read_text(encoding="utf-8")
+    assert "dualLayer: false" in source
+    html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+    assert 'id="btn-ls-dual" class="lightshow-btn"' in html
+    assert '>2-LAYER: OFF</button>' in html
