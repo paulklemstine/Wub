@@ -707,25 +707,31 @@ def build_reference(processed_dir: Path,
 # Demo trace (smoke test / baseline shape)
 # ---------------------------------------------------------------------------
 
-def demo_trace(mode: str = "arc", bars: int = 104, seed: int = 505) -> Dict[str, Any]:
+def demo_trace(mode: str = "arc", bars: int = 104, seed: int = 505,
+               plan: Optional[Sequence[Tuple[str, int]]] = None) -> Dict[str, Any]:
     """Synthetic traces for the three shapes worth distinguishing.
 
     ``arc``    the *current* shipped 104-bar shape (4 -> 8 -> 16 + bridge).
                Expected to fail form/duration: that is the baseline finding.
-    ``song``   a corpus-shaped form (several short GROOVE_A/DROP sections).
+    ``song``   a corpus-shaped form: short GROOVE_A / BUILDUP / DROP / BREAKDOWN
+               runs with returns, matching the real transition distribution.
     ``churn``  a 4-bar source swap, the failure mode the source gate catches.
+
+    ``plan`` overrides the section plan (``[(section, bars), ...]``); this is
+    how candidate forms are searched against a reference before being adopted.
     """
     rng = random.Random(seed)
     plans = {
         "arc": [("INTRO", 16), ("GROOVE_A", 32), ("BUILDUP", 16),
                 ("DROP", 32), ("BREAKDOWN", 8)],
-        "song": [("INTRO", 8), ("GROOVE_A", 16), ("DROP", 16), ("BREAKDOWN", 8),
-                 ("GROOVE_A", 24), ("DROP", 16), ("BREAKDOWN", 16)],
+        "song": [("INTRO", 8), ("GROOVE_A", 12), ("DROP", 12), ("GROOVE_A", 12),
+                 ("BREAKDOWN", 12), ("GROOVE_A", 12), ("BREAKDOWN", 12),
+                 ("GROOVE_A", 12), ("BREAKDOWN", 12)],
     }
-    plan = plans["song"] if mode == "song" else plans["arc"]
+    plan = list(plan) if plan else (plans["song"] if mode == "song" else plans["arc"])
     energy_target = {
-        "INTRO": 0.33, "GROOVE_A": 0.72, "BUILDUP": 0.84,
-        "DROP": 0.95, "BREAKDOWN": 0.30,
+        "INTRO": 0.50, "GROOVE_A": 0.70, "BUILDUP": 0.78,
+        "DROP": 0.88, "BREAKDOWN": 0.55,
     }
     section_of_bar: List[str] = []
     for label, n_bars in plan:
@@ -753,7 +759,12 @@ def demo_trace(mode: str = "arc", bars: int = 104, seed: int = 505) -> Dict[str,
             pattern_id += 1
             pattern_start = bar
             if mode != "churn":
-                moved = rng.sample(list(STEMS), k=rng.choice([1, 2]))
+                # Deterministic 2-stem rotation at each pattern boundary.  A
+                # demo that parks vocals for the whole set would misrepresent
+                # the movement budget, so every stem takes a turn.
+                rotation = (("bass", "other"), ("vocals", "drums"),
+                            ("other", "bass"), ("drums", "vocals"))
+                moved = rotation[(pattern_id - 1) % len(rotation)]
                 for stem in moved:
                     source[stem] = f"t{rng.randrange(6)}_{stem}"
                     phrase[stem] = f"p{rng.randrange(8)}_{stem}"

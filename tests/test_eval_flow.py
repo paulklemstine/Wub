@@ -146,6 +146,7 @@ def test_demo_trace_songlike_beats_churn():
     good = score_trace(song, ref)
     bad = score_trace(churn, ref)
     assert good["structure"]["corr"] > bad["structure"]["corr"]
+    assert good["verdict"]["pass"] is True
     assert bad["verdict"]["pass"] is False
     assert any("source changes" in reason for reason in bad["verdict"]["reasons"])
 
@@ -154,8 +155,8 @@ def test_score_trace_reports_every_section():
     trace = demo_trace("song", bars=104, seed=3)
     report = score_trace(trace, _ref(trace))
     labels = [run["section"] for run in report["section_runs"]]
-    assert labels == ["INTRO", "GROOVE_A", "DROP", "BREAKDOWN",
-                      "GROOVE_A", "DROP", "BREAKDOWN"]
+    assert labels == ["INTRO", "GROOVE_A", "DROP", "GROOVE_A", "BREAKDOWN",
+                      "GROOVE_A", "BREAKDOWN", "GROOVE_A", "BREAKDOWN"]
     assert sum(run["bars"] for run in report["section_runs"]) == 104
     assert report["energy"]["envelope_rmse"] is not None
 

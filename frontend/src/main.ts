@@ -212,6 +212,7 @@ class WubApp {
   private masterCtx: CanvasRenderingContext2D | null = null;
   private psychedelicBg: PsychedelicBackground | null = null;
   private lightshow: RaveLightshowPanel | null = null;
+  private lightshowPanelEl: HTMLElement | null | undefined = undefined;
   private lsBearOverlayCanvas: HTMLCanvasElement | null = null;
   private bearOverlayEnabled = true;
   private tapTimestamps: number[] = [];
@@ -818,6 +819,13 @@ class WubApp {
     // Master Toggle
     const toggleBtn = document.getElementById("trip-toggle-btn") as HTMLButtonElement | null;
     if (toggleBtn) {
+      // The light show is off by default (full-screen shader); reflect that in
+      // the control instead of leaving a stale "ON" label.
+      const initial = bg.getState().enabled;
+      toggleBtn.classList.toggle("active", initial);
+      toggleBtn.setAttribute("aria-pressed", String(initial));
+      toggleBtn.textContent = initial ? "LIGHT SHOW: ON" : "LIGHT SHOW: OFF";
+
       toggleBtn.addEventListener("click", () => {
         const cur = bg.getState().enabled;
         const next = !cur;
@@ -2049,6 +2057,20 @@ class WubApp {
     };
   }
 
+  /**
+   * The lightshow is a multi-pass Three.js renderer (two shader passes plus a
+   * trail ping-pong).  When its panel is collapsed there is nothing to show,
+   * so skip the whole chain rather than paying for hidden render targets.
+   */
+  private lightshowPanelVisible(): boolean {
+    if (this.lightshowPanelEl === undefined) {
+      this.lightshowPanelEl = document.getElementById("panel-lightshow");
+    }
+    const panel = this.lightshowPanelEl;
+    if (panel === null) return true;
+    return !panel.classList.contains("panel-minimized");
+  }
+
   private frame(_t: number): void {
     const t = visualNow();
     const audioNow = this.engine.now();
@@ -2302,7 +2324,7 @@ class WubApp {
         activeTitle: (this.lastGrooveboxMeta as any)?.activeTrackTitle || this.lastGrooveboxMeta?.vocalSongTitle,
       });
     }
-    if (this.psychedelicBg !== null) {
+    if (this.psychedelicBg !== null && this.psychedelicBg.getState().enabled) {
       const drumsLvl = this.analyserLevel("drums");
       const bassLvl = this.analyserLevel("bass");
       const vocalsLvl = this.analyserLevel("vocals");
@@ -2320,7 +2342,7 @@ class WubApp {
       });
     }
 
-    if (this.lightshow !== null) {
+    if (this.lightshow !== null && !document.hidden && this.lightshowPanelVisible()) {
       const drumsLvl = this.analyserLevel("drums");
       const bassLvl = this.analyserLevel("bass");
       const vocalsLvl = this.analyserLevel("vocals");
