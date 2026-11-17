@@ -29,6 +29,15 @@ export const BEAR_CAMERA_LABELS: Record<BearCameraPreset, string> = {
 
 export type BearMouthStyle = "real" | "acid" | "cyber";
 
+/**
+ * Dual offscreen framebuffer texture pass: two 512x512 psychedelic shader
+ * renders per frame (sky sphere + head sphere). It is the most expensive part
+ * of the 3D view and pegs a software-GL / low-end machine, so it ships off.
+ * With it off the spheres keep the animated gummi palette and the scene
+ * lighting; flip this to true to bring the shader-wrapped textures back.
+ */
+export const SPHERE_TEXTURE_ENABLED = false;
+
 export interface BearVisualConfig {
   showCage: boolean;
   showVisor: boolean;
@@ -737,30 +746,40 @@ export class Bear3DView {
     this.scene = scene;
     this.camera = camera;
 
-    // Dual offscreen framebuffers (512x512): sky shader texture vs contrasting sphere shader texture
-    const fbOpts: THREE.RenderTargetOptions = {
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      format: THREE.RGBAFormat,
-    };
-    this.skyTarget = new THREE.WebGLRenderTarget(512, 512, fbOpts);
-    this.headTarget = new THREE.WebGLRenderTarget(512, 512, fbOpts);
-    this.skyTarget.texture.wrapS = THREE.RepeatWrapping;
-    this.skyTarget.texture.wrapT = THREE.ClampToEdgeWrapping;
-    this.headTarget.texture.wrapS = THREE.RepeatWrapping;
-    this.headTarget.texture.wrapT = THREE.ClampToEdgeWrapping;
-    this.offQuadMesh = new THREE.Mesh(this.offQuadGeo, this.getDualShaderMaterial(this.skyPresetId)!);
-    this.offScene.add(this.offQuadMesh);
-    this.loadPresetBundle();
+    // Dual offscreen framebuffers (512x512): sky shader texture vs contrasting sphere shader texture.
+    // Skipped entirely while SPHERE_TEXTURE_ENABLED is false — no render
+    // targets, no fullscreen shader quad, no preset bundle fetch.
+    if (SPHERE_TEXTURE_ENABLED) {
+      const fbOpts: THREE.RenderTargetOptions = {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat,
+      };
+      this.skyTarget = new THREE.WebGLRenderTarget(512, 512, fbOpts);
+      this.headTarget = new THREE.WebGLRenderTarget(512, 512, fbOpts);
+      this.skyTarget.texture.wrapS = THREE.RepeatWrapping;
+      this.skyTarget.texture.wrapT = THREE.ClampToEdgeWrapping;
+      this.headTarget.texture.wrapS = THREE.RepeatWrapping;
+      this.headTarget.texture.wrapT = THREE.ClampToEdgeWrapping;
+      this.offQuadMesh = new THREE.Mesh(this.offQuadGeo, this.getDualShaderMaterial(this.skyPresetId)!);
+      this.offScene.add(this.offQuadMesh);
+      this.loadPresetBundle();
+    }
 
-    // Animated Psychedelic Sky Sphere textured by Framebuffer 1 (skyTarget)
+    // Animated Psychedelic Sky Sphere (shader-textured, or flat night sky)
     const skyGeo = this.track(new THREE.SphereGeometry(28, 40, 28));
     const skyMat = this.track(
-      new THREE.MeshBasicMaterial({
-        map: this.skyTarget.texture,
-        side: THREE.BackSide,
-        depthWrite: false,
-      })
+      SPHERE_TEXTURE_ENABLED
+        ? new THREE.MeshBasicMaterial({
+            map: this.skyTarget!.texture,
+            side: THREE.BackSide,
+            depthWrite: false,
+          })
+        : new THREE.MeshBasicMaterial({
+            color: 0x0a0420,
+            side: THREE.BackSide,
+            depthWrite: false,
+          })
     );
     this.skyMesh = new THREE.Mesh(skyGeo, skyMat);
     scene.add(this.skyMesh);
@@ -875,9 +894,9 @@ export class Bear3DView {
     this.gummiMat = this.track(
       new THREE.MeshPhysicalMaterial({
         color: 0xffffff,
-        map: this.headTarget?.texture ?? null,
+        map: SPHERE_TEXTURE_ENABLED ? this.headTarget?.texture ?? null : null,
         emissive: 0xffffff,
-        emissiveMap: this.headTarget?.texture ?? null,
+        emissiveMap: SPHERE_TEXTURE_ENABLED ? this.headTarget?.texture ?? null : null,
         emissiveIntensity: 0.72,
         roughness: 0.14,
         metalness: 0.08,
@@ -1280,82 +1299,93 @@ export class Bear3DView {
 
     const vis = tel.visual ?? DEFAULT_BEAR_VISUAL_CONFIG;
 
-    // 0. Dual Offscreen Framebuffer Pass:
+    // 0. Dual Offscreen Framebuffer Pass (disabled unless SPHERE_TEXTURE_ENABLED):
     //    Pass A -> skyTarget (animated psychedelic sky sphere texture)
     //    Pass B -> headTarget (contrasting random visualization texture wrapped onto the 3D sphere head)
-    if (uTime - this.lastTexSwapSec > 28 && tel.mix > 0.08) {
-      this.randomizeTextures();
-    }
-    const du = this.dualUniforms;
-    const beatAngle = t * beatHz * Math.PI * 2;
-    du.uTime.value = uTime;
-    du.uAudioTime.value = t;
-    du.uBpm.value = Math.max(60, tel.bpm || 126);
-    du.uBeat.value = (t * beatHz) % 1;
-    du.uBpmSin.value = Math.sin(beatAngle);
-    du.uBpmSin2.value = Math.sin(beatAngle * 2);
-    du.uBpmSin4.value = Math.sin(beatAngle * 4);
-    du.uKick.value = tel.drumPunch;
-    du.uOnset.value = tel.drumPunch;
-    du.uEnergy.value = tel.mix;
-    du.uSpeed.value = 0.85 + 0.35 * vis.danceGain;
-    du.uPalette.value = (tel.stage - 1) % 4;
-    du.uWarmth.value = tel.bass;
-    du.uBrightness.value = tel.other * 0.6 + tel.drums * 0.4;
-    du.uMusicDensity.value = Math.min(1, (tel.drums + tel.bass + tel.other + tel.vocals) * 0.45);
-    du.uForwardFlight.value = tel.mix * 1.2;
-    if (tel.freqBins && tel.freqBins.length >= 64) {
-      const bins = tel.freqBins;
-      const ranges = [
-        [0, 3], [3, 8], [8, 16], [16, 32],
-        [32, 64], [64, 128], [128, 256], [256, Math.min(512, bins.length)],
-      ];
-      for (let b = 0; b < 8; b++) {
-        let sum = 0;
-        const [lo, hi] = ranges[b];
-        for (let k = lo; k < hi; k++) sum += bins[k];
-        const amp = sum / Math.max(1, (hi - lo) * 255);
-        du[`uSpectrum${b}`].value = amp;
-        du[`uBandFlux${b}`].value = amp * tel.drumPunch;
+    if (SPHERE_TEXTURE_ENABLED) {
+      if (uTime - this.lastTexSwapSec > 28 && tel.mix > 0.08) {
+        this.randomizeTextures();
       }
-    } else {
-      const vals = [
-        tel.bass,
-        tel.drums * 0.8 + tel.bass * 0.4,
-        tel.other * 0.7,
-        tel.vocals,
-        tel.vocals * 0.8 + tel.other * 0.5,
-        tel.other,
-        tel.drums * 0.9,
-        tel.mix,
-      ];
-      for (let b = 0; b < 8; b++) {
-        du[`uSpectrum${b}`].value = vals[b];
-        du[`uBandFlux${b}`].value = vals[b] * tel.drumPunch;
+      const du = this.dualUniforms;
+      const beatAngle = t * beatHz * Math.PI * 2;
+      du.uTime.value = uTime;
+      du.uAudioTime.value = t;
+      du.uBpm.value = Math.max(60, tel.bpm || 126);
+      du.uBeat.value = (t * beatHz) % 1;
+      du.uBpmSin.value = Math.sin(beatAngle);
+      du.uBpmSin2.value = Math.sin(beatAngle * 2);
+      du.uBpmSin4.value = Math.sin(beatAngle * 4);
+      du.uKick.value = tel.drumPunch;
+      du.uOnset.value = tel.drumPunch;
+      du.uEnergy.value = tel.mix;
+      du.uSpeed.value = 0.85 + 0.35 * vis.danceGain;
+      du.uPalette.value = (tel.stage - 1) % 4;
+      du.uWarmth.value = tel.bass;
+      du.uBrightness.value = tel.other * 0.6 + tel.drums * 0.4;
+      du.uMusicDensity.value = Math.min(1, (tel.drums + tel.bass + tel.other + tel.vocals) * 0.45);
+      du.uForwardFlight.value = tel.mix * 1.2;
+      if (tel.freqBins && tel.freqBins.length >= 64) {
+        const bins = tel.freqBins;
+        const ranges = [
+          [0, 3], [3, 8], [8, 16], [16, 32],
+          [32, 64], [64, 128], [128, 256], [256, Math.min(512, bins.length)],
+        ];
+        for (let b = 0; b < 8; b++) {
+          let sum = 0;
+          const [lo, hi] = ranges[b];
+          for (let k = lo; k < hi; k++) sum += bins[k];
+          const amp = sum / Math.max(1, (hi - lo) * 255);
+          du[`uSpectrum${b}`].value = amp;
+          du[`uBandFlux${b}`].value = amp * tel.drumPunch;
+        }
+      } else {
+        const vals = [
+          tel.bass,
+          tel.drums * 0.8 + tel.bass * 0.4,
+          tel.other * 0.7,
+          tel.vocals,
+          tel.vocals * 0.8 + tel.other * 0.5,
+          tel.other,
+          tel.drums * 0.9,
+          tel.mix,
+        ];
+        for (let b = 0; b < 8; b++) {
+          du[`uSpectrum${b}`].value = vals[b];
+          du[`uBandFlux${b}`].value = vals[b] * tel.drumPunch;
+        }
       }
-    }
-    if (this.offQuadMesh && this.skyTarget && this.headTarget) {
-      const skyMat = this.getDualShaderMaterial(this.skyPresetId);
-      if (skyMat) {
-        this.offQuadMesh.material = skyMat;
-        this.renderer.setRenderTarget(this.skyTarget);
-        this.renderer.render(this.offScene, this.offCam);
+      if (this.offQuadMesh && this.skyTarget && this.headTarget) {
+        const skyMat = this.getDualShaderMaterial(this.skyPresetId);
+        if (skyMat) {
+          this.offQuadMesh.material = skyMat;
+          this.renderer.setRenderTarget(this.skyTarget);
+          this.renderer.render(this.offScene, this.offCam);
+        }
+        const headTexMat = this.getDualShaderMaterial(this.headPresetId);
+        if (headTexMat) {
+          this.offQuadMesh.material = headTexMat;
+          this.renderer.setRenderTarget(this.headTarget);
+          this.renderer.render(this.offScene, this.offCam);
+        }
+        this.renderer.setRenderTarget(null);
       }
-      const headTexMat = this.getDualShaderMaterial(this.headPresetId);
-      if (headTexMat) {
-        this.offQuadMesh.material = headTexMat;
-        this.renderer.setRenderTarget(this.headTarget);
-        this.renderer.render(this.offScene, this.offCam);
-      }
-      this.renderer.setRenderTarget(null);
     }
 
     // 1. DMT / LSD psychedelic stage palette sweep + dual-FBO sphere texture illumination
     const baseHue = ((tel.stage - 1) * 0.2 + t * 0.07 + tel.mix * 0.12) % 1;
     if (this.gummiMat) {
-      this.gummiMat.color.setHex(0xffffff);
-      this.gummiMat.emissive.setHex(0xffffff);
-      this.gummiMat.emissiveIntensity = 0.62 + tel.mix * 0.68 + tel.drumPunch * 0.32;
+      if (SPHERE_TEXTURE_ENABLED) {
+        this.gummiMat.color.setHex(0xffffff);
+        this.gummiMat.emissive.setHex(0xffffff);
+        this.gummiMat.emissiveIntensity = 0.62 + tel.mix * 0.68 + tel.drumPunch * 0.32;
+      } else {
+        // No shader texture: drive the gummi skin from the stage palette so the
+        // head still breathes with the mix without the per-frame FBO passes.
+        this.tmpColor.setHSL((baseHue + 0.62) % 1, 0.85, 0.54 + 0.1 * tel.mix);
+        this.gummiMat.color.copy(this.tmpColor);
+        this.gummiMat.emissive.copy(this.tmpColor);
+        this.gummiMat.emissiveIntensity = 0.36 + tel.mix * 0.45 + tel.drumPunch * 0.22;
+      }
     }
     if (this.skyMesh) {
       this.skyMesh.rotation.y = t * 0.04;

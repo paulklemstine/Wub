@@ -141,3 +141,20 @@ The background visualizer (`frontend/src/psychedelic_bg.ts`) runs a GPU fragment
    - `DMT`: High-contrast neon purples, hot magentas, cyber teals, and intense greens.
    - `LSD`: Shifting rainbow spectrum with liquid melting domain distortion.
    - `Mescaline`: Warm earthen golds, oranges, ambers, and fiery reds.
+
+### 3D Wub Bear rendering budget
+
+`frontend/src/bear_3d_view.ts` is the optional **3D CAM** view (floating sphere
+head). Two rules keep it from starving the audio thread:
+
+- **Lazy construction.** The Three.js scene, geometries, mouth rig and shaders
+  are built on the first press of `3D CAM`, not at page load. Most sessions
+  never open the view, and building it costs tens of MB of GPU memory.
+- **`SPHERE_TEXTURE_ENABLED = false`.** The dual-FBO pass (two 512×512
+  psychedelic shader renders per frame, piped into the sky sphere and as the
+  head's `map`/`emissiveMap`) is disabled in this build. It was the single most
+  expensive thing in the visualizer and pegged low-end / software-GL machines.
+  With it off there are no render targets, no fullscreen shader quad, and no
+  `superacid_presets.json` fetch from the 3D view; the spheres render with the
+  animated gummi palette and the normal scene lighting instead. Flip the
+  constant to `true` to restore the textured spheres.

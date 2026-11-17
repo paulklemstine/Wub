@@ -21,6 +21,16 @@ import { TamagotchiAvatar } from "./tamagotchi";
 import { SingingHeadPanel } from "./singing_head";
 import { TransitionProbe } from "./transition_probe";
 import { RaveLightshowPanel, type LightshowPresetId } from "./lightshow";
+import {
+  Fm1MidiInput,
+  FM1_DEFAULT_BANK,
+  FM1_KNOB_STEMS,
+  buildSliceOrder,
+  isFm1BankId,
+  knobValueToSlot,
+  scrollSlot,
+} from "./fm1_midi";
+import type { Fm1MidiDevice, Fm1StatusTone } from "./fm1_midi";
 
 export interface StemState {
   stem: StemName;
@@ -265,6 +275,16 @@ class WubApp {
   private currentStepIndex: number = 0;
   private currentStepAudioTime: number = 0;
   private totalStepsInPattern: number = 16;
+
+  // FM-1 / CTL-1 knob → phrase control.
+  private fm1: Fm1MidiInput | null = null;
+  private fm1StatusEl: HTMLElement | null = null;
+  private fm1Sliders: Partial<Record<StemName, HTMLInputElement>> = {};
+  private fm1Labels: Partial<Record<StemName, HTMLElement>> = {};
+  private fm1Slot: Partial<Record<StemName, number>> = {};
+  private fm1LastRaw: Partial<Record<StemName, number>> = {};
+  private fm1Timers: Partial<Record<StemName, ReturnType<typeof setTimeout>>> = {};
+  private fm1SliceCache: Partial<Record<StemName, { key: string; at: number; points: NebulaPoint[] }>> = {};
 
   init(): void {
     this.statusEl = el<HTMLElement>("status-line");
@@ -534,6 +554,9 @@ class WubApp {
     } catch (e) {
       console.warn("Client ML sequencer init failed:", e);
     }
+
+    // Hardware knob phrase control (M-VAVE FM-1 running CTL-1 firmware).
+    this.initFm1();
 
     // Sticky BPM: load from localStorage if set, else default to 96 BPM
     const savedBpm = localStorage.getItem("wub_bpm");
@@ -2368,6 +2391,251 @@ class WubApp {
     }
 
     requestAnimationFrame((next) => this.frame(next));
+  }
+
+  // -- FM-1 knob phrase control -------------------------------------------
+  //
+  // The stock FM-1 knobs never transmit CC. With the CTL-1 firmware, KNOB 1-4
+  // send absolute CC in one of four banks; each knob is bound to the matching
+  // stem in DJ-surface order (DRUMS, BASS, VOCALS, OTHER). A knob value maps
+  // linearly onto that stem's deterministic slice catalogue, and the same
+  // reticle-steering path as a mouse drag commits the phrase.
+
+  private initFm1(): void {
+    const strip = document.getElementById("fm1-strip");
+    if (strip === null) return;
+    this.fm1StatusEl = document.getElementById("fm1-status");
+
+    const bankSelect = document.getElementById("fm1-bank-select");
+    const selectedBank =
+      bankSelect instanceof HTMLSelectElement && isFm1BankId(bankSelect.value)
+        ? bankSelect.value
+        : FM1_DEFAULT_BANK;
+    if (bankSelect instanceof HTMLSelectElement) bankSelect.value = selectedBank;
+
+    this.fm1 = new Fm1MidiInput({
+      bank: selectedBank,
+      onKnob: (stem, value) => this.handleFm1Knob(stem, value),
+      onStatus: (message, tone) => this.setFm1Status(message, tone),
+      onDevices: (devices, selectedId) => this.renderFm1Devices(devices, selectedId),
+    });
+
+    const connectBtn = document.getElementById("fm1-connect");
+    if (connectBtn instanceof HTMLButtonElement) {
+      connectBtn.addEventListener("click", () => {
+        void this.connectFm1();
+      });
+    }
+    const inputSelect = document.getElementById("fm1-input-select");
+    if (inputSelect instanceof HTMLSelectElement) {
+      inputSelect.addEventListener("change", () => {
+        this.fm1?.selectInput(inputSelect.value === "" ? null : inputSelect.value);
+      });
+    }
+    if (bankSelect instanceof HTMLSelectElement) {
+      bankSelect.addEventListener("change", () => {
+        if (isFm1BankId(bankSelect.value)) this.fm1?.setBank(bankSelect.value);
+      });
+    }
+
+    FM1_KNOB_STEMS.forEach((stem, index) => {
+      const slider = document.getElementById(`fm1-knob-${stem}`);
+      if (slider instanceof HTMLInputElement) {
+        this.fm1Sliders[stem] = slider;
+        slider.addEventListener("input", () => {
+          if (this.fm1 === null) return;
+          this.handleFm1Absolute(stem, Number(slider.value));
+        });
+      }
+      const label = document.getElementById(`fm1-val-${stem}`);
+      if (label !== null) this.fm1Labels[stem] = label;
+    });
+
+    this.renderFm1Devices([], null);
+    this.setFm1Status(
+      "Stock FM-1 knobs send nothing — flash CTL-1, connect USB, then press CONNECT MIDI.",
+    );
+
+    (window as unknown as { __wubFM1: unknown }).__wubFM1 = {
+      connect: () => this.connectFm1(),
+      disconnect: () => this.fm1?.disconnect(),
+      state: () => this.fm1?.state() ?? { supported: false, connected: false },
+      bank: (bank: string) => {
+        if (isFm1BankId(bank)) this.fm1?.setBank(bank);
+      },
+      injectCC: (cc: number, value: number) => this.fm1?.injectCC(cc, value) ?? null,
+      knob: (index: number, value: number) => {
+        const cc = this.fm1?.ccForKnob(index) ?? -1;
+        if (FM1_KNOB_STEMS[index] === undefined || cc < 0) return null;
+        return this.fm1?.injectCC(cc, value) ?? null;
+      },
+      slices: (stem: StemName) => this.fm1Slices(stem),
+      select: (stem: StemName, slot: number) => this.selectFm1Slot(stem, slot),
+      reticles: () => this.nebula?.reticles ?? null,
+      remix: () => this.clientConductor?.debugStemRemix() ?? [],
+    };
+  }
+
+  private async connectFm1(): Promise<boolean> {
+    if (this.fm1 === null) return false;
+    this.setFm1Status("Requesting Web MIDI access…");
+    const ok = await this.fm1.connect();
+    if (!ok) return false;
+    if (this.fm1.connected) {
+      this.setFm1Status(`Listening to ${this.fm1.deviceName ?? "MIDI input"}.`, "ok");
+    } else {
+      this.setFm1Status(
+        `MIDI ready — choose a CTL-1 input (bank ${this.fm1.bankId}).`,
+        "ok",
+      );
+    }
+    return true;
+  }
+
+  private setFm1Status(message: string, tone: Fm1StatusTone = "info"): void {
+    const elx = this.fm1StatusEl ?? document.getElementById("fm1-status");
+    if (elx === null) return;
+    elx.textContent = message;
+    elx.dataset.tone = tone;
+  }
+
+  private renderFm1Devices(devices: Fm1MidiDevice[], selectedId: string | null): void {
+    const select = document.getElementById("fm1-input-select");
+    if (!(select instanceof HTMLSelectElement)) return;
+    const previous = selectedId ?? select.value;
+    select.replaceChildren();
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = devices.length === 0 ? "— no MIDI inputs —" : "— none —";
+    select.appendChild(none);
+    for (const device of devices) {
+      const option = document.createElement("option");
+      option.value = device.id;
+      option.textContent =
+        device.state === "connected" ? device.name : `${device.name} (${device.state})`;
+      select.appendChild(option);
+    }
+    select.value =
+      previous !== "" && devices.some((device) => device.id === previous) ? previous : "";
+  }
+
+  /** Deterministic per-stem slice order, cached per cluster/playback mode. */
+  private fm1Slices(stem: StemName): NebulaPoint[] {
+    const conductor = this.clientConductor;
+    if (conductor === null) return [];
+    const key = `${conductor.activeClusterId ?? "-"}|${conductor.getPlaybackMode()}|${
+      conductor.isStemRemix ? "remix" : "kit"
+    }`;
+    const now = Date.now();
+    const cached = this.fm1SliceCache[stem];
+    if (cached !== undefined && cached.key === key && now - cached.at < 15000) {
+      return cached.points;
+    }
+    const pool = conductor.stemSlices(stem);
+    const points = buildSliceOrder(
+      pool.length > 0
+        ? pool
+        : conductor.getAllKitPhrasePoints().filter((point) => point.stem === stem),
+    );
+    this.fm1SliceCache[stem] = { key, at: now, points };
+    return points;
+  }
+
+  /**
+   * Hardware knob turn: the CTL-1 encoder is endless and sends absolute 0..127
+   * values with acceleration. The first event seeds a slot from that value;
+   * after that each click scrolls by the (unwrapped) delta, so a slow turn
+   * walks through every slice and a fast turn skips a few.
+   */
+  private handleFm1Knob(stem: StemName, value: number): void {
+    const points = this.fm1Slices(stem);
+    const count = points.length;
+    if (count === 0) {
+      this.fm1LastRaw[stem] = value;
+      this.syncFm1Cell(stem, value, 0, 0);
+      this.setFm1Status("No slices loaded yet — press PLAY, then turn the knob.", "warn");
+      return;
+    }
+    const previous = this.fm1LastRaw[stem];
+    const current = this.fm1Slot[stem];
+    let slot: number;
+    if (current === undefined || previous === undefined) {
+      slot = knobValueToSlot(value, count);
+    } else {
+      slot = scrollSlot(current, value, previous, count);
+    }
+    this.fm1LastRaw[stem] = value;
+    this.applyFm1Slot(stem, value, slot, points);
+  }
+
+  /** Virtual slider: a direct 0..127 jump to a slot (also re-anchors scroll). */
+  private handleFm1Absolute(stem: StemName, value: number): void {
+    const points = this.fm1Slices(stem);
+    const count = points.length;
+    const slot = knobValueToSlot(value, count);
+    this.fm1LastRaw[stem] = value;
+    this.applyFm1Slot(stem, value, slot, points);
+  }
+
+  private applyFm1Slot(
+    stem: StemName,
+    value: number,
+    slot: number,
+    points: NebulaPoint[],
+  ): void {
+    const count = points.length;
+    if (count === 0) {
+      this.syncFm1Cell(stem, value, 0, 0);
+      this.setFm1Status("No slices loaded yet — press PLAY, then turn the knob.", "warn");
+      return;
+    }
+    const index = Math.max(0, Math.min(count - 1, Math.round(slot)));
+    this.syncFm1Cell(stem, value, index, count);
+    const point = points[index];
+    if (point === undefined) return;
+    // Move the reticle immediately (same visual language as a drag) and commit
+    // the pinned phrase once the knob settles.
+    this.nebula?.setReticleTarget(stem, point.x, point.y, 0.18);
+    if (this.fm1Slot[stem] === index) return;
+    this.fm1Slot[stem] = index;
+    const pending = this.fm1Timers[stem];
+    if (pending !== undefined) clearTimeout(pending);
+    this.fm1Timers[stem] = setTimeout(() => {
+      delete this.fm1Timers[stem];
+      this.commitFm1(stem, point);
+    }, 180);
+    this.setFm1Status(
+      `K${FM1_KNOB_STEMS.indexOf(stem) + 1} ${stem.toUpperCase()} → slice ${index + 1}/${count}${
+        point.trackId ? ` · ${point.trackId}` : ""
+      }`,
+    );
+  }
+
+  /** Debug/test jump to an exact slot in the stem's ordered slice list. */
+  private selectFm1Slot(stem: StemName, slot: number): NebulaPoint | null {
+    const points = this.fm1Slices(stem);
+    if (points.length === 0) return null;
+    const index = Math.max(0, Math.min(points.length - 1, Math.round(slot)));
+    const value =
+      points.length <= 1 ? 0 : Math.round((index * 127) / (points.length - 1));
+    this.fm1LastRaw[stem] = value;
+    this.applyFm1Slot(stem, value, index, points);
+    return points[index] ?? null;
+  }
+
+  /** Commit a knob slice exactly like dropping the stem's reticle. */
+  private commitFm1(stem: StemName, point: NebulaPoint): void {
+    this.nebula?.setReticle(stem, point.x, point.y);
+    this.clientConductor?.setReticleSteering(stem, point.x, point.y, true);
+  }
+
+  private syncFm1Cell(stem: StemName, value: number, slot: number, count: number): void {
+    const slider = this.fm1Sliders[stem];
+    if (slider !== undefined && Number(slider.value) !== value) slider.value = String(value);
+    const label = this.fm1Labels[stem];
+    if (label !== undefined) {
+      label.textContent = count > 0 ? `${value} · ${slot + 1}/${count}` : `${value} · —`;
+    }
   }
 
   private setStatus(text: string): void {

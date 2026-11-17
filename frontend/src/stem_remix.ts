@@ -4685,6 +4685,26 @@ export class StemRemixPlayer {
     return points;
   }
 
+  /**
+   * Live phrase pool for one stem: exactly the phrases a pin can select at the
+   * current tempo/key/style. Hardware knob control maps onto this list so every
+   * detent lands on a legal phrase instead of an arbitrary catalogue point.
+   */
+  stemPoolPoints(stem: StemName): NebulaPoint[] {
+    const points: NebulaPoint[] = [];
+    for (const entry of this.pools[stem]) {
+      points.push({
+        x: entry.x,
+        y: entry.y,
+        stem,
+        trackId: entry.kit.track_id,
+        phraseId: entry.phrase.id,
+        kitId: entry.kit.track_id,
+      });
+    }
+    return points;
+  }
+
   activePoints(): NebulaPoint[] {
     const points: NebulaPoint[] = [];
     for (const stem of STEMS) {

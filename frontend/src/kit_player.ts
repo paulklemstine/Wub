@@ -540,6 +540,15 @@ export class KitPlayer {
     return points;
   }
 
+  /** One stem's selectable slices for hardware knob control. */
+  public stemSlices(stem: StemName): NebulaPoint[] {
+    if (this.remix !== null) {
+      const pool = this.remix.stemPoolPoints(stem);
+      if (pool.length > 0) return pool;
+    }
+    return this.allPhrasePoints().filter((point) => point.stem === stem);
+  }
+
   private loudestStem(phrase: KitPhrase): StemName {
     let loudest: StemName = "drums";
     let bestDb = Number.NEGATIVE_INFINITY;

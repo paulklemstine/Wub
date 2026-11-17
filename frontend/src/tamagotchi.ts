@@ -220,11 +220,6 @@ export class TamagotchiAvatar {
     this.host3dEl = document.getElementById("tamagotchi-3d-host");
     this.btn3dToggleEl = document.getElementById("btn-tamagotchi-3d");
     this.btn3dCamEl = document.getElementById("btn-tamagotchi-cam");
-    if (this.host3dEl && !this.bear3dView) {
-      this.bear3dView = new Bear3DView(this.host3dEl, (preset) => {
-        this.sync3DButtons(preset);
-      });
-    }
     if (this.btn3dToggleEl) {
       this.btn3dToggleEl.addEventListener("click", () => this.toggle3DMode());
     }
@@ -319,12 +314,31 @@ export class TamagotchiAvatar {
   }
 
   public set3DMode(active: boolean): void {
-    this.view3dActive = active && Boolean(this.bear3dView);
+    // Build the WebGL scene on first activation only: constructing the Three.js
+    // stage, geometries and shaders at page load burned CPU for a view most
+    // sessions never open.
+    this.view3dActive = active ? this.ensure3DView() : false;
     if (this.canvasEl && this.canvasEl.dataset.offscreen !== "true") {
       this.canvasEl.style.display = this.view3dActive ? "none" : "block";
     }
     this.bear3dView?.setActive(this.view3dActive);
     this.sync3DButtons(this.bear3dView?.getCameraPreset() ?? "three");
+  }
+
+  /** Lazily create the 3D Wub Bear scene. Returns false if it cannot start. */
+  private ensure3DView(): boolean {
+    if (this.bear3dView !== null) return true;
+    if (this.host3dEl === null) return false;
+    try {
+      this.bear3dView = new Bear3DView(this.host3dEl, (preset) => {
+        this.sync3DButtons(preset);
+      });
+      return true;
+    } catch (err) {
+      console.warn("[tamagotchi] 3D view unavailable:", err);
+      this.bear3dView = null;
+      return false;
+    }
   }
 
   public toggle3DMode(): void {

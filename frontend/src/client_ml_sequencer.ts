@@ -5246,6 +5246,11 @@ export class ClientGrooveboxConductor {
     return this.kitPlayer?.allPhrasePoints() ?? [];
   }
 
+  /** One stem's legal slice pool for the FM-1/CTL-1 knob controller. */
+  public stemSlices(stem: StemName): NebulaPoint[] {
+    return this.kitPlayer?.stemSlices(stem) ?? [];
+  }
+
   /** Switch between structured Song Mode and Infinite DJ Morph Mode. */
   public setSongMode(mode: "song" | "morph"): void {
     this.pendingSongMode = mode;
