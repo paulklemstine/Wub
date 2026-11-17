@@ -164,3 +164,58 @@ def test_unobserved_columns_have_no_random_runtime_effect():
     exported,pred,loss=train_net(x,y,val,4,'cpu')
     assert np.isfinite(pred).all() and np.isfinite(loss)
     assert all(row[3]==0 for row in exported['w1'])
+
+
+def test_motif_return_sidecar_is_complete_and_bounded():
+    base=ROOT/'frontend/public/data/kits'
+    model=json.loads((base/'motif_return.json').read_text())
+    assert model['format']=='wub-motif-return-v1'
+    assert model['input_dim']==3*DIM+4+3+1
+    net=model['net']
+    assert len(net['mean'])==model['input_dim']
+    assert len(net['std'])==model['input_dim']
+    assert all(std>0 for std in net['std'])
+    assert len(net['w1'])==32 and all(len(row)==model['input_dim'] for row in net['w1'])
+    assert len(net['w2'])==1 and len(net['w2'][0])==32
+    assert model['report']['val_auc']>0.6
+    assert model['report']['val_positive_rate']>0.2
+    sidecars=json.loads((base/'sidecars.json').read_text())
+    assert sidecars['motif_return'] is True
+
+
+def test_browser_loads_motif_sidecar_as_a_soft_term():
+    source=(ROOT/'frontend/src/slice_flow.ts').read_text(encoding='utf-8')
+    assert 'motif_return.json' in source
+    assert 'returnScore' in source
+    assert 'motifGain' in source
+    assert 'MOTIF_INPUT_DIM' in source
+
+
+def test_browser_accepts_valid_motif_sidecar(tmp_path):
+    out=tmp_path/'motif.cjs'
+    subprocess.run([str(ROOT/'frontend/node_modules/.bin/esbuild'),str(ROOT/'frontend/src/slice_flow.ts'),'--bundle','--platform=node','--format=cjs',f'--outfile={out}'],check=True,capture_output=True)
+    base=ROOT/'frontend/public/data/kits'
+    motif=(base/'motif_return.json').read_text()
+    artifact=dict(format='slice_flow_v1',feature_dim=DIM,phrase_ids=['a','b'],feature_file='features.f32',critic=network(INPUT_DIM),mix=network(16),planner=network(8,3),foundation_seconds=90)
+    features=np.ones((2,4,4,DIM),np.float32)*.3
+    import base64
+    raw=base64.b64encode(features.astype('<f4').tobytes()).decode()
+    script=r'''
+const assert=require('node:assert/strict');
+const {SliceFlow}=require(process.argv[1]);
+const artifact=JSON.parse(process.argv[2]);
+const motif=JSON.parse(process.argv[3]);
+const raw=Buffer.from(process.argv[4],'base64');
+global.fetch=async url=>{
+ if(String(url).endsWith('motif_return.json'))return {ok:true,json:async()=>motif};
+ return {ok:true,json:async()=>artifact,arrayBuffer:async()=>raw.buffer.slice(raw.byteOffset,raw.byteOffset+raw.byteLength)};
+};
+(async()=>{
+ const flow=new SliceFlow();
+ assert.equal(await flow.load('/kits'),true);
+ assert.ok(flow.motif && flow.motif.w1.length===32);
+ console.log('ok');
+})().catch(e=>{console.error(e);process.exitCode=1});
+'''
+    result=subprocess.run(['node','-e',script,str(out),json.dumps(artifact),motif,raw],capture_output=True,text=True)
+    assert result.returncode==0, result.stderr

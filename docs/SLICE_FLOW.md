@@ -110,3 +110,24 @@ only training-partition material and reset context across excluded material.
 No preference is invented when there is no human feedback. Inspect the exported
 model's report for actual corpus counts, split IDs, proxy errors and feedback
 counts. The general sidecar builder preserves the new sidecar flag when present.
+
+## Motif return and the Phase 1 evaluator
+
+`scripts/eval_flow.py` now mines a **motif lag profile** from each real track:
+energy, four 16-step onset masks and a 12-bin chroma per bar, compared only
+within the same section at lags 1, 2, 4, 8, 16 and 32.  Against 78 real tracks
+the return correlation is about +0.34 at 8 bars, +0.22 at 16 and +0.14 at 32,
+so the metric can tell "a groove that comes back" from "constant novelty".  A
+trace without onset masks degrades to the coarse Phase 0 shape instead of
+fake-materialising structure.
+
+`scripts/train_motif_return.py` trains a 104→32→1 tanh network on the same
+shipped 32-d cells.  Positives are cells 8/16/32 bars later in the same
+original song; negatives are cross-song pairs and same-song cells 64 bars away,
+so record identity alone cannot solve the task.  Track partitions are fixed
+before sampling.  The model is published as `motif_return.json` and loaded
+optionally by `slice_flow.ts`; its score becomes a soft term in the final gate
+that favours a candidate recalling the current foundation after roughly
+60–120 s.  On the shipped bank it reaches about 0.84 validation AUC against
+these acoustic targets — still a proxy, so the listening A/B loop remains the
+real judge.

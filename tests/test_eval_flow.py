@@ -10,12 +10,15 @@ import numpy as np
 from scripts.eval_flow import (
     ARC_POINTS,
     BASE_SECTIONS,
+    MOTIF_DIM,
     dtw_distance,
     base_section,
     build_reference,
     demo_trace,
     energy01,
     lag_profile,
+    motif_matrix,
+    motif_vector,
     ngram_counts,
     ngram_logprob,
     resample,
@@ -39,6 +42,7 @@ def _ref(trace):
         },
         "duration_bars": {label: {"p10": 4, "p50": 16, "p90": 64} for label in BASE_SECTIONS},
         "lag_profile": profile,
+        "motif_lag_profile": lag_profile(motif_matrix(trace["bars"])),
         "energy_envelope": {
             "mean": resample([b["energy"] for b in trace["bars"]]).tolist(),
             "std": [0.0] * ARC_POINTS,
@@ -178,3 +182,38 @@ def test_build_reference_requires_usable_corpus(tmp_path):
     import pytest
     with pytest.raises(SystemExit):
         build_reference(tmp_path, max_tracks=4)
+
+
+def test_motif_vector_has_onsets_and_chroma():
+    bar = {
+        "energy": 0.7,
+        "chroma": [0.1] * 12,
+        "stems": {stem: {"onsets": [1 if i % 4 == 0 else 0 for i in range(16)]}
+                  for stem in ("drums", "bass", "other", "vocals")},
+    }
+    vec = motif_vector(bar)
+    assert vec.shape == (MOTIF_DIM,)
+    assert vec[0] == 0.7
+    assert vec[1] == 1.0 and vec[2] == 0.0
+    assert vec[-1] == 0.1
+    # Missing masks stay zero instead of inventing a fake motif.
+    bare = motif_vector({"energy": 0.5})
+    assert bare.shape == (MOTIF_DIM,)
+    assert np.count_nonzero(bare[1:]) == 0
+
+
+def test_motif_return_separates_groove_from_churn():
+    song = demo_trace("song", 104, seed=19)
+    churn = demo_trace("churn", 104, seed=19)
+    good = lag_profile(motif_matrix(song["bars"]))
+    bad = lag_profile(motif_matrix(churn["bars"]))
+    assert good[8] > 0.2
+    assert bad[8] < 0.1
+    assert good[8] > bad[8]
+
+
+def test_score_trace_reports_motif_gate():
+    trace = demo_trace("song", 104, seed=23)
+    report = score_trace(trace, _ref(trace))
+    assert "corr" in report["motif"]
+    assert report["motif"]["profile"]

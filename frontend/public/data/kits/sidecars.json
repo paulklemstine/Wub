@@ -12,5 +12,6 @@
   "section_model": true,
   "cell_index": true,
   "cell_compat": true,
-  "slice_flow": true
+  "slice_flow": true,
+  "motif_return": true
 }

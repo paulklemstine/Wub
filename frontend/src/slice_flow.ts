@@ -7,8 +7,11 @@ import type { StemName } from "./types";
 
 export const FLOW_DIM = 32;
 export const FLOW_INPUT_DIM = 108;
+export const MOTIF_INPUT_DIM = FLOW_DIM * 3 + 4 + 3 + 1;
+const MOTIF_FORMAT = "wub-motif-return-v1";
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 interface Network { mean: number[]; std: number[]; w1: number[][]; b1: number[]; w2: number[][]; b2: number[] }
+interface MotifArtifact { format: string; input_dim: number; net: Network }
 interface Artifact {
   format: string; feature_dim: number; phrase_ids: string[]; feature_file: string;
   critic: Network; mix: Network; planner: Network; foundation_seconds: number;
@@ -32,7 +35,7 @@ export interface FlowContext {
 }
 export interface SliceFlowTrace {
   id: number; stem: StemName; at: number; endAt: number; section: string;
-  cells: FlowCell[]; score: number; seamFeatures: number[] | null;
+  cells: FlowCell[]; score: number; returnScore: number; seamFeatures: number[] | null;
 }
 const clamp = (x: number, lo = 0, hi = 1): number => Math.max(lo, Math.min(hi, x));
 
@@ -43,6 +46,18 @@ export function flowTransitionFeatures(a: ArrayLike<number>, b: ArrayLike<number
   }
   out[96 + STEMS.indexOf(stem)] = 1;
   out.set(ctx, 100);
+  return out;
+}
+
+export function motifFeatures(a: ArrayLike<number>, b: ArrayLike<number>, stem: number, lag: number, age: number): Float32Array {
+  const out = new Float32Array(MOTIF_INPUT_DIM);
+  for (let i = 0; i < FLOW_DIM; i++) {
+    out[i] = a[i]; out[FLOW_DIM + i] = b[i];
+    out[2 * FLOW_DIM + i] = Math.abs(a[i] - b[i]);
+  }
+  out[3 * FLOW_DIM + stem] = 1;
+  out[3 * FLOW_DIM + 4 + lag] = 1;
+  out[MOTIF_INPUT_DIM - 1] = age;
   return out;
 }
 
@@ -102,6 +117,7 @@ function infer(net: Network, x: ArrayLike<number>): number[] {
 
 export class SliceFlow {
   private artifact: Artifact | null = null;
+  private motif: Network | null = null;
   private features: Float32Array | null = null;
   private rows = new Map<string, number>();
   private tails: Partial<Record<StemName, FlowCell>> = {};
@@ -134,6 +150,16 @@ export class SliceFlow {
       if (!features.every(Number.isFinite)) return false;
       this.rows.clear(); artifact.phrase_ids.forEach((id, i) => this.rows.set(id, i));
       this.features = features; this.artifact = artifact;
+      // Motif-return is optional: the acoustic critic alone still works if
+      // this sidecar is missing from an older bank.
+      try {
+        const response = await fetch(`${base}/motif_return.json`);
+        if (response.ok) {
+          const model = await response.json() as MotifArtifact;
+          if (model.format === MOTIF_FORMAT && model.input_dim === MOTIF_INPUT_DIM
+            && validNetwork(model.net, MOTIF_INPUT_DIM, 1)) this.motif = model.net;
+        }
+      } catch { /* optional model */ }
       console.info(`[SliceFlow] acoustic critic + development planner ready (${artifact.phrase_ids.length} phrases)`);
       return true;
     } catch { return false; }
@@ -159,11 +185,12 @@ export class SliceFlow {
     return out;
   }
 
-  score(cells: readonly FlowCell[], context: FlowContext): { score: number; seamFeatures: number[] | null } {
-    if (!this.artifact || !cells.length) return { score: .5, seamFeatures: null };
+  score(cells: readonly FlowCell[], context: FlowContext): { score: number; seamFeatures: number[] | null; returnScore: number } {
+    if (!this.artifact || !cells.length) return { score: .5, seamFeatures: null, returnScore: .5 };
     let previous = this.tails[cells[0].stem];
     let sum = 0, count = 0, minimum = 1;
     let seamFeatures: number[] | null = null;
+    let returnSum = 0, returnCount = 0;
     for (const cell of cells) {
       const a = previous ? this.cellFeatures(previous) : null;
       const b = this.cellFeatures(cell);
@@ -174,9 +201,24 @@ export class SliceFlow {
         if (!seamFeatures) seamFeatures = Array.from(input);
         minimum = Math.min(minimum, score); sum += score; count++;
       }
+      if (this.motif && b && cell.startFrac === 0) {
+        const foundation = this.foundations[cell.stem];
+        const anchor = foundation ? this.cellFeatures(foundation) : null;
+        if (anchor) {
+          const seconds = Math.max(0, context.at - (this.identitySince[cell.stem] ?? context.at));
+          const lag = seconds < 20 ? 0 : seconds < 40 ? 1 : 2;
+          const input = motifFeatures(anchor, b, STEMS.indexOf(cell.stem), lag, clamp(seconds / 60, 0, 2));
+          returnSum += 1 / (1 + Math.exp(-infer(this.motif, input)[0]));
+          returnCount++;
+        }
+      }
       previous = cell;
     }
-    return { score: count ? .55 * sum / count + .45 * minimum : .5, seamFeatures };
+    return {
+      score: count ? .55 * sum / count + .45 * minimum : .5,
+      seamFeatures,
+      returnScore: returnCount ? returnSum / returnCount : .5,
+    };
   }
 
   mixScore<T extends FlowEntry>(tasks: readonly FlowTask<T>[], context: FlowContext): number {
@@ -216,18 +258,20 @@ export class SliceFlow {
     const candidates = tasks.map(task => {
       if (pinned.has(task.stem)) return { task, fallback: null, changed: false, priority: 1 };
       const prior = this.foundations[task.stem];
-      const candidate = this.score(describeFlowTask(task, context.bars, 240/context.bpm), context).score;
+      const candidate = this.score(describeFlowTask(task, context.bars, 240/context.bpm), context);
       const fallback = hold(task.stem);
-      const fallbackScore = fallback ? this.score(describeFlowTask(fallback,context.bars,240/context.bpm),context).score : 0;
+      const fallbackAssessment = fallback ? this.score(describeFlowTask(fallback,context.bars,240/context.bpm),context) : null;
+      const fallbackScore = fallbackAssessment?.score ?? 0;
+      const motifGain = .28 * (candidate.returnScore - (fallbackAssessment?.returnScore ?? .5));
       const first = task.run[0];
       const changed = Boolean(prior && first && prior.trackId !== first.kit.track_id);
       const stableAge = Math.max(0,context.at-(this.identitySince[task.stem]??context.at));
       const foundation = task.stem === "drums" || task.stem === "bass";
       const protectedFoundation = foundation && stableAge < this.artifact!.foundation_seconds && !context.rotation && !context.bridge;
-      if (fallback && ((changed && protectedFoundation && !context.sectionChanged) || (!context.bridge && candidate + .18 < fallbackScore))) {
+      if (fallback && ((changed && protectedFoundation && !context.sectionChanged) || (!context.bridge && candidate.score + .18 < fallbackScore - motifGain))) {
         return { task: fallback, fallback, changed: false, priority: 0 };
       }
-      return { task, fallback, changed, priority: candidate-fallbackScore + (foundation ? 0 : .02) };
+      return { task, fallback, changed, priority: candidate.score-fallbackScore + motifGain + (foundation ? 0 : .02) };
     });
     // Preserve a recognizable anchor even when the old arc requests a reset.
     const maxChanges = context.bars <= 4 || this.lastIntent === "hold" || context.rotation ? 1 : 2;

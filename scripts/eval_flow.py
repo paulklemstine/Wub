@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 0 flow evaluation for Wub sets.
+"""Phase 0/1 flow evaluation for Wub sets.
 
 This is the missing instrument: it scores a played (or synthesised) set against
 **real music statistics**, not against a pairwise AUC.  It is deliberately
@@ -27,6 +27,9 @@ Metrics (all reported with a percentile against the real-track sample):
                  lags 1,2,4,8,16,32 versus real tracks.  This is the metric
                  that separates "a song with a groove" from "constant shuffle":
                  real tracks are self-similar at 8/16 bars and varied at 4.
+* ``motif``      Phase 1: same lag profile computed from 16-step onset masks
+                 plus chroma, so an actual motif return can be measured rather
+                 than inferred from loudness and density.
 * ``sources``    per-stem bars-per-source-change and phrase-use entropy.  The
                  live mode target is slow change (16-32 bars) with high entropy;
                  a 4-bar swap rate fails here.
@@ -67,10 +70,14 @@ if str(_REPO_ROOT) not in sys.path:
 
 TRACE_FORMAT = "wub-set-trace-v1"
 REFERENCE_FORMAT = "wub-flow-reference-v1"
+MOTIF_FORMAT = "wub-motif-return-v1"
 BASE_SECTIONS = ("INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN")
 STEMS = ("drums", "bass", "other", "vocals")
 LAGS = (1, 2, 4, 8, 16, 32)
 ARC_POINTS = 64
+# Phase 1: energy + 4 x 16-step onset masks + 12-d chroma.  Unlike the Phase 0
+# 5-d arrangement vector, this can actually see a motif come back at 8/16 bars.
+MOTIF_DIM = 1 + 4 * 16 + 12
 
 # Starting gates.  Phase 0 calibrates these: the target is "inside the real
 # distribution", so most gates are percentiles rather than absolutes.
@@ -82,6 +89,8 @@ DEFAULT_GATES: Dict[str, float] = {
     "form_percentile": 20.0,
     "structure_corr": -0.25,
     "structure_rmse": 1.00,
+    "motif_corr": 0.30,
+    "motif_rmse": 0.60,
     "duration_in_band": 0.70,
     "energy_percentile": 20.0,
     "min_bars_per_source_change": 8.0,
@@ -162,6 +171,42 @@ def bar_vector(bar: Dict[str, Any]) -> np.ndarray:
 
 def trace_matrix(bars: Sequence[Dict[str, Any]]) -> np.ndarray:
     return np.stack([bar_vector(bar) for bar in bars]) if bars else np.zeros((0, 5))
+
+
+def _mask16(value: Any) -> np.ndarray:
+    """Coerce a 16-step onset mask; missing data stays silent (no fake motif)."""
+    out = np.zeros(16, dtype=np.float64)
+    if isinstance(value, (list, tuple)):
+        for i in range(min(16, len(value))):
+            out[i] = clamp01(_finite(value[i]))
+    return out
+
+
+def motif_vector(bar: Dict[str, Any]) -> np.ndarray:
+    """Phase 1 bar vector: energy + onset masks + chroma (MOTIF_DIM floats).
+
+    Real traces carry ``stems.<stem>.onsets`` (16 steps) and ``chroma`` (12
+    bins).  Older traces omit them; those columns stay zero, so the scorer
+    degrades to the coarse Phase 0 shape instead of inventing structure.
+    """
+    vec = [energy01(bar.get("energy", bar.get("target_energy", 0.0)))]
+    for stem in STEMS:
+        vec.extend(_mask16(_stem_payload(bar, stem).get("onsets")).tolist())
+    chroma = bar.get("chroma")
+    if isinstance(chroma, (list, tuple)):
+        vec.extend(clamp01(_finite(v)) for v in chroma[:12])
+    else:
+        vec.extend([0.0] * 12)
+    out = np.asarray(vec, dtype=np.float64)
+    if out.size != MOTIF_DIM:
+        out = np.resize(out, MOTIF_DIM)
+    return out
+
+
+def motif_matrix(bars: Sequence[Dict[str, Any]]) -> np.ndarray:
+    if not bars:
+        return np.zeros((0, MOTIF_DIM))
+    return np.stack([motif_vector(bar) for bar in bars])
 
 
 def standardize(matrix: np.ndarray) -> np.ndarray:
@@ -440,6 +485,7 @@ def score_trace(trace: Dict[str, Any],
     labels = [base_section(bar.get("section", bar.get("kind"))) for bar in bars]
     profile = lag_profile(matrix)
     within = lag_profile(matrix, sections=labels)
+    motif = lag_profile(motif_matrix(bars), sections=labels)
     runs = section_runs(bars)
     seq = [label for label, _ in runs]
     sources = source_stats(bars)
@@ -455,6 +501,7 @@ def score_trace(trace: Dict[str, Any],
         "form": {"sequence": seq},
         "structure": {"profile": {str(k): v for k, v in profile.items()}},
         "structure_within": {"profile": {str(k): v for k, v in within.items()}},
+        "motif": {"profile": {str(k): v for k, v in motif.items()}},
         "sources": sources,
         "energy": energy,
         "seams": seams,
@@ -496,6 +543,22 @@ def score_trace(trace: Dict[str, Any],
         if rmse > gates["structure_rmse"]:
             ok = False
             verdict_reasons.append(f"structure rmse {rmse:.2f} > {gates['structure_rmse']:.2f}")
+
+        motif_ref = ref.get("motif_lag_profile")
+        if motif_ref:
+            mcorr, mrmse = structure_metrics(motif, motif_ref)
+            report["motif"]["corr"] = mcorr
+            report["motif"]["rmse"] = mrmse
+            report["motif"]["percentile"] = percentile(
+                mcorr, ref.get("metrics", {}).get("motif_corr", []))
+            if mcorr < gates["motif_corr"]:
+                ok = False
+                verdict_reasons.append(
+                    f"motif return correlation {mcorr:.2f} < {gates['motif_corr']:.2f}")
+            if mrmse > gates["motif_rmse"]:
+                ok = False
+                verdict_reasons.append(
+                    f"motif return rmse {mrmse:.2f} > {gates['motif_rmse']:.2f}")
 
         fit, checked = duration_fit(runs, ref.get("duration_bars") or {})
         report["durations"] = {"in_band": fit, "checked": checked}
@@ -544,6 +607,35 @@ def score_trace(trace: Dict[str, Any],
 # Reference mining (real tracks)
 # ---------------------------------------------------------------------------
 
+def _bar_motif_rows(data: Dict[str, Any], n_bars: int, energy: np.ndarray) -> np.ndarray:
+    """Per-bar onset masks + chroma from raw segments (Phase 1 motif vector)."""
+    segments = {str(s.get("id")): s for s in data.get("segments", []) if isinstance(s, dict)}
+    tatums = data.get("tatums") or []
+    masks = {stem: np.zeros((n_bars, 16), dtype=np.float64) for stem in STEMS}
+    chroma = np.zeros((n_bars, 12), dtype=np.float64)
+    previous: Dict[str, Optional[str]] = {stem: None for stem in STEMS}
+    for i, tatum in enumerate(tatums[:n_bars * 16]):
+        bar, step = divmod(i, 16)
+        for stem in STEMS:
+            ids = (tatum.get("stem_segments") or {}).get(stem) or []
+            sid = str(ids[-1]) if ids else None
+            seg = segments.get(sid) if sid else None
+            audible = bool(seg) and not seg.get("is_silent", False) and \
+                _finite(seg.get("loudness_max"), -60) > -58
+            if sid is not None and sid != previous[stem] and audible:
+                masks[stem][bar, step] = 1.0
+            previous[stem] = sid
+            if stem != "drums" and audible:
+                pitches = seg.get("pitches") or []
+                if pitches:
+                    weight = clamp01((_finite(seg.get("loudness_max"), -60) + 60) / 60)
+                    chroma[bar] += np.asarray(pitches[:12], dtype=np.float64) * (weight / 16.0)
+    maximum = chroma.max(axis=1, keepdims=True)
+    chroma = chroma / np.maximum(maximum, 1e-6)
+    parts = [energy.reshape(-1, 1)] + [masks[stem] for stem in STEMS] + [chroma]
+    return np.concatenate(parts, axis=1)
+
+
 def _track_from_processed(path: Path) -> Optional[Dict[str, Any]]:
     from wub_core.section_arcs import bar_features, segment_sections
 
@@ -568,6 +660,7 @@ def _track_from_processed(path: Path) -> Optional[Dict[str, Any]]:
         for f in feats
     ], dtype=np.float64)
     energy = matrix[:, 0]
+    motif = _bar_motif_rows(data, len(feats), energy)
     runs: List[Tuple[str, int]] = []
     for label in labels:
         if runs and runs[-1][0] == label:
@@ -582,6 +675,7 @@ def _track_from_processed(path: Path) -> Optional[Dict[str, Any]]:
         "labels": labels,
         "runs": runs,
         "matrix": matrix,
+        "motif_matrix": motif,
         "energy": energy,
     }
 
@@ -629,15 +723,19 @@ def build_reference(processed_dir: Path,
     # Aggregate lag profile: mean/std over tracks, globally and within sections.
     profiles = [lag_profile(t["matrix"]) for t in tracks]
     within_profiles = [lag_profile(t["matrix"], sections=t["labels"]) for t in tracks]
+    motif_profiles = [lag_profile(t["motif_matrix"], sections=t["labels"]) for t in tracks]
     lag_mean: Dict[str, float] = {}
     lag_std: Dict[str, float] = {}
     within_mean: Dict[str, float] = {}
+    motif_mean: Dict[str, float] = {}
     for lag in LAGS:
         vals = [p[lag] for p in profiles if lag in p]
         lag_mean[str(lag)] = float(np.mean(vals)) if vals else 0.0
         lag_std[str(lag)] = float(np.std(vals)) if vals else 0.0
         wvals = [p[lag] for p in within_profiles if lag in p]
         within_mean[str(lag)] = float(np.mean(wvals)) if wvals else 0.0
+        mvals = [p[lag] for p in motif_profiles if lag in p]
+        motif_mean[str(lag)] = float(np.mean(mvals)) if mvals else 0.0
 
     arcs = [resample(t["energy"]) for t in tracks]
     envelope_mean = np.mean(np.stack(arcs), axis=0)
@@ -648,6 +746,8 @@ def build_reference(processed_dir: Path,
     structure_corr: List[float] = []
     structure_rmse: List[float] = []
     structure_within_corr: List[float] = []
+    motif_corr: List[float] = []
+    motif_rmse: List[float] = []
     energy_dtw: List[float] = []
     energy_range: List[float] = []
     for i, track in enumerate(tracks):
@@ -655,6 +755,7 @@ def build_reference(processed_dir: Path,
                            ngram, list(BASE_SECTIONS), order=3)
         corr, rmse = structure_metrics(profiles[i], lag_mean)
         wcorr, _ = structure_metrics(within_profiles[i], within_mean)
+        mcorr, mrmse = structure_metrics(motif_profiles[i], motif_mean)
         nearest = min(
             (dtw_distance(arcs[i], arcs[j]) for j in range(len(arcs)) if j != i),
             default=None)
@@ -662,6 +763,8 @@ def build_reference(processed_dir: Path,
         structure_corr.append(corr)
         structure_rmse.append(rmse)
         structure_within_corr.append(wcorr)
+        motif_corr.append(mcorr)
+        motif_rmse.append(mrmse)
         if nearest is not None:
             energy_dtw.append(nearest)
         energy_range.append(float(np.percentile(track["energy"], 95)
@@ -682,6 +785,7 @@ def build_reference(processed_dir: Path,
         "lag_profile": lag_mean,
         "lag_profile_std": lag_std,
         "lag_profile_within_section": within_mean,
+        "motif_lag_profile": motif_mean,
         "energy_envelope": {
             "mean": envelope_mean.tolist(),
             "std": envelope_std.tolist(),
@@ -693,6 +797,8 @@ def build_reference(processed_dir: Path,
             "structure_corr": structure_corr,
             "structure_rmse": structure_rmse,
             "structure_within_corr": structure_within_corr,
+            "motif_corr": motif_corr,
+            "motif_rmse": motif_rmse,
             "energy_dtw": energy_dtw,
             "energy_range": energy_range,
         },
@@ -748,6 +854,14 @@ def demo_trace(mode: str = "arc", bars: int = 104, seed: int = 505,
     # Phase 1 finding.
     base = {"drums": 0.62, "bass": 0.40, "other": 0.34, "vocals": 0.22}
     pattern_density = dict(base)
+    # Phase 1 motif content: a fixed 8-bar groove with a fill on its last bar,
+    # plus a chord-colour cycle that returns every 8 bars.  Churn randomises it.
+    groove = {
+        "drums": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0],
+        "bass": [1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0],
+        "other": [1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+        "vocals": [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    }
 
     pattern_id = 0
     pattern_start = 0
@@ -793,12 +907,34 @@ def demo_trace(mode: str = "arc", bars: int = 104, seed: int = 505,
                 else:
                     density = clamp01(pattern_density[stem] + rng.uniform(-0.01, 0.01)
                                       + (0.12 if (fill and stem == "drums") else 0.0))
+            mask = list(groove[stem]) if mode != "churn" else [
+                int(rng.random() < 0.3) for _ in range(16)
+            ]
+            if mode != "churn":
+                # Slow variation every 16 bars: the groove returns at 8 bars
+                # inside a block but drifts across blocks, like a real track.
+                variant = (bar // 16) % 3
+                mask = mask[variant:] + mask[:variant]
+            if mode != "churn" and fill and stem == "drums":
+                mask[14] = 1
+                mask[15] = 1
+            if not active[stem]:
+                mask = [0] * 16
             stems[stem] = {
                 "phrase": phrase[stem],
                 "track": source[stem],
                 "active": active[stem],
                 "density": density,
+                "onsets": mask,
             }
+        root = (0 if (bar // 4) % 2 == 0 else 7) + ((bar // 16) % 3) * 2
+        root %= 12
+        chroma = [0.0] * 12
+        chroma[root] = 1.0
+        chroma[(root + 7) % 12] = 0.6
+        chroma[(root + 4) % 12] = 0.4
+        if mode == "churn":
+            chroma = [rng.random() for _ in range(12)]
         energy = clamp01(tgt + (rng.uniform(-0.01, 0.01) if mode != "churn"
                                 else rng.uniform(-0.25, 0.25))
                          + (0.03 if fill else 0.0))
@@ -809,6 +945,7 @@ def demo_trace(mode: str = "arc", bars: int = 104, seed: int = 505,
             "section": sec,
             "target_energy": tgt,
             "energy": energy,
+            "chroma": chroma,
             "stems": stems,
             "changed": [],
         })
@@ -878,6 +1015,12 @@ def self_test() -> List[str]:
     check(bad["verdict"]["pass"] is False, "churn trace fails the source gate")
     check(good["form"]["percentile"] is not None, "form percentile is reported")
 
+    song_motif = lag_profile(motif_matrix(song["bars"]))
+    churn_motif = lag_profile(motif_matrix(churn["bars"]))
+    check(len(motif_vector(song["bars"][0])) == MOTIF_DIM, "motif vector has Phase 1 width")
+    check(song_motif.get(8, 0.0) > churn_motif.get(8, 0.0),
+          "motif return at 8 bars separates a groove from churn")
+
     # periodicity: an 8-bar loop should be strongly self-similar at lag 8.
     loop = [{"energy": 0.5 + 0.02 * (i % 8), "section": "DROP",
              "stems": {s: {"phrase": f"p{i % 8}", "track": "t0", "active": True,
@@ -932,6 +1075,9 @@ def main() -> None:
         print("[flow] within-section: " + "  ".join(
             f"{lag}:{value:+.2f}"
             for lag, value in ref.get("lag_profile_within_section", {}).items()))
+        print("[flow] motif return: " + "  ".join(
+            f"{lag}:{value:+.2f}"
+            for lag, value in ref.get("motif_lag_profile", {}).items()))
         return
 
     if not args.trace:
