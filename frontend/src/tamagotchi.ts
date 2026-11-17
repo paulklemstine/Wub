@@ -614,7 +614,7 @@ export class TamagotchiAvatar {
       this.speechBubble = `"${meta.vocalLyric}"`;
     }
 
-    this.renderCanvas(
+    this.renderFourHeads(
       meta,
       isDropGap,
       waveform,
@@ -627,6 +627,7 @@ export class TamagotchiAvatar {
       drumLevel ?? 0,
       bassLevel ?? 0,
       vocalsLevel ?? 0,
+      otherLevel ?? 0,
       rmsLevel
     );
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel);
@@ -1108,6 +1109,111 @@ export class TamagotchiAvatar {
   // Audio Reactive Single Line Loop & Live Waveform Mouth Canvas Engine
   // ---------------------------------------------------------------------------
 
+  /** RMS of a byte time-domain waveform (0..1). */
+  private static waveEnergy(wave?: Uint8Array | null): number {
+    if (!wave || wave.length === 0) return 0;
+    const step = Math.max(1, Math.floor(wave.length / 48));
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < wave.length; i += step) {
+      const v = (wave[i] - 128) / 128;
+      sum += v * v;
+      n += 1;
+    }
+    return n > 0 ? Math.min(1, Math.sqrt(sum / n) * 2.5) : 0;
+  }
+
+  /**
+   * Four copies of the exact same head routine.  Every copy receives only its
+   * own stem's level + waveform, so each one sings its own instrument track.
+   */
+  private renderFourHeads(
+    meta: GrooveboxMeta | null,
+    isDropGap: boolean,
+    waveform: Uint8Array | null | undefined,
+    dt: number,
+    bpm: number,
+    drumWaveform: Uint8Array | null | undefined,
+    bassWaveform: Uint8Array | null | undefined,
+    otherWaveform: Uint8Array | null | undefined,
+    masterWaveform: Uint8Array | null | undefined,
+    drumLevel: number,
+    bassLevel: number,
+    vocalsLevel: number,
+    otherLevel: number,
+    rmsLevel: number
+  ): void {
+    if (!this.canvasEl) return;
+    const savedEnv = { ...this.stemEnv };
+    const savedPunch = { ...this.stemPunch };
+    const savedMixEnv = this.mixEnv;
+    const savedMixPunch = this.mixPunch;
+    const savedMouth = this.liveMouth;
+    const savedAmp = this.smoothedVocalAmp;
+    const savedF0 = this.vocalF0Hz;
+    const savedNotes = this.noteFloating;
+
+    const voices = [
+      { label: "DRUMS", wave: drumWaveform, level: drumLevel, color: "#00e5ff" },
+      { label: "BASS", wave: bassWaveform, level: bassLevel, color: "#b46cff" },
+      { label: "OTHER", wave: otherWaveform, level: otherLevel, color: "#ffb347" },
+      { label: "VOCALS", wave: waveform, level: vocalsLevel, color: "#ff5c8a" },
+    ];
+    const targets = [[0.25, 0.26], [0.75, 0.26], [0.25, 0.70], [0.75, 0.70]] as const;
+    const faceScale = 0.54;
+    const w = this.canvasEl.width;
+    const h = this.canvasEl.height;
+    const centerX = w * 0.5 * faceScale;
+    const centerY = h * 0.54 * faceScale;
+
+    try {
+      voices.forEach((voice, i) => {
+        const energy = TamagotchiAvatar.waveEnergy(voice.wave);
+        const level = Math.max(voice.level, energy);
+        // Feed every internal channel the same per-voice values so the shared
+        // head code reacts only to this instrument, never to the whole mix.
+        this.stemEnv = { drums: level, bass: level, other: level, vocals: level };
+        this.stemPunch = { drums: level, bass: level, other: level, vocals: level };
+        this.mixEnv = level;
+        this.mixPunch = level;
+        this.liveMouth = i === 3 ? savedMouth : null;
+        this.smoothedVocalAmp = energy;
+        this.vocalF0Hz = i === 3 ? savedF0 : 0;
+        this.noteFloating = i === 3 ? savedNotes : [];
+        const [tx, ty] = targets[i];
+        this.renderCanvas(
+          meta, isDropGap, voice.wave, dt, bpm,
+          voice.wave, voice.wave, voice.wave, voice.wave,
+          level, level, level, level,
+          i === 0,
+          tx * w - centerX, ty * h - centerY, faceScale
+        );
+      });
+
+      const ctx = this.ctx2d;
+      if (ctx) {
+        ctx.font = `bold ${Math.max(8, Math.round(w * 0.028))}px monospace`;
+        ctx.textAlign = "center";
+        ctx.globalAlpha = 0.9;
+        voices.forEach((voice, i) => {
+          const [tx, ty] = targets[i];
+          ctx.fillStyle = voice.color;
+          ctx.fillText(voice.label, tx * w, ty * h + faceScale * 146);
+        });
+        ctx.globalAlpha = 1;
+      }
+    } finally {
+      this.stemEnv = savedEnv;
+      this.stemPunch = savedPunch;
+      this.mixEnv = savedMixEnv;
+      this.mixPunch = savedMixPunch;
+      this.liveMouth = savedMouth;
+      this.smoothedVocalAmp = savedAmp;
+      this.vocalF0Hz = savedF0;
+      this.noteFloating = savedNotes;
+    }
+  }
+
   private renderCanvas(
     meta: GrooveboxMeta | null,
     isDropGap: boolean,
@@ -1121,7 +1227,11 @@ export class TamagotchiAvatar {
     drumLevel: number = 0,
     bassLevel: number = 0,
     vocalsLevel: number = 0,
-    rmsLevel: number = 0
+    rmsLevel: number = 0,
+    clear = true,
+    offsetX = 0,
+    offsetY = 0,
+    faceScale = 1
   ): void {
     if (!this.canvasEl) return;
     if (!this.ctx2d) {
@@ -1132,7 +1242,12 @@ export class TamagotchiAvatar {
     const w = this.canvasEl.width;
     const h = this.canvasEl.height;
 
-    ctx.clearRect(0, 0, w, h);
+    if (clear) ctx.clearRect(0, 0, w, h);
+    // Four identical copies of this exact head share one buffer: each call
+    // draws into its own translated/scaled quadrant of the same canvas.
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(faceScale, faceScale);
 
     const sec = meta?.section ?? "GROOVE_A";
     const vowel = this.vocalVowelFormant || meta?.vocalVowel || "";
@@ -1987,6 +2102,7 @@ export class TamagotchiAvatar {
         this.lyricBarEl.innerHTML = `<span style="color: #00ffaa;">♫ ${sec}</span> • <span style="color: #ff77e9;">${this.speechBubble || "WUB GROOVE"}</span>`;
       }
     }
+    ctx.restore();
   }
 
   private drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, outerR: number, innerR: number): void {
