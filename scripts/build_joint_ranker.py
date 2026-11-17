@@ -303,7 +303,15 @@ def build_phrase_states(manifest, rows, row_of, mels, emb32):
     states = {}
     phrase_meta = {}
     for kit in manifest.get("kits", []):
-        cluster = kit_cluster.get(kit["track_id"], {"key": kit["key"], "bpm": kit["bpm"]})
+        cluster = kit_cluster.get(kit["track_id"])
+        if cluster is None:
+            if clusters:
+                cluster = min(
+                    clusters,
+                    key=lambda c: abs(float(c["bpm"]) - float(kit["bpm"])) / max(1.0, float(c["bpm"])),
+                )
+            else:
+                cluster = {"id": kit["track_id"], "key": kit["key"], "bpm": kit["bpm"]}
         block_sec = 960.0 / max(1e-6, float(cluster["bpm"]))
         shift = key_shift(cluster["key"], kit["key"])
         for phrase in kit.get("phrases", []):
