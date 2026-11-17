@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wub device shim — FM-1 / CTL-1</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --ink: #e2e8f0;
+        --dim: #8fa3bd;
+        --line: #26344a;
+        --panel: #0b111b;
+        --deck: #121a27;
+        --drums: #ff5470;
+        --bass: #ffb020;
+        --vocals: #c084fc;
+        --other: #38bdf8;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: radial-gradient(120% 120% at 50% -10%, #16233a 0%, #080c14 60%, #05070c 100%);
+        color: var(--ink);
+        font: 14px/1.45 ui-sans-serif, system-ui, "DejaVu Sans", sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        padding: 24px 16px 40px;
+      }
+      .device {
+        width: min(980px, 100%);
+        border: 1px solid #2b3a52;
+        border-radius: 18px;
+        background: linear-gradient(180deg, #141d2b, #0b1119 60%);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        overflow: hidden;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.25);
+      }
+      header h1 { font-size: 15px; margin: 0; letter-spacing: 0.12em; text-transform: uppercase; }
+      header .sub { color: var(--dim); font-size: 12px; }
+      header .spacer { flex: 1; }
+      .tag {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 9px;
+      }
+      .screen { padding: 16px 18px 4px; }
+      .stem {
+        display: grid;
+        grid-template-columns: 78px 1fr 90px;
+        gap: 12px;
+        align-items: center;
+        padding: 9px 12px;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        background: #0a0f18;
+        margin-bottom: 6px;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .stem.is-focus { border-color: #3b82f6; background: #0c1524; }
+      .stem.is-playing .dot { background: var(--stem, #7dd3fc); box-shadow: 0 0 10px var(--stem, #7dd3fc); }
+      .stem.is-buffering { opacity: 0.6; }
+      .stem-name { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 0.06em; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #334155; }
+      .stem-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .stem-phrase { font-size: 11px; color: var(--dim); letter-spacing: 0.04em; }
+      .stem-slot { font-variant-numeric: tabular-nums; font-size: 11px; color: var(--dim); text-align: right; }
+      .bar { height: 3px; border-radius: 2px; background: #17202e; overflow: hidden; margin-top: 5px; }
+      .bar > i { display: block; height: 100%; background: var(--stem, #38bdf8); width: 0; }
+      .knobs {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        padding: 14px 18px 6px;
+      }
+      .knob-card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px 10px;
+        background: #0a1018;
+        text-align: center;
+      }
+      .knob-card .label { font-size: 11px; letter-spacing: 0.08em; color: var(--dim); }
+      .knob-card input[type="range"] { width: 100%; accent-color: var(--stem, #38bdf8); }
+      .knob-card .value { font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 18px 4px;
+      }
+      button {
+        font: inherit;
+        font-size: 12px;
+        color: var(--ink);
+        background: #16202f;
+        border: 1px solid #31415a;
+        border-radius: 8px;
+        padding: 6px 11px;
+        cursor: pointer;
+      }
+      button:hover { border-color: #60a5fa; }
+      button.active { background: #1d4ed8; border-color: #60a5fa; }
+      #btn-play { min-width: 78px; font-weight: 600; letter-spacing: 0.05em; }
+      #btn-play.active { background: #15803d; border-color: #4ade80; }
+      select {
+        font: inherit;
+        font-size: 12px;
+        color: var(--ink);
+        background: #16202f;
+        border: 1px solid #31415a;
+        border-radius: 8px;
+        padding: 5px 7px;
+      }
+      .keys { display: flex; gap: 2px; padding: 12px 18px 6px; }
+      .key {
+        flex: 1;
+        padding: 14px 0;
+        border-radius: 4px;
+        background: linear-gradient(180deg, #f8fafc, #cbd5e1);
+        color: #0f172a;
+        font-size: 10px;
+        font-weight: 600;
+        border: 1px solid #94a3b8;
+        cursor: pointer;
+        user-select: none;
+        touch-action: none;
+      }
+      .key:active { background: linear-gradient(180deg, #93c5fd, #60a5fa); }
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 18px 16px;
+        border-top: 1px solid var(--line);
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .meter { flex: 1; min-width: 120px; height: 6px; border-radius: 3px; background: #17202e; overflow: hidden; }
+      .meter > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #22d3ee, #a855f7); }
+      code { font-family: ui-monospace, "DejaVu Sans Mono", monospace; color: #93c5fd; }
+      .legend {
+        padding: 4px 18px 2px;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .legend b { color: var(--ink); font-weight: 600; }
+      .modbar { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--dim); }
+      .modbar .meter { flex: 0 0 90px; }
+      #status { color: #7dd3fc; }
+    </style>
+  </head>
+  <body>
+    <main class="device">
+      <header>
+        <h1>Wub Device Shim</h1>
+        <span class="sub">FM-1 / CTL-1 · four stems · one 4-bar grid</span>
+        <span class="spacer"></span>
+        <span class="tag" id="bpm-value">126 BPM</span>
+        <span class="tag" id="midi-state">MIDI: on-screen panel</span>
+      </header>
+
+      <section class="screen" aria-label="Stem phrases">
+        <div class="stem" id="stem-drums" style="--stem: var(--drums)">
+          <div class="stem-name"><span class="dot"></span>DRUMS</div>
+          <div>
+            <div class="stem-title">—</div>
+            <div class="stem-phrase">loading</div>
+          </div>
+          <div>
+            <div class="stem-slot">0/0</div>
+            <div class="bar"><i class="stem-bar"></i></div>
+          </div>
+        </div>
+        <div class="stem" id="stem-bass" style="--stem: var(--bass)">
+          <div class="stem-name"><span class="dot"></span>BASS</div>
+          <div>
+            <div class="stem-title">—</div>
+            <div class="stem-phrase">loading</div>
+          </div>
+          <div>
+            <div class="stem-slot">0/0</div>
+            <div class="bar"><i class="stem-bar"></i></div>
+          </div>
+        </div>
+        <div class="stem" id="stem-vocals" style="--stem: var(--vocals)">
+          <div class="stem-name"><span class="dot"></span>VOCALS</div>
+          <div>
+            <div class="stem-title">—</div>
+            <div class="stem-phrase">loading</div>
+          </div>
+          <div>
+            <div class="stem-slot">0/0</div>
+            <div class="bar"><i class="stem-bar"></i></div>
+          </div>
+        </div>
+        <div class="stem" id="stem-other" style="--stem: var(--other)">
+          <div class="stem-name"><span class="dot"></span>OTHER</div>
+          <div>
+            <div class="stem-title">—</div>
+            <div class="stem-phrase">loading</div>
+          </div>
+          <div>
+            <div class="stem-slot">0/0</div>
+            <div class="bar"><i class="stem-bar"></i></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="knobs" aria-label="Knob 1 to 4">
+        <label class="knob-card" style="--stem: var(--drums)">
+          <div class="label">K1 · DRUMS</div>
+          <input id="knob-drums" type="range" min="0" max="127" value="0" />
+          <div class="value" id="knob-value-drums">0</div>
+        </label>
+        <label class="knob-card" style="--stem: var(--bass)">
+          <div class="label">K2 · BASS</div>
+          <input id="knob-bass" type="range" min="0" max="127" value="0" />
+          <div class="value" id="knob-value-bass">0</div>
+        </label>
+        <label class="knob-card" style="--stem: var(--vocals)">
+          <div class="label">K3 · VOCALS</div>
+          <input id="knob-vocals" type="range" min="0" max="127" value="0" />
+          <div class="value" id="knob-value-vocals">0</div>
+        </label>
+        <label class="knob-card" style="--stem: var(--other)">
+          <div class="label">K4 · OTHER</div>
+          <input id="knob-other" type="range" min="0" max="127" value="0" />
+          <div class="value" id="knob-value-other">0</div>
+        </label>
+      </section>
+
+      <section class="controls">
+        <button id="btn-play" type="button">PLAY</button>
+        <button id="btn-rec" type="button" title="CTL-1 REC: panic / all notes off">REC</button>
+        <button id="btn-env" type="button" title="CTL-1 ENV: hold for breakdown (CC 64)">ENV</button>
+        <button id="btn-lfo" type="button" title="CTL-1 LFO: mod wheel sweep (CC 1)">LFO</button>
+        <button id="btn-presets" type="button" title="CTL-1 PRESETS: program change → kit jump">PRESETS</button>
+        <button id="btn-connect" type="button">CONNECT MIDI</button>
+        <label class="legend" for="bank-select">BANK</label>
+        <select id="bank-select" aria-label="Knob bank">
+          <option>A</option><option>B</option><option>C</option><option>D</option>
+        </select>
+        <button id="btn-oct-down" type="button" title="CTL-1 OCT−">OCT−</button>
+        <span class="tag" id="octave-value">0</span>
+        <button id="btn-oct-up" type="button" title="CTL-1 OCT+">OCT+</button>
+        <span class="tag">KEYS → <span id="focus-value">DRUMS</span></span>
+        <span class="tag" id="bank-info">loading manifest…</span>
+      </section>
+
+      <div class="keys" id="keys" role="group" aria-label="27 keys, chromatic from F3"></div>
+
+      <div class="legend">
+        <b>K1–K4</b> scroll that stem's phrase · <b>keys</b> jump the focused stem ·
+        <b>ENV</b> breakdown · <b>LFO</b> filter · <b>PRESETS</b> kit · <b>PLAY/REC</b> transport.
+        A commit lands on the next bar.
+      </div>
+
+      <footer>
+        <span class="meter"><i id="meter-fill"></i></span>
+        <span class="modbar">MOD <span class="meter"><i id="mod-fill"></i></span></span>
+        <span>last <code id="last-msg">—</code></span>
+        <span id="status">booting…</span>
+      </footer>
+    </main>
+    <script type="module" src="./device.js"></script>
+  </body>
+</html>

@@ -206,6 +206,27 @@ If wireless device playback ever matters, the credible spike is a packed-bank
 HTTP **Range** player that streams *pre-rendered* PCM runs — no Opus decode, no
 stretch, no key shift. That is a "Wub phrase player", not the Wub engine.
 
+### The device shim (emulator-first bench)
+
+`tools/fm1_shim/` is that idea, running in the browser where the codec and the
+memory already exist. It fetches the shipped `kit_manifest.json` and real Opus
+phrases from GitHub raw (or a local bank), plays four stem streams on one 4-bar
+grid with next-bar commits, and handles every CTL-1 message: keys, the four
+knob banks, ENV, LFO, MASTER, PLAY/REC, PRESETS, MIDI clock and aftertouch.
+The on-screen panel is the emulator; **CONNECT MIDI** drives the same handler
+from real hardware.
+
+```bash
+python3 tools/fm1_shim/serve.py --port 8123 --bank frontend/public/data/kits
+# open http://127.0.0.1:8123/?base=/bank
+python3 tools/fm1_shim_test.py        # 29 headless checks
+```
+
+It is a bench for the firmware contract and the bank format, not firmware: it
+resamples tempo with `playbackRate` (no stretch, no key shift) and relies on
+the browser's Opus decoder. See `tools/fm1_shim/README.md` for the full control
+map.
+
 ---
 
 ## 7. Troubleshooting
@@ -232,3 +253,5 @@ stretch, no key shift. That is a "Wub phrase player", not the Wub engine.
 | `tests/test_fm1_midi.py` | Node mapping assertions plus static HTML/wiring contract. |
 | `tools/fm1_emu_shim.js` | Headless emulator: virtual CTL-1 MIDI port + encoder panel injected before app scripts. |
 | `tools/fm1_emu_test.py` | Chrome DevTools Protocol harness that drives the shipped build and asserts the knob → phrase path end to end. |
+| `tools/fm1_shim/` | Device-side shim: plays the shipped bank from HTTPS and maps every CTL-1 message (emulator-first firmware bench). |
+| `tools/fm1_shim_test.py` | Headless checks for the device shim (bank loading, four streams, full control map, real MIDI round-trip). |
