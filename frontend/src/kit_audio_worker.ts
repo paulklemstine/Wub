@@ -6,12 +6,13 @@
  * loaded machine that burst starves the audio render thread into
  * all-stem digital-zero dropouts (the silence watchdog kept firing during
  * 8/16-bar prefetches in v0.2.235).  Decoding and concatenating here keeps
- * that cost off the main thread entirely; the main thread only pays for the
- * worklet's addBuffers clone and the scheduling calls.
+ * that cost off the main thread; fresh run PCM transfers into the worklet.
+ * Browsers without worker-side decodeAudioData use a native decode bridge.
  *
- * The worker owns a 24-entry LRU of decoded mono PCM (same key space as the
+ * The worker owns a 24-entry LRU of decoded stereo PCM (same key space as the
  * main-thread fallback cache: phraseId:stem).  Cache misses are fetched and
- * decoded with an OfflineAudioContext at the engine's sample rate, so the
+ * decoded at the engine's sample rate (in-worker where supported, otherwise
+ * via window's native asynchronous decoder), so the
  * concatenated run is a single transferable postMessage back to the main
  * thread (no copy on return).
  *
@@ -20,6 +21,8 @@
  *   -> { type: "load", id, items: [{ key, url, preUrl }] }      (one run)
  *   <- { type: "run", id, samples, preDur, mainDurations, sampleRate }
  *   <- { type: "error", id, message }
+ *   <- { type: "decode", decodeId, bytes }                    (native bridge)
+ *   -> { type: "decoded", decodeId, samples | message }
  * Any item failure fails the whole run (mirrors the main-thread loader's
  * "a missing phrase fails the run" semantics).
  */
@@ -41,6 +44,12 @@ const cache = new Map<string, CacheEntry>();
 const loading = new Map<string, Promise<CacheEntry>>();
 let decodeContext: OfflineAudioContext | null = null;
 let sampleRate = 44100;
+let nextDecodeId = 1;
+const decodes = new Map<number, {
+  resolve: (samples: [Float32Array, Float32Array]) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
 
 interface Host {
   postMessage: (message: unknown, transfer?: Transferable[]) => void;
@@ -71,6 +80,19 @@ async function decodeStereo(url: string): Promise<[Float32Array, Float32Array]> 
   const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`stem ${res.status} ${url}`);
   const bytes = await res.arrayBuffer();
+  // Most browsers expose decodeAudioData only on the window. Keep fetching,
+  // caching and PCM assembly here; request just the native async decode there.
+  if (typeof OfflineAudioContext === "undefined") {
+    return new Promise((resolve, reject) => {
+      const decodeId = nextDecodeId++;
+      const timer = setTimeout(() => {
+        decodes.delete(decodeId);
+        reject(new Error("audio decode bridge timed out"));
+      }, 4000);
+      decodes.set(decodeId, { resolve, reject, timer });
+      host().postMessage({ type: "decode", decodeId, bytes }, [bytes]);
+    });
+  }
   // Length is ignored by decodeAudioData; it decodes to this context's rate.
   const ctx = decodeContext ??= new OfflineAudioContext(2, 1, sampleRate);
   const audio = await ctx.decodeAudioData(bytes);
@@ -135,10 +157,20 @@ async function handleLoad(
   onmessage: ((ev: MessageEvent) => void) | null;
 }).onmessage = (ev: MessageEvent): void => {
   const msg = ev.data as
-    | { type?: string; sampleRate?: number; id?: number; items?: PoolItem[]; slices?: SliceSpec[]; crossfadeMs?: number }
+    | { type?: string; sampleRate?: number; id?: number; items?: PoolItem[]; slices?: SliceSpec[]; crossfadeMs?: number;
+        decodeId?: number; samples?: [Float32Array, Float32Array]; message?: string }
     | null
     | undefined;
   if (!msg || typeof msg.type !== "string") return;
+  if (msg.type === "decoded" && typeof msg.decodeId === "number") {
+    const pending = decodes.get(msg.decodeId);
+    if (!pending) return;
+    decodes.delete(msg.decodeId);
+    clearTimeout(pending.timer);
+    if (msg.samples?.length === 2) pending.resolve(msg.samples);
+    else pending.reject(new Error(msg.message ?? "audio decode failed"));
+    return;
+  }
   if (msg.type === "init") {
     if (typeof msg.sampleRate === "number" && msg.sampleRate > 0) {
       sampleRate = msg.sampleRate;

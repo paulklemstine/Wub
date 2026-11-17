@@ -291,6 +291,7 @@ void main() {
 export class PsychedelicBackground {
   private canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext | null = null;
+  private graphicsAttempted = false;
   private program: WebGLProgram | null = null;
 
   // Uniform locations
@@ -346,23 +347,34 @@ export class PsychedelicBackground {
       document.body.insertBefore(el, document.body.firstChild);
     }
     this.canvas = el;
-    this.initWebGL();
+    this.canvas.addEventListener("webglcontextlost", () => {
+      this.gl = null;
+      this.program = null;
+      this.state.enabled = false;
+      this.applyVisibility();
+    });
     this.initResize();
     this.applyVisibility();
   }
 
   private initWebGL(): void {
-    const gl =
-      this.canvas.getContext("webgl", {
+    if (this.graphicsAttempted) return;
+    this.graphicsAttempted = true;
+    let gl: WebGLRenderingContext | null = null;
+    try {
+      gl = this.canvas.getContext("webgl", {
         alpha: false,
         depth: false,
         stencil: false,
         antialias: false,
         powerPreference: "high-performance",
-      }) ||
-      (this.canvas.getContext("experimental-webgl") as WebGLRenderingContext | null);
-
+      }) || (this.canvas.getContext("experimental-webgl") as WebGLRenderingContext | null);
+    } catch {
+      // A browser may throw when it has blocked this page after context loss.
+    }
     if (!gl) {
+      this.state.enabled = false;
+      this.applyVisibility();
       console.warn("[PsychedelicBG] WebGL not supported; psychedelic background disabled.");
       return;
     }
@@ -511,6 +523,8 @@ export class PsychedelicBackground {
     trebleLevel?: number;
     masterLevel?: number;
   }): void {
+    if (!this.state.enabled || document.hidden) return;
+    if (!this.graphicsAttempted) this.initWebGL();
     const gl = this.gl;
     const prog = this.program;
     // Disabled or backgrounded: do not touch the GL context at all.  The

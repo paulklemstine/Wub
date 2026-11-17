@@ -274,6 +274,9 @@ export const LIGHTSHOW_PRESETS: readonly { id: string; label: string }[] = [
 export class RaveLightshowPanel {
   private readonly canvas: HTMLCanvasElement;
   private renderer: THREE.WebGLRenderer | null = null;
+  private rendererAttempted = false;
+  private fallbackCtx: CanvasRenderingContext2D | null = null;
+  private contextLost = false;
   private scene = new THREE.Scene();
   private camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private quadGeo = new THREE.PlaneGeometry(2, 2);
@@ -330,7 +333,11 @@ export class RaveLightshowPanel {
 
     for (const p of this.presets) this.presetMap.set(p.id, p);
     this.initSharedUniforms();
-    this.initRenderer();
+    this.canvas.addEventListener("webglcontextlost", () => {
+      this.contextLost = true;
+      this.canvas.style.background = "radial-gradient(ellipse, #28194a, #050509)";
+      this.canvas.title = "Graphics context lost; audio playback continues. Reload to retry graphics.";
+    });
     void this.loadSuperAcidBank();
   }
 
@@ -367,14 +374,23 @@ export class RaveLightshowPanel {
   }
 
   private initRenderer(): void {
+    if (this.rendererAttempted) return;
+    this.rendererAttempted = true;
     try {
+      // Probe once before Three.js, which otherwise throws and logs retries.
+      const context = this.canvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false });
+      if (!context) {
+        this.initFallback();
+        return;
+      }
       const r = new THREE.WebGLRenderer({
+        context,
         canvas: this.canvas,
         alpha: false,
         antialias: false,
         powerPreference: "high-performance",
       });
-      r.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      r.setPixelRatio(1);
       r.autoClear = false;
       this.renderer = r;
 
@@ -412,6 +428,49 @@ export class RaveLightshowPanel {
     } catch (err) {
       console.warn("[Lightshow] Three.js WebGL unavailable:", err);
       this.renderer = null;
+      this.initFallback();
+    }
+  }
+
+  private initFallback(): void {
+    try {
+      this.fallbackCtx = this.canvas.getContext("2d");
+    } catch {
+      this.fallbackCtx = null;
+    }
+    this.canvas.style.background = "radial-gradient(ellipse, #28194a, #050509)";
+    this.canvas.title = "WebGL unavailable; using the audio-reactive 2D lightshow.";
+    console.info("[Lightshow] Using the 2D fallback (WebGL unavailable)");
+  }
+
+  private renderFallback(frame: LightshowAudioFrame): void {
+    const ctx = this.fallbackCtx;
+    if (!ctx) return;
+    const w = Math.max(1, Math.round(this.canvas.clientWidth || 640));
+    const h = Math.max(1, Math.round(this.canvas.clientHeight || 400));
+    // Same bounded pixel budget as the GPU path; CSS supplies display size.
+    const scale = Math.min(1, Math.sqrt(600_000 / (w * h)));
+    const rw = Math.max(1, Math.round(w * scale));
+    const rh = Math.max(1, Math.round(h * scale));
+    if (this.canvas.width !== rw || this.canvas.height !== rh) {
+      this.canvas.width = rw;
+      this.canvas.height = rh;
+    }
+    ctx.fillStyle = "#050509";
+    ctx.fillRect(0, 0, rw, rh);
+    if (this.state.blackout) return;
+    const energy = Math.max(0, Math.min(1, frame.mix));
+    const gradient = ctx.createRadialGradient(rw / 2, rh / 2, 0, rw / 2, rh / 2, Math.max(rw, rh) * 0.7);
+    gradient.addColorStop(0, `hsla(${(frame.timeSec * 12) % 360}, 85%, 45%, ${0.2 + energy * 0.5})`);
+    gradient.addColorStop(1, "#050509");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, rw, rh);
+    const bins = frame.freqBins;
+    ctx.fillStyle = "#8cecff";
+    for (let i = 0; i < 48; i++) {
+      const magnitude = bins?.length ? bins[Math.floor(i * bins.length / 48)] / 255 : energy;
+      const height = Math.max(1, magnitude * rh * 0.7);
+      ctx.fillRect(i * rw / 48, (rh - height) / 2, Math.max(1, rw / 48 - 2), height);
     }
   }
 
@@ -521,12 +580,12 @@ export class RaveLightshowPanel {
     const rect = this.canvas.getBoundingClientRect();
     const w = Math.max(240, Math.round(rect.width || this.canvas.width || 640));
     const h = Math.max(160, Math.round(rect.height || this.canvas.height || 400));
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const rw = Math.round(w * dpr);
-    const rh = Math.round(h * dpr);
+    const scale = Math.min(1.5, window.devicePixelRatio || 1, Math.sqrt(600_000 / (w * h)));
+    const rw = Math.max(1, Math.round(w * scale));
+    const rh = Math.max(1, Math.round(h * scale));
 
     if (this.rtW !== rw || this.rtH !== rh) {
-      this.renderer.setSize(w, h, false);
+      this.renderer.setSize(rw, rh, false);
       this.bgTarget?.dispose();
       this.fgTarget?.dispose();
       this.trailTargets[0]?.dispose();
@@ -535,6 +594,8 @@ export class RaveLightshowPanel {
         minFilter: THREE.LinearFilter,
         magFilter: THREE.LinearFilter,
         format: THREE.RGBAFormat,
+        depthBuffer: false,
+        stencilBuffer: false,
       };
       this.bgTarget = new THREE.WebGLRenderTarget(rw, rh, opts);
       this.fgTarget = new THREE.WebGLRenderTarget(rw, rh, opts);
@@ -549,7 +610,13 @@ export class RaveLightshowPanel {
   }
 
   public render(frame: LightshowAudioFrame): void {
-    if (!this.state.enabled || !this.renderer || !this.postMat || !this.blitMat) return;
+    if (!this.state.enabled || document.hidden || this.contextLost) return;
+    if (!this.rendererAttempted) this.initRenderer();
+    if (!this.renderer) {
+      this.renderFallback(frame);
+      return;
+    }
+    if (!this.postMat || !this.blitMat) return;
     if (!this.ensureTargets()) return;
 
     const uTime = (performance.now() - this.startMs) * 0.001;

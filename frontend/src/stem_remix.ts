@@ -383,8 +383,8 @@ const EAR_W_FALLBACK = 0.30;
  */
 class KitAudioWorkerLoader {
   /** False once construction, the worker error handler, or a timeout fails —
-   *  or after repeated error responses (e.g. OfflineAudioContext missing in
-   *  workers, which disables decode entirely in that browser). */
+   *  or after repeated error responses. Missing worker-side decoding uses
+   *  the native decode bridge and does not disable the worker. */
   ok = false;
   private worker: Worker | null = null;
   private nextId = 1;
@@ -394,8 +394,9 @@ class KitAudioWorkerLoader {
   }>();
   private consecutiveErrors = 0;
   private lastErrorMessage = "";
+  private decode: ((bytes: ArrayBuffer) => Promise<AudioBuffer>) | null = null;
 
-  start(sampleRate: number): void {
+  start(sampleRate: number, decode: (bytes: ArrayBuffer) => Promise<AudioBuffer>): void {
     if (this.ok && this.worker) return;
     // A previous worker disabled by repeated errors is terminated here so a
     // fresh session starts with a clean worker (not one orphan).
@@ -408,6 +409,7 @@ class KitAudioWorkerLoader {
       this.worker = null;
     }
     this.consecutiveErrors = 0;
+    this.decode = decode;
     try {
       const worker = new Worker(new URL("./kit_audio_worker.ts", import.meta.url), { type: "module" });
       worker.onmessage = (ev: MessageEvent) => this.onMessage(ev);
@@ -418,7 +420,7 @@ class KitAudioWorkerLoader {
       worker.postMessage({ type: "init", sampleRate });
       this.worker = worker;
       this.ok = true;
-      console.info("[StemRemix] kit audio worker ready");
+      console.info("[StemRemix] kit audio worker ready (native decode bridge available)");
     } catch (err) {
       this.ok = false;
       this.worker = null;
@@ -441,12 +443,34 @@ class KitAudioWorkerLoader {
     const msg = ev.data as {
       type?: string;
       id?: number;
+      decodeId?: number;
+      bytes?: ArrayBuffer;
       samples?: Float32Array[];
       preDur?: number;
       mainDurations?: number[];
       sampleRate?: number;
     } | null | undefined;
-    if (!msg || typeof msg.id !== "number") return;
+    if (!msg) return;
+    if (msg.type === "decode" && typeof msg.decodeId === "number" && msg.bytes instanceof ArrayBuffer) {
+      const worker = this.worker;
+      const decode = this.decode;
+      if (worker && decode) {
+        const decodeId = msg.decodeId;
+        void decode(msg.bytes).then(async (audio) => {
+          await yieldToMain();
+          if (this.worker !== worker || !this.ok) return;
+          // Own these copies so transfer never detaches AudioBuffer storage.
+          const left = audio.getChannelData(0).slice();
+          const right = audio.getChannelData(audio.numberOfChannels > 1 ? 1 : 0).slice();
+          worker.postMessage({ type: "decoded", decodeId, samples: [left, right] }, [left.buffer, right.buffer]);
+        }).catch((error: unknown) => {
+          if (this.worker !== worker || !this.ok) return;
+          worker.postMessage({ type: "decoded", decodeId, message: error instanceof Error ? error.message : String(error) });
+        });
+      }
+      return;
+    }
+    if (typeof msg.id !== "number") return;
     const pending = this.pending.get(msg.id);
     if (!pending) return;
     this.pending.delete(msg.id);
@@ -464,14 +488,7 @@ class KitAudioWorkerLoader {
       // A real per-file failure (or error message): fail the run so the
       // main-thread loader can try; log the cause so decode bugs surface.
       const message = (msg as { message?: unknown }).message;
-      if (typeof message === "string" && message.includes("OfflineAudioContext is not defined")) {
-        // Known browser limitation: no OAC in workers — disable once and fall
-        // back to main-thread decode without noisy warnings.
-        if (this.ok) {
-          this.ok = false;
-          console.info("[StemRemix] kit audio worker unavailable in this browser (no OfflineAudioContext); using main-thread decode");
-        }
-      } else if (typeof message === "string" && message.length > 0) {
+      if (typeof message === "string" && message.length > 0) {
         if (message !== this.lastErrorMessage) {
           console.warn(`[StemRemix] kit audio worker error: ${message}`);
         }
@@ -1541,7 +1558,7 @@ export class StemRemixPlayer {
     // for the transport's first schedule() call.
     // The kit audio worker carries decode+concat off the main thread; the
     // anchor preload below is its first real load.
-    this.audioWorker.start(ENGINE_SAMPLE_RATE);
+    this.audioWorker.start(ENGINE_SAMPLE_RATE, (bytes) => this.engine.decodeAudio(bytes));
     const anchor = this.anchorKit ?? this.chooseAnchor();
     if (anchor) {
       const allEntries = this.entriesForKit(anchor);
