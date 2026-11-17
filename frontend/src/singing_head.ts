@@ -220,9 +220,9 @@ export class SingingHeadPanel {
     this.modelBadgeEl = document.getElementById(modelBadgeId);
     this.host3dEl = document.getElementById("singing-head-3d-host");
     this.controls3dEl = document.getElementById("sh-3d-controls");
-    if (this.host3dEl) {
-      this.tract3dView = new Tract3DView(this.host3dEl);
-    }
+    // The 3D vocal tract is built on first use.  Constructing the Three.js
+    // scene, its meshes and a WebGL context at page load held GPU memory for a
+    // view most sessions never open.
 
     this.bindToolbarControls();
     void this.loadModel();
@@ -335,7 +335,21 @@ export class SingingHeadPanel {
     if (this.controls3dEl) {
       this.controls3dEl.style.display = mode === "3d" ? "inline-flex" : "none";
     }
+    if (mode === "3d") this.ensureTract3D();
     this.tract3dView?.setActive(mode === "3d", this.tractGeom);
+  }
+
+  /** Lazily construct the 3D tract view. Returns null if WebGL is unavailable. */
+  private ensureTract3D(): Tract3DView | null {
+    if (this.tract3dView !== null) return this.tract3dView;
+    if (this.host3dEl === null) return null;
+    try {
+      this.tract3dView = new Tract3DView(this.host3dEl);
+    } catch (err) {
+      console.warn("[singing-head] 3D tract view unavailable:", err);
+      this.tract3dView = null;
+    }
+    return this.tract3dView;
   }
 
   public async loadModel(url: string = `${import.meta.env.BASE_URL}data/singing_head_model.json`): Promise<boolean> {

@@ -158,27 +158,13 @@ def test_client_ml_sequencer_song_and_slice_continuity():
     assert "isLongLoop" in ae_content
 
 
-def test_bear_realistic_mouth_and_3d_camera():
-    """Verify Wub Bear 2.0 realistic singing mouth (lips/teeth/tongue/throat) and 3D camera."""
-    bear3d_path = Path("frontend/src/bear_3d_view.ts")
-    assert bear3d_path.exists(), "frontend/src/bear_3d_view.ts must exist"
-    bear3d = bear3d_path.read_text(encoding="utf-8")
-    for token in (
-        "Bear3DView",
-        "OrbitControls",
-        "upperLipGeo",
-        "lowerLipGeo",
-        "tongueGeo",
-        "upperTeeth",
-        "lowerTeeth",
-        "throatMesh",
-        "uvulaMesh",
-        "setCameraPreset",
-    ):
-        assert token in bear3d
+def test_bear_2d_mouth_and_no_3d_camera():
+    """The 2D singing mouth remains; the interactive 3D camera stage is gone."""
+    assert not Path("frontend/src/bear_3d_view.ts").exists()
 
     tg = Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
-    assert "Bear3DView" in tg
+    assert "Bear3DView" not in tg
+    assert "3D CAM" not in tg
     assert "getLiveMouthState" in Path("frontend/src/singing_head.ts").read_text(encoding="utf-8")
     assert "liveMouth" in tg
     assert "uvulaY" in tg
@@ -187,7 +173,7 @@ def test_bear_realistic_mouth_and_3d_camera():
 
     html = Path("frontend/index.html").read_text(encoding="utf-8")
     for dom_id in ("tamagotchi-3d-host", "btn-tamagotchi-3d", "btn-tamagotchi-cam"):
-        assert dom_id in html
+        assert dom_id not in html
 
 
 def test_super_rave_box_panels_dj_fx_and_lightshow():
@@ -235,17 +221,11 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
 
     ls_section = html.split('id="panel-lightshow"')[1].split('id="groovebox-panel"')[0]
     for dom_id in (
-        "btn-bear-cage",
-        "btn-bear-visor",
         "btn-bear-halo",
         "btn-bear-bikini",
         "btn-bear-mouth-style",
-        "btn-bear-tex",
         "bear-dance-slider",
         "bear-mouth-slider",
-        "btn-tamagotchi-3d",
-        "btn-tamagotchi-cam",
-        "tamagotchi-3d-host",
         "lightshow-canvas",
         "lightshow-bear-overlay",
         "btn-ls-bear",
@@ -257,13 +237,6 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
     tg_src = Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
     assert "drawOverlayInto" in tg_src
     assert "drawPaw" not in tg_src
-
-    b3d_src = Path("frontend/src/bear_3d_view.ts").read_text(encoding="utf-8")
-    for token in ("skyTarget", "headTarget", "skyMesh", "headMesh", "randomizeTextures", "earBowGroup"):
-        assert token in b3d_src
-    assert "torsoGeo" not in b3d_src
-    assert "makeArm" not in b3d_src
-    assert "makeLeg" not in b3d_src
 
     ls_src = Path("frontend/src/lightshow.ts").read_text(encoding="utf-8")
     for preset in ("acid-warp", "breathing-mandala", "space-tubes", "dmt-hyperspace", "ego-death"):

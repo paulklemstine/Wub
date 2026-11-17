@@ -1,10 +1,12 @@
-"""Rendering budget guard for the optional 3D Wub Bear view.
+"""Budget guard for the removed interactive 3D camera subsystems.
 
-The dual offscreen framebuffer pass (two 512x512 psychedelic shader renders per
-frame, wrapped onto the sky sphere and the head sphere) pegged low-end and
-software-GL machines, so it is disabled in this build. The Three.js scene must
-also stay lazily constructed: building it at page load cost GPU memory and
-shader compile time for a view most sessions never open.
+The Wub Bear 3D stage (dual offscreen framebuffers, OrbitControls, a full
+Three.js mesh scene at device pixel ratio 2) and the eager vocal-tract 3D
+construction were the heaviest per-page GPU/memory costs, and the bear stage
+stuttered on low-end and software-GL machines.  The bear view is gone; the
+vocal-tract 3D view is built only when the user opens that mode.
+
+These tests fail if either regression comes back.
 """
 
 from __future__ import annotations
@@ -12,27 +14,48 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BEAR = ROOT / "frontend/src/bear_3d_view.ts"
 TAMA = ROOT / "frontend/src/tamagotchi.ts"
+HEAD = ROOT / "frontend/src/singing_head.ts"
+BEAR = ROOT / "frontend/src/bear_3d_view.ts"
+HTML = ROOT / "frontend/index.html"
 
 
-def test_sphere_texture_pass_is_disabled() -> None:
-    source = BEAR.read_text(encoding="utf-8")
-    assert "export const SPHERE_TEXTURE_ENABLED = false" in source
-    # The FBO creation and the per-frame shader passes must both be gated.
-    assert "if (SPHERE_TEXTURE_ENABLED) {" in source
-    assert "this.skyTarget = new THREE.WebGLRenderTarget(512, 512" in source
-    assert "this.headTarget = new THREE.WebGLRenderTarget(512, 512" in source
-    # Texture maps on the head material come only from the gated target.
-    assert "SPHERE_TEXTURE_ENABLED ? this.headTarget?.texture ?? null : null" in source
-    # The animated gummi palette is the fallback when the pass is off.
-    assert "this.gummiMat.color.copy(this.tmpColor)" in source
+def test_bear_3d_stage_is_gone() -> None:
+    assert not BEAR.exists(), "the 3D bear stage module must stay removed"
 
-
-def test_3d_scene_is_built_lazily() -> None:
     source = TAMA.read_text(encoding="utf-8")
-    assert "private ensure3DView(): boolean" in source
-    assert "this.view3dActive = active ? this.ensure3DView() : false" in source
-    # The constructor must not build the scene; only ensure3DView may.
-    init_body = source.split("public set3DMode", 1)[0]
-    assert "new Bear3DView(" not in init_body, "3D view must not be built in the constructor"
+    for token in ("Bear3DView", "OrbitControls", "3D CAM", "bear3dView"):
+        assert token not in source
+
+    html = HTML.read_text(encoding="utf-8")
+    for dom_id in ("tamagotchi-3d-host", "btn-tamagotchi-3d", "btn-tamagotchi-cam"):
+        assert dom_id not in html
+    # 3D-only controls went with the stage.
+    for dom_id in ("btn-bear-cage", "btn-bear-visor", "btn-bear-tex"):
+        assert dom_id not in html
+
+
+def test_2d_bear_mouth_controls_survive() -> None:
+    source = TAMA.read_text(encoding="utf-8")
+    # The 2D kawaii mouth/face articulation is independent of the 3D stage.
+    for token in ("uvulaY", "tongueCenterY", "lipGrad", "mouthStyle", "danceGain"):
+        assert token in source
+
+    html = HTML.read_text(encoding="utf-8")
+    for dom_id in (
+        "btn-bear-halo",
+        "btn-bear-bikini",
+        "btn-bear-mouth-style",
+        "bear-dance-slider",
+        "bear-mouth-slider",
+    ):
+        assert dom_id in html
+
+
+def test_tract_3d_is_built_lazily() -> None:
+    source = HEAD.read_text(encoding="utf-8")
+    assert "private ensureTract3D(): Tract3DView | null" in source
+    assert 'if (mode === "3d") this.ensureTract3D();' in source
+
+    init_body = source.split("public bindAudioEngine", 1)[0]
+    assert "new Tract3DView(" not in init_body, "3D tract must not be built in initDOM"

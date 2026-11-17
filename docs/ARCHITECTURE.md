@@ -142,19 +142,20 @@ The background visualizer (`frontend/src/psychedelic_bg.ts`) runs a GPU fragment
    - `LSD`: Shifting rainbow spectrum with liquid melting domain distortion.
    - `Mescaline`: Warm earthen golds, oranges, ambers, and fiery reds.
 
-### 3D Wub Bear rendering budget
+### 3D camera subsystems (removed)
 
-`frontend/src/bear_3d_view.ts` is the optional **3D CAM** view (floating sphere
-head). Two rules keep it from starving the audio thread:
+The interactive **3D CAM** Wub Bear stage (`frontend/src/bear_3d_view.ts`) was
+removed. It was a full Three.js scene at device pixel ratio 2 with OrbitControls
+camera presets and two offscreen render targets, and it caused halting frame
+drops on low-end and software-GL machines. Nothing in `tamagotchi.ts` constructs
+it any more, and its `3D CAM` / `CAM` buttons and host element are gone from
+`index.html`. The 2D kawaii head remains the shipped avatar.
 
-- **Lazy construction.** The Three.js scene, geometries, mouth rig and shaders
-  are built on the first press of `3D CAM`, not at page load. Most sessions
-  never open the view, and building it costs tens of MB of GPU memory.
-- **`SPHERE_TEXTURE_ENABLED = false`.** The dual-FBO pass (two 512×512
-  psychedelic shader renders per frame, piped into the sky sphere and as the
-  head's `map`/`emissiveMap`) is disabled in this build. It was the single most
-  expensive thing in the visualizer and pegged low-end / software-GL machines.
-  With it off there are no render targets, no fullscreen shader quad, and no
-  `superacid_presets.json` fetch from the 3D view; the spheres render with the
-  animated gummi palette and the normal scene lighting instead. Flip the
-  constant to `true` to restore the textured spheres.
+The Voice Workshop's **3D vocal tract** view (`vocal_sim/tract_3d_view.ts`)
+survives, but is now built lazily:
+
+- **Lazy construction.** `SingingHeadPanel.ensureTract3D()` runs only when the
+  user first selects the 3D mode. Building the tract scene, its meshes and a
+  WebGL context at page load held GPU memory for a view most sessions never
+  open.
+- The 2D mid-sagittal side view is the default and costs nothing extra.

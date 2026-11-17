@@ -4,15 +4,25 @@
 // -----------------------------------------------------------------------------
 
 import type { GrooveboxMeta } from "./main";
-import {
-  Bear3DView,
-  BEAR_CAMERA_LABELS,
-  DEFAULT_BEAR_VISUAL_CONFIG,
-  type BearCameraPreset,
-  type BearMouthStyle,
-  type BearVisualConfig,
-} from "./bear_3d_view";
 import type { LiveMouthState } from "./singing_head";
+
+export type BearMouthStyle = "real" | "acid" | "cyber";
+
+export interface BearVisualConfig {
+  showHalo: boolean;
+  showBikini: boolean;
+  mouthStyle: BearMouthStyle;
+  danceGain: number;
+  mouthGain: number;
+}
+
+const DEFAULT_BEAR_VISUAL_CONFIG: BearVisualConfig = {
+  showHalo: true,
+  showBikini: true,
+  mouthStyle: "real",
+  danceGain: 1.0,
+  mouthGain: 1.0,
+};
 
 export type TamagotchiStage = 1 | 2 | 3 | 4;
 
@@ -175,13 +185,8 @@ export class TamagotchiAvatar {
   private mixPunch: number = 0;
   private otherTone: number = 0;
 
-  // Live Singing Head oral articulators + 3D Camera stage
+  // Live Singing Head oral articulators driving the 2D mouth.
   private liveMouth: LiveMouthState | null = null;
-  private host3dEl: HTMLElement | null = null;
-  private bear3dView: Bear3DView | null = null;
-  private view3dActive: boolean = false;
-  private btn3dToggleEl: HTMLElement | null = null;
-  private btn3dCamEl: HTMLElement | null = null;
   private visualConfig: BearVisualConfig = { ...DEFAULT_BEAR_VISUAL_CONFIG };
 
   constructor() {
@@ -217,18 +222,7 @@ export class TamagotchiAvatar {
     const btnHype = document.getElementById("btn-tamagotchi-hype");
     if (btnHype) btnHype.addEventListener("click", () => this.hype());
 
-    this.host3dEl = document.getElementById("tamagotchi-3d-host");
-    this.btn3dToggleEl = document.getElementById("btn-tamagotchi-3d");
-    this.btn3dCamEl = document.getElementById("btn-tamagotchi-cam");
-    if (this.btn3dToggleEl) {
-      this.btn3dToggleEl.addEventListener("click", () => this.toggle3DMode());
-    }
-    if (this.btn3dCamEl) {
-      this.btn3dCamEl.addEventListener("click", () => this.cycle3DCamera());
-    }
-    this.sync3DButtons(this.bear3dView?.getCameraPreset() ?? "three");
     this.bindVisualControlBar();
-
     this.render();
   }
 
@@ -240,8 +234,13 @@ export class TamagotchiAvatar {
     this.visualConfig = { ...this.visualConfig, ...patch };
   }
 
+  /** 2D Wub Creature look controls (the 3D stage was removed). */
   private bindVisualControlBar(): void {
-    const toggleVisualBool = (id: string, key: "showCage" | "showVisor" | "showHalo" | "showBikini", label: string) => {
+    const toggleVisualBool = (
+      id: string,
+      key: "showHalo" | "showBikini",
+      label: string
+    ) => {
       const btn = document.getElementById(id);
       if (!btn) return;
       const sync = () => {
@@ -255,20 +254,8 @@ export class TamagotchiAvatar {
         sync();
       });
     };
-    toggleVisualBool("btn-bear-cage", "showCage", "CAGE");
-    toggleVisualBool("btn-bear-visor", "showVisor", "VISOR");
     toggleVisualBool("btn-bear-halo", "showHalo", "HALO");
     toggleVisualBool("btn-bear-bikini", "showBikini", "BOW");
-
-    const texBtn = document.getElementById("btn-bear-tex");
-    if (texBtn) {
-      texBtn.addEventListener("click", () => {
-        if (!this.view3dActive) {
-          this.set3DMode(true);
-        }
-        this.randomize3DTextures();
-      });
-    }
 
     const mouthStyleBtn = document.getElementById("btn-bear-mouth-style");
     if (mouthStyleBtn) {
@@ -306,62 +293,6 @@ export class TamagotchiAvatar {
           if (mouthVal) mouthVal.textContent = `${Math.round(v * 100)}%`;
         }
       });
-    }
-  }
-
-  public randomize3DTextures(): void {
-    this.bear3dView?.randomizeTextures();
-  }
-
-  public set3DMode(active: boolean): void {
-    // Build the WebGL scene on first activation only: constructing the Three.js
-    // stage, geometries and shaders at page load burned CPU for a view most
-    // sessions never open.
-    this.view3dActive = active ? this.ensure3DView() : false;
-    if (this.canvasEl && this.canvasEl.dataset.offscreen !== "true") {
-      this.canvasEl.style.display = this.view3dActive ? "none" : "block";
-    }
-    this.bear3dView?.setActive(this.view3dActive);
-    this.sync3DButtons(this.bear3dView?.getCameraPreset() ?? "three");
-  }
-
-  /** Lazily create the 3D Wub Bear scene. Returns false if it cannot start. */
-  private ensure3DView(): boolean {
-    if (this.bear3dView !== null) return true;
-    if (this.host3dEl === null) return false;
-    try {
-      this.bear3dView = new Bear3DView(this.host3dEl, (preset) => {
-        this.sync3DButtons(preset);
-      });
-      return true;
-    } catch (err) {
-      console.warn("[tamagotchi] 3D view unavailable:", err);
-      this.bear3dView = null;
-      return false;
-    }
-  }
-
-  public toggle3DMode(): void {
-    this.set3DMode(!this.view3dActive);
-  }
-
-  public cycle3DCamera(): void {
-    if (!this.view3dActive) {
-      this.set3DMode(true);
-      return;
-    }
-    const next = this.bear3dView?.cycleCameraPreset() ?? "three";
-    this.sync3DButtons(next);
-  }
-
-  private sync3DButtons(preset: BearCameraPreset): void {
-    if (this.btn3dToggleEl) {
-      this.btn3dToggleEl.textContent = this.view3dActive ? "2D VIEW" : "3D CAM";
-      this.btn3dToggleEl.classList.toggle("active", this.view3dActive);
-    }
-    if (this.btn3dCamEl) {
-      this.btn3dCamEl.style.display = this.view3dActive ? "inline-flex" : "none";
-      this.btn3dCamEl.textContent = `CAM: ${BEAR_CAMERA_LABELS[preset]}`;
     }
   }
 
@@ -698,31 +629,6 @@ export class TamagotchiAvatar {
       vocalsLevel ?? 0,
       rmsLevel
     );
-    if (this.view3dActive && this.bear3dView) {
-      const mouthAperture = Math.max(0, Math.min(1, this.smoothedVocalAmp * 2.2));
-      const vowel = this.vocalVowelFormant || meta?.vocalVowel || "AH";
-      this.bear3dView.renderFrame({
-        stage: this.stage,
-        bpm,
-        drums: this.stemEnv.drums,
-        bass: this.stemEnv.bass,
-        other: this.stemEnv.other,
-        vocals: this.stemEnv.vocals,
-        mix: this.mixEnv,
-        drumPunch: this.stemPunch.drums,
-        bassPunch: this.stemPunch.bass,
-        otherPunch: this.stemPunch.other,
-        mixPunch: this.mixPunch,
-        isBlinking: this.isBlinking,
-        isDrop: sec === "DROP",
-        action: this.temporaryAction,
-        mouth: this.liveMouth,
-        fallbackAperture: mouthAperture,
-        fallbackVowel: vowel,
-        freqBins,
-        visual: this.visualConfig,
-      });
-    }
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel);
     this.updateDashboard();
   }
