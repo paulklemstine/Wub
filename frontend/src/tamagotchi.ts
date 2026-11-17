@@ -45,35 +45,25 @@ export interface GummiLoopVertex {
 }
 
 /**
- * Builds the smooth closed Catmull-Rom parametric loop for the Kawaii Gummi Bear body contour.
+ * Builds the smooth closed Catmull-Rom parametric loop for the floating circular
+ * Wub Bear head contour (body outline removed: round cheeks, bear ears, curved chin).
  * Outward unit normals are precomputed for seamless audio-reactive wave displacement.
  */
 function buildGummiBearPoints(): GummiLoopVertex[] {
   const halfPts: [number, number][] = [
-    [0.0, -48.0],     // 0: top head center dip
-    [14.0, -50.0],    // 1: top head slope
-    [23.0, -53.0],    // 2: inner ear base
-    [30.0, -66.0],    // 3: inner ear curve
-    [40.0, -68.0],    // 4: ear peak
-    [48.0, -59.0],    // 5: ear outer round
-    [44.0, -46.0],    // 6: outer ear base
-    [46.0, -33.0],    // 7: upper cheek
-    [50.0, -16.0],    // 8: chubby cheek max
-    [45.0, -2.0],     // 9: lower cheek curve
-    [35.0, 8.0],      // 10: cute neck pinch
-    [40.0, 14.0],     // 11: shoulder
-    [52.0, 19.0],     // 12: arm top
-    [58.0, 27.0],     // 13: chubby paw tip
-    [52.0, 35.0],     // 14: paw bottom round
-    [42.0, 38.0],     // 15: arm under
-    [36.0, 42.0],     // 16: waist indent
-    [44.0, 52.0],     // 17: chubby tummy upper
-    [48.0, 64.0],     // 18: chubby tummy max
-    [42.0, 76.0],     // 19: hip
-    [34.0, 84.0],     // 20: outer foot
-    [22.0, 88.0],     // 21: foot bottom round
-    [11.0, 84.0],     // 22: inner foot
-    [0.0, 74.0],      // 23: crotch center
+    [0.0, -42.0],     // 0: top head center dip
+    [13.0, -43.5],    // 1: top head slope
+    [22.0, -45.5],    // 2: inner ear base
+    [28.5, -58.5],    // 3: inner ear curve
+    [38.5, -60.5],    // 4: ear peak
+    [46.5, -51.5],    // 5: ear outer round
+    [43.0, -37.5],    // 6: outer ear base
+    [47.0, -23.0],    // 7: upper temple
+    [50.0, -5.0],     // 8: round cheek outer edge
+    [47.0, 14.0],     // 9: lower cheek round
+    [37.0, 30.0],     // 10: lower jaw curve
+    [21.0, 41.0],     // 11: chin side
+    [0.0, 45.0],      // 12: circular chin center
   ];
 
   const leftPts: [number, number][] = [];
@@ -271,7 +261,17 @@ export class TamagotchiAvatar {
     toggleVisualBool("btn-bear-cage", "showCage", "CAGE");
     toggleVisualBool("btn-bear-visor", "showVisor", "VISOR");
     toggleVisualBool("btn-bear-halo", "showHalo", "HALO");
-    toggleVisualBool("btn-bear-bikini", "showBikini", "BIKINI");
+    toggleVisualBool("btn-bear-bikini", "showBikini", "BOW");
+
+    const texBtn = document.getElementById("btn-bear-tex");
+    if (texBtn) {
+      texBtn.addEventListener("click", () => {
+        if (!this.view3dActive) {
+          this.set3DMode(true);
+        }
+        this.randomize3DTextures();
+      });
+    }
 
     const mouthStyleBtn = document.getElementById("btn-bear-mouth-style");
     if (mouthStyleBtn) {
@@ -312,9 +312,13 @@ export class TamagotchiAvatar {
     }
   }
 
+  public randomize3DTextures(): void {
+    this.bear3dView?.randomizeTextures();
+  }
+
   public set3DMode(active: boolean): void {
     this.view3dActive = active && Boolean(this.bear3dView);
-    if (this.canvasEl) {
+    if (this.canvasEl && this.canvasEl.dataset.offscreen !== "true") {
       this.canvasEl.style.display = this.view3dActive ? "none" : "block";
     }
     this.bear3dView?.setActive(this.view3dActive);
@@ -536,7 +540,8 @@ export class TamagotchiAvatar {
     otherWaveform?: Uint8Array | null,
     otherLevel?: number,
     masterWaveform?: Uint8Array | null,
-    liveMouth?: LiveMouthState | null
+    liveMouth?: LiveMouthState | null,
+    freqBins?: Uint8Array | null
   ): void {
     this.liveMouth = liveMouth ?? null;
     const dt = this.lastRenderSec > 0 ? Math.max(0.001, audioNow - this.lastRenderSec) : 0.016;
@@ -698,6 +703,7 @@ export class TamagotchiAvatar {
         mouth: this.liveMouth,
         fallbackAperture: mouthAperture,
         fallbackVowel: vowel,
+        freqBins,
         visual: this.visualConfig,
       });
     }
@@ -1221,10 +1227,10 @@ export class TamagotchiAvatar {
       0.40 + env.other * 1.55 + punch.other * 2.0 + mixPunch * 0.35
     )) % 1;
 
-    // Center coordinates with beat bobbing
+    // Center coordinates with beat bobbing for the floating circle head
     const cx = w * 0.5;
-    const bobOffset = (bob ? 3.0 : 0.0) + 2.0 * mixPunch;
-    const cy = h * 0.44 + bobOffset;
+    const bobOffset = (bob ? 3.5 : 0.0) + 2.4 * mixPunch;
+    const cy = h * 0.54 + bobOffset;
 
     // Stage-based color palette
     let mainColor = "#ff77e9";
@@ -1257,29 +1263,29 @@ export class TamagotchiAvatar {
     const drumSquish = Math.min(1.4, env.drums * 1.15 * vis.danceGain);
     const squishY = 1.0 - 0.06 * drumSquish - 0.025 * mixPunch * vis.danceGain + (bob ? -0.02 * vis.danceGain : 0.015);
     const squishX = 1.0 + 0.06 * drumSquish + 0.025 * mixPunch * vis.danceGain - (bob ? -0.02 * vis.danceGain : 0.015);
-    const baseScale = (1.06 + 0.02 * this.stage) * (1.0 + 0.025 * mixEnv);
+    const baseScale = (1.34 + 0.02 * this.stage) * (1.0 + 0.025 * mixEnv);
     const scaleX = baseScale * squishX;
     const scaleY = baseScale * squishY;
 
-    // Rave halo behind the creature: stage-coloured bloom that breathes with
-    // the true full mix, so all four stems add up to the body glow.
+    // Rave halo behind the floating head: stage-coloured bloom that breathes with
+    // the true full mix, so all four stems add up to the glow.
     ctx.save();
-    const haloR = 104 * (1 + 0.11 * mixEnv + 0.05 * mixPunch);
-    const halo = ctx.createRadialGradient(cx, cy + 4 * scaleY, 8, cx, cy + 4 * scaleY, haloR);
+    const haloR = 112 * (1 + 0.11 * mixEnv + 0.05 * mixPunch);
+    const halo = ctx.createRadialGradient(cx, cy, 8, cx, cy, haloR);
     halo.addColorStop(0.0, glowColor);
     halo.addColorStop(0.55, glowColor);
     halo.addColorStop(1.0, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = halo;
     ctx.globalAlpha = 0.07 + 0.24 * mixEnv + 0.08 * mixPunch;
     ctx.beginPath();
-    ctx.arc(cx, cy + 4 * scaleY, haloR, 0, Math.PI * 2);
+    ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
     ctx.fill();
 
-    // DMT / LSD sacred-geometry mandala ring pulsing behind the electro bear
+    // DMT / LSD sacred-geometry mandala ring pulsing behind the floating head
     if (vis.showHalo) {
-      const mandalaR = (84 + 14 * mixEnv + 6 * mixPunch) * baseScale;
+      const mandalaR = (68 + 12 * mixEnv + 6 * mixPunch) * baseScale;
       const hexSides = 6;
-      ctx.translate(cx, cy + 2 * scaleY);
+      ctx.translate(cx, cy);
       ctx.rotate(t * 0.35);
       ctx.strokeStyle = accentColor;
       ctx.lineWidth = 1.1;
@@ -1354,8 +1360,8 @@ export class TamagotchiAvatar {
     ctx.closePath();
 
     const jellyGrad = ctx.createRadialGradient(
-      cx, cy + 20 * scaleY, 10,
-      cx, cy + 20 * scaleY, 78 * baseScale
+      cx, cy, 8,
+      cx, cy, 58 * baseScale
     );
     if (this.stage === 1) {
       // Pink Strawberry Gummi
@@ -1441,7 +1447,7 @@ export class TamagotchiAvatar {
 
     // Left Inner Ear Pad
     ctx.save();
-    ctx.translate(cx - 32 * scaleX, cy - 54 * scaleY + earWiggle);
+    ctx.translate(cx - 32 * scaleX, cy - 48 * scaleY + earWiggle);
     ctx.rotate(-0.25);
     ctx.beginPath();
     ctx.ellipse(0, 0, earPadW, earPadH, 0, 0, Math.PI * 2);
@@ -1456,7 +1462,7 @@ export class TamagotchiAvatar {
 
     // Right Inner Ear Pad
     ctx.save();
-    ctx.translate(cx + 32 * scaleX, cy - 54 * scaleY - earWiggle);
+    ctx.translate(cx + 32 * scaleX, cy - 48 * scaleY - earWiggle);
     ctx.rotate(0.25);
     ctx.beginPath();
     ctx.ellipse(0, 0, earPadW, earPadH, 0, 0, Math.PI * 2);
@@ -1471,306 +1477,50 @@ export class TamagotchiAvatar {
     ctx.restore();
 
     // -------------------------------------------------------------------------
-    // 4. RAVE HEART — the 'other' instrument (pads, chords, atmosphere)
-    // -------------------------------------------------------------------------
-    ctx.save();
-    const bellyY = cy + 42 * scaleY - 10;
-    const otherEnv = env.other;
-    const otherPunch = punch.other;
-    const beatPhase = this.heartBeatPhase;
-    const beatPulse = 1.0 + 0.18 * otherEnv + 0.18 * otherPunch + 0.035 * Math.sin(beatPhase * Math.PI * 2);
-    const heartW = 23 * scaleX * beatPulse;
-    const heartH = 21 * scaleY * beatPulse;
-    const heartWave = otherWaveform ?? null;
-    // Warm gold pads -> pink -> cool violet as 'other' gets brighter.
-    const otherHue = (45 - 135 * this.otherTone + 360) % 360;
-    const heartGlow = `hsl(${otherHue.toFixed(0)}, 100%, 60%)`;
-    const heartLine = `hsl(${otherHue.toFixed(0)}, 100%, 72%)`;
-    const heartCore = `hsl(${otherHue.toFixed(0)}, 100%, 89%)`;
-
-    const heartPathAt = (cw: number, ch: number): void => {
-      const top = bellyY - ch * 0.55;
-      const bottom = bellyY + ch * 0.62;
-      const notch = bellyY - ch * 0.08;
-      ctx.beginPath();
-      ctx.moveTo(cx, bottom);
-      ctx.bezierCurveTo(cx - cw * 1.14, bellyY + ch * 0.10, cx - cw * 0.72, top - ch * 0.22, cx, notch);
-      ctx.bezierCurveTo(cx + cw * 0.72, top - ch * 0.22, cx + cw * 1.14, bellyY + ch * 0.10, cx, bottom);
-      ctx.closePath();
-    };
-
-    // Expanding heartbeat ripples on every 'other' swell, not on the kick.
-    for (let i = 2; i >= 0; i--) {
-      const ph = (beatPhase + i / 3) % 1;
-      const rippleScale = 1 + ph * 0.72;
-      ctx.save();
-      heartPathAt(heartW * rippleScale, heartH * rippleScale);
-      ctx.strokeStyle = i === 0 ? heartCore : heartLine;
-      ctx.globalAlpha = (1 - ph) * (0.12 + 0.58 * otherEnv + 0.35 * otherPunch);
-      ctx.lineWidth = 1.1 + (1 - ph) * 1.8;
-      ctx.shadowBlur = 10 + 16 * (1 - ph) * (0.5 + otherEnv);
-      ctx.shadowColor = heartGlow;
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // Jelly heart body.
-    heartPathAt(heartW, heartH);
-    const bellyGrad = ctx.createRadialGradient(
-      cx, bellyY - heartH * 0.10, 2,
-      cx, bellyY, heartW * 1.05
-    );
-    if (this.stage === 4) {
-      bellyGrad.addColorStop(0.0, "rgba(255, 252, 220, 0.62)");
-      bellyGrad.addColorStop(0.55, "rgba(255, 210, 80, 0.42)");
-      bellyGrad.addColorStop(1.0, "rgba(255, 120, 60, 0.20)");
-    } else if (this.stage === 3) {
-      bellyGrad.addColorStop(0.0, "rgba(235, 255, 255, 0.60)");
-      bellyGrad.addColorStop(0.55, "rgba(120, 245, 255, 0.40)");
-      bellyGrad.addColorStop(1.0, "rgba(60, 130, 255, 0.20)");
-    } else if (this.stage === 2) {
-      bellyGrad.addColorStop(0.0, "rgba(255, 245, 255, 0.60)");
-      bellyGrad.addColorStop(0.55, "rgba(235, 130, 255, 0.40)");
-      bellyGrad.addColorStop(1.0, "rgba(150, 40, 255, 0.20)");
-    } else {
-      bellyGrad.addColorStop(0.0, "rgba(255, 250, 254, 0.60)");
-      bellyGrad.addColorStop(0.55, "rgba(255, 200, 233, 0.40)");
-      bellyGrad.addColorStop(1.0, "rgba(255, 150, 215, 0.20)");
-    }
-    ctx.fillStyle = bellyGrad;
-    ctx.shadowBlur = 14 + 20 * otherEnv + 12 * otherPunch;
-    ctx.shadowColor = heartGlow;
-    ctx.fill();
-
-    // Inside the heart: live waveform + twinkling rave dust, clipped to the shape.
-    ctx.save();
-    heartPathAt(heartW, heartH);
-    ctx.clip();
-    if (heartWave && heartWave.length > 0) {
-      ctx.beginPath();
-      const steps = 56;
-      for (let j = 0; j <= steps; j++) {
-        const u = j / steps;
-        const x = cx + (u - 0.5) * heartW * 2.0;
-        const idx = Math.floor(u * (heartWave.length - 1));
-        const amp = (heartWave[idx] - 128) / 128;
-        const y = bellyY + 1.2 + amp * heartH * 0.62 * (0.45 + 0.85 * otherEnv);
-        if (j === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = heartCore;
-      ctx.globalAlpha = 0.50 + 0.50 * otherEnv;
-      ctx.lineWidth = 1.3;
-      ctx.shadowBlur = 10 + 8 * otherPunch;
-      ctx.shadowColor = heartGlow;
-      ctx.stroke();
-    }
-    for (let k = 0; k < 9; k++) {
-      const a = t * (0.6 + k * 0.11) + k * 2.1;
-      const rr = 0.20 + 0.55 * (0.5 + 0.5 * Math.sin(t * 0.8 + k * 1.3));
-      const sx = cx + Math.cos(a) * heartW * rr;
-      const sy = bellyY + Math.sin(a * 1.3 + k) * heartH * rr;
-      const tw = 0.3 + 0.7 * Math.pow(Math.abs(Math.sin(t * 2.7 + k * 1.9)), 2);
-      ctx.beginPath();
-      ctx.arc(sx, sy, (0.8 + 1.5 * tw) * (0.7 + 0.55 * otherEnv + 0.25 * otherPunch), 0, Math.PI * 2);
-      ctx.fillStyle = k % 3 === 0 ? "#ffffff" : (k % 3 === 1 ? heartCore : heartLine);
-      ctx.globalAlpha = tw * (0.30 + 0.70 * otherEnv);
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = heartGlow;
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // Glossy candy highlight on the upper-left lobe.
-    ctx.save();
-    ctx.translate(cx - heartW * 0.34, bellyY - heartH * 0.24);
-    ctx.rotate(-0.5);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, heartW * 0.20, heartH * 0.10, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.62)";
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = "#ffffff";
-    ctx.fill();
-    ctx.restore();
-
-    // Double neon outline: soft halo + crisp core.
-    heartPathAt(heartW, heartH);
-    ctx.strokeStyle = heartLine;
-    ctx.lineWidth = 3.4;
-    ctx.globalAlpha = 0.50 + 0.38 * otherEnv + 0.12 * otherPunch;
-    ctx.shadowBlur = 18 + 24 * otherEnv + 14 * otherPunch;
-    ctx.shadowColor = heartGlow;
-    ctx.stroke();
-    heartPathAt(heartW, heartH);
-    ctx.strokeStyle = heartCore;
-    ctx.lineWidth = 1.2;
-    ctx.globalAlpha = 0.92;
-    ctx.shadowBlur = 7;
-    ctx.shadowColor = "#fff3b0";
-    ctx.stroke();
-    ctx.restore();
-
-    // -------------------------------------------------------------------------
-    // 4B. SEXY KAWAII RAVE BIKINI & EAR BOW
+    // 4. KAWAII EAR RIBBON BOW (HEAD ACCESSORY, NO BODY)
     // -------------------------------------------------------------------------
     if (vis.showBikini) {
       ctx.save();
-      const bikPink = ctx.createLinearGradient(cx, cy + 16 * scaleY, cx, cy + 72 * scaleY);
-      bikPink.addColorStop(0.0, "#ff6ec7");
-      bikPink.addColorStop(0.45, "#ff0084");
-      bikPink.addColorStop(1.0, "#c80064");
       const bikTrim = "#00f6ff";
-      const bikGlow = `rgba(255, 0, 150, ${0.55 + 0.45 * mixEnv})`;
-
-      const drawRibbonBow = (bx: number, by: number, bw: number, bh: number, rot: number) => {
-        ctx.save();
-        ctx.translate(bx, by);
-        ctx.rotate(rot);
-        ctx.fillStyle = "#ff2ea6";
-        ctx.strokeStyle = bikTrim;
-        ctx.lineWidth = 1.0;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(-bw, -bh);
-        ctx.quadraticCurveTo(-bw * 1.15, 0, -bw, bh);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(bw, -bh);
-        ctx.quadraticCurveTo(bw * 1.15, 0, bw, bh);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(0, 0, Math.max(1.8, bw * 0.28), 0, Math.PI * 2);
-        ctx.fillStyle = "#ffffff";
-        ctx.fill();
-        ctx.restore();
-      };
-
-      // Halter neck straps & chest string tie
+      const bx = cx + 38 * scaleX;
+      const by = cy - 54 * scaleY;
+      const bw = 7.4 * baseScale;
+      const bh = 4.5 * baseScale;
+      ctx.translate(bx, by);
+      ctx.rotate(0.42);
+      ctx.fillStyle = "#ff2ea6";
       ctx.strokeStyle = bikTrim;
-      ctx.lineWidth = 2.0 * baseScale;
+      ctx.lineWidth = 1.2;
       ctx.shadowBlur = 8 + 8 * mixEnv;
-      ctx.shadowColor = bikGlow;
-      for (const s of [-1, 1]) {
-        ctx.beginPath();
-        ctx.moveTo(cx + s * 10 * scaleX, cy + 7 * scaleY);
-        ctx.quadraticCurveTo(cx + s * 16 * scaleX, cy + 14 * scaleY, cx + s * 16 * scaleX, cy + 20 * scaleY);
-        ctx.stroke();
-      }
+      ctx.shadowColor = "#ff0088";
       ctx.beginPath();
-      ctx.moveTo(cx - 33 * scaleX, cy + 33 * scaleY);
-      ctx.quadraticCurveTo(cx, cy + 36 * scaleY, cx + 33 * scaleX, cy + 33 * scaleY);
-      ctx.stroke();
-
-      // Contoured glittering triangle bikini cups
-      for (const s of [-1, 1]) {
-        const apexX = cx + s * 15 * scaleX;
-        const apexY = cy + 19 * scaleY;
-        const innerX = cx + s * 2.2 * scaleX;
-        const outerX = cx + s * 27 * scaleX;
-        const baseY = cy + 34.5 * scaleY;
-        ctx.beginPath();
-        ctx.moveTo(apexX, apexY);
-        ctx.quadraticCurveTo(cx + s * 26 * scaleX, cy + 26 * scaleY, outerX, baseY);
-        ctx.quadraticCurveTo(cx + s * 14 * scaleX, cy + 37.5 * scaleY, innerX, baseY - 1.5 * scaleY);
-        ctx.quadraticCurveTo(cx + s * 6 * scaleX, cy + 26 * scaleY, apexX, apexY);
-        ctx.closePath();
-        ctx.fillStyle = bikPink;
-        ctx.fill();
-        ctx.strokeStyle = bikTrim;
-        ctx.lineWidth = 1.6;
-        ctx.stroke();
-
-        // Glossy candy shine on cup
-        ctx.beginPath();
-        ctx.ellipse(apexX - s * 2 * scaleX, cy + 27 * scaleY, 4.2 * baseScale, 1.8 * baseScale, s * 0.4, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255, 255, 255, 0.58)";
-        ctx.fill();
-      }
-      drawRibbonBow(cx, cy + 32.5 * scaleY, 5.0 * baseScale, 3.2 * baseScale, 0);
-
-      // Low-rise cheeky V-cut bikini bottoms + hip side ties
-      const waistY = cy + 54 * scaleY;
-      const hipW = 35 * scaleX;
-      ctx.beginPath();
-      ctx.moveTo(cx - hipW, waistY);
-      ctx.quadraticCurveTo(cx, waistY + 5.5 * scaleY, cx + hipW, waistY);
-      ctx.quadraticCurveTo(cx + hipW * 0.62, cy + 66 * scaleY, cx + 4.5 * scaleX, cy + 72.5 * scaleY);
-      ctx.quadraticCurveTo(cx, cy + 73.5 * scaleY, cx - 4.5 * scaleX, cy + 72.5 * scaleY);
-      ctx.quadraticCurveTo(cx - hipW * 0.62, cy + 66 * scaleY, cx - hipW, waistY);
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-bw, -bh);
+      ctx.quadraticCurveTo(-bw * 1.15, 0, -bw, bh);
       ctx.closePath();
-      ctx.fillStyle = bikPink;
       ctx.fill();
-      ctx.strokeStyle = bikTrim;
-      ctx.lineWidth = 1.8;
       ctx.stroke();
-
-      // Center waistband crystal heart charm + glittering hip tie bows
       ctx.beginPath();
-      ctx.arc(cx, waistY + 4.2 * scaleY, 2.5 * baseScale, 0, Math.PI * 2);
+      ctx.moveTo(0, 0);
+      ctx.lineTo(bw, -bh);
+      ctx.quadraticCurveTo(bw * 1.15, 0, bw, bh);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, Math.max(1.8, bw * 0.28), 0, Math.PI * 2);
       ctx.fillStyle = "#ffffff";
       ctx.fill();
-      const hipFlutter = Math.sin(t * 7.5) * 0.14;
-      drawRibbonBow(cx - hipW, waistY + 1.0 * scaleY, 5.5 * baseScale, 3.6 * baseScale, -0.35 + hipFlutter);
-      drawRibbonBow(cx + hipW, waistY + 1.0 * scaleY, 5.5 * baseScale, 3.6 * baseScale, 0.35 - hipFlutter);
-
-      // Cute matching kawaii bow clip on right ear
-      drawRibbonBow(cx + 38 * scaleX, cy - 60 * scaleY, 7.2 * baseScale, 4.4 * baseScale, 0.42);
       ctx.restore();
     }
 
-    // -------------------------------------------------------------------------
-    // 5. KAWAII PAW BEANS (PINK JELLY PADS ON HANDS & FEET)
-    // -------------------------------------------------------------------------
-    ctx.save();
-    const drawPaw = (pawX: number, pawY: number, angle: number, isHand: boolean) => {
-      ctx.save();
-      ctx.translate(pawX, pawY);
-      ctx.rotate(angle);
-      ctx.fillStyle = "rgba(255, 150, 210, 0.65)";
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = "#ff77e9";
-
-      // Main palm/foot pad
-      const padR = (isHand ? 3.5 : 4.2) * baseScale * (1 + 0.18 * Math.min(1.4, env.bass * 1.5 + punch.bass));
-      ctx.beginPath();
-      ctx.arc(0, 0, padR, 0, Math.PI * 2);
-      ctx.fill();
-
-      // 3 Cute tiny toe beans
-      const beanR = (isHand ? 1.6 : 2.0) * baseScale;
-      const beanDist = padR + beanR + 1.2;
-      for (let b = -1; b <= 1; b++) {
-        const bAng = b * 0.45 - Math.PI / 2;
-        const bx = beanDist * Math.cos(bAng);
-        const by = beanDist * Math.sin(bAng);
-        ctx.beginPath();
-        ctx.arc(bx, by, beanR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    };
-
-    // Left & Right Hand Paws
-    drawPaw(cx - 48 * scaleX, cy + 24 * scaleY, -0.65, true);
-    drawPaw(cx + 48 * scaleX, cy + 24 * scaleY, 0.65, true);
-
-    // Left & Right Foot Paws
-    drawPaw(cx - 18 * scaleX, cy + 70 * scaleY, 0.15, false);
-    drawPaw(cx + 18 * scaleX, cy + 70 * scaleY, -0.15, false);
-    ctx.restore();
-
-    // 5B. Floating rave motes orbiting the creature (full-mix shimmer).
+    // 5. Floating rave motes orbiting the circle head (full-mix shimmer).
     ctx.save();
     for (let k = 0; k < 7; k++) {
-      const a = t * (0.32 + k * 0.035) + k * (Math.PI * 2 / 7);
-      const rr = 0.92 + 0.10 * Math.sin(t * 0.7 + k * 1.3);
+      const a = t * (0.36 + k * 0.04) + k * (Math.PI * 2 / 7);
+      const rr = 0.96 + 0.10 * Math.sin(t * 0.7 + k * 1.3);
       const mx = cx + Math.cos(a) * 64 * scaleX * rr;
-      const my = cy + Math.sin(a) * 78 * scaleY * rr;
+      const my = cy + Math.sin(a) * 60 * scaleY * rr;
       const tw = 0.35 + 0.65 * Math.pow(Math.abs(Math.sin(t * 2.4 + k * 1.7)), 2);
       const rad = (0.9 + 1.6 * tw) * (0.75 + 0.55 * mixEnv + 0.25 * mixPunch);
       ctx.beginPath();
@@ -1793,20 +1543,20 @@ export class TamagotchiAvatar {
 
     // Forehead shine arc
     ctx.beginPath();
-    ctx.arc(cx - 12 * scaleX, cy - 35 * scaleY, 14 * scaleX, 1.15 * Math.PI, 1.65 * Math.PI);
+    ctx.arc(cx - 12 * scaleX, cy - 28 * scaleY, 14 * scaleX, 1.15 * Math.PI, 1.65 * Math.PI);
     ctx.stroke();
 
     // Ear gloss dots
     ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
     ctx.beginPath();
-    ctx.arc(cx - 36 * scaleX, cy - 60 * scaleY, 2.2, 0, Math.PI * 2);
-    ctx.arc(cx + 36 * scaleX, cy - 60 * scaleY, 2.2, 0, Math.PI * 2);
+    ctx.arc(cx - 36 * scaleX, cy - 53 * scaleY, 2.2, 0, Math.PI * 2);
+    ctx.arc(cx + 36 * scaleX, cy - 53 * scaleY, 2.2, 0, Math.PI * 2);
     ctx.fill();
 
     // Chubby cheek gloss pills
     ctx.beginPath();
-    ctx.arc(cx - 34 * scaleX, cy - 14 * scaleY, 2.0, 0, Math.PI * 2);
-    ctx.arc(cx + 34 * scaleX, cy - 14 * scaleY, 2.0, 0, Math.PI * 2);
+    ctx.arc(cx - 34 * scaleX, cy - 6 * scaleY, 2.0, 0, Math.PI * 2);
+    ctx.arc(cx + 34 * scaleX, cy - 6 * scaleY, 2.0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.restore();
@@ -1815,7 +1565,7 @@ export class TamagotchiAvatar {
     // 8. ROSY CHEEKS & KAWAII BLUSH SLASHES (///)
     // -------------------------------------------------------------------------
     const cheekSpacing = 28 * scaleX;
-    const cheekY = cy - 6 * scaleY;
+    const cheekY = cy + 2 * scaleY;
     const lCheekX = cx - cheekSpacing;
     const rCheekX = cx + cheekSpacing;
 
@@ -1851,7 +1601,7 @@ export class TamagotchiAvatar {
     // 9. BIG EXPRESSIVE ANIME WAVEFORM EYES
     // -------------------------------------------------------------------------
     const eyeSpacing = 18 * scaleX;
-    const eyeY = cy - 18 * scaleY;
+    const eyeY = cy - 11 * scaleY;
     const leftEyeX = cx - eyeSpacing;
     const rightEyeX = cx + eyeSpacing;
 
@@ -1886,7 +1636,7 @@ export class TamagotchiAvatar {
     // -------------------------------------------------------------------------
     // 10. CUTE BEAR SNOUT / MUZZLE
     // -------------------------------------------------------------------------
-    const muzzleY = cy - 4 * scaleY;
+    const muzzleY = cy + 6 * scaleY;
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(cx, muzzleY, 13 * scaleX, 10 * scaleY, 0, 0, Math.PI * 2);
@@ -1902,7 +1652,7 @@ export class TamagotchiAvatar {
     // -------------------------------------------------------------------------
     // 11. KAWAII BEAR BUTTON NOSE
     // -------------------------------------------------------------------------
-    const noseY = cy - 7 * scaleY;
+    const noseY = cy + 2 * scaleY;
     this.drawKawaiiBearNose(
       ctx, cx, noseY,
       env.drums, env.bass, env.vocals, mixEnv,
@@ -1918,7 +1668,7 @@ export class TamagotchiAvatar {
     const lmActive = Boolean(lm?.active);
     const liveArt = lm?.rawArt ?? lm?.art;
     const liveTract = lm?.rawTract ?? lm?.tract;
-    const mouthY = cy + 2.4 * scaleY
+    const mouthY = cy + 13.5 * scaleY
       // Pitch lift: higher F0 rides the mouth up a touch (subtle, ±2px).
       + (this.vocalF0Hz > 0
         ? Math.max(-0.35, Math.min(0.55, (this.vocalF0Hz - 220) / 700)) * 3.0 * scaleY

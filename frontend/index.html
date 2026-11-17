@@ -830,18 +830,13 @@
       border: 1px solid #1f2533;
     }
 
-    /* --- HERO STAGE: Wub creature under transport, nebula below it --- */
+    /* --- HERO STAGE: DJ Control Surface + Unified Full Visualizer Output --- */
     #hero-stages {
       display: grid;
-      grid-template-columns: minmax(290px, 1.0fr) minmax(360px, 1.38fr) minmax(300px, 1.12fr);
+      grid-template-columns: 1fr;
       gap: 14px;
       margin-top: 12px;
       align-items: stretch;
-    }
-    @media (max-width: 1180px) {
-      #hero-stages {
-        grid-template-columns: 1fr;
-      }
     }
     #hero-stages .tamagotchi-card {
       width: 100%;
@@ -1070,14 +1065,14 @@
     .dj-pad.macro { border-color: #475569; color: #ffea00; }
     .dj-pad.macro:hover { border-color: #ffea00; background: #1f2937; }
 
-    /* --- TRIPPY RAVE LIGHTSHOW OUTPUT PANEL --- */
+    /* --- TRIPPY RAVE LIGHTSHOW & WUB CREATURE FULL VISUALIZER PANEL --- */
     .lightshow-body {
       display: grid;
-      grid-template-columns: 1fr 124px;
+      grid-template-columns: 1fr 142px;
       gap: 8px;
       padding: 8px;
       flex: 1;
-      min-height: 320px;
+      min-height: 460px;
     }
     @media (max-width: 640px) {
       .lightshow-body {
@@ -1090,7 +1085,15 @@
       overflow: hidden;
       background: #04010a;
       border: 1px solid #2e1065;
-      min-height: 280px;
+      min-height: 420px;
+    }
+    .lightshow-bear-strip {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 10px 10px;
+      background: #0b0f1a;
+      border-top: 1px solid #1e293b;
     }
     #lightshow-canvas {
       display: block;
@@ -1427,7 +1430,7 @@
       letter-spacing: 0.6px;
       text-align: center;
       pointer-events: none;
-      z-index: 2;
+      z-index: 4;
       min-height: 1.2em;
     }
     .tamagotchi-screen::before {
@@ -1628,10 +1631,11 @@
       box-shadow: 0 0 10px rgba(0, 255, 255, 0.55);
     }
     .bear3d-host {
-      position: relative;
+      position: absolute;
+      inset: 0;
       width: 100%;
-      height: 220px;
-      z-index: 1;
+      height: 100%;
+      z-index: 3;
       border-radius: 6px;
       overflow: hidden;
     }
@@ -2743,12 +2747,11 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.297 <span class="mc-build-num">#297</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.298 <span class="mc-build-num">#298</span></span>
       </div>
       <div id="panel-dock" class="panel-dock" role="toolbar" aria-label="Toggle Front Page Panels">
-        <button type="button" class="panel-dock-btn active" data-panel="panel-bear">WUB BEAR</button>
         <button type="button" class="panel-dock-btn active" data-panel="panel-dj-surface">DJ SURFACE</button>
-        <button type="button" class="panel-dock-btn active" data-panel="panel-lightshow">LIGHT SHOW</button>
+        <button type="button" class="panel-dock-btn active" data-panel="panel-lightshow">FULL VISUALIZER</button>
         <button type="button" class="panel-dock-btn" data-panel="groovebox-panel">SEQUENCER</button>
         <button type="button" class="panel-dock-btn" data-panel="trippy-sequencer-rack">MODULAR RACK</button>
         <button type="button" class="panel-dock-btn" data-panel="structure-panel">ARRANGEMENT</button>
@@ -2759,54 +2762,8 @@
       </div>
     </header>
 
-  <!-- HERO STAGE: 1) Wub Creature 2.0 + Visual Controls, 2) DJ Control Surface + 4-Voice Nebula, 3) SuperAcid Rave Lightshow -->
-  <section id="hero-stages" aria-label="Wub Creature, DJ Control Surface, and Rave Lightshow">
-    <!-- HERO 1: WUB CREATURE 2.0 + BEAR VISUAL CONTROLS -->
-    <div id="panel-bear" class="stage-card tamagotchi-card">
-      <div class="stage-header">
-        <span style="color: #ff77e9;">WUB BEAR 2.0</span>
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <span id="tamagotchi-stage-badge">LVL 1 • GUMMI CUB</span>
-          <button type="button" class="panel-min-btn" data-panel-min="panel-bear" title="Minimize panel">–</button>
-        </div>
-      </div>
-      <div class="tamagotchi-container">
-        <div class="tamagotchi-screen">
-          <div class="tamagotchi-scanlines"></div>
-          <canvas id="tamagotchi-canvas" class="tamagotchi-canvas" width="280" height="200" aria-label="Wub Kawaii Gummi Bear Audio Reactive Body Loop"></canvas>
-          <div id="tamagotchi-3d-host" class="bear3d-host" style="display: none;" aria-label="Wub Electro-Animatronic Techno Dance Bear 2.0 3D View"></div>
-          <div id="tamagotchi-lyric-bar" class="tamagotchi-lyric-bar"></div>
-          <pre id="tamagotchi-ascii" class="tamagotchi-ascii" style="display: none;" aria-label="Tamagotchi ASCII Face"></pre>
-        </div>
-        <div class="tamagotchi-dashboard">
-          <div class="tamagotchi-stat-row">
-            <span>VIBE: <b id="tamagotchi-vibe">85%</b></span>
-            <span>MOOD: <b id="tamagotchi-mood">CHILL</b></span>
-            <span>XP: <b id="tamagotchi-xp">0</b></span>
-          </div>
-          <div class="tamagotchi-actions">
-            <button id="btn-tamagotchi-pet" class="tamagotchi-btn" type="button" title="Praise & Pet Wub Gummi Bear">PET ♥</button>
-            <button id="btn-tamagotchi-feed" class="tamagotchi-btn" type="button" title="Feed Juicy Audio Slice Snack">SNACK 🍕</button>
-            <button id="btn-tamagotchi-hype" class="tamagotchi-btn" type="button" title="Hype up the dance bounce energy">HYPE ⚡</button>
-            <button id="btn-tamagotchi-3d" class="tamagotchi-btn" type="button" title="Toggle 2D / 3D Electro-Animatronic Camera View">3D CAM</button>
-            <button id="btn-tamagotchi-cam" class="tamagotchi-btn" type="button" title="Cycle 3D Camera Angle" style="display: none;">CAM: 3/4 HERO</button>
-          </div>
-          <div class="bear-visual-strip" aria-label="Wub Creature 2.0 Visual Controls">
-            <div class="bear-visual-toggles">
-              <button id="btn-bear-cage" class="tamagotchi-btn active" type="button">CAGE: ON</button>
-              <button id="btn-bear-visor" class="tamagotchi-btn active" type="button">VISOR: ON</button>
-              <button id="btn-bear-halo" class="tamagotchi-btn active" type="button">HALO: ON</button>
-              <button id="btn-bear-bikini" class="tamagotchi-btn active" type="button">BIKINI: ON</button>
-              <button id="btn-bear-mouth-style" class="tamagotchi-btn" type="button">MOUTH: REAL</button>
-            </div>
-            <div class="bear-visual-sliders">
-              <label>DANCE <input id="bear-dance-slider" type="range" min="0.3" max="2.0" step="0.05" value="1.0" /><span id="bear-dance-val">100%</span></label>
-              <label>MOUTH <input id="bear-mouth-slider" type="range" min="0.6" max="1.8" step="0.05" value="1.0" /><span id="bear-mouth-val">100%</span></label>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+  <!-- HERO STAGE: 1) DJ Control Surface + 4-Voice Nebula, 2) Full Rave Visualizer & Wub Bear Controls -->
+  <section id="hero-stages" aria-label="DJ Control Surface and Full Rave Visualizer">
 
     <!-- HERO 2: DJ CONTROL SURFACE (TRANSPORT + 4-VOICE NEBULA RETICLES + GROOVEBOX FX) -->
     <div id="panel-dj-surface" class="stage-card">
@@ -2934,22 +2891,27 @@
       </div>
     </div>
 
-    <!-- HERO 3: TRIPPY RAVE LIGHTSHOW OUTPUT (SuperAcid + SpaceTubes) -->
+    <!-- HERO 2: FULL VISUALIZER (SuperAcid Lightshow + Floating Wub Bear Head 2D/3D) -->
     <div id="panel-lightshow" class="stage-card lightshow-card">
       <div class="stage-header">
-        <span style="color: #ffe600;">RAVE LIGHTSHOW</span>
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <button id="btn-lightshow-fullscreen" class="panel-min-btn" type="button" title="Toggle Fullscreen Lightshow (F)">FULLSCREEN ⛶</button>
+        <span style="color: #ffe600;">FULL VISUALIZER • RAVE LIGHTSHOW &amp; WUB BEAR</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span id="tamagotchi-stage-badge" style="color: #ff77e9; font-weight: 800;">LVL 1 • GUMMI CUB</span>
+          <button id="btn-lightshow-fullscreen" class="panel-min-btn" type="button" title="Toggle Fullscreen Visualizer (F)">FULLSCREEN ⛶</button>
           <button type="button" class="panel-min-btn" data-panel-min="panel-lightshow" title="Minimize panel">–</button>
         </div>
       </div>
       <div class="lightshow-body">
         <div class="lightshow-stage-wrap">
-          <canvas id="lightshow-canvas" width="640" height="400" aria-label="SuperAcid & SpaceTubes Rave Lightshow Output"></canvas>
-          <canvas id="lightshow-bear-overlay" width="640" height="400" aria-hidden="true"></canvas>
+          <canvas id="lightshow-canvas" width="960" height="540" aria-label="SuperAcid & SpaceTubes Rave Lightshow Output"></canvas>
+          <canvas id="lightshow-bear-overlay" width="960" height="540" aria-hidden="true"></canvas>
+          <canvas id="tamagotchi-canvas" class="tamagotchi-canvas" width="320" height="320" data-offscreen="true" style="display: none;" aria-label="Wub Floating Head Audio Reactive Buffer"></canvas>
+          <div id="tamagotchi-3d-host" class="bear3d-host" style="display: none;" aria-label="Wub Floating Sphere Head 3D View"></div>
+          <div id="tamagotchi-lyric-bar" class="tamagotchi-lyric-bar"></div>
+          <pre id="tamagotchi-ascii" class="tamagotchi-ascii" style="display: none;" aria-label="Tamagotchi ASCII Face"></pre>
         </div>
         <div class="lightshow-side" aria-label="Lightshow VJ Controls">
-          <button id="btn-ls-bear" class="lightshow-btn" type="button" title="Overlay dancing Wub Creature 2.0 onto Lightshow visuals (O)">BEAR OVERLAY: OFF</button>
+          <button id="btn-ls-bear" class="lightshow-btn active" type="button" title="Overlay floating Wub Bear circle head onto Lightshow visuals (O)">BEAR OVERLAY: ON</button>
           <button id="btn-ls-cortex" class="lightshow-btn active" type="button" title="Auto-rotate presets on song sections">CORTEX VJ: ON</button>
           <button id="btn-ls-dual" class="lightshow-btn active" type="button" title="Composite FG overlay preset atop BG shader">2-LAYER: ON</button>
           <div class="lightshow-nav-row">
@@ -2982,6 +2944,34 @@
           <div class="lightshow-sliders">
             <label>GAIN <input id="ls-intensity-slider" type="range" min="0.3" max="2.2" step="0.05" value="1.25" /></label>
             <label>SPEED <input id="ls-speed-slider" type="range" min="0.2" max="2.5" step="0.05" value="1.05" /></label>
+          </div>
+        </div>
+      </div>
+      <div class="lightshow-bear-strip" aria-label="Combined Wub Creature & 3D Sphere Controls">
+        <div class="tamagotchi-stat-row">
+          <span>VIBE: <b id="tamagotchi-vibe">85%</b></span>
+          <span>MOOD: <b id="tamagotchi-mood">CHILL</b></span>
+          <span>XP: <b id="tamagotchi-xp">0</b></span>
+        </div>
+        <div class="tamagotchi-actions">
+          <button id="btn-tamagotchi-pet" class="tamagotchi-btn" type="button" title="Praise & Pet Wub Bear">PET ♥</button>
+          <button id="btn-tamagotchi-feed" class="tamagotchi-btn" type="button" title="Feed Juicy Audio Slice Snack">SNACK 🍕</button>
+          <button id="btn-tamagotchi-hype" class="tamagotchi-btn" type="button" title="Hype up the bounce energy">HYPE ⚡</button>
+          <button id="btn-tamagotchi-3d" class="tamagotchi-btn" type="button" title="Toggle 2D / 3D Dual-Framebuffer Sphere Head">3D CAM</button>
+          <button id="btn-tamagotchi-cam" class="tamagotchi-btn" type="button" title="Cycle 3D Camera Angle" style="display: none;">CAM: 3/4 HERO</button>
+          <button id="btn-bear-tex" class="tamagotchi-btn" type="button" title="Randomize contrasting 3D Sphere & Sky Shader Textures">🎲 TEX</button>
+        </div>
+        <div class="bear-visual-strip" aria-label="Wub Creature Visual Controls">
+          <div class="bear-visual-toggles">
+            <button id="btn-bear-cage" class="tamagotchi-btn active" type="button">CAGE: ON</button>
+            <button id="btn-bear-visor" class="tamagotchi-btn active" type="button">VISOR: ON</button>
+            <button id="btn-bear-halo" class="tamagotchi-btn active" type="button">HALO: ON</button>
+            <button id="btn-bear-bikini" class="tamagotchi-btn active" type="button" title="Toggle Kawaii Ear Bow">BOW: ON</button>
+            <button id="btn-bear-mouth-style" class="tamagotchi-btn" type="button">MOUTH: REAL</button>
+          </div>
+          <div class="bear-visual-sliders">
+            <label>DANCE <input id="bear-dance-slider" type="range" min="0.3" max="2.0" step="0.05" value="1.0" /><span id="bear-dance-val">100%</span></label>
+            <label>MOUTH <input id="bear-mouth-slider" type="range" min="0.6" max="1.8" step="0.05" value="1.0" /><span id="bear-mouth-val">100%</span></label>
           </div>
         </div>
       </div>
@@ -3683,7 +3673,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.297 (Build #297 • rev 201200f096)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.298 (Build #298 • rev 076295eabe)</span>
     </div>
   </div>
 

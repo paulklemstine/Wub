@@ -67,8 +67,124 @@ export interface Bear3DTelemetry {
   mouth: LiveMouthState | null;
   fallbackAperture: number;
   fallbackVowel: string;
+  freqBins?: Uint8Array | null;
   visual?: BearVisualConfig;
 }
+
+interface DualVizPreset {
+  id: string;
+  label: string;
+  role: "bg" | "fg";
+  defaults: Record<string, number>;
+  frag: string;
+}
+
+const DUAL_OFF_VERT = `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+const DUAL_BUILTIN_PRESETS: DualVizPreset[] = [
+  {
+    id: "acid-warp-sky",
+    label: "ACID WARP",
+    role: "bg",
+    defaults: {},
+    frag: `
+precision highp float;
+varying vec2 vUv;
+uniform float uTime;
+uniform float uKick;
+uniform float uEnergy;
+uniform float uSpeed;
+uniform float uPalette;
+uniform float uSpectrum0;
+uniform float uSpectrum3;
+vec3 hsv2rgb(float h, float s, float v) {
+  vec3 c = abs(fract(h + vec3(1.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0;
+  return v * mix(vec3(1.0), clamp(c, 0.0, 1.0), s);
+}
+void main() {
+  vec2 p = (vUv - 0.5) * 4.0;
+  float time = uTime * uSpeed * 1.4;
+  float b = (uSpectrum0 + uSpectrum3) * 0.85;
+  vec2 p1 = p + vec2(sin(p.y * 2.5 + time * 0.7), cos(p.x * 2.3 + time * 0.6)) * (1.1 + b);
+  vec2 p2 = p1 + vec2(sin(p1.y * 3.7 + time * 0.5 + p1.x * 1.3), cos(p1.x * 3.1 - time * 0.4)) * 0.85;
+  float pat = sin(p2.x * 4.8 + p2.y * 4.2 + time * 0.35) * 0.5 + 0.5;
+  float hue = fract(pat * 0.85 + uPalette * 0.25 + time * 0.05);
+  vec3 col = hsv2rgb(hue, 0.92, clamp(pat * 0.8 + 0.28 + uEnergy * 0.35 + uKick * 0.2, 0.0, 1.0));
+  gl_FragColor = vec4(col, 1.0);
+}`,
+  },
+  {
+    id: "chroma-mandala-head",
+    label: "CHROMA MANDALA",
+    role: "bg",
+    defaults: {},
+    frag: `
+precision highp float;
+varying vec2 vUv;
+uniform float uTime;
+uniform float uKick;
+uniform float uEnergy;
+uniform float uSpeed;
+uniform float uPalette;
+uniform float uSpectrum1;
+uniform float uSpectrum5;
+vec3 hsv2rgb(float h, float s, float v) {
+  vec3 c = abs(fract(h + vec3(1.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0;
+  return v * mix(vec3(1.0), clamp(c, 0.0, 1.0), s);
+}
+void main() {
+  vec2 p = (vUv - 0.5) * 2.0;
+  float r = length(p);
+  float a = atan(p.y, p.x);
+  float t = uTime * uSpeed;
+  float k = abs(sin(a * 8.0 + t * 1.6)) * (0.45 + 0.45 * uSpectrum5);
+  float rings = sin(r * 18.0 - t * 3.2 + sin(a * 6.0) * 1.5) * 0.5 + 0.5;
+  float grid = smoothstep(0.35, 0.9, rings * (0.6 + k)) + uKick * 0.25;
+  float hue = fract(0.55 + r * 0.45 - t * 0.08 + uPalette * 0.25 + uSpectrum1 * 0.2);
+  vec3 col = hsv2rgb(hue, 0.95, clamp(grid * (0.85 + 0.45 * uEnergy), 0.18, 1.0));
+  gl_FragColor = vec4(col, 1.0);
+}`,
+  },
+  {
+    id: "space-tubes-sky",
+    label: "SPACE TUBES",
+    role: "bg",
+    defaults: {},
+    frag: `
+precision highp float;
+varying vec2 vUv;
+uniform float uTime;
+uniform float uKick;
+uniform float uEnergy;
+uniform float uSpeed;
+uniform float uPalette;
+uniform float uSpectrum0;
+uniform float uSpectrum6;
+vec3 hsv2rgb(float h, float s, float v) {
+  vec3 c = abs(fract(h + vec3(1.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0;
+  return v * mix(vec3(1.0), clamp(c, 0.0, 1.0), s);
+}
+void main() {
+  vec2 p = (vUv - 0.5) * 2.0;
+  float t = uTime * uSpeed;
+  float r = length(p) + 0.01;
+  float ang = atan(p.y, p.x);
+  float z = 1.4 / r + t * (2.2 + uSpectrum0 * 1.8);
+  float rib = pow(abs(sin(z * 2.6)), 8.0);
+  float rail = smoothstep(0.9, 1.0, abs(sin(ang * 7.0 + sin(z * 0.4) * 2.0)));
+  float hue = fract(z * 0.09 + uPalette * 0.25 + t * 0.04);
+  vec3 col = mix(vec3(0.03, 0.01, 0.1), hsv2rgb(hue, 0.95, 1.0) * 0.9, rib);
+  col += hsv2rgb(fract(hue + 0.42), 0.92, 1.0) * rail * (0.5 + uKick * 0.7 + uSpectrum6 * 0.4);
+  gl_FragColor = vec4(clamp(col * (0.85 + 0.45 * uEnergy), 0.0, 1.0), 1.0);
+}`,
+  },
+];
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -323,14 +439,12 @@ export class Bear3DView {
   private readonly presetBtns = new Map<BearCameraPreset, HTMLButtonElement>();
   private readonly statusBanner: HTMLDivElement;
 
-  // Rig groups & reactive meshes
+  // Rig groups & reactive meshes (floating circle/sphere Wub Bear head only)
   private stageRoot = new THREE.Group();
   private bodyGroup = new THREE.Group();
   private headGroup = new THREE.Group();
-  private leftArm = new THREE.Group();
-  private rightArm = new THREE.Group();
-  private leftLeg = new THREE.Group();
-  private rightLeg = new THREE.Group();
+  private headMesh: THREE.Mesh | null = null;
+  private skyMesh: THREE.Mesh | null = null;
   private leftEar = new THREE.Group();
   private rightEar = new THREE.Group();
   private leftEye = new THREE.Group();
@@ -340,14 +454,62 @@ export class Bear3DView {
   private leftPupil: THREE.Mesh | null = null;
   private rightPupil: THREE.Mesh | null = null;
   private visorMesh: THREE.Mesh | null = null;
-  private heartMesh: THREE.Mesh | null = null;
   private haloMesh: THREE.Mesh | null = null;
-  private bikiniGroup: THREE.Group | null = null;
   private earBowGroup: THREE.Group | null = null;
   private bikiniMat: THREE.MeshPhysicalMaterial | null = null;
   private mandalaFloor: THREE.Group | null = null;
   private mandalaBack: THREE.Group | null = null;
   private moteRing: THREE.Group | null = null;
+
+  // Dual offscreen framebuffers: contrasting sky animated texture + sphere head texture
+  private skyTarget: THREE.WebGLRenderTarget | null = null;
+  private headTarget: THREE.WebGLRenderTarget | null = null;
+  private offScene = new THREE.Scene();
+  private offCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private offQuadGeo = new THREE.PlaneGeometry(2, 2);
+  private offQuadMesh: THREE.Mesh | null = null;
+  private vizPresets: DualVizPreset[] = [...DUAL_BUILTIN_PRESETS];
+  private vizHeaders: Record<string, string> = {};
+  private vizMatCache = new Map<string, THREE.ShaderMaterial>();
+  private skyPresetId = "space-tubes-sky";
+  private headPresetId = "chroma-mandala-head";
+  private lastTexSwapSec = 0;
+  private dualStartMs = performance.now();
+  private readonly dualUniforms: Record<string, THREE.IUniform<number>> = {
+    uTime: { value: 0 },
+    uAudioTime: { value: 0 },
+    uBpm: { value: 126 },
+    uBeat: { value: 0 },
+    uBpmSin: { value: 0 },
+    uBpmSin2: { value: 0 },
+    uBpmSin4: { value: 0 },
+    uKick: { value: 0 },
+    uOnset: { value: 0 },
+    uEnergy: { value: 0 },
+    uIntensity: { value: 1.15 },
+    uSpeed: { value: 1.0 },
+    uPalette: { value: 0 },
+    uWarmth: { value: 0 },
+    uBrightness: { value: 0 },
+    uMusicDensity: { value: 0.4 },
+    uForwardFlight: { value: 0.3 },
+    uSpectrum0: { value: 0 },
+    uSpectrum1: { value: 0 },
+    uSpectrum2: { value: 0 },
+    uSpectrum3: { value: 0 },
+    uSpectrum4: { value: 0 },
+    uSpectrum5: { value: 0 },
+    uSpectrum6: { value: 0 },
+    uSpectrum7: { value: 0 },
+    uBandFlux0: { value: 0 },
+    uBandFlux1: { value: 0 },
+    uBandFlux2: { value: 0 },
+    uBandFlux3: { value: 0 },
+    uBandFlux4: { value: 0 },
+    uBandFlux5: { value: 0 },
+    uBandFlux6: { value: 0 },
+    uBandFlux7: { value: 0 },
+  };
 
   // Realistic mouth components
   private mouthAnchor = new THREE.Group();
@@ -374,7 +536,6 @@ export class Bear3DView {
   private lipMat: THREE.MeshPhysicalMaterial | null = null;
   private tongueMat: THREE.MeshPhysicalMaterial | null = null;
   private throatMat: THREE.MeshStandardMaterial | null = null;
-  private heartMat: THREE.MeshStandardMaterial | null = null;
   private visorMat: THREE.MeshStandardMaterial | null = null;
   private earPadMat: THREE.MeshStandardMaterial | null = null;
   private eyeIrisMatL: THREE.MeshStandardMaterial | null = null;
@@ -434,25 +595,89 @@ export class Bear3DView {
     this.syncPresetButtons();
     this.onPresetChange?.(preset);
     if (!this.camera || !this.controls) return;
-    const d = 4.65;
+    const d = 4.15;
     if (preset === "mouth") {
-      this.camera.position.set(0.12, 1.88, 2.38);
-      this.controls.target.set(0, 1.8, 1.05);
+      this.camera.position.set(0.12, -0.1, 2.38);
+      this.controls.target.set(0, -0.17, 1.05);
     } else if (preset === "front") {
-      this.camera.position.set(0, 1.25, d);
-      this.controls.target.set(0, 1.02, 0);
+      this.camera.position.set(0, 0.08, d);
+      this.controls.target.set(0, 0, 0);
     } else if (preset === "side") {
-      this.camera.position.set(4.25, 1.25, 1.35);
-      this.controls.target.set(0, 1.08, 0.2);
+      this.camera.position.set(3.95, 0.14, 1.15);
+      this.controls.target.set(0, 0, 0.15);
     } else if (preset === "orbit") {
-      this.camera.position.set(2.2, 1.65, 3.85);
-      this.controls.target.set(0, 1.05, 0);
+      this.camera.position.set(2.15, 0.55, 3.65);
+      this.controls.target.set(0, 0, 0);
     } else {
-      // "three" (hero 3/4 zoomed to fill screen)
-      this.camera.position.set(1.55, 1.55, 4.15);
-      this.controls.target.set(0, 1.05, 0.1);
+      // "three" (hero 3/4 floating sphere head zoomed to fill screen)
+      this.camera.position.set(1.38, 0.42, 3.85);
+      this.controls.target.set(0, 0, 0.05);
     }
     this.controls.update();
+  }
+
+  public randomizeTextures(): void {
+    const bgList = this.vizPresets.filter((p) => p.role === "bg");
+    const all = bgList.length >= 2 ? bgList : this.vizPresets;
+    if (all.length === 0) return;
+    const skyIdx = Math.floor(Math.random() * all.length);
+    let headIdx = Math.floor(Math.random() * all.length);
+    if (all.length > 1 && headIdx === skyIdx) {
+      headIdx = (skyIdx + 1 + Math.floor(Math.random() * (all.length - 1))) % all.length;
+    }
+    this.skyPresetId = all[skyIdx].id;
+    this.headPresetId = all[headIdx].id;
+    this.lastTexSwapSec = (performance.now() - this.dualStartMs) * 0.001;
+  }
+
+  private loadPresetBundle(): void {
+    void fetch("/data/superacid_presets.json")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((doc: { headers?: Record<string, string>; presets?: DualVizPreset[] } | null) => {
+        if (!doc || !Array.isArray(doc.presets) || doc.presets.length === 0) return;
+        this.vizHeaders = doc.headers ?? {};
+        this.vizPresets = [...DUAL_BUILTIN_PRESETS, ...doc.presets];
+        this.randomizeTextures();
+      })
+      .catch(() => {
+        // Keep built-in shaders if bundle unavailable
+      });
+  }
+
+  private getDualShaderMaterial(presetId: string): THREE.ShaderMaterial | null {
+    const cached = this.vizMatCache.get(presetId);
+    if (cached) return cached;
+    const meta = this.vizPresets.find((p) => p.id === presetId) ?? DUAL_BUILTIN_PRESETS[0];
+    if (!meta) return null;
+    let frag = meta.frag;
+    for (const [token, hdr] of Object.entries(this.vizHeaders)) {
+      frag = frag.replace(token, hdr);
+    }
+    if (!frag.includes("precision ")) {
+      frag = `precision highp float;\n${frag}`;
+    }
+    const uniforms: Record<string, THREE.IUniform<number>> = { ...this.dualUniforms };
+    for (const [k, v] of Object.entries(meta.defaults || {})) {
+      if (!(k in uniforms)) {
+        uniforms[k] = { value: Number.isFinite(v) ? v : 0.6 };
+      }
+    }
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: DUAL_OFF_VERT,
+      fragmentShader: frag,
+      uniforms,
+      depthTest: false,
+      depthWrite: false,
+    });
+    if (this.vizMatCache.size >= 16) {
+      const oldest = this.vizMatCache.keys().next().value;
+      if (oldest) {
+        this.vizMatCache.get(oldest)?.dispose();
+        this.vizMatCache.delete(oldest);
+      }
+    }
+    this.vizMatCache.set(presetId, mat);
+    return mat;
   }
 
   private syncPresetButtons(): void {
@@ -508,13 +733,40 @@ export class Bear3DView {
     });
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x070118, 0.036);
-    const camera = new THREE.PerspectiveCamera(36, 1.4, 0.1, 100);
+    const camera = new THREE.PerspectiveCamera(38, 1.4, 0.1, 120);
     this.scene = scene;
     this.camera = camera;
 
+    // Dual offscreen framebuffers (512x512): sky shader texture vs contrasting sphere shader texture
+    const fbOpts: THREE.RenderTargetOptions = {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+    };
+    this.skyTarget = new THREE.WebGLRenderTarget(512, 512, fbOpts);
+    this.headTarget = new THREE.WebGLRenderTarget(512, 512, fbOpts);
+    this.skyTarget.texture.wrapS = THREE.RepeatWrapping;
+    this.skyTarget.texture.wrapT = THREE.ClampToEdgeWrapping;
+    this.headTarget.texture.wrapS = THREE.RepeatWrapping;
+    this.headTarget.texture.wrapT = THREE.ClampToEdgeWrapping;
+    this.offQuadMesh = new THREE.Mesh(this.offQuadGeo, this.getDualShaderMaterial(this.skyPresetId)!);
+    this.offScene.add(this.offQuadMesh);
+    this.loadPresetBundle();
+
+    // Animated Psychedelic Sky Sphere textured by Framebuffer 1 (skyTarget)
+    const skyGeo = this.track(new THREE.SphereGeometry(28, 40, 28));
+    const skyMat = this.track(
+      new THREE.MeshBasicMaterial({
+        map: this.skyTarget.texture,
+        side: THREE.BackSide,
+        depthWrite: false,
+      })
+    );
+    this.skyMesh = new THREE.Mesh(skyGeo, skyMat);
+    scene.add(this.skyMesh);
+
     // DMT / Techno neon 3-point + point-disco lighting
-    scene.add(new THREE.HemisphereLight(0xc084fc, 0x16052c, 1.25));
+    scene.add(new THREE.HemisphereLight(0xd8b4fe, 0x1e0638, 1.35));
     const key = new THREE.DirectionalLight(0xa5f3fc, 1.35);
     key.position.set(2.5, 4.0, 5.2);
     scene.add(key);
@@ -550,7 +802,7 @@ export class Bear3DView {
 
   private buildMandalaStage(scene: THREE.Scene): void {
     const floor = new THREE.Group();
-    floor.position.set(0, -1.22, 0);
+    floor.position.set(0, -1.72, 0);
 
     const ringSpecs: Array<[number, number, number, number]> = [
       [2.65, 0.025, 48, 0x00ffff],
@@ -574,16 +826,16 @@ export class Bear3DView {
     scene.add(floor);
     this.mandalaFloor = floor;
 
-    // Sacred geometry DMT prism frame rotating behind the bear
+    // Sacred geometry DMT prism frame rotating behind the floating head
     const back = new THREE.Group();
-    back.position.set(0, 1.05, -2.4);
+    back.position.set(0, 0, -2.6);
     for (let k = 0; k < 2; k++) {
       const geo = this.track(new THREE.TorusGeometry(2.15 + k * 0.55, 0.028, 8, k === 0 ? 6 : 12));
       const mat = this.track(
         new THREE.MeshBasicMaterial({
           color: k === 0 ? 0xff4fd8 : 0x00f0ff,
           transparent: true,
-          opacity: 0.42,
+          opacity: 0.48,
         })
       );
       const ring = new THREE.Mesh(geo, mat);
@@ -595,7 +847,7 @@ export class Bear3DView {
 
     // Orbiting LSD neon motes
     const motes = new THREE.Group();
-    motes.position.set(0, 1.0, 0);
+    motes.position.set(0, 0, 0);
     const moteGeo = this.track(new THREE.OctahedronGeometry(0.08, 0));
     const moteColors = [0x00ffff, 0xff00e6, 0xffe600, 0x00ffaa, 0xa855f7, 0xff3b9a];
     for (let i = 0; i < 12; i++) {
@@ -608,7 +860,7 @@ export class Bear3DView {
         })
       );
       const mote = new THREE.Mesh(moteGeo, mat);
-      const r = 2.3 + (i % 3) * 0.45;
+      const r = 2.15 + (i % 3) * 0.42;
       mote.position.set(Math.cos(a) * r, ((i % 4) - 1.5) * 0.65, Math.sin(a) * r);
       motes.add(mote);
     }
@@ -622,17 +874,15 @@ export class Bear3DView {
 
     this.gummiMat = this.track(
       new THREE.MeshPhysicalMaterial({
-        color: 0xff66e0,
-        emissive: 0x3b0764,
-        emissiveIntensity: 0.55,
-        roughness: 0.18,
-        metalness: 0.12,
-        transmission: 0.24,
-        thickness: 0.8,
-        clearcoat: 0.9,
-        clearcoatRoughness: 0.12,
-        transparent: true,
-        opacity: 0.9,
+        color: 0xffffff,
+        map: this.headTarget?.texture ?? null,
+        emissive: 0xffffff,
+        emissiveMap: this.headTarget?.texture ?? null,
+        emissiveIntensity: 0.72,
+        roughness: 0.14,
+        metalness: 0.08,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.08,
       })
     );
 
@@ -649,61 +899,12 @@ export class Bear3DView {
       new THREE.MeshStandardMaterial({
         color: 0xffdaf4,
         emissive: 0x5c1854,
-        emissiveIntensity: 0.4,
-        roughness: 0.28,
+        emissiveIntensity: 0.42,
+        roughness: 0.24,
         metalness: 0.08,
       })
     );
 
-    this.heartMat = this.track(
-      new THREE.MeshStandardMaterial({
-        color: 0xff22aa,
-        emissive: 0xff0088,
-        emissiveIntensity: 1.4,
-        roughness: 0.15,
-      })
-    );
-
-    // --- Torso ---
-    this.bodyGroup = new THREE.Group();
-    this.stageRoot.add(this.bodyGroup);
-
-    const torsoGeo = this.track(new THREE.SphereGeometry(0.92, 26, 20));
-    const torsoMesh = new THREE.Mesh(torsoGeo, this.gummiMat);
-    torsoMesh.scale.set(1.06, 1.15, 0.88);
-    torsoMesh.position.set(0, 0.02, 0);
-    this.bodyGroup.add(torsoMesh);
-
-    const torsoCage = new THREE.Mesh(torsoGeo, this.cageMat);
-    torsoCage.scale.set(1.1, 1.18, 0.92);
-    torsoCage.position.set(0, 0.02, 0);
-    this.bodyGroup.add(torsoCage);
-
-    // Glowing inner cyber heart crystal
-    const heartGeo = this.track(new THREE.OctahedronGeometry(0.32, 1));
-    this.heartMesh = new THREE.Mesh(heartGeo, this.heartMat);
-    this.heartMesh.position.set(0, 0.1, 0.62);
-    this.heartMesh.scale.set(1.05, 1.12, 0.6);
-    this.bodyGroup.add(this.heartMesh);
-
-    // Techno collar ring
-    const collarGeo = this.track(new THREE.TorusGeometry(0.68, 0.065, 10, 28));
-    const collarMat = this.track(
-      new THREE.MeshStandardMaterial({
-        color: 0x00ffff,
-        emissive: 0x00d8ff,
-        emissiveIntensity: 0.95,
-        metalness: 0.6,
-        roughness: 0.2,
-      })
-    );
-    const collar = new THREE.Mesh(collarGeo, collarMat);
-    collar.rotation.x = Math.PI / 2;
-    collar.position.set(0, 0.95, 0.04);
-    this.bodyGroup.add(collar);
-
-    // --- Sexy Kawaii Neon Rave Bikini ---
-    const bikini = new THREE.Group();
     this.bikiniMat = this.track(
       new THREE.MeshPhysicalMaterial({
         color: 0xff1a8c,
@@ -716,137 +917,23 @@ export class Bear3DView {
         side: THREE.DoubleSide,
       })
     );
-    const trimMat = this.track(
-      new THREE.MeshStandardMaterial({
-        color: 0x00ffff,
-        emissive: 0x00d8ff,
-        emissiveIntensity: 0.9,
-        roughness: 0.2,
-      })
-    );
 
-    // Triangle bikini top cups + halter straps + center clasp jewel
-    const cupGeo = this.track(new THREE.ConeGeometry(0.28, 0.34, 4, 1));
-    for (const s of [-1, 1]) {
-      const cup = new THREE.Mesh(cupGeo, this.bikiniMat);
-      cup.position.set(s * 0.33, 0.34, 0.72);
-      cup.rotation.set(-0.22, s * 0.36, s * -0.14);
-      cup.scale.set(1.05, 1.0, 0.48);
-      bikini.add(cup);
+    // --- Floating Circle/Sphere Wub Bear Head ONLY (body removed) ---
+    this.bodyGroup = new THREE.Group();
+    this.stageRoot.add(this.bodyGroup);
 
-      const strapGeo = this.track(new THREE.CylinderGeometry(0.02, 0.02, 0.62, 8));
-      const strap = new THREE.Mesh(strapGeo, trimMat);
-      strap.position.set(s * 0.27, 0.68, 0.52);
-      strap.rotation.set(-0.62, 0, s * 0.22);
-      bikini.add(strap);
-    }
-    const bustBandGeo = this.track(new THREE.TorusGeometry(0.84, 0.024, 8, 28));
-    const bustBand = new THREE.Mesh(bustBandGeo, trimMat);
-    bustBand.rotation.x = Math.PI / 2;
-    bustBand.position.set(0, 0.22, 0.02);
-    bikini.add(bustBand);
-
-    const gemGeo = this.track(new THREE.OctahedronGeometry(0.075, 0));
-    const centerGem = new THREE.Mesh(gemGeo, trimMat);
-    centerGem.position.set(0, 0.3, 0.85);
-    bikini.add(centerGem);
-
-    // Low-rise V-cut bikini bottoms + hip waistband + side tie bows
-    const waistBandGeo = this.track(new THREE.TorusGeometry(0.88, 0.028, 8, 30));
-    const waistBand = new THREE.Mesh(waistBandGeo, trimMat);
-    waistBand.rotation.x = Math.PI / 2;
-    waistBand.position.set(0, -0.34, 0.02);
-    bikini.add(waistBand);
-
-    const briefGeo = this.track(new THREE.ConeGeometry(0.46, 0.44, 4, 1));
-    const frontBrief = new THREE.Mesh(briefGeo, this.bikiniMat);
-    frontBrief.position.set(0, -0.52, 0.66);
-    frontBrief.rotation.set(0.42, Math.PI / 4, Math.PI);
-    frontBrief.scale.set(1.25, 1.0, 0.45);
-    bikini.add(frontBrief);
-
-    const backBrief = new THREE.Mesh(briefGeo, this.bikiniMat);
-    backBrief.position.set(0, -0.52, -0.66);
-    backBrief.rotation.set(-0.42, Math.PI / 4, Math.PI);
-    backBrief.scale.set(1.3, 1.0, 0.45);
-    bikini.add(backBrief);
-
-    const bowLoopGeo = this.track(new THREE.ConeGeometry(0.075, 0.16, 8));
-    for (const s of [-1, 1]) {
-      const hipBow = new THREE.Group();
-      hipBow.position.set(s * 0.89, -0.34, 0.08);
-      for (const ls of [-1, 1]) {
-        const loop = new THREE.Mesh(bowLoopGeo, this.bikiniMat);
-        loop.rotation.z = ls * 0.9;
-        loop.position.y = ls * 0.06;
-        hipBow.add(loop);
-      }
-      const knot = new THREE.Mesh(gemGeo, trimMat);
-      knot.scale.set(0.65, 0.65, 0.65);
-      hipBow.add(knot);
-      bikini.add(hipBow);
-    }
-    this.bodyGroup.add(bikini);
-    this.bikiniGroup = bikini;
-
-    // --- Limbs (arms + paws, legs + feet) ---
-    const limbGeo = this.track(new THREE.CapsuleGeometry(0.24, 0.52, 8, 14));
-    const pawPadMat = this.track(
-      new THREE.MeshStandardMaterial({
-        color: 0x00ffff,
-        emissive: 0x0088ff,
-        emissiveIntensity: 0.9,
-        roughness: 0.25,
-      })
-    );
-    const padGeo = this.track(new THREE.SphereGeometry(0.14, 12, 10));
-
-    const makeArm = (sign: number): THREE.Group => {
-      const g = new THREE.Group();
-      g.position.set(sign * 0.92, 0.56, 0.05);
-      const armMesh = new THREE.Mesh(limbGeo, this.gummiMat!);
-      armMesh.position.set(sign * 0.14, -0.26, 0.12);
-      armMesh.rotation.z = sign * 0.55;
-      armMesh.rotation.x = -0.35;
-      g.add(armMesh);
-      const paw = new THREE.Mesh(padGeo, pawPadMat);
-      paw.position.set(sign * 0.34, -0.52, 0.28);
-      g.add(paw);
-      this.bodyGroup.add(g);
-      return g;
-    };
-    this.leftArm = makeArm(-1);
-    this.rightArm = makeArm(1);
-
-    const legGeo = this.track(new THREE.CapsuleGeometry(0.27, 0.44, 8, 14));
-    const makeLeg = (sign: number): THREE.Group => {
-      const g = new THREE.Group();
-      g.position.set(sign * 0.52, -0.78, 0.06);
-      const legMesh = new THREE.Mesh(legGeo, this.gummiMat!);
-      legMesh.position.set(0, -0.2, 0.08);
-      g.add(legMesh);
-      const sole = new THREE.Mesh(padGeo, pawPadMat);
-      sole.scale.set(1.25, 0.75, 1.5);
-      sole.position.set(0, -0.44, 0.26);
-      g.add(sole);
-      this.bodyGroup.add(g);
-      return g;
-    };
-    this.leftLeg = makeLeg(-1);
-    this.rightLeg = makeLeg(1);
-
-    // --- Head Group ---
     this.headGroup = new THREE.Group();
-    this.headGroup.position.set(0, 1.92, 0.04);
+    this.headGroup.position.set(0, 0, 0);
     this.bodyGroup.add(this.headGroup);
 
-    const headGeo = this.track(new THREE.SphereGeometry(1.02, 28, 22));
+    const headGeo = this.track(new THREE.SphereGeometry(1.16, 48, 36));
     const headMesh = new THREE.Mesh(headGeo, this.gummiMat);
-    headMesh.scale.set(1.16, 0.98, 0.96);
+    headMesh.scale.set(1.06, 1.0, 0.96);
     this.headGroup.add(headMesh);
+    this.headMesh = headMesh;
 
     const headCage = new THREE.Mesh(headGeo, this.cageMat);
-    headCage.scale.set(1.2, 1.02, 1.0);
+    headCage.scale.set(1.1, 1.04, 1.0);
     this.headGroup.add(headCage);
 
     // Ears
@@ -873,7 +960,7 @@ export class Bear3DView {
 
     const makeEar = (sign: number): THREE.Group => {
       const ear = new THREE.Group();
-      ear.position.set(sign * 0.84, 0.78, -0.05);
+      ear.position.set(sign * 0.88, 0.86, -0.04);
       ear.rotation.z = sign * -0.42;
       const outer = new THREE.Mesh(earGeo, this.gummiMat!);
       outer.scale.set(1.0, 1.0, 0.52);
@@ -907,10 +994,10 @@ export class Bear3DView {
     }
 
     // Floating sacred crown halo
-    const haloGeo = this.track(new THREE.TorusGeometry(0.76, 0.036, 10, 36));
+    const haloGeo = this.track(new THREE.TorusGeometry(0.84, 0.036, 10, 36));
     this.haloMesh = new THREE.Mesh(haloGeo, goldMat);
     this.haloMesh.rotation.x = Math.PI / 2 - 0.14;
-    this.haloMesh.position.set(0, 1.32, 0);
+    this.haloMesh.position.set(0, 1.44, 0);
     this.headGroup.add(this.haloMesh);
 
     // Eyes
@@ -940,7 +1027,7 @@ export class Bear3DView {
 
     const makeEye = (sign: number, irisMat: THREE.MeshStandardMaterial): THREE.Group => {
       const eye = new THREE.Group();
-      eye.position.set(sign * 0.44, 0.24, 0.86);
+      eye.position.set(sign * 0.44, 0.24, 0.99);
       const sclera = new THREE.Mesh(scleraGeo, scleraMat);
       sclera.scale.set(1.0, 1.15, 0.65);
       eye.add(sclera);
@@ -982,7 +1069,7 @@ export class Bear3DView {
       })
     );
     const visorGeo = this.track(
-      new THREE.CylinderGeometry(1.12, 1.12, 0.28, 24, 1, true, -0.78, 1.56)
+      new THREE.CylinderGeometry(1.25, 1.25, 0.3, 24, 1, true, -0.78, 1.56)
     );
     this.visorMesh = new THREE.Mesh(visorGeo, this.visorMat);
     this.visorMesh.position.set(0, 0.25, -0.02);
@@ -1001,7 +1088,7 @@ export class Bear3DView {
     );
     for (const s of [-1, 1]) {
       const cheek = new THREE.Mesh(cheekGeo, cheekMat);
-      cheek.position.set(s * 0.68, -0.04, 0.76);
+      cheek.position.set(s * 0.68, -0.04, 0.89);
       cheek.scale.set(1.2, 0.78, 0.45);
       this.headGroup.add(cheek);
     }
@@ -1009,25 +1096,25 @@ export class Bear3DView {
     // Upper snout/muzzle dome + glossy nose + cute whisker puffs cleanly above upper lip
     const snoutGeo = this.track(new THREE.SphereGeometry(0.52, 22, 18));
     const upperSnout = new THREE.Mesh(snoutGeo, this.muzzleMat);
-    upperSnout.position.set(0, 0.01, 0.74);
+    upperSnout.position.set(0, 0.01, 0.84);
     upperSnout.scale.set(1.12, 0.64, 0.72);
     this.headGroup.add(upperSnout);
 
     const puffGeo = this.track(new THREE.SphereGeometry(0.16, 14, 12));
     for (const s of [-1, 1]) {
       const puff = new THREE.Mesh(puffGeo, this.muzzleMat);
-      puff.position.set(s * 0.16, 0.03, 1.12);
+      puff.position.set(s * 0.16, 0.03, 1.2);
       puff.scale.set(1.05, 0.82, 0.68);
       this.headGroup.add(puff);
     }
 
     const noseGeo = this.track(new THREE.SphereGeometry(0.14, 16, 12));
     const nose = new THREE.Mesh(noseGeo, darkMat);
-    nose.position.set(0, 0.12, 1.21);
+    nose.position.set(0, 0.12, 1.3);
     nose.scale.set(1.18, 0.8, 0.88);
     this.headGroup.add(nose);
     const noseSpark = new THREE.Mesh(sparkGeo, sparkMat);
-    noseSpark.position.set(-0.04, 0.16, 1.32);
+    noseSpark.position.set(-0.04, 0.16, 1.4);
     this.headGroup.add(noseSpark);
 
     // -------------------------------------------------------------------------
@@ -1035,7 +1122,7 @@ export class Bear3DView {
     // (Lips, teeth rows, articulated 3D tongue, oral cavity & glowing back throat)
     // -------------------------------------------------------------------------
     this.mouthAnchor = new THREE.Group();
-    this.mouthAnchor.position.set(0, -0.17, 1.14);
+    this.mouthAnchor.position.set(0, -0.17, 1.24);
     this.headGroup.add(this.mouthAnchor);
 
     // Hinged lower chin/jaw cup (set cleanly below lip rim so zero occlusion)
@@ -1189,17 +1276,89 @@ export class Bear3DView {
     const beatHz = Math.max(60, tel.bpm) / 60;
     this.phase += dt * beatHz * Math.PI;
     const t = nowMs / 1000;
+    const uTime = (nowMs - this.dualStartMs) * 0.001;
 
     const vis = tel.visual ?? DEFAULT_BEAR_VISUAL_CONFIG;
 
-    // 1. DMT / LSD psychedelic stage palette sweep per creature stage
+    // 0. Dual Offscreen Framebuffer Pass:
+    //    Pass A -> skyTarget (animated psychedelic sky sphere texture)
+    //    Pass B -> headTarget (contrasting random visualization texture wrapped onto the 3D sphere head)
+    if (uTime - this.lastTexSwapSec > 28 && tel.mix > 0.08) {
+      this.randomizeTextures();
+    }
+    const du = this.dualUniforms;
+    const beatAngle = t * beatHz * Math.PI * 2;
+    du.uTime.value = uTime;
+    du.uAudioTime.value = t;
+    du.uBpm.value = Math.max(60, tel.bpm || 126);
+    du.uBeat.value = (t * beatHz) % 1;
+    du.uBpmSin.value = Math.sin(beatAngle);
+    du.uBpmSin2.value = Math.sin(beatAngle * 2);
+    du.uBpmSin4.value = Math.sin(beatAngle * 4);
+    du.uKick.value = tel.drumPunch;
+    du.uOnset.value = tel.drumPunch;
+    du.uEnergy.value = tel.mix;
+    du.uSpeed.value = 0.85 + 0.35 * vis.danceGain;
+    du.uPalette.value = (tel.stage - 1) % 4;
+    du.uWarmth.value = tel.bass;
+    du.uBrightness.value = tel.other * 0.6 + tel.drums * 0.4;
+    du.uMusicDensity.value = Math.min(1, (tel.drums + tel.bass + tel.other + tel.vocals) * 0.45);
+    du.uForwardFlight.value = tel.mix * 1.2;
+    if (tel.freqBins && tel.freqBins.length >= 64) {
+      const bins = tel.freqBins;
+      const ranges = [
+        [0, 3], [3, 8], [8, 16], [16, 32],
+        [32, 64], [64, 128], [128, 256], [256, Math.min(512, bins.length)],
+      ];
+      for (let b = 0; b < 8; b++) {
+        let sum = 0;
+        const [lo, hi] = ranges[b];
+        for (let k = lo; k < hi; k++) sum += bins[k];
+        const amp = sum / Math.max(1, (hi - lo) * 255);
+        du[`uSpectrum${b}`].value = amp;
+        du[`uBandFlux${b}`].value = amp * tel.drumPunch;
+      }
+    } else {
+      const vals = [
+        tel.bass,
+        tel.drums * 0.8 + tel.bass * 0.4,
+        tel.other * 0.7,
+        tel.vocals,
+        tel.vocals * 0.8 + tel.other * 0.5,
+        tel.other,
+        tel.drums * 0.9,
+        tel.mix,
+      ];
+      for (let b = 0; b < 8; b++) {
+        du[`uSpectrum${b}`].value = vals[b];
+        du[`uBandFlux${b}`].value = vals[b] * tel.drumPunch;
+      }
+    }
+    if (this.offQuadMesh && this.skyTarget && this.headTarget) {
+      const skyMat = this.getDualShaderMaterial(this.skyPresetId);
+      if (skyMat) {
+        this.offQuadMesh.material = skyMat;
+        this.renderer.setRenderTarget(this.skyTarget);
+        this.renderer.render(this.offScene, this.offCam);
+      }
+      const headTexMat = this.getDualShaderMaterial(this.headPresetId);
+      if (headTexMat) {
+        this.offQuadMesh.material = headTexMat;
+        this.renderer.setRenderTarget(this.headTarget);
+        this.renderer.render(this.offScene, this.offCam);
+      }
+      this.renderer.setRenderTarget(null);
+    }
+
+    // 1. DMT / LSD psychedelic stage palette sweep + dual-FBO sphere texture illumination
     const baseHue = ((tel.stage - 1) * 0.2 + t * 0.07 + tel.mix * 0.12) % 1;
     if (this.gummiMat) {
-      this.tmpColor.setHSL(baseHue, 0.88, 0.62);
-      this.gummiMat.color.copy(this.tmpColor);
-      this.tmpColor.setHSL((baseHue + 0.12) % 1, 0.9, 0.24 + tel.mix * 0.18);
-      this.gummiMat.emissive.copy(this.tmpColor);
-      this.gummiMat.emissiveIntensity = 0.45 + tel.mix * 0.75 + tel.drumPunch * 0.35;
+      this.gummiMat.color.setHex(0xffffff);
+      this.gummiMat.emissive.setHex(0xffffff);
+      this.gummiMat.emissiveIntensity = 0.62 + tel.mix * 0.68 + tel.drumPunch * 0.32;
+    }
+    if (this.skyMesh) {
+      this.skyMesh.rotation.y = t * 0.04;
     }
     if (this.cageMat) {
       this.cageMat.visible = vis.showCage;
@@ -1243,38 +1402,19 @@ export class Bear3DView {
       this.discoRimLight.intensity = 1.6 + tel.bass * 2.4;
     }
 
-    // 2. Techno Dance Bounce (squash & stretch + hype/eat/pet animations)
+    // 2. Floating Circle Head Techno Bounce (squash & stretch + hype/eat/pet animations)
     const hypeBoost = (tel.action === "HYPE" ? 1.75 : 1.0) * vis.danceGain;
     const danceGroove = Math.sin(this.phase) * (0.08 + 0.12 * tel.drums) * hypeBoost;
-    const bounceY = Math.abs(Math.sin(this.phase)) * (0.09 + 0.14 * tel.drumPunch + 0.08 * tel.bass) * vis.danceGain;
+    const bounceY = Math.abs(Math.sin(this.phase)) * (0.1 + 0.15 * tel.drumPunch + 0.08 * tel.bass) * vis.danceGain;
     const squash = clamp((tel.drumPunch * 0.12 + tel.drums * 0.07) * vis.danceGain, 0, 0.22);
-    this.bodyGroup.position.set(Math.sin(this.phase * 0.5) * 0.09 * hypeBoost, bounceY, 0);
+    this.bodyGroup.position.set(Math.sin(this.phase * 0.5) * 0.12 * hypeBoost, bounceY, 0);
     this.bodyGroup.scale.set(1 + squash * 0.65, 1 - squash * 0.5, 1 + squash * 0.65);
-    this.bodyGroup.rotation.y = Math.sin(this.phase * 0.5) * 0.18 * hypeBoost;
-    this.bodyGroup.rotation.z = Math.cos(this.phase * 0.5) * 0.07 * hypeBoost;
-
-    // Pump arms & swing legs to BPM
-    const armPump = Math.sin(this.phase) * (0.35 + 0.45 * tel.drums) * hypeBoost;
-    this.leftArm.rotation.x = -0.35 + armPump;
-    this.rightArm.rotation.x = -0.35 - armPump;
-    this.leftArm.rotation.z = 0.18 + Math.abs(armPump) * 0.25;
-    this.rightArm.rotation.z = -0.18 - Math.abs(armPump) * 0.25;
-
-    const legKick = Math.sin(this.phase) * (0.14 + 0.24 * tel.bass);
-    this.leftLeg.rotation.x = legKick;
-    this.rightLeg.rotation.x = -legKick;
+    this.bodyGroup.rotation.y = Math.sin(this.phase * 0.5) * 0.2 * hypeBoost;
+    this.bodyGroup.rotation.z = Math.cos(this.phase * 0.5) * 0.08 * hypeBoost;
 
     // Head bob & rhythmic tilt
-    this.headGroup.rotation.x = Math.sin(this.phase * 2) * (0.04 + 0.08 * tel.drumPunch) - danceGroove * 0.25;
+    this.headGroup.rotation.x = Math.sin(this.phase * 2) * (0.05 + 0.08 * tel.drumPunch) - danceGroove * 0.25;
     this.headGroup.rotation.z = Math.sin(this.phase * 0.5) * 0.1;
-
-    // Heart crystal swells with 'other' pads/synths
-    if (this.heartMesh && this.heartMat) {
-      const hs = 1.0 + tel.other * 0.45 + tel.otherPunch * 0.25;
-      this.heartMesh.scale.set(1.05 * hs, 1.12 * hs, 0.6 * hs);
-      this.heartMesh.rotation.y = t * 1.4;
-      this.heartMat.emissiveIntensity = 0.8 + tel.other * 2.2;
-    }
 
     // Ear wiggle & floating DMT halo
     const earWig = Math.sin(t * 9) * (0.05 + 0.18 * tel.vocals + 0.1 * tel.drumPunch);
@@ -1282,7 +1422,7 @@ export class Bear3DView {
     this.rightEar.rotation.z = -0.42 - earWig;
     if (this.haloMesh) {
       this.haloMesh.visible = vis.showHalo;
-      this.haloMesh.position.y = 1.32 + Math.sin(t * 3.4) * 0.06;
+      this.haloMesh.position.y = 1.44 + Math.sin(t * 3.4) * 0.06;
       this.haloMesh.rotation.z = t * 1.1;
     }
     if (this.visorMesh) {
@@ -1305,9 +1445,6 @@ export class Bear3DView {
     }
     if (this.visorMat) {
       this.visorMat.opacity = vis.showVisor ? 0.16 + 0.3 * tel.mix + (tel.isDrop ? 0.2 : 0) : 0;
-    }
-    if (this.bikiniGroup) {
-      this.bikiniGroup.visible = vis.showBikini;
     }
     if (this.earBowGroup) {
       this.earBowGroup.visible = vis.showBikini;
@@ -1332,7 +1469,7 @@ export class Bear3DView {
     if (this.moteRing) {
       this.moteRing.visible = vis.showHalo;
       this.moteRing.rotation.y = t * 0.65;
-      this.moteRing.position.y = 1.0 + Math.sin(t * 2.1) * 0.15;
+      this.moteRing.position.y = Math.sin(t * 2.1) * 0.15;
     }
 
     // 3. REALISTIC SINGING MOUTH ARTICULATION (Zero-latency Head Synth synced!)
@@ -1411,8 +1548,8 @@ export class Bear3DView {
 
     if (this.preset === "orbit") {
       const orbitA = t * 0.55;
-      this.camera.position.set(Math.sin(orbitA) * 4.35, 1.48 + Math.sin(t * 0.9) * 0.35, Math.cos(orbitA) * 4.35);
-      this.controls.target.set(0, 1.05, 0);
+      this.camera.position.set(Math.sin(orbitA) * 4.05, 0.48 + Math.sin(t * 0.9) * 0.35, Math.cos(orbitA) * 4.05);
+      this.controls.target.set(0, 0, 0);
     }
 
     this.controls.update();
@@ -1422,6 +1559,11 @@ export class Bear3DView {
   public dispose(): void {
     this.ro?.disconnect();
     this.controls?.dispose();
+    this.skyTarget?.dispose();
+    this.headTarget?.dispose();
+    this.offQuadGeo.dispose();
+    this.vizMatCache.forEach((m) => m.dispose());
+    this.vizMatCache.clear();
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
     this.renderer?.dispose();

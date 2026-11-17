@@ -203,7 +203,7 @@ class WubApp {
   private psychedelicBg: PsychedelicBackground | null = null;
   private lightshow: RaveLightshowPanel | null = null;
   private lsBearOverlayCanvas: HTMLCanvasElement | null = null;
-  private bearOverlayEnabled = false;
+  private bearOverlayEnabled = true;
   private tapTimestamps: number[] = [];
   private macroBuildupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1111,8 +1111,7 @@ class WubApp {
 
     this.lsBearOverlayCanvas = document.getElementById("lightshow-bear-overlay") as HTMLCanvasElement | null;
     const bearOverlayBtn = document.getElementById("btn-ls-bear");
-    const toggleBearOverlay = () => {
-      this.bearOverlayEnabled = !this.bearOverlayEnabled;
+    const syncBearOverlay = () => {
       if (this.lsBearOverlayCanvas) {
         this.lsBearOverlayCanvas.style.display = this.bearOverlayEnabled ? "block" : "none";
       }
@@ -1121,6 +1120,11 @@ class WubApp {
         bearOverlayBtn.textContent = `BEAR OVERLAY: ${this.bearOverlayEnabled ? "ON" : "OFF"}`;
       }
     };
+    const toggleBearOverlay = () => {
+      this.bearOverlayEnabled = !this.bearOverlayEnabled;
+      syncBearOverlay();
+    };
+    syncBearOverlay();
     bearOverlayBtn?.addEventListener("click", toggleBearOverlay);
 
     const lsPanel = document.getElementById("panel-lightshow");
@@ -2355,7 +2359,8 @@ class WubApp {
         otherWaveform,
         otherLvl,
         mixFrame.waveform,
-        liveMouth
+        liveMouth,
+        this.masterFreqScratch
       );
       if (this.bearOverlayEnabled && this.lsBearOverlayCanvas) {
         this.tamagotchi.drawOverlayInto(this.lsBearOverlayCanvas);

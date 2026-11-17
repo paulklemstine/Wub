@@ -185,11 +185,13 @@ def test_bear_realistic_mouth_and_3d_camera():
 
 
 def test_super_rave_box_panels_dj_fx_and_lightshow():
-    """Verify toggleable minimized secondary drawers, 3 hero panels, Bear 2.0 visual controls,
-    DJ Control Surface FX rack, and SuperAcid Lightshow panel with Fullscreen."""
+    """Verify toggleable minimized secondary drawers, combined DJ Surface + Full Visualizer layout,
+    floating circle Wub Bear head controls inside panel-lightshow, and dual-FBO 3D sphere/sky textures."""
     html = Path("frontend/index.html").read_text(encoding="utf-8")
-    # 3 Hero Panels visible at load (not panel-minimized)
-    for hero_id in ("panel-bear", "panel-dj-surface", "panel-lightshow"):
+    # Separate top panel-bear removed; DJ Control Surface + combined Full Visualizer visible at load
+    assert 'id="panel-bear"' not in html
+    assert 'data-panel="panel-bear"' not in html
+    for hero_id in ("panel-dj-surface", "panel-lightshow"):
         assert f'id="{hero_id}"' in html
         assert f'data-panel="{hero_id}"' in html
 
@@ -206,7 +208,7 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
         assert f'data-panel="{drawer_id}"' in html
         assert "panel-minimized" in html.split(f'id="{drawer_id}"')[1].split(">")[0]
 
-    # Transport moved into DJ Control Surface + DJ FX & Lightshow controls present
+    # Transport moved into DJ Control Surface + DJ FX & combined Full Visualizer controls present
     dj_section = html.split('id="panel-dj-surface"')[1].split('id="panel-lightshow"')[0]
     for dom_id in (
         "btn-play",
@@ -225,23 +227,37 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
     ):
         assert dom_id in dj_section
 
+    ls_section = html.split('id="panel-lightshow"')[1].split('id="groovebox-panel"')[0]
     for dom_id in (
         "btn-bear-cage",
         "btn-bear-visor",
         "btn-bear-halo",
         "btn-bear-bikini",
         "btn-bear-mouth-style",
+        "btn-bear-tex",
         "bear-dance-slider",
         "bear-mouth-slider",
+        "btn-tamagotchi-3d",
+        "btn-tamagotchi-cam",
+        "tamagotchi-3d-host",
         "lightshow-canvas",
         "lightshow-bear-overlay",
         "btn-ls-bear",
         "btn-lightshow-fullscreen",
         "btn-ls-cortex",
     ):
-        assert dom_id in html
-    assert "drawOverlayInto" in Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
-    assert "bikiniGroup" in Path("frontend/src/bear_3d_view.ts").read_text(encoding="utf-8")
+        assert dom_id in ls_section
+
+    tg_src = Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
+    assert "drawOverlayInto" in tg_src
+    assert "drawPaw" not in tg_src
+
+    b3d_src = Path("frontend/src/bear_3d_view.ts").read_text(encoding="utf-8")
+    for token in ("skyTarget", "headTarget", "skyMesh", "headMesh", "randomizeTextures", "earBowGroup"):
+        assert token in b3d_src
+    assert "torsoGeo" not in b3d_src
+    assert "makeArm" not in b3d_src
+    assert "makeLeg" not in b3d_src
 
     ls_src = Path("frontend/src/lightshow.ts").read_text(encoding="utf-8")
     for preset in ("acid-warp", "breathing-mandala", "space-tubes", "dmt-hyperspace", "ego-death"):
