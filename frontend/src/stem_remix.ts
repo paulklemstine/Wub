@@ -20,7 +20,7 @@ import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
 import { StretchVoice, type PitchAutomationPoint } from "./stretch_voice";
-import { BarComposer, type VocalActivityInfo } from "./bar_composer";
+import { BarComposer, type VocalActivityInfo, type VocalFlowPriors } from "./bar_composer";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
@@ -886,6 +886,7 @@ export class StemRemixPlayer {
       setupLoads.push(this.cellCompat.load(`${base}/cell_compat.json`));
     }
     if (this.sidecarEnabled("slice_flow")) setupLoads.push(this.sliceFlow.load(base));
+    if (this.sidecarEnabled("vocal_flow")) setupLoads.push(this.loadVocalFlow(base));
     if (setupLoads.length > 0) {
       await Promise.all(setupLoads);
     }
@@ -1312,6 +1313,20 @@ export class StemRemixPlayer {
           console.warn("[StemRemix] vocal mix unavailable; vocal-edge bonus neutral", err);
         }
       }
+    }
+  }
+
+  /** Learned vocal-development prior (run lengths / distinct-bar targets). */
+  private async loadVocalFlow(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_flow.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalFlowPriors;
+      if (doc?.format === "wub-vocal-flow-v1" && doc.distinct_bars_per_active) {
+        this.barComposer.vocalFlow = doc;
+      }
+    } catch {
+      // Optional prior; the composer falls back to all active bars.
     }
   }
 

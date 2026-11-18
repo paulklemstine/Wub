@@ -252,3 +252,20 @@ actual master analyser, record scheduled slices, and verify exactly two voices
 per stem. They capture errors, source-cluster changes, long tasks and sustained
 digital-zero intervals. They do not accelerate the audio clock and are not a
 substitute for human evaluation of musical phrasing or a full-device FPS test.
+
+## Vocal development (no one-bar vocal loop)
+
+`scripts/build_vocal_flow.py` mines singing development from the real analyses:
+active-bar runs and, inside each four-bar phrase, how many *different* melodic
+bars the vocal actually uses (measured from bar chroma, not mere activity).  In
+600 songs a four-active-bar phrase uses about 1.9 distinct melodic bars; runs of
+2–3 bars are the most common short phrases.  That prior ships as
+`vocal_flow.json` and is loaded into `BarComposer`.
+
+The old repair path copied the phrase's only active bar into every output bar
+(`activeSrcBars[b % 1]`), which is exactly the one-bar vocal loop.  It now builds
+a small pool of active bars — borrowing from the secondary vocal donor when the
+primary has only one — and `developVocalBars()` cycles through at least two
+distinct bars, using the learned distinct-bar target and rotating per block.
+The chorus hook loop applies the same rule instead of alternating two fixed
+bars.  With no sidecar the composer falls back to all active bars.

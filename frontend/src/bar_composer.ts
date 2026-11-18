@@ -44,6 +44,13 @@ export interface ComposingPoolEntry {
   rmsDb: number;
 }
 
+export interface VocalFlowPriors {
+  format: string;
+  run_lengths: Record<string, number>;
+  distinct_bars_per_active: Record<string, number>;
+  variation_rate: number;
+}
+
 export interface ComposedStemPlan<TEntry extends ComposingPoolEntry> {
   stem: StemName;
   /** Distinct donor pool entries loaded for slicing (`itemIndex` indexes into this array). */
@@ -103,6 +110,9 @@ export interface VocalActivityInfo {
 const SCHEMAS: readonly MotifSchema[] = ["AAAB", "ABAB", "ABAC", "AABB"];
 
 export class BarComposer {
+  /** Optional learned vocal-development prior from real songs. */
+  vocalFlow: VocalFlowPriors | null = null;
+
   private index: CellIndexData | null = null;
   private loaded = false;
   private lastBlockTail: Partial<Record<StemName, PrevBarTransitionContext>> = {};
@@ -206,6 +216,31 @@ export class BarComposer {
       return best;
     }
     return SCHEMAS[blockIdx % SCHEMAS.length];
+  }
+
+  /**
+   * Build a vocal bar schedule that develops instead of repeating one cell.
+   * The distinct-bar target comes from real songs: a 4-bar vocal phrase with
+   * four active bars uses about two different melodic bars, not one.
+   */
+  private developVocalBars<T extends { itemIndex: number; srcBar: number }>(
+    pool: ReadonlyArray<T>,
+    outputBars: number,
+    rotation: number,
+  ): T[] {
+    if (pool.length === 0) return [];
+    const priors = this.vocalFlow;
+    const priorTarget = priors
+      ? priors.distinct_bars_per_active[String(pool.length)]
+      : undefined;
+    const target = Math.max(pool.length >= 2 ? 2 : 1,
+      Math.min(pool.length, Math.round(priorTarget ?? Math.min(pool.length, 4))));
+    const chosen = pool.slice(0, Math.max(1, target));
+    const out: T[] = [];
+    for (let b = 0; b < outputBars; b++) {
+      out.push(chosen[(b + rotation) % chosen.length]);
+    }
+    return out;
   }
 
   private chooseVocalPrimary<TEntry extends ComposingPoolEntry>(
@@ -792,23 +827,37 @@ export class BarComposer {
           if (this.isVocalBarActive(primary.phrase.id, bIdx, pMeta)) activeSrcBars.push(bIdx);
         }
         if (activeSrcBars.length > 0 && activeSrcBars.length < 4 && !pinnedStems.has("vocals")) {
-          for (let b = 0; b < blockBars; b++) {
-            const cur = selectedBars[b];
-            if (!this.isVocalBarActive(primary.phrase.id, cur.srcBar, pMeta)) {
-              const donorBar = activeSrcBars[b % activeSrcBars.length];
-              selectedBars[b] = {
-                ...cur,
-                itemIndex: 0,
-                srcBar: donorBar,
-                purity: pMeta.p[donorBar] ?? cur.purity,
-                onsetMask: pMeta.o[donorBar] ?? cur.onsetMask,
-                quality: pMeta.q[donorBar] ?? cur.quality,
-                essentialScore: pMeta.es?.[donorBar] ?? (pMeta.p[donorBar] ?? cur.essentialScore),
-                essentialRole: pMeta.er?.[donorBar] ?? cur.essentialRole,
-              };
-              hasSpliceOrGainEdit = true;
+          // Real songs develop a vocal line across several different bars.
+          // A phrase with one active bar borrows active bars from the secondary
+          // donor instead of copying that bar into every output slot.
+          const pool: Array<{ itemIndex: number; srcBar: number; meta: CellStemMeta; semitones: number }> =
+            activeSrcBars.map((bar) => ({ itemIndex: 0, srcBar: bar, meta: pMeta, semitones: phraseKeyShift }));
+          if (pool.length < 2 && secondary && sMeta) {
+            const secActive = [0, 1, 2, 3].filter((bar) => this.isVocalBarActive(secondary.phrase.id, bar, sMeta));
+            const secShift = this.solvePhraseKeyShift("vocals", secondary, sMeta, ch0, sessionRoot);
+            for (const bar of secActive) {
+              pool.push({ itemIndex: 1, srcBar: bar, meta: sMeta, semitones: secShift });
             }
           }
+          const schedule = this.developVocalBars(pool, blockBars, blockIndex);
+          for (let b = 0; b < blockBars; b++) {
+            const pick = schedule[b];
+            if (!pick) continue;
+            selectedBars[b] = {
+              ...selectedBars[b],
+              entry: pick.itemIndex === 0 ? primary : (secondary ?? primary),
+              itemIndex: pick.itemIndex,
+              srcBar: pick.srcBar,
+              purity: pick.meta.p[pick.srcBar] ?? selectedBars[b].purity,
+              semitones: pick.semitones,
+              onsetMask: pick.meta.o[pick.srcBar] ?? selectedBars[b].onsetMask,
+              quality: pick.meta.q[pick.srcBar] ?? selectedBars[b].quality,
+              essentialScore: pick.meta.es?.[pick.srcBar] ?? (pick.meta.p[pick.srcBar] ?? selectedBars[b].essentialScore),
+              essentialRole: pick.meta.er?.[pick.srcBar] ?? selectedBars[b].essentialRole,
+              meta: pick.meta,
+            };
+          }
+          hasSpliceOrGainEdit = true;
         } else if (activeSrcBars.length === 0 && secondary && sMeta && !pinnedStems.has("vocals")) {
           const secActive: number[] = [];
           for (let bIdx = 0; bIdx < 4; bIdx++) {
@@ -855,9 +904,14 @@ export class BarComposer {
             compatScorer,
           });
           if (loopSeam >= 0.68) {
+            const hookPool = [0, 1]
+              .filter((bar) => this.isVocalBarActive(primary.phrase.id, bar, pMeta))
+              .map((bar) => ({ itemIndex: 0, srcBar: bar }));
+            const hookBars = this.developVocalBars(hookPool, blockBars, blockIndex);
+            const source = selectedBars.slice();
             for (let b = 0; b < blockBars; b++) {
-              const hkBar = b % 2;
-              selectedBars[b] = { ...selectedBars[hkBar], srcBar: hkBar };
+              const bar = hookBars[b]?.srcBar ?? b % 2;
+              selectedBars[b] = { ...source[bar], srcBar: bar };
             }
             schema = "ABAB";
             hasSpliceOrGainEdit = true;
