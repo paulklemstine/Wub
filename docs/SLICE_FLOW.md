@@ -131,3 +131,26 @@ that favours a candidate recalling the current foundation after roughly
 60–120 s.  On the shipped bank it reaches about 0.84 validation AUC against
 these acoustic targets — still a proxy, so the listening A/B loop remains the
 real judge.
+
+## Autonomous listening judgement
+
+Human A/B clicks are optional, not required: `scripts/auto_review.py` makes the
+decision itself.  It renders each candidate handoff from the shipped Opus cells
+and scores the boundary with the models already trained on original songs —
+the 108-d acoustic critic, the 16-d assembled-mix critic, the motif-return head
+and a rendered-RMS dip check.  The variant with the higher weighted score wins,
+and the decision is exported as a `origin: "auto-reward-v1"` preference row that
+`train_slice_flow.py --feedback` can ingest.  No microphone, network, or human
+click is involved.
+
+```bash
+PYTHONPATH=. python3 scripts/auto_review.py --cases 12 \
+  --out /tmp/wub-slice-flow/auto_preferences.jsonl
+PYTHONPATH=. python3 scripts/train_slice_flow.py --device cpu \
+  --feedback /tmp/wub-slice-flow/auto_preferences.jsonl
+```
+
+The automatic judge can disagree with the acoustic critic because it also sees
+mix balance and motif return.  It is still a model of the training corpus, not
+a proof of perception — but it makes the loop self-contained: train -> render
+-> judge -> retrain, with the flow evaluator as the external yardstick.

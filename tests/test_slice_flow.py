@@ -219,3 +219,26 @@ global.fetch=async url=>{
 '''
     result=subprocess.run(['node','-e',script,str(out),json.dumps(artifact),motif,raw],capture_output=True,text=True)
     assert result.returncode==0, result.stderr
+
+
+def test_auto_review_decides_without_human_input(tmp_path):
+    import importlib
+    auto = importlib.import_module('scripts.auto_review')
+    from scripts.train_slice_flow import load_feedback
+    out=tmp_path/'auto.jsonl'
+    subprocess.run(['python3','-m','scripts.auto_review','--cases','2','--out',str(out)],
+                   cwd=ROOT,check=True,capture_output=True,text=True)
+    rows=load_feedback(out)
+    assert len(rows)==2
+    for row in rows:
+        assert row['origin']=='auto-reward-v1'
+        assert row['winner'] in ('a','b')
+        assert len(row['a'])==INPUT_DIM and len(row['b'])==INPUT_DIM
+
+
+def test_seam_dip_detects_a_level_hole():
+    from scripts.auto_review import seam_dip
+    import numpy as np
+    a=np.ones(22050,np.float32)*.5
+    assert seam_dip(np.concatenate([a,a]),len(a))<1e-6
+    assert seam_dip(np.concatenate([a,np.zeros(22050,np.float32)]),len(a))>.9
