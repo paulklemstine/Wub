@@ -14,5 +14,7 @@
   "cell_compat": true,
   "slice_flow": true,
   "motif_return": true,
-  "bar_tour_value": true
+  "bar_tour_value": true,
+  "vocal_bar_model": true,
+  "vocal_phrases": true
 }

@@ -252,3 +252,25 @@ actual master analyser, record scheduled slices, and verify exactly two voices
 per stem. They capture errors, source-cluster changes, long tasks and sustained
 digital-zero intervals. They do not accelerate the audio clock and are not a
 substitute for human evaluation of musical phrasing or a full-device FPS test.
+
+## Vocal AI as a ranking layer
+
+The shipped vocal path is the pre-development one: silent bars inside the primary
+phrase are repaired by cycling the phrase's own active bars, and the section hook
+loops over two bars. The two learned vocal artifacts only *rank* inside that
+path.
+
+- `vocal_bar_model.json` (`wub-vocal-bar-v1`, 120-d window → 29-d next-bar
+  activity/chroma/onset head, plus a run-length head) scores the phrase's
+  existing active bars. The repair keeps the same active-bar set and the same
+  `b % ordered.length` cadence; only the order of those bars changes. If the
+  model is missing or malformed the order is the historical
+  `activeSrcBars[b % activeSrcBars.length]`.
+- `vocal_phrases.json` (`wub-vocal-phrases-v1`) mines contiguous multi-bar vocal
+  performances per track and scores recurrence/repeat. `chooseVocalPrimary` adds
+  a small bonus to phrases that belong to such a unit; it never remaps bars,
+  never forces a wrap, and never overrides the pinned/recall paths.
+
+Both sidecars are optional (`sidecars.json` flags `vocal_bar_model` and
+`vocal_phrases`); a failed fetch logs nothing and leaves the known-good
+scheduling intact.

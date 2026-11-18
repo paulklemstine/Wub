@@ -44,6 +44,47 @@ export interface ComposingPoolEntry {
   rmsDb: number;
 }
 
+export interface VocalBarNet {
+  mean: number[];
+  std: number[];
+  w1: number[][];
+  b1: number[];
+  w2: number[][];
+  b2: number[];
+}
+
+export interface VocalBarModel {
+  format: string;
+  version: number;
+  input_dim: number;
+  next_dim: number;
+  next: VocalBarNet;
+  length: VocalBarNet;
+}
+
+/** One mined multi-bar vocal performance (a contiguous chain of 4-bar cells). */
+export interface VocalPhraseUnit {
+  ids: string[];
+  bars: number;
+  start_bar: number;
+  features: number[];
+  recurrence: number;
+  repeat: number;
+  score: number;
+}
+
+/** Learned chorus/loop model over mined multi-bar vocal units. */
+export interface VocalPhraseModel {
+  format: string;
+  version: number;
+  feature_names: string[];
+  mean: number[];
+  scale: number[];
+  weights: number[];
+  bias: number;
+  tracks: Record<string, VocalPhraseUnit[]>;
+}
+
 export interface ComposedStemPlan<TEntry extends ComposingPoolEntry> {
   stem: StemName;
   /** Distinct donor pool entries loaded for slicing (`itemIndex` indexes into this array). */
@@ -107,9 +148,71 @@ export class BarComposer {
   private loaded = false;
   private lastBlockTail: Partial<Record<StemName, PrevBarTransitionContext>> = {};
   private vocalActivity: Map<string, VocalActivityInfo> | null = null;
+  /** Optional learned next-vocal-bar model; ranks active bars, never reslices the phrase. */
+  vocalBarModel: VocalBarModel | null = null;
+  /** Optional mined multi-bar unit model; biases phrase selection only. */
+  vocalPhraseModel: VocalPhraseModel | null = null;
 
   setVocalActivity(map: Map<string, VocalActivityInfo> | null): void {
     this.vocalActivity = map;
+  }
+
+  private inferVocal(net: VocalBarNet, x: readonly number[]): number[] {
+    const hidden = new Array<number>(net.b1.length).fill(0);
+    for (let j = 0; j < net.b1.length; j++) {
+      let sum = net.b1[j];
+      for (let i = 0; i < x.length; i++) {
+        sum += net.w1[j][i] * (x[i] - net.mean[i]) / net.std[i];
+      }
+      hidden[j] = Math.tanh(sum);
+    }
+    return net.w2.map((row, j) => row.reduce((s, w, i) => s + w * hidden[i], net.b2[j]));
+  }
+
+  private vocalBarVec(meta: CellStemMeta, bar: number): number[] {
+    const v = new Array<number>(30).fill(0);
+    const mask = meta.o[bar] ?? 0;
+    const count = popcount16(mask);
+    v[0] = count >= 2 ? 1 : 0;
+    v[1] = Math.min(1, count / 8);
+    const root = meta.r[bar] ?? -1;
+    v[2 + (root >= 0 ? root % 12 : 11)] = 1;
+    for (let i = 0; i < 16; i++) v[14 + i] = (mask >> i) & 1;
+    return v;
+  }
+
+  /**
+   * Rank the phrase's active bars by the learned next-vocal-bar prediction.
+   * The repaired block keeps the *same* active-bar set and the same
+   * `b % pool.length` cadence as the known-good path; the model only chooses
+   * the order, so it cannot splice in foreign bars or shorten the phrase.
+   */
+  private orderVocalActiveBars(meta: CellStemMeta, activeBars: readonly number[]): number[] {
+    const model = this.vocalBarModel;
+    if (!model || activeBars.length < 2) return [...activeBars];
+    let anchor = activeBars[0];
+    let anchorScore = -1;
+    for (const bar of activeBars) {
+      const score = (meta.p[bar] ?? 0) + (meta.es?.[bar] ?? 0) * 0.5;
+      if (score > anchorScore) {
+        anchorScore = score;
+        anchor = bar;
+      }
+    }
+    const at = (offset: number): number[] =>
+      this.vocalBarVec(meta, Math.max(0, Math.min(3, anchor + offset)));
+    // Training layout: [bar-2, bar, bar-1, bar].
+    const input = [...at(-2), ...at(0), ...at(-1), ...at(0)];
+    const prediction = this.inferVocal(model.next, input);
+    const scoreOf = (bar: number): number => {
+      const vec = this.vocalBarVec(meta, bar);
+      let score = 0;
+      for (let i = 0; i < 12; i++) score += vec[2 + i] * prediction[i];
+      for (let i = 0; i < 16; i++) score += vec[14 + i] * prediction[12 + i] * 0.5;
+      score += vec[0] * prediction[28] * 0.8;
+      return score;
+    };
+    return [...activeBars].sort((a, b) => scoreOf(b) - scoreOf(a) || a - b);
   }
 
   private isVocalBarActive(phraseId: string, barIdx: number, meta: CellStemMeta): boolean {
@@ -279,6 +382,15 @@ export class BarComposer {
       }
       if (e.phrase.id === fallback.phrase.id) {
         s += fallbackIsSparse ? -0.4 : 0.20;
+      }
+      // AI prior: prefer phrases that belong to a mined real multi-bar
+      // performance (chorus/verse).  Selection only — the known-good repair
+      // and hook paths below still decide the actual bars.
+      const unit = this.vocalPhraseModel?.tracks?.[e.kit.track_id]
+        ?.find((candidate) => candidate.ids.includes(e.phrase.id));
+      if (unit) {
+        s += 0.15 + unit.score * 0.20;
+        if (unit.repeat && (ctxIsChorus(ctx) || ctx.kitSection === "DROP")) s += 0.08;
       }
       scored.push({ entry: e, score: s, strategy: strat });
     }
@@ -792,10 +904,11 @@ export class BarComposer {
           if (this.isVocalBarActive(primary.phrase.id, bIdx, pMeta)) activeSrcBars.push(bIdx);
         }
         if (activeSrcBars.length > 0 && activeSrcBars.length < 4 && !pinnedStems.has("vocals")) {
+          const orderedActive = this.orderVocalActiveBars(pMeta, activeSrcBars);
           for (let b = 0; b < blockBars; b++) {
             const cur = selectedBars[b];
             if (!this.isVocalBarActive(primary.phrase.id, cur.srcBar, pMeta)) {
-              const donorBar = activeSrcBars[b % activeSrcBars.length];
+              const donorBar = orderedActive[b % orderedActive.length];
               selectedBars[b] = {
                 ...cur,
                 itemIndex: 0,
@@ -816,8 +929,9 @@ export class BarComposer {
           }
           if (secActive.length > 0) {
             const secShift = this.solvePhraseKeyShift("vocals", secondary, sMeta, ch0, sessionRoot);
+            const orderedSec = this.orderVocalActiveBars(sMeta, secActive);
             for (let b = 0; b < blockBars; b++) {
-              const sb = secActive[b % secActive.length];
+              const sb = orderedSec[b % orderedSec.length];
               selectedBars[b] = {
                 entry: secondary,
                 itemIndex: 1,

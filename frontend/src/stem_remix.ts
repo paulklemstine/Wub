@@ -20,7 +20,7 @@ import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
 import { StretchVoice, type PitchAutomationPoint } from "./stretch_voice";
-import { BarComposer, type VocalActivityInfo } from "./bar_composer";
+import { BarComposer, type VocalActivityInfo, type VocalBarModel, type VocalPhraseModel } from "./bar_composer";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
@@ -886,6 +886,8 @@ export class StemRemixPlayer {
       setupLoads.push(this.cellCompat.load(`${base}/cell_compat.json`));
     }
     if (this.sidecarEnabled("slice_flow")) setupLoads.push(this.sliceFlow.load(base));
+    if (this.sidecarEnabled("vocal_bar_model")) setupLoads.push(this.loadVocalBarModel(base));
+    if (this.sidecarEnabled("vocal_phrases")) setupLoads.push(this.loadVocalPhrases(base));
     if (setupLoads.length > 0) {
       await Promise.all(setupLoads);
     }
@@ -1312,6 +1314,41 @@ export class StemRemixPlayer {
           console.warn("[StemRemix] vocal mix unavailable; vocal-edge bonus neutral", err);
         }
       }
+    }
+  }
+
+  /**
+   * Learned next-vocal-bar head.  It ranks the phrase's existing active bars;
+   * the known-good repair cadence and hook loop stay in charge.
+   */
+  private async loadVocalBarModel(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_bar_model.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalBarModel;
+      if (doc?.format === "wub-vocal-bar-v1" && doc.input_dim === 120
+        && doc.next?.w1?.length) {
+        this.barComposer.vocalBarModel = doc;
+      }
+    } catch {
+      // Optional model; the known-good vocal path remains in force.
+    }
+  }
+
+  /** Learned multi-bar unit ranker for vocal phrase selection. */
+  private async loadVocalPhrases(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_phrases.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalPhraseModel;
+      if (doc?.format === "wub-vocal-phrases-v1"
+        && doc.tracks && typeof doc.tracks === "object") {
+        this.barComposer.vocalPhraseModel = doc;
+        const units = Object.values(doc.tracks).reduce((sum, list) => sum + list.length, 0);
+        console.info(`[StemRemix] Vocal phrase ranker loaded (${units} units / ${Object.keys(doc.tracks).length} tracks)`);
+      }
+    } catch {
+      // Optional ranker; selection falls back to the known-good heuristics.
     }
   }
 
