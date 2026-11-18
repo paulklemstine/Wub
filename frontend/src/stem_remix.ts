@@ -84,6 +84,18 @@ export interface TransitionCohort {
   };
 }
 
+/** Optional variety policy (bounded biases against track/vocal repetition). */
+interface VarietyPrior {
+  format: string;
+  version: number;
+  track_history_bars: number;
+  track_reuse_penalty: number;
+  vocal_freshness_weight: number;
+  joint_reserve: number;
+  source_novelty_weight: number;
+  max_recall_per_set: number;
+}
+
 /** Policy config for the unified short-horizon ranking bias. */
 interface HorizonPlannerConfig {
   format: string;
@@ -696,6 +708,8 @@ export class StemRemixPlayer {
   private levelCorrection: Partial<Record<StemName, number>> | null = null;
   /** Optional unified short-horizon planner config. */
   private horizonConfig: HorizonPlannerConfig | null = null;
+  /** Optional variety policy from the variety_prior.json sidecar. */
+  private varietyPrior: VarietyPrior | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -965,6 +979,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("vocal_cadence")) setupLoads.push(this.loadVocalCadence(base));
     if (this.sidecarEnabled("level_seam")) setupLoads.push(this.loadLevelSeam(base));
     if (this.sidecarEnabled("horizon_planner")) setupLoads.push(this.loadHorizonPlanner(base));
+    if (this.sidecarEnabled("variety_prior")) setupLoads.push(this.loadVarietyPrior(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1496,6 +1511,50 @@ export class StemRemixPlayer {
   private seamGain(stem: StemName, gain: number): number {
     const correction = this.levelCorrection?.[stem] ?? 1;
     return Math.max(0.2, Math.min(3, gain * correction));
+  }
+
+  /** Optional variety policy; neutral when absent. */
+  private async loadVarietyPrior(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/variety_prior.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VarietyPrior;
+      if (doc?.format === "wub-variety-prior-v1" && doc.track_reuse_penalty >= 0) {
+        this.varietyPrior = doc;
+        this.songArchitect.setVarietyConfig(doc);
+      }
+    } catch {
+      // Optional; historical selection remains in force.
+    }
+  }
+
+  /** How often this stem's recent history used a given source track. */
+  private trackUseCount(stem: StemName, trackId: string): number {
+    const cfg = this.varietyPrior;
+    const history = this.stemHistory[stem] ?? [];
+    const window = cfg ? Math.max(8, Math.round(cfg.track_history_bars / 4)) : 16;
+    let used = 0;
+    for (const id of history.slice(-window)) {
+      if (this.entryById.get(`${id}:${stem}`)?.kit.track_id === trackId) used += 1;
+    }
+    return used;
+  }
+
+  /** Session freshness of a vocal phrase (1 = never played, 0 = just played). */
+  private vocalFreshnessOf(phraseId: string): number {
+    const plays = this.playCountOf("vocals", phraseId);
+    const history = this.stemHistory.vocals ?? [];
+    const idx = history.lastIndexOf(phraseId);
+    const age = idx < 0 ? 99 : history.length - 1 - idx;
+    return clamp01(0.6 / (1 + plays * 0.5) + 0.4 * Math.min(1, age / 12));
+  }
+
+  /** Bounded variety bonus for a candidate source track. */
+  private varietyBonusFor(stem: StemName, trackId: string): number {
+    const cfg = this.varietyPrior;
+    if (!cfg) return 0;
+    const used = this.trackUseCount(stem, trackId);
+    return cfg.track_reuse_penalty * (1 / (1 + used) - 0.5);
   }
 
   /** Unified short-horizon planner config (rank bias only). */
@@ -2989,6 +3048,10 @@ export class StemRemixPlayer {
       normalized,
       this.barComposer.getStyleProgressions(),
     );
+    if (this.varietyPrior) {
+      secCtx.vocalFreshness = (phraseId) => this.vocalFreshnessOf(phraseId);
+      secCtx.vocalFreshnessWeight = this.varietyPrior.vocal_freshness_weight;
+    }
     if (this.songArchitect.getMode() === "song" && !bridge && !rotation) {
       normalized = secCtx.kitSection;
       displaySection = secCtx.role;
@@ -3283,6 +3346,7 @@ export class StemRemixPlayer {
       const accepted = this.sliceFlow.select(tasks, {
         at, bars, bpm: this.sessionBpm, section: normalized, targetEnergy,
         sectionChanged, rotation, bridge,
+        sourceNoveltyWeight: this.varietyPrior?.source_novelty_weight,
         cohortMaxChanges: handoffThisBlock
           ? Math.max(4, this.transitionCohort?.handoff?.max_stems ?? 4)
           : sectionChanged
@@ -3503,11 +3567,12 @@ export class StemRemixPlayer {
       const earBonus = EAR_W_JOINT * (entry.earQ - 0.5);
       const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
       const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
+      const variety = this.varietyBonusFor(stem, entry.kit.track_id);
       return {
         entry,
         full: legal,
         judge,
-        score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus + signatureBonus + timbre + vocalActBonus,
+        score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus + signatureBonus + timbre + vocalActBonus + variety,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -3542,9 +3607,12 @@ export class StemRemixPlayer {
         return a.entry.tempoCost + a.entry.keyCost * 0.05
           - (b.entry.tempoCost + b.entry.keyCost * 0.05);
       });
+    const reserveLimit = this.varietyPrior
+      ? Math.max(JOINT_RESERVE, Math.min(8, Math.floor(this.varietyPrior.joint_reserve)))
+      : JOINT_RESERVE;
     let added = 0;
     for (const item of reserve) {
-      if (added >= JOINT_RESERVE) break;
+      if (added >= reserveLimit) break;
       const trackId = item.entry.kit.track_id;
       if (seen.has(trackId)) continue;
       if (this.playCountOf(stem, item.entry.phrase.id) !== 0) continue;
@@ -3920,6 +3988,15 @@ export class StemRemixPlayer {
       }
       if (sectionChanged && subset.includes("vocals") && this.vocalCadence) {
         policy.score = Math.min(1, policy.score + this.vocalCadence.policy.section_change_bonus);
+      }
+      // Variety prior: break the near-ties created by saturated per-stem judge
+      // scores in favour of source tracks this stem has not used recently.
+      let variety = 0;
+      for (let i = 0; i < subset.length; i++) {
+        variety += this.varietyBonusFor(subset[i], picks[i]?.kit.track_id ?? "");
+      }
+      if (variety !== 0) {
+        policy.score = Math.max(0, Math.min(1, policy.score + variety / Math.max(1, subset.length)));
       }
       // Unified short-horizon bias: best next bar / phrase / 2-3 block arc fit.
       const horizon = this.horizonScoreFor(subset, picks, startBar, candidateEnergy, section);
@@ -4373,7 +4450,8 @@ export class StemRemixPlayer {
         sigBonus +
         timbre -
         vocalSegmentPenalty +
-        vocalSegmentBonus;
+        vocalSegmentBonus +
+        (this.varietyPrior ? 4 * this.varietyBonusFor(stem, entry.kit.track_id) : 0);
       if (!best || score > best.score) best = { entry, score };
     }
     if (best) break;

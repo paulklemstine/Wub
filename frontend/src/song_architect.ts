@@ -40,11 +40,20 @@ export interface SectionPlanContext {
   isBreakdownStart: boolean;
   /** Remembered vocal phrase ID for Chorus or Verse recall (null if fresh) */
   recalledVocalPhraseId: string | null;
+  /** Optional session freshness 0..1 for a vocal phrase (1 = never played). */
+  vocalFreshness?: (phraseId: string) => number;
+  /** Optional weight for the freshness term in chooseVocalPrimary. */
+  vocalFreshnessWeight?: number;
   /** Remembered motif phrases by stem for Chorus/Verse identity recall */
   recalledDonorPhraseIds: Partial<Record<StemName, string>>;
   /** Bar range within the 104-bar set */
   sectionStartBar: number;
   sectionEndBar: number;
+}
+
+/** Optional variety policy supplied by the variety_prior.json sidecar. */
+export interface VarietyConfig {
+  max_recall_per_set: number;
 }
 
 export interface SongThemeMemory {
@@ -57,6 +66,8 @@ export interface SongThemeMemory {
   chorusDonors: Partial<Record<StemName, string>>;
   chorusVocalHookId: string | null;
   verseVocalId: string | null;
+  chorusRecallCount?: number;
+  verseRecallCount?: number;
 }
 
 interface SongSegmentDef {
@@ -89,6 +100,11 @@ export class SongArchitect {
   private mode: SongMode = "song";
   private theme: SongThemeMemory | null = null;
   private setSeed = 0;
+  private variety: VarietyConfig | null = null;
+
+  setVarietyConfig(config: VarietyConfig | null): void {
+    this.variety = config;
+  }
 
   getMode(): SongMode {
     return this.mode;
@@ -110,6 +126,8 @@ export class SongArchitect {
       chorusDonors: {},
       chorusVocalHookId: null,
       verseVocalId: null,
+      chorusRecallCount: 0,
+      verseRecallCount: 0,
     };
   }
 
@@ -189,15 +207,36 @@ export class SongArchitect {
 
     let recalledVocal: string | null = null;
     let recalledDonors: Partial<Record<StemName, string>> = {};
+    const varied = this.variety !== null;
+    const maxRecall = varied
+      ? Math.max(0, Math.floor(this.variety!.max_recall_per_set))
+      : Number.POSITIVE_INFINITY;
     if (seg.role === "CHORUS_2") {
-      recalledVocal = theme.chorusVocalHookId;
-      recalledDonors = { ...theme.chorusDonors };
-    } else if (seg.role === "CHORUS_1" && bar > seg.startBar) {
-      // Repeat the exact same Chorus 1 vocal hook across Chorus 1 sub-blocks
-      recalledVocal = theme.chorusVocalHookId;
+      if (!varied || (bar === seg.startBar && (theme.chorusRecallCount ?? 0) < maxRecall)) {
+        recalledVocal = theme.chorusVocalHookId;
+        recalledDonors = { ...theme.chorusDonors };
+        if (varied && recalledVocal) theme.chorusRecallCount = (theme.chorusRecallCount ?? 0) + 1;
+      }
+    } else if (seg.role === "CHORUS_1") {
+      // Without the sidecar, keep the historical sub-block repetition. With
+      // it, recall only once at the first chorus block, so the set does not
+      // replay one latched hook in every chorus sub-block.
+      const allowed = varied
+        ? bar === seg.startBar && (theme.chorusRecallCount ?? 0) < maxRecall
+        : bar > seg.startBar;
+      if (allowed) {
+        recalledVocal = theme.chorusVocalHookId;
+        if (varied && recalledVocal) theme.chorusRecallCount = (theme.chorusRecallCount ?? 0) + 1;
+      }
     } else if (seg.role === "VERSE_2") {
-      recalledVocal = theme.verseVocalId;
-      recalledDonors = { ...theme.verseDonors };
+      const allowed = varied
+        ? bar === seg.startBar && (theme.verseRecallCount ?? 0) < maxRecall
+        : true;
+      if (allowed) {
+        recalledVocal = theme.verseVocalId;
+        recalledDonors = { ...theme.verseDonors };
+        if (varied && recalledVocal) theme.verseRecallCount = (theme.verseRecallCount ?? 0) + 1;
+      }
     }
 
     return {

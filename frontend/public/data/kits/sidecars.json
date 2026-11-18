@@ -25,5 +25,6 @@
   "motif_calendar": true,
   "vocal_cadence": true,
   "level_seam": true,
-  "horizon_planner": true
+  "horizon_planner": true,
+  "variety_prior": true
 }

@@ -38,6 +38,8 @@ export interface FlowContext {
   sectionChanged: boolean; rotation: boolean; bridge: boolean;
   /** Learned section-change stem cap from transition_cohort.json (optional). */
   cohortMaxChanges?: number;
+  /** Optional variety weight for source-track novelty in the final gate. */
+  sourceNoveltyWeight?: number;
 }
 export interface SliceFlowTrace {
   id: number; stem: StemName; at: number; endAt: number; section: string;
@@ -358,7 +360,7 @@ export class SliceFlow {
       if (fallback && ((changed && protectedFoundation && !context.sectionChanged) || (!context.bridge && candidate.score + .18 < fallbackScore))) {
         return { task: fallback, fallback, canHold, changed: !canHold, priority: 0 };
       }
-      const noveltyGain = .15 * (this.sourceNovelty(String(first?.kit.track_id ?? ""))
+      const noveltyGain = (context.sourceNoveltyWeight ?? .15) * (this.sourceNovelty(String(first?.kit.track_id ?? ""))
         - (fallback ? this.sourceNovelty(String(fallback.run[0]?.kit.track_id ?? "")) : .5));
       return { task, fallback, canHold, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + noveltyGain + (foundation ? 0 : .02) };
     });

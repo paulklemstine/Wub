@@ -596,6 +596,9 @@ export class BarComposer {
         s += 0.06 + unit.score * 0.10;
         if (unit.repeat && (ctxIsChorus(ctx) || ctx.kitSection === "DROP")) s += 0.04;
       }
+      if (ctx.vocalFreshness && ctx.vocalFreshnessWeight) {
+        s += ctx.vocalFreshnessWeight * (ctx.vocalFreshness(e.phrase.id) - 0.5);
+      }
       scored.push({ entry: e, score: s, strategy: strat });
     }
 

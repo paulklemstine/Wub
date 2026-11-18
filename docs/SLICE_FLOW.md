@@ -414,3 +414,23 @@ horizon term now blends taste quality with recency (`0.6·earQ + 0.4·freshness`
 where a phrase unseen in this stem's 32-entry history is fully fresh), and its
 weight dropped from 0.25 to 0.12 with the budget moved to bar (0.38) and
 sequence (0.50). `scripts/build_horizon_planner.py` reproduces the config.
+
+## Variety prior (track and vocal repetition)
+
+The selector was collapsing variety for three measurable reasons: per-stem judge
+top-1 scores are saturated (drums 0.982, bass 0.984, vocals 0.961), `earQ` is
+nearly constant outside bass, and `SongArchitect` latched one chorus/verse hook
+per set and replayed it in every sub-block. `variety_prior.json` adds bounded,
+optional biases without changing any hard rule:
+
+- recently used **source tracks** are penalized in the joint shortlist, the
+  final joint score and the fallback `selectMorph` path; the never-played
+  reserve grows from 2 to 4 slots;
+- the next-bar phrase selector gets a session **freshness** callback
+  (`0.6/(1+plays·0.5) + 0.4·age/12`), weighted 0.30;
+- theme recall is budgeted to **one chorus and one verse recall per set**, at
+  the first sub-block only (previously repeated through every sub-block);
+- the final SliceFlow gate's `sourceNovelty` weight rises from 0.15 to 0.30.
+
+Everything is neutral when the sidecar is absent; no phrase, bar, stretch rate
+or slice boundary is changed by this prior.
