@@ -188,10 +188,9 @@ export class TamagotchiAvatar {
   // Live Singing Head oral articulators driving the 2D mouth.
   // The lone "eye + mouth" creature drifts across the visualiser, nudged by
   // the same spectrum that drives the background image.
+  private orbitPhase = 0;
   private driftX = 0.5;
   private driftY = 0.5;
-  private driftVX = 0;
-  private driftVY = 0;
 
   private liveMouth: LiveMouthState | null = null;
   private visualConfig: BearVisualConfig = { ...DEFAULT_BEAR_VISUAL_CONFIG };
@@ -1133,31 +1132,33 @@ export class TamagotchiAvatar {
     const bass = band(1, 10);
     const mid = band(10, 40);
     const treble = band(40, Math.min(120, freqBins?.length ?? 40));
-    this.driftVX = this.driftVX * 0.92 + ((bass - mid) * 0.42 + Math.sin(performance.now() / 2900) * 0.06) * dt;
-    this.driftVY = this.driftVY * 0.92 + ((treble - bass) * 0.34 + Math.cos(performance.now() / 3400) * 0.05) * dt;
-    this.driftX += this.driftVX + Math.sin(performance.now() / 5200) * 0.0007;
-    this.driftY += this.driftVY + Math.cos(performance.now() / 6100) * 0.0005;
-    if (this.driftX < 0.16 || this.driftX > 0.84) {
-      this.driftX = Math.max(0.16, Math.min(0.84, this.driftX));
-      this.driftVX *= -0.7;
-    }
-    if (this.driftY < 0.18 || this.driftY > 0.82) {
-      this.driftY = Math.max(0.18, Math.min(0.82, this.driftY));
-      this.driftVY *= -0.7;
-    }
+
+    // Fly a butterfly/figure-eight around the centre of the visualisation.
+    // The background spectrum widens/lifts the orbit and speeds it up, but the
+    // centre stays the focus instead of the face wandering to the edges.
+    const now = performance.now() / 1000;
+    this.orbitPhase += dt * (0.34 + 0.42 * (bass + treble) + 0.18 * mid);
+    const phase = this.orbitPhase;
+    const spread = 0.17 + 0.09 * bass;
+    const lift = 0.12 + 0.07 * treble;
+    this.driftX = 0.5 + spread * Math.sin(phase);
+    this.driftY = 0.5 + lift * Math.sin(phase * 2) * Math.cos(phase * 0.5);
+    // Pseudo-3D depth: scale swells as the face swings toward the viewer.
+    const depth = 0.5 + 0.5 * Math.cos(phase * 2 + 0.6);
+    const perspective = 0.72 + 0.62 * depth;
 
     const cx = this.driftX * w;
     const cy = this.driftY * h;
     const energy = TamagotchiAvatar.waveEnergy(wave);
     const amp = Math.max(vocalsLevel, energy, this.smoothedVocalAmp * 0.7);
-    const beat = (performance.now() / 1000 / Math.max(60, bpm)) % 1;
+    const beat = (now / Math.max(60, bpm)) % 1;
     const breath = 1 + 0.05 * Math.sin(beat * Math.PI * 2) + 0.04 * amp;
-    const eyeGap = 21 * breath;
-    const eyeY = cy - 13 * breath;
-    const scale = Math.min(w, h) / 320;
-    const blink = Math.sin(performance.now() / 1700) > 0.985 ? 0.15 : 1;
-    const lookX = Math.max(-1, Math.min(1, this.driftVX * 30));
-    const lookY = Math.max(-1, Math.min(1, this.driftVY * 30));
+    const scale = (Math.min(w, h) / 320) * perspective;
+    const eyeGap = 21 * breath * scale;
+    const eyeY = cy - 13 * breath * scale;
+    const blink = Math.sin(now * 1.7) > 0.985 ? 0.15 : 1;
+    const lookX = Math.cos(phase);
+    const lookY = Math.cos(phase * 2) * Math.cos(phase * 0.5);
 
     const lipColor = this.visualConfig.mouthStyle === "acid"
       ? "#9dff00"
@@ -1189,31 +1190,171 @@ export class TamagotchiAvatar {
 
     const live = this.liveMouth?.active ? this.liveMouth.art : null;
     const aperture = live
-      ? 0.08 + Math.max(0, Math.min(1, live.aperture)) * 0.9
-      : 0.10 + amp * 1.25;
+      ? Math.max(0, Math.min(1, live.aperture))
+      : Math.max(0, Math.min(1, amp * 1.15));
     const width = live
       ? 0.55 + Math.max(0, Math.min(1, live.width)) * 0.65
       : 0.85 + amp * 0.5;
-    const mw = 17 * scale * width * this.visualConfig.mouthGain;
-    const mh = 10 * scale * aperture * this.visualConfig.mouthGain;
+    const roundness = live ? Math.max(0, Math.min(1, live.roundness)) : 0.2;
+    const vowel = live?.topVowel ?? (amp > 0.35 ? "AH" : "EE");
     const my = eyeY + 33 * scale * breath;
-
-    ctx.beginPath();
-    ctx.ellipse(cx, my, mw, Math.max(1.6 * scale, mh), 0, 0, Math.PI * 2);
-    ctx.fillStyle = lipColor;
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(cx, my + mh * 0.18, mw * 0.72, Math.max(1, mh * 0.62), 0, 0, Math.PI * 2);
-    ctx.fillStyle = "#2a0016";
-    ctx.fill();
-    if (aperture > 0.42) {
-      ctx.beginPath();
-      ctx.ellipse(cx, my + mh * 0.52, mw * 0.42, mh * 0.3, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#ff7a9c";
-      ctx.fill();
-    }
+    this.drawFloatingLips(ctx, cx, my, aperture, width, roundness, vowel,
+      wave, this.visualConfig.mouthGain, scale, lipColor, performance.now() / 1000);
     ctx.restore();
     void rmsLevel;
+  }
+
+  /**
+   * The lipstick mouth developed for the full bear, lifted out so it can float
+   * without a head: Cupid's-bow outline, glossy red gradient, liner, seam,
+   * teeth, tongue and a throat glow that opens with the vocal articulation.
+   */
+  private drawFloatingLips(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    my: number,
+    aperture: number,
+    width: number,
+    roundness: number,
+    vowel: string,
+    wave: Uint8Array | null | undefined,
+    gain: number,
+    scale: number,
+    lipColor: string,
+    timeSec: number
+  ): void {
+    const ruby = lipColor === "#9dff00"
+      ? { top: "#eaff7b", mid: "#9dff00", shade: "#008f4c", bot: "#5cff9d", liner: "#005e36" }
+      : lipColor === "#00f0ff"
+      ? { top: "#a6f6ff", mid: "#00c8ff", shade: "#4c1d95", bot: "#ff66e5", liner: "#2e1065" }
+      : { top: "#ff6b9d", mid: "#e00751", shade: "#8f0030", bot: "#ff266e", liner: "#610021" };
+    const open = Math.max(0, Math.min(1, aperture));
+    const rw = Math.max(6 * scale, 16 * scale * width * gain);
+    const rh = Math.max(1.2 * scale, 11 * scale * open * gain);
+    const steps = 64;
+    const cupid = (cosP: number): number => {
+      const cleft = Math.exp(-Math.pow(cosP * 4.2, 2));
+      const peaks = Math.exp(-Math.pow((Math.abs(cosP) - 0.36) * 4.4, 2));
+      return (peaks * 1.15 - cleft * 0.65) * (1 - 0.55 * roundness);
+    };
+    const outline = (): void => {
+      ctx.beginPath();
+      for (let j = 0; j <= steps; j++) {
+        const phi = (j / steps) * Math.PI * 2;
+        const cosP = Math.cos(phi);
+        const sinP = Math.sin(phi);
+        const x = cx + rw * cosP;
+        const y = sinP <= 0
+          ? my - rh * Math.pow(-sinP, 0.85) - cupid(cosP) * rh * 0.42
+          : my + rh * Math.pow(sinP, 0.85) * 1.25;
+        if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+    };
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = lipColor;
+    ctx.shadowBlur = 8 + open * 16;
+
+    if (open < 0.16) {
+      // Slightly parted glossy pout.
+      outline();
+      const grad = ctx.createLinearGradient(cx, my - rh, cx, my + rh * 1.3);
+      grad.addColorStop(0, ruby.top);
+      grad.addColorStop(0.42, ruby.mid);
+      grad.addColorStop(0.58, ruby.shade);
+      grad.addColorStop(1, ruby.bot);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.strokeStyle = ruby.liner;
+      ctx.lineWidth = 1.1 * scale;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - rw * 0.9, my);
+      ctx.quadraticCurveTo(cx, my + 1.6 * scale, cx + rw * 0.9, my);
+      ctx.strokeStyle = "#2b0010";
+      ctx.lineWidth = 1.35 * scale;
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.78)";
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.ellipse(cx + side * rw * 0.27, my - rh * 0.5, 1.8 * scale, 0.7 * scale, side * -0.25, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.ellipse(cx, my + rh * 0.62, rw * 0.34, 1.1 * scale, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    // Open mouth: lip rim, dark cavity, teeth, tongue, throat glow.
+    outline();
+    const grad = ctx.createLinearGradient(cx, my - rh, cx, my + rh * 1.25);
+    grad.addColorStop(0, ruby.top);
+    grad.addColorStop(0.4, ruby.mid);
+    grad.addColorStop(0.56, ruby.shade);
+    grad.addColorStop(1, ruby.bot);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.strokeStyle = ruby.liner;
+    ctx.lineWidth = 1.2 * scale;
+    ctx.stroke();
+
+    const cavityH = rh * (vowel === "EE" ? 0.66 : vowel === "OO" ? 0.78 : 0.92);
+    const cavityW = rw * (vowel === "OO" ? 0.62 : vowel === "EE" ? 0.86 : 0.76);
+    ctx.beginPath();
+    ctx.ellipse(cx, my + rh * 0.1, cavityW, Math.max(1.4 * scale, cavityH), 0, 0, Math.PI * 2);
+    ctx.fillStyle = "#2a0016";
+    ctx.fill();
+
+    // Throat glow behind the tongue.
+    const throat = ctx.createRadialGradient(cx, my + rh * 0.5, 0.5 * scale, cx, my + rh * 0.5, rh * 1.1);
+    throat.addColorStop(0, `rgba(255, 70, 140, ${0.35 + open * 0.45})`);
+    throat.addColorStop(1, "rgba(255, 70, 140, 0)");
+    ctx.fillStyle = throat;
+    ctx.fill();
+
+    // Upper teeth row, gently following the waveform.
+    const sample = wave && wave.length > 8
+      ? (wave[Math.floor(wave.length * 0.25)] - 128) / 128 : 0;
+    ctx.beginPath();
+    ctx.moveTo(cx - cavityW * 0.82, my - cavityH * 0.28);
+    for (let j = 0; j <= 12; j++) {
+      const u = j / 12;
+      const x = cx - cavityW * 0.82 + cavityW * 1.64 * u;
+      const y = my - cavityH * 0.34 + Math.cos(u * Math.PI) * cavityH * 0.12 + sample * 1.2 * scale;
+      ctx.lineTo(x, y);
+    }
+    ctx.quadraticCurveTo(cx, my - cavityH * 0.08, cx - cavityW * 0.82, my - cavityH * 0.28);
+    ctx.closePath();
+    ctx.fillStyle = "#fff6f8";
+    ctx.fill();
+
+    // Tongue.
+    ctx.beginPath();
+    ctx.ellipse(cx + (vowel === "EE" ? 2 * scale : -1 * scale),
+      my + cavityH * 0.52,
+      cavityW * 0.48, Math.max(1 * scale, cavityH * 0.36),
+      0, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff7a9c";
+    ctx.fill();
+
+    // Wet highlights on the pillowy lower lip.
+    ctx.fillStyle = "rgba(255,255,255,0.72)";
+    ctx.beginPath();
+    ctx.ellipse(cx - rw * 0.3, my - rh * 0.62, 1.7 * scale, 0.6 * scale, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx + rw * 0.28, my - rh * 0.58, 1.5 * scale, 0.55 * scale, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx, my + rh * 1.02 + Math.sin(timeSec * 3) * 0.3 * scale,
+      rw * 0.38, 1.2 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   private renderCanvas(
