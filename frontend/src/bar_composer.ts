@@ -567,9 +567,7 @@ export class BarComposer {
         if (meta.vr === "verse" || meta.vr === "chop") s += 0.35;
       }
       if (e.phrase.id === fallback.phrase.id) {
-        // Keep a small continuity nudge, but not enough to freeze the vocal
-        // line: real songs change vocal patterns at ~73% of 4-bar boundaries.
-        s += fallbackIsSparse ? -0.4 : 0.05;
+        s += fallbackIsSparse ? -0.4 : 0.20;
       }
       // AI prior: prefer phrases that belong to a mined real multi-bar
       // performance (chorus/verse).  Selection only — the known-good repair
@@ -577,8 +575,8 @@ export class BarComposer {
       const unit = this.vocalPhraseModel?.tracks?.[e.kit.track_id]
         ?.find((candidate) => candidate.ids.includes(e.phrase.id));
       if (unit) {
-        s += 0.06 + unit.score * 0.10;
-        if (unit.repeat && (ctxIsChorus(ctx) || ctx.kitSection === "DROP")) s += 0.04;
+        s += 0.15 + unit.score * 0.20;
+        if (unit.repeat && (ctxIsChorus(ctx) || ctx.kitSection === "DROP")) s += 0.08;
       }
       scored.push({ entry: e, score: s, strategy: strat });
     }

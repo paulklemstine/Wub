@@ -472,9 +472,7 @@ export function scoreTransition(input: TransitionScoreInput): TransitionScore {
     // fragment, so long sections of a song play out instead of chopping.
     const segmentBars = Math.max(0, finiteOr(input.vocalSegmentBars ?? 0, 0));
     if (segmentBars > 0) {
-      // Reduced from 0.15: a 12-bar unit should still win ties, but real
-      // vocal pattern runs are mostly 4 bars and should not freeze the line.
-      const segmentBonus = 0.08 * Math.max(0, (Math.min(segmentBars, 12) - 4) / 8);
+      const segmentBonus = 0.15 * Math.max(0, (Math.min(segmentBars, 12) - 4) / 8);
       if (segmentBonus > 0) {
         score += segmentBonus;
         reasons.push(`vocal-segment ${signed(segmentBonus)} (${segmentBars} bars)`);

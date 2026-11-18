@@ -149,11 +149,10 @@ def mine(processed: Path, max_tracks: int):
             kind: round(v[0] / max(1, v[1]), 4) for kind, v in vocal_change.items()
         },
         "policy": {
-            # 84% of stable vocal pattern runs last a single 4-bar cell in the
-            # corpus; a 16-bar hold is far longer than the songs actually use.
-            "min_hold_bars": 4,
+            "min_hold_bars": 8,
             "section_change_bonus": round(
-                max(0.08, (vocal_change["section"][0] / max(1, vocal_change["section"][1])) * 0.15), 4),
+                max(0.04, (vocal_change["section"][0] / max(1, vocal_change["section"][1])
+                           - vocal_change["inside"][0] / max(1, vocal_change["inside"][1])) * 0.6), 4),
         },
         "report": {
             "source": "data/processed/*.json",
