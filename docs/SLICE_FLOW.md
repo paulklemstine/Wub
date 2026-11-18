@@ -154,3 +154,29 @@ The automatic judge can disagree with the acoustic critic because it also sees
 mix balance and motif return.  It is still a model of the training corpus, not
 a proof of perception — but it makes the loop self-contained: train -> render
 -> judge -> retrain, with the flow evaluator as the external yardstick.
+
+## Navigating the bar space (the TSP-shaped problem)
+
+A set is a route through a graph whose cities are 4-bar cells and whose edge
+costs are learned flow scores.  It is a prize-collecting tour, not an exact
+TSP: the planner does not need to visit every cell, but it must avoid recent
+cells, limit source changes and hold a foundation for 60–120 s.
+
+`wub_core/bar_tour.py` implements the search: beam search with a branch factor,
+cooldowns, a source-change budget and an optional learned value head.  Edge
+quality blends the acoustic critic (0.7) and the motif-return head (0.3);
+the value head contributes 0.15 in the offline planner and 0.10 in the browser
+gate.  `scripts/train_bar_tour_value.py` fits the 72→32→1 value net on real
+song trajectories: the reward is the acoustic teacher's join score and the
+target is the discounted sum of the next eight bars.  Held-out MSE is about
+0.35 versus 0.55 for a constant predictor.
+
+```bash
+PYTHONPATH=. python3 scripts/train_bar_tour_value.py --device cpu
+PYTHONPATH=. python3 scripts/eval_bar_tour.py --tracks 10 --pool 300 --horizon 8
+```
+
+On the same candidate pool the beam route scores about 0.87 mean flow versus
+0.86 greedy, with roughly one fewer source change; adding the value head keeps
+flow and increases phrase diversity.  The value sidecar (`bar_tour_value.json`)
+loads optionally in `slice_flow.ts`, so older banks still work.

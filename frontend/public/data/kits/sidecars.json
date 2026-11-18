@@ -13,5 +13,6 @@
   "cell_index": true,
   "cell_compat": true,
   "slice_flow": true,
-  "motif_return": true
+  "motif_return": true,
+  "bar_tour_value": true
 }

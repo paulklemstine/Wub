@@ -8,10 +8,13 @@ import type { StemName } from "./types";
 export const FLOW_DIM = 32;
 export const FLOW_INPUT_DIM = 108;
 export const MOTIF_INPUT_DIM = FLOW_DIM * 3 + 4 + 3 + 1;
+export const VALUE_INPUT_DIM = FLOW_DIM * 2 + 8;
 const MOTIF_FORMAT = "wub-motif-return-v1";
+const VALUE_FORMAT = "wub-bar-tour-value-v1";
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 interface Network { mean: number[]; std: number[]; w1: number[][]; b1: number[]; w2: number[][]; b2: number[] }
 interface MotifArtifact { format: string; input_dim: number; net: Network }
+interface ValueArtifact { format: string; input_dim: number; net: Network }
 interface Artifact {
   format: string; feature_dim: number; phrase_ids: string[]; feature_file: string;
   critic: Network; mix: Network; planner: Network; foundation_seconds: number;
@@ -58,6 +61,19 @@ export function motifFeatures(a: ArrayLike<number>, b: ArrayLike<number>, stem: 
   out[3 * FLOW_DIM + stem] = 1;
   out[3 * FLOW_DIM + 4 + lag] = 1;
   out[MOTIF_INPUT_DIM - 1] = age;
+  return out;
+}
+
+export function valueFeatures(current: ArrayLike<number>, recent: ArrayLike<number>, age: number, repetition: number): Float32Array {
+  const out = new Float32Array(VALUE_INPUT_DIM);
+  for (let i = 0; i < FLOW_DIM; i++) out[i] = current[i];
+  for (let i = 0; i < FLOW_DIM; i++) out[FLOW_DIM + i] = recent[i];
+  out[2 * FLOW_DIM] = Math.min(2, age / 60);
+  out[2 * FLOW_DIM + 1] = Math.min(1, repetition);
+  out[2 * FLOW_DIM + 2] = .5;
+  out[2 * FLOW_DIM + 3] = .5;
+  out[2 * FLOW_DIM + 4] = .7;
+  out[2 * FLOW_DIM + 5] = .25;
   return out;
 }
 
@@ -118,6 +134,7 @@ function infer(net: Network, x: ArrayLike<number>): number[] {
 export class SliceFlow {
   private artifact: Artifact | null = null;
   private motif: Network | null = null;
+  private tourValue: Network | null = null;
   private features: Float32Array | null = null;
   private rows = new Map<string, number>();
   private tails: Partial<Record<StemName, FlowCell>> = {};
@@ -158,6 +175,14 @@ export class SliceFlow {
           const model = await response.json() as MotifArtifact;
           if (model.format === MOTIF_FORMAT && model.input_dim === MOTIF_INPUT_DIM
             && validNetwork(model.net, MOTIF_INPUT_DIM, 1)) this.motif = model.net;
+        }
+      } catch { /* optional model */ }
+      try {
+        const response = await fetch(`${base}/bar_tour_value.json`);
+        if (response.ok) {
+          const model = await response.json() as ValueArtifact;
+          if (model.format === VALUE_FORMAT && model.input_dim === VALUE_INPUT_DIM
+            && validNetwork(model.net, VALUE_INPUT_DIM, 1)) this.tourValue = model.net;
         }
       } catch { /* optional model */ }
       console.info(`[SliceFlow] acoustic critic + development planner ready (${artifact.phrase_ids.length} phrases)`);
@@ -221,6 +246,20 @@ export class SliceFlow {
     };
   }
 
+  /** Long-horizon value estimate for a candidate's first cell (optional). */
+  private valueGain(cells: readonly FlowCell[], context: FlowContext): number {
+    if (!this.tourValue || !cells.length) return 0;
+    const first = this.cellFeatures(cells[0]);
+    if (!first) return 0;
+    const tail = this.tails[cells[0].stem];
+    const recent = (tail ? this.cellFeatures(tail) : null) ?? first;
+    const age = Math.max(0, context.at - (this.identitySince[cells[0].stem] ?? context.at));
+    const repeated = this.history.length
+      ? this.history.filter(h => h.signature.includes(cells[0].phraseId)).length / this.history.length : 0;
+    const x = valueFeatures(first, recent, age, repeated);
+    return 1 / (1 + Math.exp(-infer(this.tourValue, x)[0]));
+  }
+
   mixScore<T extends FlowEntry>(tasks: readonly FlowTask<T>[], context: FlowContext): number {
     if (!this.artifact) return .5;
     const cells = new Map(tasks.map(task => [task.stem, describeFlowTask(task, context.bars, 240/context.bpm)]));
@@ -263,6 +302,9 @@ export class SliceFlow {
       const fallbackAssessment = fallback ? this.score(describeFlowTask(fallback,context.bars,240/context.bpm),context) : null;
       const fallbackScore = fallbackAssessment?.score ?? 0;
       const motifGain = .28 * (candidate.returnScore - (fallbackAssessment?.returnScore ?? .5));
+      const candidateCells = describeFlowTask(task, context.bars, 240/context.bpm);
+      const valueGain = .10 * (this.valueGain(candidateCells, context)
+        - (fallback ? this.valueGain(describeFlowTask(fallback, context.bars, 240/context.bpm), context) : .5));
       const first = task.run[0];
       const changed = Boolean(prior && first && prior.trackId !== first.kit.track_id);
       const stableAge = Math.max(0,context.at-(this.identitySince[task.stem]??context.at));
@@ -271,7 +313,7 @@ export class SliceFlow {
       if (fallback && ((changed && protectedFoundation && !context.sectionChanged) || (!context.bridge && candidate.score + .18 < fallbackScore - motifGain))) {
         return { task: fallback, fallback, changed: false, priority: 0 };
       }
-      return { task, fallback, changed, priority: candidate.score-fallbackScore + motifGain + (foundation ? 0 : .02) };
+      return { task, fallback, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + (foundation ? 0 : .02) };
     });
     // Preserve a recognizable anchor even when the old arc requests a reset.
     const maxChanges = context.bars <= 4 || this.lastIntent === "hold" || context.rotation ? 1 : 2;

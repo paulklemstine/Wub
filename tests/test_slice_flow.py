@@ -242,3 +242,29 @@ def test_seam_dip_detects_a_level_hole():
     a=np.ones(22050,np.float32)*.5
     assert seam_dip(np.concatenate([a,a]),len(a))<1e-6
     assert seam_dip(np.concatenate([a,np.zeros(22050,np.float32)]),len(a))>.9
+
+
+def test_browser_accepts_value_sidecar(tmp_path):
+    out=tmp_path/'value.cjs'
+    subprocess.run([str(ROOT/'frontend/node_modules/.bin/esbuild'),str(ROOT/'frontend/src/slice_flow.ts'),'--bundle','--platform=node','--format=cjs',f'--outfile={out}'],check=True,capture_output=True)
+    base=ROOT/'frontend/public/data/kits'
+    artifact=dict(format='slice_flow_v1',feature_dim=DIM,phrase_ids=['a','b'],feature_file='features.f32',critic=network(INPUT_DIM),mix=network(16),planner=network(8,3),foundation_seconds=90)
+    features=np.ones((2,4,4,DIM),np.float32)*.3
+    import base64
+    raw=base64.b64encode(features.astype('<f4').tobytes()).decode()
+    value=(base/'bar_tour_value.json').read_text()
+    script=r'''
+const assert=require('node:assert/strict');
+const {SliceFlow}=require(process.argv[1]);
+const artifact=JSON.parse(process.argv[2]);const value=JSON.parse(process.argv[3]);
+const raw=Buffer.from(process.argv[4],'base64');
+global.fetch=async url=>{
+ if(String(url).endsWith('bar_tour_value.json'))return {ok:true,json:async()=>value};
+ if(String(url).endsWith('motif_return.json'))return {ok:false};
+ return {ok:true,json:async()=>artifact,arrayBuffer:async()=>raw.buffer.slice(raw.byteOffset,raw.byteOffset+raw.byteLength)};
+};
+(async()=>{const flow=new SliceFlow();assert.equal(await flow.load('/kits'),true);
+ assert.ok(flow.tourValue && flow.tourValue.w1.length===32);console.log('ok')})().catch(e=>{console.error(e);process.exitCode=1});
+'''
+    result=subprocess.run(['node','-e',script,str(out),json.dumps(artifact),value,raw],capture_output=True,text=True)
+    assert result.returncode==0, result.stderr
