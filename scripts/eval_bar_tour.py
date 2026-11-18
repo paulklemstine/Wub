@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wub_core.bar_tour import Cell, plan_tour
+from wub_core.bar_tour import Cell, CoverageTracker, plan_tour
 from wub_core.slice_flow import DIM, STEMS
 from scripts.train_slice_flow import partition
 
@@ -40,6 +40,11 @@ def route_metrics(cells, route, models):
         "changes": sum(cells[route[i]].track != cells[route[i - 1]].track
                        for i in range(1, len(route))),
         "distinct": len({cells[i].phrase for i in route}),
+        "styles": len({cells[i].meta.get("style", "?") for i in route}),
+        "keys": len({cells[i].meta.get("key", "?") for i in route}),
+        "tempo_span": max(float(cells[i].meta.get("bpm", 0) or 0) for i in route)
+                      - min(float(cells[i].meta.get("bpm", 0) or 0) for i in route),
+        "tracks": len({cells[i].track for i in route}),
         "bars": len(route),
     }
 
@@ -65,21 +70,28 @@ def main() -> None:
             and sum(p["id"] in rows for p in k["phrases"]) >= 3]
     kits = [kits[int(i)] for i in rng.choice(len(kits), size=min(args.tracks, len(kits)), replace=False)]
 
-    variants = {"greedy": {}, "beam": {}, "beam+value": {}}
+    variants = {"greedy": {}, "beam": {}, "beam+value": {}, "beam+coverage": {}}
     for kit in kits:
         phrases = sorted((p for p in kit["phrases"] if p["id"] in rows),
                          key=lambda p: int(p.get("start_bar", 0)))
         for stem_index, stem in enumerate(STEMS):
             pool_phrases = [p for k in manifest["kits"]
-                            if k.get("key") == kit.get("key") and k["track_id"] != kit["track_id"]
+                            if k["track_id"] != kit["track_id"]
+                            and abs(float(k.get("bpm", 120)) / max(1.0, float(kit.get("bpm", 120))) - 1) <= 0.12
                             for p in k["phrases"] if p["id"] in rows]
             chosen = phrases[:2] + [pool_phrases[int(i)] for i in
                                     rng.choice(len(pool_phrases), size=min(args.pool, len(pool_phrases)), replace=False)]
             track_by_phrase = {p["id"]: str(k["track_id"]) for k in manifest["kits"]
                                for p in k["phrases"]}
+            meta_by_phrase = {p["id"]: {"bpm": str(k.get("bpm", 120)),
+                                        "key": str(k.get("key", "?")),
+                                        "style": str(k.get("style", "?")),
+                                        "energy": str(float(p.get("energy", 0.5)))}
+                              for k in manifest["kits"] for p in k["phrases"]}
             selected = phrases[:1] + chosen[2:]
             cells = [Cell(p["id"], track_by_phrase[p["id"]], stem, bar,
-                          np.asarray(features[rows[p["id"]], stem_index, bar], np.float32))
+                          np.asarray(features[rows[p["id"]], stem_index, bar], np.float32),
+                          meta_by_phrase[p["id"]])
                      for p in selected for bar in range(4)]
             if len(cells) < 16:
                 continue
@@ -88,7 +100,12 @@ def main() -> None:
             greedy = plan_tour(cells, start, args.horizon, plain, beam=1, branch=1)
             beam = plan_tour(cells, start, args.horizon, plain, beam=10, branch=10)
             with_value = plan_tour(cells, start, args.horizon, models, beam=10, branch=10)
-            for name, route in (("greedy", greedy), ("beam", beam), ("beam+value", with_value)):
+            coverage = CoverageTracker()
+            coverage.observe(cells[start])
+            broad = plan_tour(cells, start, args.horizon, plain, beam=10, branch=10,
+                              coverage=coverage, coverage_weight=0.22)
+            for name, route in (("greedy", greedy), ("beam", beam),
+                                ("beam+value", with_value), ("beam+coverage", broad)):
                 metrics = route_metrics(cells, route, models)
                 for key, value in metrics.items():
                     variants[name].setdefault(key, []).append(value)
@@ -97,9 +114,10 @@ def main() -> None:
         if not values.get("flow"):
             continue
         summary = {k: float(np.mean(v)) for k, v in values.items()}
-        print(f"[tour] {name:11s} flow {summary['flow']:.4f}  "
+        print(f"[tour] {name:13s} flow {summary['flow']:.4f}  "
               f"changes {summary['changes']:.2f}  distinct {summary['distinct']:.1f}  "
-              f"bars {summary['bars']:.1f}")
+              f"styles {summary['styles']:.1f}  keys {summary['keys']:.1f}  "
+              f"tempo {summary['tempo_span']:.1f}  tracks {summary['tracks']:.1f}")
 
 
 if __name__ == "__main__":

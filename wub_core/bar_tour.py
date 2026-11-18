@@ -13,7 +13,7 @@ subtour elimination.  The name is about the problem shape, not the algorithm.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -30,6 +30,46 @@ class Cell:
     stem: str
     bar: int
     features: np.ndarray
+    meta: Dict[str, str] = field(default_factory=dict)
+
+
+class CoverageTracker:
+    """How much of the style/tempo/key/energy spectrum has been played.
+
+    Under-visited regions get a bonus, so a long set keeps travelling instead
+    of mining one comfortable corner of the bank.  Counts are cheap integers;
+    this is an exploration pressure, not a replacement for transition quality.
+    """
+
+    DIMS = ("tempo", "key", "style", "energy", "track")
+
+    def __init__(self) -> None:
+        self.counts: Dict[str, Dict[str, int]] = {dim: {} for dim in self.DIMS}
+
+    @classmethod
+    def bins(cls, cell: Cell) -> Dict[str, str]:
+        meta = cell.meta
+        tempo = float(meta.get("bpm", 0) or 0)
+        energy = float(meta.get("energy", 0) or 0)
+        return {
+            "tempo": str(int(tempo // 10)),
+            "key": str(meta.get("key", "?")),
+            "style": str(meta.get("style", "?")),
+            "energy": str(int(energy * 4)),
+            "track": cell.track,
+        }
+
+    def observe(self, cell: Cell) -> None:
+        for dim, value in self.bins(cell).items():
+            table = self.counts[dim]
+            table[value] = table.get(value, 0) + 1
+
+    def novelty(self, cell: Cell) -> float:
+        values = []
+        for dim, value in self.bins(cell).items():
+            count = self.counts[dim].get(value, 0)
+            values.append(1.0 / (1.0 + count))
+        return float(np.mean(values))
 
 
 def net_forward(net: dict, x: np.ndarray) -> np.ndarray:
@@ -106,7 +146,9 @@ class TourState:
 
 def plan_tour(cells: Sequence[Cell], start: int, horizon: int,
               models: dict, beam: int = 12, branch: int = 12,
-              max_changes: int = 3, cooldown: int = 6) -> List[int]:
+              max_changes: int = 3, cooldown: int = 6,
+              coverage: Optional[CoverageTracker] = None,
+              coverage_weight: float = 0.25) -> List[int]:
     """Beam search for a high-flow route through the candidate cells.
 
     Returns indices into ``cells`` (including the fixed start).  The score is
@@ -134,6 +176,9 @@ def plan_tour(cells: Sequence[Cell], start: int, horizon: int,
                 recent = np.mean(np.stack(recent), axis=0)
                 vf = value_features_batch(feats, recent, step * 4, reps)
                 scores += 0.15 * sigmoid(net_forward(models["value"], vf)[:, 0])
+            if coverage is not None:
+                novelty = np.asarray([coverage.novelty(c) for c in cells])
+                scores += coverage_weight * novelty
             top = np.argsort(-scores)[:branch]
             for j in top:
                 if scores[j] <= -1e2:
@@ -160,4 +205,10 @@ def plan_tour(cells: Sequence[Cell], start: int, horizon: int,
             if len(kept) >= beam:
                 break
         beam_states = kept
-    return list(max(beam_states, key=lambda s: s.score).path) if beam_states else [start]
+    if not beam_states:
+        return [start]
+    best = max(beam_states, key=lambda s: s.score).path
+    if coverage is not None:
+        for index in best:
+            coverage.observe(cells[index])
+    return list(best)

@@ -246,6 +246,17 @@ export class SliceFlow {
     };
   }
 
+  /** How under-represented a source is in the recent listening window. */
+  private sourceNovelty(trackId: string): number {
+    const recent = this.records.slice(-16);
+    if (!recent.length) return 1;
+    let seen = 0;
+    for (const record of recent) for (const cell of record.cells) {
+      if (cell.trackId === trackId) seen++;
+    }
+    return 1 / (1 + seen);
+  }
+
   /** Long-horizon value estimate for a candidate's first cell (optional). */
   private valueGain(cells: readonly FlowCell[], context: FlowContext): number {
     if (!this.tourValue || !cells.length) return 0;
@@ -313,7 +324,9 @@ export class SliceFlow {
       if (fallback && ((changed && protectedFoundation && !context.sectionChanged) || (!context.bridge && candidate.score + .18 < fallbackScore - motifGain))) {
         return { task: fallback, fallback, changed: false, priority: 0 };
       }
-      return { task, fallback, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + (foundation ? 0 : .02) };
+      const noveltyGain = .15 * (this.sourceNovelty(String(first?.kit.track_id ?? ""))
+        - (fallback ? this.sourceNovelty(String(fallback.run[0]?.kit.track_id ?? "")) : .5));
+      return { task, fallback, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + noveltyGain + (foundation ? 0 : .02) };
     });
     // Preserve a recognizable anchor even when the old arc requests a reset.
     const maxChanges = context.bars <= 4 || this.lastIntent === "hold" || context.rotation ? 1 : 2;

@@ -180,3 +180,18 @@ On the same candidate pool the beam route scores about 0.87 mean flow versus
 0.86 greedy, with roughly one fewer source change; adding the value head keeps
 flow and increases phrase diversity.  The value sidecar (`bar_tour_value.json`)
 loads optionally in `slice_flow.ts`, so older banks still work.
+
+## Whole-spectrum coverage
+
+A tour that only picks locally safe cells eventually mines one style/tempo/
+key corner and stops moving the music forward.  `CoverageTracker` counts visits
+across five spectrum dimensions — tempo decade, key, style, energy quartile and
+source track — and gives under-visited cells an inverse-frequency bonus.  The
+offline planner adds `0.22 x novelty` on top of the learned edge score; the
+browser gate uses a lighter source-only version (`sourceNovelty`) so a recently
+heard record is less likely to be selected again.
+
+With the same candidate pool, the coverage-aware beam route visits about 2.4
+styles, 3.5 keys and 14 BPM of tempo span versus 2.1 / 3.1 / 10 for the plain
+beam, at a flow cost of roughly 0.008.  That trade keeps the set travelling
+across the bank without giving up the learned transition quality.

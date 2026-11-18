@@ -79,3 +79,19 @@ def test_shipping_value_sidecar_and_browser_tensor_are_valid():
     assert "valueGain" in source
     sidecars = json.loads((BASE / "sidecars.json").read_text())
     assert sidecars["bar_tour_value"] is True
+
+
+def test_coverage_tracker_pushes_toward_the_whole_spectrum():
+    from wub_core.bar_tour import CoverageTracker
+    def cell(pid, track, tempo, key, style, energy):
+        return Cell(pid, track, "other", 0, np.full(32, .5, np.float32),
+                    {"bpm": str(tempo), "key": key, "style": style, "energy": str(energy)})
+    known = cell("p0", "t0", 128, "F minor", "house", .8)
+    fresh = cell("p1", "t1", 96, "A minor", "breaks", .3)
+    tracker = CoverageTracker()
+    before = (tracker.novelty(known), tracker.novelty(fresh))
+    assert before[0] == before[1] == 1.0
+    for _ in range(5):
+        tracker.observe(known)
+    assert tracker.novelty(known) < tracker.novelty(fresh)
+    assert set(tracker.bins(known)) == set(CoverageTracker.DIMS)
