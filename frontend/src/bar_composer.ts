@@ -44,6 +44,24 @@ export interface ComposingPoolEntry {
   rmsDb: number;
 }
 
+export interface VocalBarNet {
+  mean: number[];
+  std: number[];
+  w1: number[][];
+  b1: number[];
+  w2: number[][];
+  b2: number[];
+}
+
+export interface VocalBarModel {
+  format: string;
+  version: number;
+  input_dim: number;
+  next_dim: number;
+  next: VocalBarNet;
+  length: VocalBarNet;
+}
+
 export interface VocalFlowPriors {
   format: string;
   run_lengths: Record<string, number>;
@@ -110,6 +128,8 @@ export interface VocalActivityInfo {
 const SCHEMAS: readonly MotifSchema[] = ["AAAB", "ABAB", "ABAC", "AABB"];
 
 export class BarComposer {
+  /** Optional learned next-vocal-bar model (activity/chroma + run length). */
+  vocalBarModel: VocalBarModel | null = null;
   /** Optional learned vocal-development prior from real songs. */
   vocalFlow: VocalFlowPriors | null = null;
 
@@ -218,23 +238,71 @@ export class BarComposer {
     return SCHEMAS[blockIdx % SCHEMAS.length];
   }
 
+  private inferVocal(net: VocalBarNet, x: readonly number[]): number[] {
+    const hidden = new Array<number>(net.b1.length).fill(0);
+    for (let j = 0; j < net.b1.length; j++) {
+      let sum = net.b1[j];
+      for (let i = 0; i < x.length; i++) {
+        sum += net.w1[j][i] * (x[i] - net.mean[i]) / net.std[i];
+      }
+      hidden[j] = Math.tanh(sum);
+    }
+    return net.w2.map((row, j) => row.reduce((s, w, i) => s + w * hidden[i], net.b2[j]));
+  }
+
+  private vocalBarVec(meta: CellStemMeta, bar: number): number[] {
+    const v = new Array<number>(30).fill(0);
+    const mask = meta.o[bar] ?? 0;
+    const count = popcount16(mask);
+    v[0] = count >= 2 ? 1 : 0;
+    v[1] = Math.min(1, count / 8);
+    const root = meta.r[bar] ?? -1;
+    v[2 + (root >= 0 ? root % 12 : 11)] = 1;
+    for (let i = 0; i < 16; i++) v[14 + i] = (mask >> i) & 1;
+    return v;
+  }
+
   /**
    * Build a vocal bar schedule that develops instead of repeating one cell.
    * The distinct-bar target comes from real songs: a 4-bar vocal phrase with
    * four active bars uses about two different melodic bars, not one.
    */
-  private developVocalBars<T extends { itemIndex: number; srcBar: number }>(
+  private developVocalBars<T extends { itemIndex: number; srcBar: number; meta?: CellStemMeta }>(
     pool: ReadonlyArray<T>,
     outputBars: number,
     rotation: number,
   ): T[] {
     if (pool.length === 0) return [];
+    let attention = 1;
+    let prediction: number[] | null = null;
+    const model = this.vocalBarModel;
+    if (model && pool[0].meta) {
+      const meta = pool[0].meta;
+      const here = pool[0].srcBar;
+      const at = (offset: number): number[] => this.vocalBarVec(meta, Math.max(0, Math.min(3, here + offset)));
+      // Training layout: [bar-2, bar, bar-1, bar].
+      const input = [...at(-2), ...at(0), ...at(-1), ...at(0)];
+      prediction = this.inferVocal(model.next, input);
+      const runBars = Math.max(2, Math.min(16, Math.round((this.inferVocal(model.length, input)[0] ?? 0.25) * 16)));
+      attention = Math.max(2, Math.round(runBars / 4));
+    }
     // Real vocal passages are long, but a 16-bar hold still has to *develop*.
     // The mined "distinct chroma bars" prior is perceptually too conservative
     // (sustained notes collapse to one chroma), so use every active bar we
     // have and vary the 4-bar motif with the block rotation.  A single-bar
     // motif is never repeated verbatim across a long hold.
     const chosen = pool.slice(0, Math.max(1, Math.min(pool.length, 4)));
+    if (prediction && chosen.some((item) => item.meta)) {
+      const similarity = (item: T): number => {
+        if (!item.meta) return 0;
+        const vec = this.vocalBarVec(item.meta, item.srcBar);
+        let score = 0;
+        for (let i = 0; i < 12; i++) score += vec[2 + i] * prediction[i];
+        for (let i = 0; i < 16; i++) score += vec[14 + i] * prediction[12 + i] * 0.5;
+        return score;
+      };
+      chosen.sort((a, b) => similarity(b) - similarity(a));
+    }
     const motifs = [
       [0, 1, 2, 3],
       [0, 1, 0, 2],
@@ -245,7 +313,7 @@ export class BarComposer {
     const out: T[] = [];
     let last = -1;
     for (let b = 0; b < outputBars; b++) {
-      const cycle = Math.floor(b / 4);
+      const cycle = Math.floor(b / (4 * attention));
       const motif = motifs[(rotation + cycle) % motifs.length];
       let index = motif[b % 4] % chosen.length;
       if (index === last && chosen.length > 1) index = (index + 1) % chosen.length;
@@ -918,7 +986,7 @@ export class BarComposer {
           if (loopSeam >= 0.68) {
             const hookPool = [0, 1]
               .filter((bar) => this.isVocalBarActive(primary.phrase.id, bar, pMeta))
-              .map((bar) => ({ itemIndex: 0, srcBar: bar }));
+              .map((bar) => ({ itemIndex: 0, srcBar: bar, meta: pMeta }));
             const hookBars = this.developVocalBars(hookPool, blockBars, blockIndex);
             const source = selectedBars.slice();
             for (let b = 0; b < blockBars; b++) {

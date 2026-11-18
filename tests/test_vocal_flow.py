@@ -47,3 +47,41 @@ const fallback=c.developVocalBars([{itemIndex:0,srcBar:1},{itemIndex:0,srcBar:3}
 assert.equal(new Set(fallback.map(s=>s.srcBar)).size,2);
 """
     subprocess.run(["node", "-e", script, str(out)], check=True, capture_output=True, text=True)
+
+
+def test_vocal_bar_model_is_trained_and_shipped():
+    base = ROOT / "frontend/public/data/kits"
+    model = json.loads((base / "vocal_bar_model.json").read_text())
+    assert model["format"] == "wub-vocal-bar-v1"
+    assert model["input_dim"] == 120 and model["next_dim"] == 29
+    assert model["report"]["run_mae"] < model["report"]["run_baseline_mae"]
+    assert json.loads((base / "sidecars.json").read_text())["vocal_bar_model"] is True
+
+
+def test_bar_composer_uses_next_vocal_bar_prediction(tmp_path):
+    out = tmp_path / "vocal_model.cjs"
+    subprocess.run([
+        str(ROOT / "frontend/node_modules/.bin/esbuild"),
+        str(ROOT / "frontend/src/bar_composer.ts"), "--bundle", "--platform=node",
+        "--format=cjs", f"--outfile={out}",
+    ], check=True, capture_output=True, text=True)
+    model_text = (ROOT / "frontend/public/data/kits/vocal_bar_model.json").read_text()
+    model_path = tmp_path / "vocal_bar_model.json"
+    model_path.write_text(model_text)
+    script = r"""
+const assert=require('node:assert/strict');
+const {BarComposer}=require(process.argv[1]);
+const model=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
+const meta=(root,mask)=>({o:[mask,0,0,0],p:[.8,.7,.6,.5],r:[root,(root+2)%12,(root+7)%12,(root+4)%12]});
+const pool=[0,1,2,3].map(bar=>({itemIndex:0,srcBar:bar,meta:meta(bar,0b1010101010101010)}));
+const c=new BarComposer();
+assert.equal(c.vocalBarModel,null);
+const plain=c.developVocalBars(pool,8,0).map(s=>s.srcBar);
+c.vocalBarModel=model;
+const learned=c.developVocalBars(pool,8,0).map(s=>s.srcBar);
+assert.equal(learned.length,8);
+assert.equal(new Set(learned).size,4);
+assert.ok(learned.some((v,i)=>v!==plain[i]));
+"""
+    result = subprocess.run(["node", "-e", script, str(out), str(model_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

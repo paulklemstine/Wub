@@ -271,3 +271,21 @@ and rotates a 4-bar motif per block (with an anti-immediate-repeat guard), so a
 distinct-bar prior proved too conservative for that purpose.
 The chorus hook loop applies the same rule instead of alternating two fixed
 bars.  With no sidecar the composer falls back to all active bars.
+
+## Is there a next-vocal-bar model?
+
+Historically the answer was **no**: the shipped slice path used a reverse-trained
+*audio-to-articulator* model for the singing mouth and a hand-written
+`VocalSongArranger` / `vocal_flow` prior for bar choice.  The bar GPT predicts
+symbolic per-step tokens for the legacy sequencer, not which vocal bar plays.
+That is why shortening and repetition survived earlier fixes.
+
+`scripts/train_vocal_bar_model.py` now trains the missing thing from real
+songs: per-bar onset/pitch vectors from `data/processed`, a next-bar head
+(onset shape + pitch class + activity) and a run-length head (how many more
+bars the vocal continues).  Track-disjoint split; 117,564 training bars;
+held-out run-length MAE 0.024 vs 0.181 constant baseline.  The exported
+`vocal_bar_model.json` is loaded by `StemRemixPlayer` into `BarComposer`, where
+the prediction ranks candidate bars and the predicted run length sets how long
+a motif holds before developing.  The MAE is measured against activity-derived
+labels, not perception — the listening loop remains the final judge.
