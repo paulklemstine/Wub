@@ -186,6 +186,13 @@ export class TamagotchiAvatar {
   private otherTone: number = 0;
 
   // Live Singing Head oral articulators driving the 2D mouth.
+  // The lone "eye + mouth" creature drifts across the visualiser, nudged by
+  // the same spectrum that drives the background image.
+  private driftX = 0.5;
+  private driftY = 0.5;
+  private driftVX = 0;
+  private driftVY = 0;
+
   private liveMouth: LiveMouthState | null = null;
   private visualConfig: BearVisualConfig = { ...DEFAULT_BEAR_VISUAL_CONFIG };
 
@@ -236,27 +243,6 @@ export class TamagotchiAvatar {
 
   /** 2D Wub Creature look controls (the 3D stage was removed). */
   private bindVisualControlBar(): void {
-    const toggleVisualBool = (
-      id: string,
-      key: "showHalo" | "showBikini",
-      label: string
-    ) => {
-      const btn = document.getElementById(id);
-      if (!btn) return;
-      const sync = () => {
-        const on = this.visualConfig[key];
-        btn.classList.toggle("active", on);
-        btn.textContent = `${label}: ${on ? "ON" : "OFF"}`;
-      };
-      sync();
-      btn.addEventListener("click", () => {
-        this.visualConfig[key] = !this.visualConfig[key];
-        sync();
-      });
-    };
-    toggleVisualBool("btn-bear-halo", "showHalo", "HALO");
-    toggleVisualBool("btn-bear-bikini", "showBikini", "BOW");
-
     const mouthStyleBtn = document.getElementById("btn-bear-mouth-style");
     if (mouthStyleBtn) {
       const styles: BearMouthStyle[] = ["real", "acid", "cyber"];
@@ -614,21 +600,13 @@ export class TamagotchiAvatar {
       this.speechBubble = `"${meta.vocalLyric}"`;
     }
 
-    this.renderFourHeads(
-      meta,
-      isDropGap,
+    this.renderFloatingFace(
       waveform,
       dt,
       bpm,
-      drumWaveform,
-      bassWaveform,
-      otherWaveform,
-      masterWaveform,
-      drumLevel ?? 0,
-      bassLevel ?? 0,
       vocalsLevel ?? 0,
-      otherLevel ?? 0,
-      rmsLevel
+      rmsLevel,
+      freqBins
     );
     this.renderASCII(meta, isDropGap, waveform, dt, bpm, vocalsLevel, drumLevel ?? 0, bassLevel ?? 0, rmsLevel);
     this.updateDashboard();
@@ -1124,94 +1102,118 @@ export class TamagotchiAvatar {
   }
 
   /**
-   * Four copies of the exact same head routine.  Every copy receives only its
-   * own stem's level + waveform, so each one sings its own instrument track.
+   * The eye + mouth Wub Creature: no head, halo, bow or border.  Its position
+   * drifts with the background spectrum, so the face seems to be pushed around
+   * the visualiser by the music itself.
    */
-  private renderFourHeads(
-    meta: GrooveboxMeta | null,
-    isDropGap: boolean,
-    waveform: Uint8Array | null | undefined,
+  private renderFloatingFace(
+    wave: Uint8Array | null | undefined,
     dt: number,
     bpm: number,
-    drumWaveform: Uint8Array | null | undefined,
-    bassWaveform: Uint8Array | null | undefined,
-    otherWaveform: Uint8Array | null | undefined,
-    masterWaveform: Uint8Array | null | undefined,
-    drumLevel: number,
-    bassLevel: number,
     vocalsLevel: number,
-    otherLevel: number,
-    rmsLevel: number
+    rmsLevel: number,
+    freqBins?: Uint8Array | null
   ): void {
     if (!this.canvasEl) return;
-    const savedEnv = { ...this.stemEnv };
-    const savedPunch = { ...this.stemPunch };
-    const savedMixEnv = this.mixEnv;
-    const savedMixPunch = this.mixPunch;
-    const savedMouth = this.liveMouth;
-    const savedAmp = this.smoothedVocalAmp;
-    const savedF0 = this.vocalF0Hz;
-    const savedNotes = this.noteFloating;
-
-    const voices = [
-      { label: "DRUMS", wave: drumWaveform, level: drumLevel, color: "#00e5ff" },
-      { label: "BASS", wave: bassWaveform, level: bassLevel, color: "#b46cff" },
-      { label: "OTHER", wave: otherWaveform, level: otherLevel, color: "#ffb347" },
-      { label: "VOCALS", wave: waveform, level: vocalsLevel, color: "#ff5c8a" },
-    ];
-    const targets = [[0.25, 0.26], [0.75, 0.26], [0.25, 0.70], [0.75, 0.70]] as const;
-    const faceScale = 0.54;
+    if (!this.ctx2d) {
+      this.ctx2d = this.canvasEl.getContext("2d");
+      if (!this.ctx2d) return;
+    }
+    const ctx = this.ctx2d;
     const w = this.canvasEl.width;
     const h = this.canvasEl.height;
-    const centerX = w * 0.5 * faceScale;
-    const centerY = h * 0.54 * faceScale;
+    ctx.clearRect(0, 0, w, h);
 
-    try {
-      voices.forEach((voice, i) => {
-        const energy = TamagotchiAvatar.waveEnergy(voice.wave);
-        const level = Math.max(voice.level, energy);
-        // Feed every internal channel the same per-voice values so the shared
-        // head code reacts only to this instrument, never to the whole mix.
-        this.stemEnv = { drums: level, bass: level, other: level, vocals: level };
-        this.stemPunch = { drums: level, bass: level, other: level, vocals: level };
-        this.mixEnv = level;
-        this.mixPunch = level;
-        this.liveMouth = i === 3 ? savedMouth : null;
-        this.smoothedVocalAmp = energy;
-        this.vocalF0Hz = i === 3 ? savedF0 : 0;
-        this.noteFloating = i === 3 ? savedNotes : [];
-        const [tx, ty] = targets[i];
-        this.renderCanvas(
-          meta, isDropGap, voice.wave, dt, bpm,
-          voice.wave, voice.wave, voice.wave, voice.wave,
-          level, level, level, level,
-          i === 0,
-          tx * w - centerX, ty * h - centerY, faceScale
-        );
-      });
-
-      const ctx = this.ctx2d;
-      if (ctx) {
-        ctx.font = `bold ${Math.max(8, Math.round(w * 0.028))}px monospace`;
-        ctx.textAlign = "center";
-        ctx.globalAlpha = 0.9;
-        voices.forEach((voice, i) => {
-          const [tx, ty] = targets[i];
-          ctx.fillStyle = voice.color;
-          ctx.fillText(voice.label, tx * w, ty * h + faceScale * 146);
-        });
-        ctx.globalAlpha = 1;
-      }
-    } finally {
-      this.stemEnv = savedEnv;
-      this.stemPunch = savedPunch;
-      this.mixEnv = savedMixEnv;
-      this.mixPunch = savedMixPunch;
-      this.liveMouth = savedMouth;
-      this.smoothedVocalAmp = savedAmp;
-      this.vocalF0Hz = savedF0;
-      this.noteFloating = savedNotes;
+    const band = (from: number, to: number): number => {
+      if (!freqBins || freqBins.length < to) return 0.35;
+      let sum = 0;
+      for (let i = from; i < to; i++) sum += freqBins[i];
+      return sum / ((to - from) * 255);
+    };
+    const bass = band(1, 10);
+    const mid = band(10, 40);
+    const treble = band(40, Math.min(120, freqBins?.length ?? 40));
+    this.driftVX = this.driftVX * 0.92 + ((bass - mid) * 0.42 + Math.sin(performance.now() / 2900) * 0.06) * dt;
+    this.driftVY = this.driftVY * 0.92 + ((treble - bass) * 0.34 + Math.cos(performance.now() / 3400) * 0.05) * dt;
+    this.driftX += this.driftVX + Math.sin(performance.now() / 5200) * 0.0007;
+    this.driftY += this.driftVY + Math.cos(performance.now() / 6100) * 0.0005;
+    if (this.driftX < 0.16 || this.driftX > 0.84) {
+      this.driftX = Math.max(0.16, Math.min(0.84, this.driftX));
+      this.driftVX *= -0.7;
     }
+    if (this.driftY < 0.18 || this.driftY > 0.82) {
+      this.driftY = Math.max(0.18, Math.min(0.82, this.driftY));
+      this.driftVY *= -0.7;
+    }
+
+    const cx = this.driftX * w;
+    const cy = this.driftY * h;
+    const energy = TamagotchiAvatar.waveEnergy(wave);
+    const amp = Math.max(vocalsLevel, energy, this.smoothedVocalAmp * 0.7);
+    const beat = (performance.now() / 1000 / Math.max(60, bpm)) % 1;
+    const breath = 1 + 0.05 * Math.sin(beat * Math.PI * 2) + 0.04 * amp;
+    const eyeGap = 21 * breath;
+    const eyeY = cy - 13 * breath;
+    const scale = Math.min(w, h) / 320;
+    const blink = Math.sin(performance.now() / 1700) > 0.985 ? 0.15 : 1;
+    const lookX = Math.max(-1, Math.min(1, this.driftVX * 30));
+    const lookY = Math.max(-1, Math.min(1, this.driftVY * 30));
+
+    const lipColor = this.visualConfig.mouthStyle === "acid"
+      ? "#9dff00"
+      : this.visualConfig.mouthStyle === "cyber"
+      ? "#00f0ff"
+      : "#ff2e93";
+
+    ctx.save();
+    ctx.shadowColor = lipColor;
+    ctx.shadowBlur = 10 + amp * 18;
+
+    for (const side of [-1, 1]) {
+      const ex = cx + side * eyeGap;
+      const ry = 15 * breath * blink;
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, 12 * scale * breath, ry * scale, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(ex + lookX * 3, eyeY + lookY * 2 + amp * 1.5,
+        6 * scale * breath, 8 * scale * blink, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#0b0620";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(ex - 2 + lookX * 2, eyeY - 3 + lookY * 2, 2.4 * scale, 3 * scale, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fill();
+    }
+
+    const live = this.liveMouth?.active ? this.liveMouth.art : null;
+    const aperture = live
+      ? 0.08 + Math.max(0, Math.min(1, live.aperture)) * 0.9
+      : 0.10 + amp * 1.25;
+    const width = live
+      ? 0.55 + Math.max(0, Math.min(1, live.width)) * 0.65
+      : 0.85 + amp * 0.5;
+    const mw = 17 * scale * width * this.visualConfig.mouthGain;
+    const mh = 10 * scale * aperture * this.visualConfig.mouthGain;
+    const my = eyeY + 33 * scale * breath;
+
+    ctx.beginPath();
+    ctx.ellipse(cx, my, mw, Math.max(1.6 * scale, mh), 0, 0, Math.PI * 2);
+    ctx.fillStyle = lipColor;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx, my + mh * 0.18, mw * 0.72, Math.max(1, mh * 0.62), 0, 0, Math.PI * 2);
+    ctx.fillStyle = "#2a0016";
+    ctx.fill();
+    if (aperture > 0.42) {
+      ctx.beginPath();
+      ctx.ellipse(cx, my + mh * 0.52, mw * 0.42, mh * 0.3, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#ff7a9c";
+      ctx.fill();
+    }
+    ctx.restore();
+    void rmsLevel;
   }
 
   private renderCanvas(
@@ -2400,7 +2402,7 @@ export class TamagotchiAvatar {
   }
 
   public render(): void {
-    this.renderCanvas(null, false);
+    this.renderFloatingFace(null, 0.016, 126, 0, 0, null);
     this.renderASCII(null, false);
     this.updateDashboard();
   }

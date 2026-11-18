@@ -142,6 +142,18 @@ The background visualizer (`frontend/src/psychedelic_bg.ts`) runs a GPU fragment
    - `LSD`: Shifting rainbow spectrum with liquid melting domain distortion.
    - `Mescaline`: Warm earthen golds, oranges, ambers, and fiery reds.
 
+### Floating eye + mouth Wub Creature
+
+The visualiser shows a single disembodied face: two eyes and a mouth, with no
+head outline, halo, bow or border.  `TamagotchiAvatar.renderFloatingFace()`
+drives it from the **vocals** stem only (`vocalsLevel`, the vocal waveform and
+the trained singing-head articulation).  Its position drifts across the
+lightshow canvas: the same frequency bands that animate the background nudge
+the face horizontally (bass vs mids) and vertically (treble vs bass), with
+damping, slow sine wander and soft edge bounces.  The face is drawn into the
+existing offscreen buffer and composited into `#lightshow-bear-overlay`, so no
+extra texture or per-frame readback is needed.
+
 ### 3D camera subsystems (removed)
 
 The interactive **3D CAM** Wub Bear stage (`frontend/src/bear_3d_view.ts`) was

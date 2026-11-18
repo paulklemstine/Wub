@@ -221,8 +221,6 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
 
     ls_section = html.split('id="panel-lightshow"')[1].split('id="groovebox-panel"')[0]
     for dom_id in (
-        "btn-bear-halo",
-        "btn-bear-bikini",
         "btn-bear-mouth-style",
         "bear-dance-slider",
         "bear-mouth-slider",
@@ -259,13 +257,13 @@ def test_super_rave_box_panels_dj_fx_and_lightshow():
 
 
 
-def test_four_instances_of_the_exact_head_per_stem():
-    """The same head routine is invoked four times, once per instrument."""
+def test_single_floating_eyes_and_mouth_creature():
+    """One vocal-tracking eye+mouth face, no head, bow, halo or border."""
     source = Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
-    assert "private renderFourHeads(" in source
-    assert source.count("this.renderCanvas(\n          meta, isDropGap, voice.wave") == 1
-    for stem in ("DRUMS", "BASS", "OTHER", "VOCALS"):
-        assert f'label: "{stem}"' in source
-    # Every copy is fed only its own stem data, never the previous stem's.
-    assert "this.stemEnv = { drums: level, bass: level, other: level, vocals: level }" in source
-    assert "this.liveMouth = i === 3 ? savedMouth : null" in source
+    assert "private renderFloatingFace(" in source
+    assert "this.renderFourHeads(" not in source
+    assert "driftX" in source and "driftY" in source
+    assert "vocalsLevel" in source
+    html = Path("frontend/index.html").read_text(encoding="utf-8")
+    for dom_id in ("btn-bear-halo", "btn-bear-bikini", "btn-tamagotchi-3d"):
+        assert dom_id not in html

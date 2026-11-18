@@ -43,8 +43,6 @@ def test_2d_bear_mouth_controls_survive() -> None:
 
     html = HTML.read_text(encoding="utf-8")
     for dom_id in (
-        "btn-bear-halo",
-        "btn-bear-bikini",
         "btn-bear-mouth-style",
         "bear-dance-slider",
         "bear-mouth-slider",
