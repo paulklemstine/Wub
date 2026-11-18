@@ -36,6 +36,8 @@ export interface FlowCell {
 export interface FlowContext {
   at: number; bars: number; bpm: number; section: string; targetEnergy: number;
   sectionChanged: boolean; rotation: boolean; bridge: boolean;
+  /** Learned section-change stem cap from transition_cohort.json (optional). */
+  cohortMaxChanges?: number;
 }
 export interface SliceFlowTrace {
   id: number; stem: StemName; at: number; endAt: number; section: string;
@@ -361,7 +363,13 @@ export class SliceFlow {
       return { task, fallback, canHold, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + noveltyGain + (foundation ? 0 : .02) };
     });
     // Preserve a recognizable anchor even when the old arc requests a reset.
-    const maxChanges = context.bars <= 4 || this.lastIntent === "hold" || context.rotation ? 1 : 2;
+    // A real section change is the one place the learned cohort prior may
+    // widen the cap: the corpus changes 3-4 stems at ~50% of section seams.
+    let maxChanges = context.bars <= 4 || this.lastIntent === "hold" || context.rotation ? 1 : 2;
+    if (context.sectionChanged && !context.rotation && !context.bridge
+      && Number.isFinite(context.cohortMaxChanges)) {
+      maxChanges = Math.max(maxChanges, Math.min(4, Math.floor(context.cohortMaxChanges!)));
+    }
     const changed = candidates.filter(c => c.changed && c.fallback && c.canHold).sort((a,b)=>b.priority-a.priority);
     for (const item of changed.slice(maxChanges)) if (item.fallback) item.task = item.fallback;
     let selected = candidates.map(c=>c.task);

@@ -130,13 +130,28 @@ export interface MovementBudget {
  *   establish itself.
  * - The 96-104 bridge is a forced hold: only other + vocals play.
  */
-export function movementBudgetAt(sessionBar: number, blockBars: number): MovementBudget {
+export function movementBudgetAt(
+  sessionBar: number,
+  blockBars: number,
+  sectionChanged = false,
+  sectionMaxChanges = 2,
+): MovementBudget {
   const target = targetAt(sessionBar);
   const bars = Math.max(1, Math.floor(finiteOr(blockBars, 4)));
   if (target.phase === "BRIDGE") {
     return { minChanges: 0, maxChanges: 0, maxHoldBars: 8 };
   }
   const intro = target.sessionBar < 8;
+  // Real songs change 3-4 stems together at about half of their section
+  // boundaries (see transition_cohort.json, mined from data/processed). The
+  // learned cap is applied only at a section change and only when the sidecar
+  // is loaded; the historical budget stays in force everywhere else.
+  if (sectionChanged && !intro) {
+    const cap = Number.isFinite(sectionMaxChanges)
+      ? Math.max(2, Math.min(4, Math.floor(sectionMaxChanges)))
+      : 2;
+    return { minChanges: bars < 8 ? 0 : 1, maxChanges: cap, maxHoldBars: 16 };
+  }
   // 4-bar blocks: allow at most 1 stem change per block to avoid jumpy,
   // rapid feel shifts; 8/16-bar blocks can move up to 2 stems.
   return {

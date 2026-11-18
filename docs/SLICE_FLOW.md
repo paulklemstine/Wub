@@ -274,3 +274,29 @@ path.
 Both sidecars are optional (`sidecars.json` flags `vocal_bar_model` and
 `vocal_phrases`); a failed fetch logs nothing and leaves the known-good
 scheduling intact.
+
+## Learned stem cohorts at section boundaries
+
+`transition_cohort.json` is mined by `scripts/build_transition_cohort.py` from
+the real 4-stem songs in `data/processed` (1,891 tracks / 61,118 four-bar
+boundaries), using `wub_core.section_arcs` for section labels and 4-bar onset
+grids for stem change detection. It replaces the old "1-2 stems at every
+boundary" assumption with the measured distribution:
+
+- inside a section: 2 stems change at 26% of boundaries, 3+ at 39%;
+- at a section change: 3+ stems change at **50%** of boundaries, with
+  `drums + bass + other + vocals` (21%) and `bass + other + vocals` (20%) the
+  two most common cohorts; drums hold at 67%, vocals change at 77%;
+- harmony barely moves at these seams (chroma cosine p10 = 0.895), so a wider
+  handoff must keep key/chroma fit — it is not a license for a key jump.
+
+The artifact is optional (`sidecars.json` flag `transition_cohort`). When it is
+present, `movementBudgetAt(sessionBar, bars, sectionChanged, cap)` and the
+final `SliceFlow.select()` gate permit up to 3 changed stems **only** at a
+section change; inside sections and on the bridge the historical 1-2 / 0 cap
+is unchanged. `selectJoint()` additionally enumerates 3-stem cohorts at those
+boundaries under the same ≤2-stems-per-source recombination cap, and gives a
+small centered tie-break toward the mined cohort probabilities. No audio is
+regenerated, repitched or resliced; the judge/ranker still decides which
+phrase each stem plays. With the sidecar missing or disabled, behavior is
+byte-for-byte the previous 1-2 stem budget.

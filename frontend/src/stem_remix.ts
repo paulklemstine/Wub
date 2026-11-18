@@ -55,6 +55,23 @@ import {
 const TRANSITION_VOCAL_REVERB_TAIL = 0.22;
 const TRANSITION_VOCAL_REVERB_TAIL_SEC = 0.5;
 
+/** Learned stem-cohort priors mined from real 4-bar song boundaries. */
+export interface TransitionCohort {
+  format: string;
+  version: number;
+  tracks: number;
+  boundaries: number;
+  p_3plus: { inside: number; section: number };
+  cohorts: Array<{ kind: string; stems: string[]; p: number; count: number }>;
+  stem_change: Record<string, Record<string, number>>;
+  policy: {
+    max_changes_inside: number;
+    max_changes_section: number;
+    min_changes_section: number;
+    pitch_cohort: string[];
+  };
+}
+
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const PITCHED: readonly StemName[] = ["bass", "other", "vocals"];
 // Any pitch class is reachable within a tritone, so every phrase key can be
@@ -625,6 +642,8 @@ export class StemRemixPlayer {
   private readonly songArchitect = new SongArchitect();
   private readonly cellCompat = new CellCompatScorer();
   private readonly sliceFlow = new SliceFlow();
+  /** Optional learned cohort policy for section boundaries; null = old behavior. */
+  private transitionCohort: TransitionCohort | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -888,6 +907,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("slice_flow")) setupLoads.push(this.sliceFlow.load(base));
     if (this.sidecarEnabled("vocal_bar_model")) setupLoads.push(this.loadVocalBarModel(base));
     if (this.sidecarEnabled("vocal_phrases")) setupLoads.push(this.loadVocalPhrases(base));
+    if (this.sidecarEnabled("transition_cohort")) setupLoads.push(this.loadTransitionCohort(base));
     if (setupLoads.length > 0) {
       await Promise.all(setupLoads);
     }
@@ -1350,6 +1370,37 @@ export class StemRemixPlayer {
     } catch {
       // Optional ranker; selection falls back to the known-good heuristics.
     }
+  }
+
+  /** Learned section-boundary stem cohorts (real-song boundary statistics). */
+  private async loadTransitionCohort(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/transition_cohort.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as TransitionCohort;
+      const policy = doc?.policy;
+      if (doc?.format === "wub-transition-cohort-v1" && doc.tracks >= 100
+        && Array.isArray(doc.cohorts) && policy
+        && Number.isFinite(policy.max_changes_section)
+        && Number.isFinite(policy.max_changes_inside)) {
+        this.transitionCohort = doc;
+        console.info(
+          `[StemRemix] Transition cohort loaded (${doc.tracks} songs, ` +
+          `${doc.boundaries} boundaries, section cap ${policy.max_changes_section})`,
+        );
+      }
+    } catch {
+      // Optional prior; the historical 1-2 stem budget remains in force.
+    }
+  }
+
+  /** Learned probability of a changed-stem cohort at a section boundary. */
+  private cohortPriorFor(changed: readonly StemName[]): number {
+    const doc = this.transitionCohort;
+    if (!doc || changed.length === 0) return 0.5;
+    const wanted = [...changed].sort().join("+");
+    const row = doc.cohorts.find((c) => c.kind === "section" && c.stems.slice().sort().join("+") === wanted);
+    return row ? row.p : 0.5;
   }
 
   /**
@@ -2667,7 +2718,9 @@ export class StemRemixPlayer {
     this.composedStats.chords = secCtx.progression
       .map((c) => `${(parsedSessionKey.root + c.relRoot) % 12}:${c.quality.slice(0, 3)}`)
       .join(" ");
-    const budget = movementBudgetAt(startBar, bars);
+    const budget = movementBudgetAt(
+      startBar, bars, sectionChanged, this.transitionCohort?.policy.max_changes_section,
+    );
 
     // Pins are measured in session bars.  Release at the first block boundary
     // at or after 32 bars; the manual hold voice fades at the same boundary.
@@ -2937,6 +2990,9 @@ export class StemRemixPlayer {
       const accepted = this.sliceFlow.select(tasks, {
         at, bars, bpm: this.sessionBpm, section: normalized, targetEnergy,
         sectionChanged, rotation, bridge,
+        cohortMaxChanges: sectionChanged
+          ? this.transitionCohort?.policy.max_changes_section
+          : undefined,
       }, (stem) => {
         const old = flowContinuation[stem];
         const entry = old ? this.entryById.get(`${old.phrase.id}:${stem}`) : null;
@@ -3244,7 +3300,9 @@ export class StemRemixPlayer {
     ranker.beginBatch();
     const nextBlockBars = phrases * 4;
     const threshold = ranker.thresholdFor(nextBlockBars);
-    const budget = movementBudgetAt(startBar, nextBlockBars);
+    const budget = movementBudgetAt(
+      startBar, nextBlockBars, sectionChanged, this.transitionCohort?.policy.max_changes_section,
+    );
     const allowVocals = vocalChangeAllowed(startBar, this.lastVocalChangeBar, sectionChanged);
     // A drum track can stay for a long time while bass/pads carry the mix.
     // After 24 bars, prefer a drum-inclusive candidate when it is nearly as
@@ -3310,6 +3368,18 @@ export class StemRemixPlayer {
     for (let i = 0; i < unpinned.length; i++) {
       for (let j = i + 1; j < unpinned.length; j++) {
         subsets.push([unpinned[i], unpinned[j]]);
+      }
+    }
+    // At a real section boundary the learned cohort policy permits a fuller
+    // handoff (the corpus moves 3-4 stems ~50% of the time).  Only consider
+    // trios there; every other block keeps the historical 1/2-stem search.
+    if (sectionChanged && budget.maxChanges >= 3 && unpinned.length >= 3) {
+      for (let i = 0; i < unpinned.length; i++) {
+        for (let j = i + 1; j < unpinned.length; j++) {
+          for (let k = j + 1; k < unpinned.length; k++) {
+            subsets.push([unpinned[i], unpinned[j], unpinned[k]]);
+          }
+        }
       }
     }
     const heldBase: Partial<Record<StemName, StemPoolEntry>> = {};
@@ -3382,10 +3452,13 @@ export class StemRemixPlayer {
       }
       const candidateState = this.jointState(candidate);
       if (!candidateState) return;
+      // The ranker was trained on 1-2 stem moves; a section cohort of three
+      // is an extrapolation, so discount its raw logit slightly and let the
+      // learned policy/mix terms decide.  Pairs and solos are unchanged.
       const rawScore = ranker.score(
         previousState, currentState, candidateState, changed, section, targetEnergy,
         this.currentBlockBars, nextBlockBars,
-      );
+      ) * (subset.length === 3 ? 0.97 : 1);
       let candidateEnergy = 0;
       let harmony = 0;
       let repetition = 0;
@@ -3518,6 +3591,13 @@ export class StemRemixPlayer {
         vocalEdge,
         vocalSegmentBars,
       });
+      // Learned section cohort prior (real songs move bass/other/vocals
+      // together); a small centered tie-break, never a rank override.
+      if (sectionChanged && this.transitionCohort) {
+        policy.score = Math.max(0, Math.min(1,
+          policy.score + 0.10 * (this.cohortPriorFor(subset) - 0.2)));
+        if (this.cohortPriorFor(subset) >= 0.19) policy.reasons.push("cohort-prior");
+      }
       // Blend mix-compat (rhythm-first, worst-bar aware) on top of the policy
       // score.  When unavailable these stay undefined and the score is unchanged.
       if (mixCompatScore !== undefined && mixRhythmScore !== undefined && mixMinBar !== undefined) {
@@ -3568,6 +3648,30 @@ export class StemRemixPlayer {
         for (const entry of lists[0]) {
           if ((heldCounts.get(entry.kit.track_id) ?? 0) + 1 > 2) continue;
           consider(subset, [entry]);
+        }
+      } else if (subset.length === 3) {
+        // Section-boundary cohort: three stems moving to a fresh handoff.
+        // Keep the same <=2 stems-per-source recombination cap as pairs.
+        const heldCounts = new Map<string, number>();
+        for (const stem of STEMS) {
+          if (subset.includes(stem)) continue;
+          const tid = heldBase[stem]?.kit.track_id;
+          if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
+        }
+        const lists3 = subset.map((s) => (options.get(s) ?? []).slice(0, PAIR_TOP_N));
+        for (const a of lists3[0]) {
+          for (const b of lists3[1]) {
+            for (const c of lists3[2]) {
+              const extra = new Map<string, number>();
+              let ok = true;
+              for (const tid of [a.kit.track_id, b.kit.track_id, c.kit.track_id]) {
+                const n = (extra.get(tid) ?? 0) + 1;
+                extra.set(tid, n);
+                if ((heldCounts.get(tid) ?? 0) + n > 2) { ok = false; break; }
+              }
+              if (ok) consider(subset, [a, b, c]);
+            }
+          }
         }
       } else {
         // Pair scoring is the expensive part (a 2k-d MLP per combo).  Only
