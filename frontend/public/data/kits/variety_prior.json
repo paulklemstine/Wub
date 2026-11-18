@@ -2,15 +2,20 @@
   "format": "wub-variety-prior-v1",
   "version": 1,
   "track_history_bars": 16,
-  "track_reuse_penalty": 0.18,
-  "vocal_freshness_weight": 0.30,
-  "joint_reserve": 4,
-  "source_novelty_weight": 0.30,
-  "max_recall_per_set": 1,
+  "track_reuse_penalty": 0.08,
+  "vocal_freshness_weight": 0.12,
+  "joint_reserve": 3,
+  "source_novelty_weight": 0.2,
+  "max_recall_per_set": 2,
   "report": {
     "source": "measurement of the shipped bank and selector",
     "findings": {
-      "per_stem_judge_top1_median": {"drums": 0.982, "bass": 0.984, "vocals": 0.961, "other": 0.740},
+      "per_stem_judge_top1_median": {
+        "drums": 0.982,
+        "bass": 0.984,
+        "vocals": 0.961,
+        "other": 0.74
+      },
       "earq_nonbass_max": 0.578,
       "cluster_tracks": "9-48",
       "phrase_quality": "no extreme outliers"

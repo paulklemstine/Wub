@@ -4451,7 +4451,7 @@ export class StemRemixPlayer {
         timbre -
         vocalSegmentPenalty +
         vocalSegmentBonus +
-        (this.varietyPrior ? 4 * this.varietyBonusFor(stem, entry.kit.track_id) : 0);
+        (this.varietyPrior ? 2 * this.varietyBonusFor(stem, entry.kit.track_id) : 0);
       if (!best || score > best.score) best = { entry, score };
     }
     if (best) break;

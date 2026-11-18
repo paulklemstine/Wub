@@ -434,3 +434,13 @@ optional biases without changing any hard rule:
 
 Everything is neutral when the sidecar is absent; no phrase, bar, stretch rate
 or slice boundary is changed by this prior.
+
+### Variety tuning pass (listener feedback: "too scattered")
+
+The first variety weights broke the sense of one song. They are pulled back to
+half strength: track-reuse penalty 0.18 → 0.08, vocal freshness 0.30 → 0.12,
+fallback morph multiplier 4 → 2, reserve 4 → 3, SliceFlow source novelty
+0.30 → 0.20. Theme recall budget is 2 → both the first CHORUS_1 block and the
+CHORUS_2 block may recall the hook, but sub-block replay stays disabled. The
+two real fixes (no repeated hook in every sub-block, some vocal freshness)
+remain.

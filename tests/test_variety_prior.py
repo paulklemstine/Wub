@@ -25,7 +25,7 @@ def test_variety_artifact_is_shipped_and_measured():
     assert 0 < doc["vocal_freshness_weight"] <= 0.6
     assert doc["joint_reserve"] >= 2
     assert doc["source_novelty_weight"] > 0.15
-    assert doc["max_recall_per_set"] == 1
+    assert doc["max_recall_per_set"] == 2
     judge = doc["report"]["findings"]["per_stem_judge_top1_median"]
     assert judge["drums"] > 0.9 and judge["vocals"] > 0.9
     assert json.loads((KITS / "sidecars.json").read_text())["variety_prior"] is True

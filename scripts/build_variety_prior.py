@@ -5,11 +5,11 @@ from pathlib import Path
 CONFIG = {
     "format": "wub-variety-prior-v1", "version": 1,
     "track_history_bars": 16,
-    "track_reuse_penalty": 0.18,
-    "vocal_freshness_weight": 0.30,
-    "joint_reserve": 4,
-    "source_novelty_weight": 0.30,
-    "max_recall_per_set": 1,
+    "track_reuse_penalty": 0.08,
+    "vocal_freshness_weight": 0.12,
+    "joint_reserve": 3,
+    "source_novelty_weight": 0.20,
+    "max_recall_per_set": 2,
     "report": {
         "source": "measurement of the shipped bank and selector",
         "findings": {
