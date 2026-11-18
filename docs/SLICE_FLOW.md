@@ -349,3 +349,21 @@ budget is raised to four and the final `SliceFlow` gate is told to accept four;
 the joint ranker's raw score is discounted (0.94) because it was trained only
 on 1–2 stem moves. This directly targets the reported "mashup feel" without
 turning the set into a cover of one record.
+
+## Motif calendar and vocal release cadence
+
+`scripts/build_motif_calendar.py` mines how often a 4-bar pattern returns after
+8/16/32 bars and how often each stem introduces fresh material, from the same
+1,895 real songs. The shipped `motif_calendar.json` says drums return at 8 bars
+**51%** of the time (vs. bass 18%, other 15%, vocals 8%), while novelty rates run
+from drums 41% to vocals 90%. A small learned prior now rewards a candidate
+that brings a phrase back at its natural lag **or** introduces fresh material
+when that stem has not done so lately — addressing both halves of "the groove
+goes nowhere".
+
+`vocal_cadence.json` mines stable vocal pattern runs (84% last only 4 bars) and
+boundary change rates (73% inside a section, 77% at section changes).
+`vocalChangeAllowed()` gained an optional learned 8-bar release budget instead
+of the fixed 16-bar hold; section changes still always release, and 3-argument
+callers keep the old 16-bar behavior. Both sidecars are optional and neutral
+when absent.

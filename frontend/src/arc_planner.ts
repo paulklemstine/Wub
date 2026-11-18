@@ -271,10 +271,11 @@ export function vocalChangeAllowed(
   sessionBar: number,
   lastVocalChangeBar: number,
   sectionChanged: boolean,
+  minHoldBars = 16,
 ): boolean {
   if (sectionChanged) return true;
   if (!Number.isFinite(lastVocalChangeBar) || lastVocalChangeBar < 0) return true;
-  return sessionBar - lastVocalChangeBar >= 16;
+  return sessionBar - lastVocalChangeBar >= Math.max(4, Math.floor(minHoldBars));
 }
 
 export interface TransitionScoreInput {

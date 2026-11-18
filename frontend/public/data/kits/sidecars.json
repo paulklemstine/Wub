@@ -21,5 +21,7 @@
   "cell_chroma": true,
   "pattern_bar_model": true,
   "harmony_continuity": true,
-  "song_arc_model": true
+  "song_arc_model": true,
+  "motif_calendar": true,
+  "vocal_cadence": true
 }

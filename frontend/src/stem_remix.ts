@@ -84,6 +84,26 @@ export interface TransitionCohort {
   };
 }
 
+/** Real-song motif return / freshness rates, keyed by stem and bars. */
+interface MotifCalendar {
+  format: string;
+  version: number;
+  tracks: number;
+  return_rate: Record<string, Record<string, number>>;
+  novelty_rate: Record<string, number>;
+  policy: { return_bonus: Record<string, number>; novelty_bonus: Record<string, number> };
+}
+
+/** Real-song vocal run lengths and release budget. */
+interface VocalCadence {
+  format: string;
+  version: number;
+  tracks: number;
+  run_lengths_bars: Record<string, number>;
+  change_prob: Record<string, number>;
+  policy: { min_hold_bars: number; section_change_bonus: number };
+}
+
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 const PITCHED: readonly StemName[] = ["bass", "other", "vocals"];
 // Any pitch class is reachable within a tritone, so every phrase key can be
@@ -660,6 +680,8 @@ export class StemRemixPlayer {
   private songArcModel: SongArcArtifact | null = null;
   private sampledArc: SampledArcSegment[] | null = null;
   private sampledArcKey = "";
+  private motifCalendar: MotifCalendar | null = null;
+  private vocalCadence: VocalCadence | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -925,6 +947,8 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("vocal_phrases")) setupLoads.push(this.loadVocalPhrases(base));
     if (this.sidecarEnabled("transition_cohort")) setupLoads.push(this.loadTransitionCohort(base));
     if (this.sidecarEnabled("song_arc_model")) setupLoads.push(this.loadSongArc(base));
+    if (this.sidecarEnabled("motif_calendar")) setupLoads.push(this.loadMotifCalendar(base));
+    if (this.sidecarEnabled("vocal_cadence")) setupLoads.push(this.loadVocalCadence(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1428,6 +1452,56 @@ export class StemRemixPlayer {
     } catch {
       // Optional; the fixed 104-bar blueprint stays in force.
     }
+  }
+
+  /** Motif return / freshness priors from real songs. */
+  private async loadMotifCalendar(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/motif_calendar.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as MotifCalendar;
+      if (doc?.format === "wub-motif-calendar-v1" && doc.tracks >= 100
+        && doc.return_rate && doc.policy?.return_bonus) {
+        this.motifCalendar = doc;
+      }
+    } catch {
+      // Optional; repetition/novelty scoring falls back to the fixed terms.
+    }
+  }
+
+  /** Learned vocal run lengths and section release bonus. */
+  private async loadVocalCadence(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_cadence.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalCadence;
+      if (doc?.format === "wub-vocal-cadence-v1" && doc.tracks >= 100
+        && doc.policy && Number.isFinite(doc.policy.min_hold_bars)) {
+        this.vocalCadence = doc;
+      }
+    } catch {
+      // Optional; the historical 16-bar vocal hold remains in force.
+    }
+  }
+
+  /** Motif return and freshness bonus for a candidate stem cohort. */
+  private motifPriorFor(subset: readonly StemName[], picks: readonly StemPoolEntry[]): number {
+    const model = this.motifCalendar;
+    if (!model) return 0;
+    let total = 0;
+    for (let i = 0; i < subset.length; i++) {
+      const stem = subset[i];
+      const id = picks[i]?.phrase.id;
+      if (!id) continue;
+      const history = this.stemHistory[stem] ?? [];
+      const idx = history.lastIndexOf(id);
+      const ageBars = idx < 0 ? 0 : (history.length - 1 - idx) * 4;
+      const rate = model.return_rate[stem]?.[String(ageBars)] ?? 0;
+      total += idx >= 0
+        ? (model.policy.return_bonus[stem] ?? 0) * (0.5 + rate)
+        : (model.policy.novelty_bonus[stem] ?? 0);
+    }
+    return Math.min(0.32, total / Math.max(1, subset.length));
   }
 
   /** Deterministic per-set sampled arc point at a session bar. */
@@ -2964,7 +3038,10 @@ export class StemRemixPlayer {
       } else if (useFallback) {
         const cooldownBars = phrasesPerStem * 4 <= 4 ? 8 : 0;
         const vocalOk = stem !== "vocals"
-          || vocalChangeAllowed(startBar, this.lastVocalChangeBar, sectionChanged);
+          || vocalChangeAllowed(
+            startBar, this.lastVocalChangeBar, sectionChanged,
+            this.vocalCadence?.policy.min_hold_bars,
+          );
         const sinceChange = startBar - (this.lastChangeBar[stem] ?? 0);
         const cooledDown = cooldownBars === 0
           || staleStems.has(stem)
@@ -3420,7 +3497,10 @@ export class StemRemixPlayer {
     );
     const budget = handoff ? { ...rawBudget, maxChanges: 4 } : rawBudget;
     const sourceCap = handoff ? Math.max(2, Math.min(4, this.transitionCohort?.handoff?.max_per_source ?? 4)) : 2;
-    const allowVocals = vocalChangeAllowed(startBar, this.lastVocalChangeBar, sectionChanged);
+    const allowVocals = vocalChangeAllowed(
+      startBar, this.lastVocalChangeBar, sectionChanged,
+      this.vocalCadence?.policy.min_hold_bars,
+    );
     // A drum track can stay for a long time while bass/pads carry the mix.
     // After 24 bars, prefer a drum-inclusive candidate when it is nearly as
     // strong as the best policy move; this breaks "same groove" plateaus.
@@ -3726,6 +3806,16 @@ export class StemRemixPlayer {
       if (clash > 0) {
         policy.score = Math.max(0, policy.score - 0.5 * clash);
         policy.reasons.push("harmony-clash");
+      }
+      // Learned motif calendar: reward a pattern returning at its natural lag,
+      // or a fresh pattern when this stem has not introduced one lately.
+      const motifBonus = this.motifPriorFor(subset, picks);
+      if (motifBonus > 0) {
+        policy.score = Math.min(1, policy.score + motifBonus);
+        policy.reasons.push("motif-calendar");
+      }
+      if (sectionChanged && subset.includes("vocals") && this.vocalCadence) {
+        policy.score = Math.min(1, policy.score + this.vocalCadence.policy.section_change_bonus);
       }
       // Blend mix-compat (rhythm-first, worst-bar aware) on top of the policy
       // score.  When unavailable these stay undefined and the score is unchanged.
