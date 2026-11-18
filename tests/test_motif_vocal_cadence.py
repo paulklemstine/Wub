@@ -35,7 +35,7 @@ def test_cadence_artifacts_match_real_song_statistics():
     vocal = json.loads((KITS / "vocal_cadence.json").read_text())
     assert vocal["format"] == "wub-vocal-cadence-v1"
     assert vocal["change_prob"]["section"] > vocal["change_prob"]["inside"] > 0.6
-    assert vocal["policy"]["min_hold_bars"] == 8
+    assert vocal["policy"]["min_hold_bars"] == 4
     assert 0 < vocal["policy"]["section_change_bonus"] <= 0.15
     assert 0.5 < sum(vocal["run_lengths_bars"].values()) <= 1.0
     src = (ROOT / "scripts/build_motif_calendar.py").read_text()

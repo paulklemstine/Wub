@@ -378,3 +378,13 @@ bass 0.995, other 1.021, vocals 0.936) so the equal-power crossfade begins at
 an acoustically equal level, then settles to the phrase's own gain. It is a
 small polish term, not a new limiter, and is fully neutral when the sidecar is
 absent.
+
+## Vocal tuning pass (listener feedback: "vocal still stuck")
+
+The corpus says stable vocal *patterns* last only 4 bars in 84% of runs and
+change at 73% of boundaries. The first pass still held a phrase too long, so
+the learned release budget is now 4 bars (not 8/16), the section-change vocal
+bonus is 0.116, and three rank biases were softened: the current-phrase bonus
+in `chooseVocalPrimary` 0.20 → 0.05, the mined-unit prior 0.15+0.20·score →
+0.06+0.10·score, and the long-segment bonus in `scoreTransition` 0.15 → 0.08.
+Theme recall still wins outright when a hook is deliberately recalled.
