@@ -2,7 +2,7 @@
 """Decide A/B handoffs automatically, using trained judges instead of a human.
 
 The review pack from ``review_slice_flow.py`` is rendered in Python from the
-same shipped Opus cells (no Stretch for these short matched-tempo clips), then
+shipping PCM assembler and Signalsmith Stretch in isolated Chrome, then
 scored with the models that were trained on original songs:
 
 * the final acoustic boundary critic (108-d, same as the browser gate),
@@ -17,56 +17,38 @@ ingest, so the system can also retrain itself from its own judgements.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import base64
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import librosa
 import numpy as np
 import soundfile as sf
 
 from wub_core.slice_flow import STEMS, describe_audio, mix_features, transition_features
 
-SR = 22050
+SR = 44100
 DIM = 32
 
 
-def decode(path: Path) -> np.ndarray:
-    audio, sr = sf.read(path, dtype="float32", always_2d=True)
-    mono = audio.mean(axis=1)
-    if sr != SR:
-        mono = librosa.resample(mono, orig_sr=sr, target_sr=SR)
-    return mono
-
-
 def render_variant(variant: dict, base: Path) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
-    """Render per-stem tracks and their mono mix for one A/B variant."""
-    bpm = max(40.0, float(variant["bpm"]))
-    bar_sec = 240.0 / bpm
-    total_bars = max(int(p["atBar"] + p["bars"]) for p in variant["parts"])
-    length = int(total_bars * bar_sec * SR) + 1
-    stems: Dict[str, np.ndarray] = {stem: np.zeros(length, np.float32) for stem in STEMS}
-    for part in variant["parts"]:
-        stem = part["stem"]
-        decoded = [decode(base / f) for f in part["files"]]
-        position = int(part["atBar"] * bar_sec * SR)
-        for cut in part["slices"]:
-            source = decoded[int(cut["itemIndex"])]
-            start = int(float(cut["startFrac"]) * len(source))
-            end = int(float(cut["endFrac"]) * len(source))
-            segment = source[start:end]
-            target = max(1, int(float(cut["targetBars"]) * bar_sec * SR))
-            if segment.size != target:
-                segment = np.interp(np.linspace(0, 1, target),
-                                    np.linspace(0, 1, segment.size), segment).astype(np.float32)
-            gain = float(cut.get("gain", 1.0))
-            end_gain = float(cut.get("endGain", gain))
-            segment = segment * np.linspace(gain, end_gain, target, dtype=np.float32)
-            stop = min(length, position + target)
-            stems[stem][position:stop] += segment[:stop - position]
-            position += target
-    mix = np.mean(np.stack([stems[s] for s in STEMS]), axis=0)
-    return stems, mix
+    """Run the same assembler, pitch/time worklet and safety stage as review.
+
+    Extra offline output channels tap the four stereo buses in the SAME render,
+    avoiding a surrogate resampler or four additional WASM graphs.
+    """
+    from scripts.review_slice_flow import Browser, RENDER_JS, ROOT
+    async def render():
+        async with Browser(kits=base) as browser:
+            job = {**variant, "returnStemPCM": True}
+            return await asyncio.wait_for(browser.evaluate(RENDER_JS.replace("JOB", json.dumps(job))), 120)
+    result = asyncio.run(render())
+    pcm = np.frombuffer(base64.b64decode(result["pcm"]), dtype="<f4").reshape(-1, result["channels"])
+    if result["sampleRate"] != SR or not np.isfinite(pcm).all():
+        raise ValueError("invalid browser render")
+    stems = {stem: pcm[:, 2 + i * 2:4 + i * 2] for i, stem in enumerate(STEMS)}
+    return stems, pcm[:, :2]
 
 
 def net_score(net: dict, x: np.ndarray) -> float:
@@ -97,12 +79,12 @@ def score_variant(variant: dict, base: Path, models: dict) -> dict:
     stems, mix = render_variant(variant, base)
     bpm = max(40.0, float(variant["bpm"]))
     bar_sec = 240.0 / bpm
-    seam = int(4 * bar_sec * SR)
+    seam = int((.15 + variant.get("seamBar", 4) * bar_sec) * SR)
     bar_len = int(bar_sec * SR)
 
     critic = 0.0
     motif = 0.0
-    features: List[np.ndarray] = []
+    features: Dict[str, np.ndarray] = {}
     for stem in STEMS:
         track = stems[stem]
         a = describe_audio(track[max(0, seam - bar_len):seam], SR, stem)
@@ -111,25 +93,32 @@ def score_variant(variant: dict, base: Path, models: dict) -> dict:
             continue
         x = transition_features(a, b, stem,
                                 [0, 1, 1, 1, 0.75, 0, 0.7, 0.25])
-        features.append(x)
+        features[stem] = x
         critic += sigmoid(net_score(models["critic"], x))
         m = models.get("motif")
+        returns = []
         if m:
-            y = np.zeros(m["input_dim"], dtype=np.float64)
-            y[:DIM] = a
-            y[DIM:2 * DIM] = b
-            y[2 * DIM:3 * DIM] = np.abs(a - b)
-            y[3 * DIM + STEMS.index(stem)] = 1
-            y[3 * DIM + len(STEMS) + 1] = 1  # 16-bar return
-            y[-1] = 0.75
-            motif += sigmoid(net_score(m["net"], y))
+            for lag_index, lag in enumerate((8, 16, 32)):
+                anchor_start = seam - lag * bar_len
+                if anchor_start < int(.15 * SR):
+                    continue
+                anchor = describe_audio(track[anchor_start:anchor_start + bar_len], SR, stem)
+                y = np.zeros(m["input_dim"], dtype=np.float64)
+                y[:DIM] = anchor; y[DIM:2 * DIM] = b
+                y[2 * DIM:3 * DIM] = np.abs(anchor - b)
+                y[3 * DIM + STEMS.index(stem)] = 1
+                y[3 * DIM + len(STEMS) + lag_index] = 1
+                y[-1] = lag / 16
+                returns.append(sigmoid(net_score(m["net"], y)))
+        motif += max(returns) if returns else .5
 
     mix_score = 0.0
     count = 0
     for bar in range(4, 8):
         row = np.zeros(16, dtype=np.float64)
         for si, stem in enumerate(STEMS):
-            chunk = stems[stem][bar * bar_len:(bar + 1) * bar_len]
+            start = int(.15 * SR) + bar * bar_len
+            chunk = stems[stem][start:start + bar_len]
             desc = describe_audio(chunk, SR, stem)
             for index, target in enumerate((0, 7, 9, 11)):
                 row[si * 4 + index] = desc[target]
@@ -146,7 +135,9 @@ def score_variant(variant: dict, base: Path, models: dict) -> dict:
         "mix": round(mix_score, 5),
         "motif": round(motif, 5),
         "rms_dip": round(dip, 5),
-        "features": [f.tolist() for f in features],
+        "features": {stem: f.tolist() for stem, f in features.items()},
+        "renderer": "shipping-pcm-signalsmith-chrome",
+        "motif_context_available": variant.get("seamBar", 4) >= 8,
     }
 
 
@@ -175,14 +166,19 @@ def main() -> None:
     report: List[dict] = []
     for case in cases:
         scores = {name: score_variant(case[name], base, models) for name in ("a", "b")}
-        winner = "a" if scores["a"]["score"] >= scores["b"]["score"] else "b"
+        margin = scores["a"]["score"] - scores["b"]["score"]
+        winner = "tie" if abs(margin) < .005 else ("a" if margin > 0 else "b")
+        changed = case["a"].get("changedStem", "other")
+        if changed != case["b"].get("changedStem", "other"):
+            raise ValueError("A/B attribution requires the same tested stem")
         rows.append({
             "id": case["id"],
             "winner": winner,
             "source_tracks": sorted(set(case["a"]["source_tracks"] + case["b"]["source_tracks"])),
-            "a": scores["a"]["features"][0],
-            "b": scores["b"]["features"][0],
-            "origin": "auto-reward-v1",
+            "a": scores["a"]["features"][changed],
+            "b": scores["b"]["features"][changed],
+            "origin": "auto-reward-v2", "tested_stem": changed,
+            "renderer": "shipping-pcm-signalsmith-chrome",
         })
         report.append({"id": case["id"], "winner": winner,
                        "margin": round(abs(scores["a"]["score"] - scores["b"]["score"]), 4),

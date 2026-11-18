@@ -12,7 +12,9 @@ The bank's 3,670 phrases have 58,720 acoustic stem/bar descriptors (32 floats ea
 Features include actual head/tail level and brightness, four spectral bands,
 attack/decay/sustain, rhythmic density/accent and fine onset offsets, stereo width,
 and chroma. Missing/silent material is represented explicitly. Analysis never
-changes or normalizes the source assets.
+changes or normalizes the source assets. The current 58,720 shipping cells are
+mono, so stereo-width columns carry no learned information and are masked rather
+than allowed to activate random weights.
 
 Three 32-unit models run at block preparation, not per frame:
 
@@ -35,12 +37,29 @@ proposals do not update the composer's tail memory.
 
 With the sidecar present, the 104-bar timing/tempo ladder remains, but the last
 8 bars are a learned handoff window rather than mandatory drum/bass removal.
-Cluster changes pass through the same final gate, preserving old anchors while
-new material arrives. Without a valid sidecar the original arc/bridge behavior
+Cluster changes pass through the same final gate. Existing anchors are retained
+where the new tempo/key pool permits them. When a tempo rung makes an outgoing
+source illegal, the player evaluates a bounded shortlist of legal incoming runs
+against the outgoing audio instead of bypassing the critic. It does not stretch
+an incompatible old anchor beyond the supported rate to satisfy a change budget. Without a valid sidecar the original arc/bridge behavior
 remains. The existing stretch limits, voice pool, pins, lazy cache, and audio-clock
 UI queue remain in force.
 
 ## Training and evaluation
+
+The complete staged loop trains the acoustic/mix/development heads, motif-return
+head and future-flow value head, validates each, and promotes the model bundle
+only after every stage passes. Source audio is symlinked read-only into staging;
+a failed stage leaves the current shipping bundle untouched.
+
+```bash
+PYTHONPATH=. python3 scripts/train_slice_pipeline.py --device cpu
+# Optional human feedback and explicitly labelled automatic judgements:
+PYTHONPATH=. python3 scripts/train_slice_pipeline.py --device cpu \
+  --feedback /path/to/slice-flow-preferences.jsonl --auto-cases 6
+```
+
+For just the three base heads:
 
 ```bash
 PYTHONPATH=. python3 scripts/train_slice_flow.py \
@@ -69,7 +88,8 @@ or a development model below the held-out majority baseline.
 ## Listening feedback and captured output
 
 The app's **Save session** button exports a bounded `wub-slice-trace-v1` record of
-successfully scheduled runs: source IDs, cut ranges, gains, pitch/rate, output bar
+successfully scheduled runs: source IDs, cut ranges, slice and voice-mixer gains, actual common voice rate,
+pitch automation, output bar
 lengths, timing and boundary feature vectors. Future prepared runs are omitted.
 Manual pins cancel superseded trace entries; tempo edits retime them. Failed
 loads are traced as the fallback that was actually scheduled. Silence recovery
@@ -107,7 +127,8 @@ PYTHONPATH=. python3 scripts/train_slice_flow.py --device cpu \
 Human preferences use a pairwise loss. Both source-track lists and vectors are
 validated; held-out tracks cannot enter feedback training. Trace examples use
 only training-partition material and reset context across excluded material.
-No preference is invented when there is no human feedback. Inspect the exported
+Human preference counts remain zero until real listening choices are imported;
+automatic judgements are never reported as human feedback. Inspect the exported
 model's report for actual corpus counts, split IDs, proxy errors and feedback
 counts. The general sidecar builder preserves the new sidecar flag when present.
 
@@ -117,43 +138,54 @@ counts. The general sidecar builder preserves the new sidecar flag when present.
 energy, four 16-step onset masks and a 12-bin chroma per bar, compared only
 within the same section at lags 1, 2, 4, 8, 16 and 32.  Against 78 real tracks
 the return correlation is about +0.34 at 8 bars, +0.22 at 16 and +0.14 at 32,
-so the metric can tell "a groove that comes back" from "constant novelty".  A
+so the metric can distinguish a groove that returns from constant novelty.  A
 trace without onset masks degrades to the coarse Phase 0 shape instead of
 fake-materialising structure.
 
-`scripts/train_motif_return.py` trains a 104→32→1 tanh network on the same
-shipped 32-d cells.  Positives are cells 8/16/32 bars later in the same
-original song; negatives are cross-song pairs and same-song cells 64 bars away,
-so record identity alone cannot solve the task.  Track partitions are fixed
-before sampling.  The model is published as `motif_return.json` and loaded
-optionally by `slice_flow.ts`; its score becomes a soft term in the final gate
-that favours a candidate recalling the current foundation after roughly
-60–120 s.  On the shipped bank it reaches about 0.84 validation AUC against
-these acoustic targets — still a proxy, so the listening A/B loop remains the
-real judge.
+`scripts/train_motif_return.py` trains a 104→32→1 tanh network on the
+shipped 32-d cells. Positive pairs use **actual `start_bar` positions** 8/16/32
+bars apart. Phrase-list indices cannot establish elapsed musical time. Cross-song
+and distant same-song distractors share the same lag/age context, so their labels
+cannot be inferred from an invented age. Every context and donor is partitioned
+by source track before pairing. The shipped corrected model uses 83,332 pairs
+from 500 tracks, with 57 held-out tracks, and obtains approximately 0.851 AUC on
+these weak chronology labels. This is not a human listening score.
+
+At runtime the model compares a proposed cell with actually recorded cells at
+8/16/32-bar lookbacks. Missing history stays neutral. The most recent foundation
+tail is not substituted for a theme supposedly heard a minute ago. Motif/value
+bonuses are soft ranking terms and cannot relax the acoustic rejection guard.
 
 ## Autonomous listening judgement
 
-Human A/B clicks are optional, not required: `scripts/auto_review.py` makes the
-decision itself.  It renders each candidate handoff from the shipped Opus cells
-and scores the boundary with the models already trained on original songs —
-the 108-d acoustic critic, the 16-d assembled-mix critic, the motif-return head
-and a rendered-RMS dip check.  The variant with the higher weighted score wins,
-and the decision is exported as a `origin: "auto-reward-v1"` preference row that
-`train_slice_flow.py --feedback` can ingest.  No microphone, network, or human
-click is involved.
+`scripts/auto_review.py` can produce additional **model-generated** A/B labels.
+It renders through the same shipping PCM assembler, Signalsmith pitch/time
+worklet and master safety stage as the listening pack, in isolated Chrome. Four
+additional stereo output taps provide the actual rendered stem buses in that
+same pass; a surrogate interpolator is not used to invent what the worklet sounds
+like. Boundary timing includes the render lead-in.
+
+Feedback vectors belong to the stem that differs between A and B, not the first
+unchanged stem. Near-ties are labelled as ties. Short clips with insufficient
+8/16/32-bar history have a neutral motif score rather than a fabricated reprise.
+Rows carry `origin: "auto-reward-v2"`, tested stem and renderer provenance.
+Automatic labels use a weaker training weight than human preferences, and the
+model report counts both separately. The staged pipeline rejects automatic
+refinement if held-out acoustic MAE regresses beyond `max(0.001, 5%)`; its report
+retains both candidate and baseline results instead of declaring self-judgement
+a listening win. They are not independent listening
+validation and do not establish a listener's taste.
 
 ```bash
 PYTHONPATH=. python3 scripts/auto_review.py --cases 12 \
   --out /tmp/wub-slice-flow/auto_preferences.jsonl
-PYTHONPATH=. python3 scripts/train_slice_flow.py --device cpu \
-  --feedback /tmp/wub-slice-flow/auto_preferences.jsonl
+PYTHONPATH=. python3 scripts/train_slice_pipeline.py --device cpu --auto-cases 12
 ```
 
-The automatic judge can disagree with the acoustic critic because it also sees
-mix balance and motif return.  It is still a model of the training corpus, not
-a proof of perception — but it makes the loop self-contained: train -> render
--> judge -> retrain, with the flow evaluator as the external yardstick.
+Human listening remains the independent check. Packs have content-derived IDs,
+so changing the audio comparison does not silently reuse an older A/B choice
+stored in the browser. Training/validation source partitions also apply to the
+review-pack donors and any imported preferences.
 
 ## Navigating the bar space (the TSP-shaped problem)
 
@@ -162,24 +194,32 @@ costs are learned flow scores.  It is a prize-collecting tour, not an exact
 TSP: the planner does not need to visit every cell, but it must avoid recent
 cells, limit source changes and hold a foundation for 60–120 s.
 
-`wub_core/bar_tour.py` implements the search: beam search with a branch factor,
-cooldowns, a source-change budget and an optional learned value head.  Edge
-quality blends the acoustic critic (0.7) and the motif-return head (0.3);
-the value head contributes 0.15 in the offline planner and 0.10 in the browser
-gate.  `scripts/train_bar_tour_value.py` fits the 72→32→1 value net on real
-song trajectories: the reward is the acoustic teacher's join score and the
-target is the discounted sum of the next eight bars.  Held-out MSE is about
-0.35 versus 0.55 for a constant predictor.
+`wub_core/bar_tour.py` implements an **offline** beam search with cooldowns,
+a source-change budget and an optional value head. The browser final gate uses
+the learned value as a soft term; it does not run this beam search on the audio
+thread. Cooldowns apply to actual route positions and source changes are counted
+between consecutive chosen nodes. Coverage includes proposed visits without
+committing them as listening history.
+
+`train_bar_tour_value.py` now uses only consecutive original source bars, never
+chains across unshipped gaps or silently removed silent bars. The target is the
+discounted reward over the next eight bars, elapsed age is measured in seconds,
+and the exported value scale is applied linearly rather than sigmoid-saturating
+a regression output. The corrected model uses 25,760 states; held-out MSE is
+about 0.350 versus 0.532 for a constant predictor. Constant input columns are
+masked in both optional heads, as in the base critic.
 
 ```bash
 PYTHONPATH=. python3 scripts/train_bar_tour_value.py --device cpu
 PYTHONPATH=. python3 scripts/eval_bar_tour.py --tracks 10 --pool 300 --horizon 8
 ```
 
-On the same candidate pool the beam route scores about 0.87 mean flow versus
-0.86 greedy, with roughly one fewer source change; adding the value head keeps
-flow and increases phrase diversity.  The value sidecar (`bar_tour_value.json`)
-loads optionally in `slice_flow.ts`, so older banks still work.
+The corrected six-track benchmark (`--tracks 6 --pool 80 --horizon 8`) uses
+held-out donor tracks throughout: mean proxy flow is about 0.716 greedy versus
+0.739 beam. These are comparable routes under one critic, not an independent
+perceptual score. A motif bonus is evaluated only when the proposed route has
+enough true lookback history. See `docs/reports/slice-flow-validation.json` for
+the executed validation summary.
 
 ## Whole-spectrum coverage
 
@@ -191,7 +231,24 @@ offline planner adds `0.22 x novelty` on top of the learned edge score; the
 browser gate uses a lighter source-only version (`sourceNovelty`) so a recently
 heard record is less likely to be selected again.
 
-With the same candidate pool, the coverage-aware beam route visits about 2.4
-styles, 3.5 keys and 14 BPM of tempo span versus 2.1 / 3.1 / 10 for the plain
-beam, at a flow cost of roughly 0.008.  That trade keeps the set travelling
-across the bank without giving up the learned transition quality.
+On that corrected benchmark, the coverage-aware route reaches about 2.5 source
+styles / 3.7 source keys / 16 BPM of source-tempo span versus 1.9 / 2.6 / 11 for
+plain beam, at a proxy-flow cost of roughly 0.016. These describe **source-bank
+coverage**, not necessarily audible session-key or tempo changes: playback still
+fits the source slices to the shared grid. Explicit style selections also constrain
+the BPM-ladder handoff; an unrestricted selection still traverses all styles. They are a tradeoff to assess in
+listening comparisons, not a reason to force an incompatible transition.
+
+## Live validation
+
+```bash
+PYTHONPATH=. python3 scripts/smoke_slice_flow.py --seconds 330
+# Force an early handoff for a shorter targeted integration check:
+PYTHONPATH=. python3 scripts/smoke_slice_flow.py --seconds 95 --force-rotation
+```
+
+These checks run real AudioContext time in an isolated muted Chrome, sample the
+actual master analyser, record scheduled slices, and verify exactly two voices
+per stem. They capture errors, source-cluster changes, long tasks and sustained
+digital-zero intervals. They do not accelerate the audio clock and are not a
+substitute for human evaluation of musical phrasing or a full-device FPS test.

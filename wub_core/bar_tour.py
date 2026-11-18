@@ -55,7 +55,7 @@ class CoverageTracker:
             "tempo": str(int(tempo // 10)),
             "key": str(meta.get("key", "?")),
             "style": str(meta.get("style", "?")),
-            "energy": str(int(energy * 4)),
+            "energy": str(min(3, max(0, int(energy * 4)))) ,
             "track": cell.track,
         }
 
@@ -64,10 +64,10 @@ class CoverageTracker:
             table = self.counts[dim]
             table[value] = table.get(value, 0) + 1
 
-    def novelty(self, cell: Cell) -> float:
+    def novelty(self, cell: Cell, pending: Sequence[Cell] = ()) -> float:
         values = []
         for dim, value in self.bins(cell).items():
-            count = self.counts[dim].get(value, 0)
+            count = self.counts[dim].get(value, 0) + sum(self.bins(c)[dim] == value for c in pending)
             values.append(1.0 / (1.0 + count))
         return float(np.mean(values))
 
@@ -86,7 +86,8 @@ def sigmoid(x: np.ndarray) -> np.ndarray:
 
 
 def edge_scores(prev: np.ndarray, candidates: np.ndarray, stem: str,
-                models: dict, ctx: Optional[Sequence[float]] = None) -> np.ndarray:
+                models: dict, ctx: Optional[Sequence[float]] = None,
+                motif_anchor: Optional[np.ndarray] = None, motif_lag: int = 8) -> np.ndarray:
     """Batch score of one previous cell against many candidate cells."""
     context = list(ctx or [0, 1, 1, 1, 0.75, 0, 0.7, 0.25])
     prev = np.asarray(prev, dtype=np.float32)
@@ -101,15 +102,15 @@ def edge_scores(prev: np.ndarray, candidates: np.ndarray, stem: str,
     score = sigmoid(net_forward(models["critic"], full)[:, 0])
 
     motif = np.full(len(candidates), 0.5)
-    if "motif" in models:
+    if "motif" in models and motif_anchor is not None:
         m = models["motif"]
         y = np.zeros((len(candidates), m["input_dim"]), dtype=np.float64)
-        y[:, :DIM] = prev
+        y[:, :DIM] = motif_anchor
         y[:, DIM:2 * DIM] = candidates
-        y[:, 2 * DIM:3 * DIM] = np.abs(np.asarray(candidates) - prev)
+        y[:, 2 * DIM:3 * DIM] = np.abs(np.asarray(candidates) - motif_anchor)
         y[:, 3 * DIM + STEMS.index(stem)] = 1
-        y[:, 3 * DIM + len(STEMS) + 1] = 1  # 16-bar return
-        y[:, -1] = 0.75
+        y[:, 3 * DIM + len(STEMS) + (8,16,32).index(motif_lag)] = 1
+        y[:, -1] = motif_lag / 16
         motif = sigmoid(net_forward(m["net"], y)[:, 0])
     return 0.7 * score + 0.3 * motif
 
@@ -166,18 +167,24 @@ def plan_tour(cells: Sequence[Cell], start: int, horizon: int,
             prev = state.path[-1]
             recent = [cells[i].features for i in state.path]
             reps = sum(1 for i in state.path if cells[i].phrase == cells[prev].phrase) / max(1, len(state.path))
-            scores = edge_scores(feats[prev], feats, cells[prev].stem, models)
+            anchor = feats[state.path[-8]] if len(state.path) >= 8 else None
+            scores = edge_scores(feats[prev], feats, cells[prev].stem, models, motif_anchor=anchor)
             names = np.array([c.track for c in cells])
-            illegal = (names == state.last_track) & (state.changes >= max_changes)
+            illegal = (names != state.last_track) & (state.changes >= max_changes)
+            illegal |= np.array([c.stem != cells[start].stem for c in cells])
             for seen in state.path[-cooldown:]:
                 illegal |= np.arange(len(cells)) == seen
             scores[illegal] = -1e3
             if "value" in models:
-                recent = np.mean(np.stack(recent), axis=0)
-                vf = value_features_batch(feats, recent, step * 4, reps)
-                scores += 0.15 * sigmoid(net_forward(models["value"], vf)[:, 0])
+                recent = np.mean(np.stack(recent[-4:]), axis=0)
+                bar_sec = 240 / max(40., float(cells[start].meta.get("bpm", 120)))
+                vf = value_features_batch(feats, recent, step * bar_sec, reps)
+                raw = net_forward(models["value"], vf)[:, 0]
+                scale = models["value"].get("value_scale")
+                value = np.clip(raw / scale, 0, 1) if scale else sigmoid(raw)
+                scores += 0.15 * value
             if coverage is not None:
-                novelty = np.asarray([coverage.novelty(c) for c in cells])
+                novelty = np.asarray([coverage.novelty(c, [cells[i] for i in state.path]) for c in cells])
                 scores += coverage_weight * novelty
             top = np.argsort(-scores)[:branch]
             for j in top:

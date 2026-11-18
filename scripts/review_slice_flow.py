@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import base64
 import json
+import hashlib
 import os
 import signal
 from pathlib import Path
@@ -34,23 +35,49 @@ def free_port():
 
 
 class Browser:
-    def __init__(self):self.processes=[];self.temp=None;self.seq=0
+    def __init__(self,kits=None):self.processes=[];self.temp=None;self.seq=0;self.kits=Path(kits).resolve() if kits else None
     async def __aenter__(self):
-        port=free_port();debug=free_port();self.temp=tempfile.TemporaryDirectory(prefix='wub-flow-chrome-')
+        chrome=shutil.which('google-chrome') or shutil.which('chromium')
+        if not chrome:raise RuntimeError('Chrome or Chromium is required for audio rendering')
+        port=free_port();self.temp=tempfile.TemporaryDirectory(prefix='wub-flow-chrome-')
         self.url=f'http://127.0.0.1:{port}'
+        self.launch_log=open(Path(self.temp.name)/'launch.log','w+')
         config=Path(self.temp.name)/'vite.config.mjs'
-        config.write_text('export default '+json.dumps({'root':str(ROOT/'frontend'),'base':'/','server':{'hmr':False},'optimizeDeps':{'exclude':['signalsmith-stretch']},'resolve':{'conditions':['onnxruntime-web-use-extern-wasm']}}))
-        self.processes.append(subprocess.Popen(['npm','run','dev','--','--host','127.0.0.1','--port',str(port),'--strictPort','--config',str(config)],cwd=ROOT/'frontend',stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True))
+        settings={'root':str(ROOT/'frontend'),'base':'/','server':{'hmr':False},'optimizeDeps':{'exclude':['signalsmith-stretch']},'resolve':{'conditions':['onnxruntime-web-use-extern-wasm']}}
+        if self.kits and self.kits != (ROOT/'frontend/public/data/kits').resolve():
+            public=Path(self.temp.name)/'public';public.mkdir()
+            for child in (ROOT/'frontend/public').iterdir():
+                if child.name=='data':
+                    data=public/'data';data.mkdir()
+                    for asset in child.iterdir():
+                        (data/asset.name).symlink_to(self.kits if asset.name=='kits' else asset.resolve(),target_is_directory=asset.is_dir())
+                else:(public/child.name).symlink_to(child.resolve(),target_is_directory=child.is_dir())
+            settings['publicDir']=str(public)
+        config.write_text('export default '+json.dumps(settings))
+        self.processes.append(subprocess.Popen(['npm','run','dev','--','--host','127.0.0.1','--port',str(port),'--strictPort','--config',str(config)],cwd=ROOT/'frontend',stdout=self.launch_log,stderr=subprocess.STDOUT,start_new_session=True))
         chrome=shutil.which('google-chrome') or shutil.which('chromium')
         if not chrome:raise RuntimeError('Chrome or Chromium is required for production-equivalent audio rendering')
-        self.processes.append(subprocess.Popen([chrome,'--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--autoplay-policy=no-user-gesture-required','--mute-audio',f'--user-data-dir={self.temp.name}',f'--remote-debugging-port={debug}','about:blank'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True))
-        for _ in range(100):
+        self.processes.append(subprocess.Popen([chrome,'--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--autoplay-policy=no-user-gesture-required','--mute-audio',f'--user-data-dir={self.temp.name}','--remote-debugging-port=0','about:blank'],stdout=self.launch_log,stderr=subprocess.STDOUT,start_new_session=True))
+        last_error=''
+        for _ in range(150):
             try:
-                urllib.request.urlopen(self.url+'/src/kit_pcm.ts',timeout=1).read(1)
-                targets=json.load(urllib.request.urlopen(f'http://127.0.0.1:{debug}/json',timeout=1))
+                if any(process.poll() is not None for process in self.processes):
+                    raise RuntimeError('rendering subprocess exited during startup')
+                debug=int((Path(self.temp.name)/'DevToolsActivePort').read_text().splitlines()[0])
+                urllib.request.urlopen(self.url+'/src/kit_pcm.ts',timeout=2).read(1)
+                targets=json.load(urllib.request.urlopen(f'http://127.0.0.1:{debug}/json',timeout=2))
                 target=next(t for t in targets if t['type']=='page');break
-            except Exception:await asyncio.sleep(.2)
-        else:raise RuntimeError('local rendering server did not start')
+            except Exception as error:
+                last_error=str(error)
+                if any(process.poll() is not None for process in self.processes):break
+                await asyncio.sleep(.2)
+        else:
+            target=None
+        if 'target' not in locals() or target is None:
+            self.launch_log.flush();self.launch_log.seek(0)
+            details=self.launch_log.read()[-8000:]
+            await self.__aexit__()
+            raise RuntimeError(f'local rendering server did not start: {last_error}\n{details}')
         self.ws=await websockets.connect(target['webSocketDebuggerUrl'],max_size=128*1024*1024)
         await self.command('Page.navigate',{'url':self.url+'/src/kit_pcm.ts'})
         await asyncio.sleep(.5)
@@ -76,6 +103,7 @@ class Browser:
             except subprocess.TimeoutExpired:
                 try:os.killpg(p.pid,signal.SIGKILL)
                 except ProcessLookupError:pass
+        if hasattr(self,'launch_log'):self.launch_log.close()
         if self.temp:self.temp.cleanup()
 
 
@@ -85,14 +113,25 @@ RENDER_JS=r'''(async()=>{
  const {StretchVoice}=await import('/src/stretch_voice.ts');
  const sr=44100, barSec=240/job.bpm;
  const totalBars=Math.max(...job.parts.map(p=>p.atBar+p.bars));
- const ctx=new OfflineAudioContext(2,Math.ceil((totalBars*barSec+.5)*sr),sr);
+ const channels=job.returnStemPCM?10:2;
+ const ctx=new OfflineAudioContext(channels,Math.ceil((totalBars*barSec+.5)*sr),sr);
  const master=ctx.createDynamicsCompressor();
  master.threshold.value=-12;master.ratio.value=4;master.attack.value=.003;master.release.value=.2;
  const limiter=ctx.createDynamicsCompressor();limiter.threshold.value=-3;limiter.knee.value=0;limiter.ratio.value=20;limiter.attack.value=.001;limiter.release.value=.08;
  const trim=ctx.createGain();trim.gain.value=.62;
  const shaper=ctx.createWaveShaper();const curve=new Float32Array(4096);
  for(let i=0;i<curve.length;i++){const x=i/(curve.length-1)*2-1,a=Math.abs(x);curve[i]=Math.sign(x)*(a<=.8?a:.8+.2*Math.tanh((a-.8)/.2));}
- shaper.curve=curve;shaper.oversample='4x';trim.connect(master);master.connect(limiter);limiter.connect(shaper);shaper.connect(ctx.destination);
+ shaper.curve=curve;shaper.oversample='4x';trim.connect(master);master.connect(limiter);limiter.connect(shaper);
+ const buses={};
+ if(job.returnStemPCM){
+  const merger=ctx.createChannelMerger(10), splitter=ctx.createChannelSplitter(2);
+  shaper.connect(splitter);splitter.connect(merger,0,0);splitter.connect(merger,1,1);
+  ['drums','bass','other','vocals'].forEach((stem,i)=>{
+   const bus=ctx.createGain(), split=ctx.createChannelSplitter(2);buses[stem]=bus;
+   bus.connect(trim);bus.connect(split);split.connect(merger,0,2+i*2);split.connect(merger,1,3+i*2);
+  });
+  merger.connect(ctx.destination);
+ } else shaper.connect(ctx.destination);
  const voices=[];
  for(const part of job.parts){
   const phrases=[];
@@ -103,21 +142,21 @@ RENDER_JS=r'''(async()=>{
    phrases.push([buffer.getChannelData(0).slice(),buffer.getChannelData(buffer.numberOfChannels>1?1:0).slice()]);
   }
   const run=assembleSlicedStereoRun(phrases,null,part.slices,sr,28);
-  const voice=await StretchVoice.create(ctx,trim);
+  const voice=await StretchVoice.create(ctx,buses[part.stem]??trim);
   voices.push(voice);
   await voice.loadSamples(run.samples,true);
   const rate=part.rate??Math.max(.94,Math.min(1.06,part.sourceDuration/(4*barSec)));
-  voice.schedule({when:.15+part.atBar*barSec,rate,semitones:part.semitones,gain:1,fadeInSec:part.stem==='drums'?.006:.08});
+  voice.schedule({when:.15+part.atBar*barSec,rate,semitones:part.semitones,gain:part.gain??1,fadeInSec:part.stem==='drums'?.006:.08});
   if(part.pitchPoints?.length)voice.schedulePitchAutomation(.15+part.atBar*barSec,rate,part.pitchPoints,part.stem==='vocals');
   voice.fadeOut(.15+(part.atBar+part.bars)*barSec,.08);
  }
  const output=await ctx.startRendering();
- const interleaved=new Float32Array(output.length*2);
- for(let c=0;c<2;c++){const data=output.getChannelData(c);for(let i=0;i<data.length;i++)interleaved[i*2+c]=data[i];}
+ const interleaved=new Float32Array(output.length*channels);
+ for(let c=0;c<channels;c++){const data=output.getChannelData(c);for(let i=0;i<data.length;i++)interleaved[i*channels+c]=data[i];}
  const bytes=new Uint8Array(interleaved.buffer);let encoded='';
  for(let i=0;i<bytes.length;i+=16384)encoded+=String.fromCharCode(...bytes.subarray(i,i+16384));
  for(const voice of voices)voice.dispose();
- return {pcm:btoa(encoded),sampleRate:sr,bars:totalBars};
+ return {pcm:btoa(encoded),sampleRate:sr,bars:totalBars,channels};
 })()'''
 
 
@@ -131,6 +170,7 @@ def make_reviews(base,count,seed):
     phrases=[(k,p) for k in manifest['kits'] for p in k['phrases'] if p['id'] in rows and not partition(k['track_id']) and all(s in p['stems'] for s in ('drums','bass','other','vocals'))]
     references=[(k,p) for k,p in phrases if k.get('style')=='wave' and p.get('energy',0)>.4]
     reviews=[]
+    bank_fingerprint=hashlib.sha256(features.tobytes()).hexdigest()
     for case in range(count):
         kit,phrase=references[int(rng.integers(len(references)))];sr=rows[phrase['id']]
         # Same key and near tempo keeps this test focused on texture/phrasing.
@@ -154,8 +194,11 @@ def make_reviews(base,count,seed):
                     parts.append(dict(stem=st,atBar=0,bars=4,files=[phrase['stems'][st]['file']],slices=[dict(itemIndex=0,startFrac=0,endFrac=1,targetBars=4)],sourceDuration=phrase['duration_sec'],semitones=0))
                     parts.append(dict(stem=st,atBar=4,bars=4,files=[dp['stems'][st]['file']],slices=[dict(itemIndex=0,startFrac=0,endFrac=1,targetBars=4)],sourceDuration=dp['duration_sec'],semitones=0))
             x=transition_features(a,features[rows[dp['id']],si,0],stem,[0,1,1,1,.5,0,.7,.25]).tolist()
-            variants.append(dict(bpm=960/phrase['duration_sec'],parts=parts,features=x,source_tracks=[kit['track_id'],dk['track_id']]))
-        reviews.append(dict(id=f'flow-{seed}-{case}',a=variants[0],b=variants[1]))
+            variants.append(dict(bpm=960/phrase['duration_sec'],parts=parts,features=x,changedStem=stem,source_tracks=[kit['track_id'],dk['track_id']]))
+        identity=json.dumps([{k:v for k,v in variant.items() if k in ('bpm','parts')} for variant in variants],sort_keys=True)
+        identity+=bank_fingerprint
+        tag=hashlib.sha256(identity.encode()).hexdigest()[:10]
+        reviews.append(dict(id=f'flow-{seed}-{case}-{tag}',a=variants[0],b=variants[1]))
     return reviews
 
 
@@ -177,7 +220,7 @@ def trace_job(path,base):
         for cell in cells:
             slices.append(dict(itemIndex=pids.index(cell['phraseId']),startFrac=cell['startFrac'],endFrac=cell['endFrac'],targetBars=cell['bars'],gain=cell['gain'],endGain=cell['endGain']))
             pitch.append(dict(offsetSec=offset*bar_sec,semitones=cell['semitones']));offset+=cell['bars']
-        parts.append(dict(stem=record['stem'],atBar=(record['at']-starts[0])/bar_sec,bars=offset,files=[phrases[pid]['stems'][record['stem']]['file'] for pid in pids],slices=slices,sourceDuration=phrases[pids[0]]['duration_sec'],semitones=cells[0]['semitones'],rate=cells[0]['rate'],pitchPoints=pitch))
+        parts.append(dict(stem=record['stem'],atBar=(record['at']-starts[0])/bar_sec,bars=offset,files=[phrases[pid]['stems'][record['stem']]['file'] for pid in pids],slices=slices,sourceDuration=phrases[pids[0]]['duration_sec'],semitones=cells[0]['semitones'],rate=cells[0]['rate'],gain=cells[0].get('mixerGain',1),pitchPoints=pitch))
     return dict(bpm=bpm,parts=parts,seamBar=(starts[1]-starts[0])/bar_sec if len(starts)>1 else bars/2)
 
 
@@ -193,7 +236,7 @@ async def main_async(args):
     report=[]
     if args.trace:
         job=trace_job(args.trace,base)
-        async with Browser() as browser:
+        async with Browser(kits=base) as browser:
             value=await asyncio.wait_for(browser.evaluate(RENDER_JS.replace('JOB',json.dumps(job))),120)
         pcm=np.frombuffer(base64.b64decode(value['pcm']),dtype='<f4').reshape(-1,2)
         if not np.isfinite(pcm).all() or np.max(np.abs(pcm))<1e-6:raise RuntimeError('invalid trace render')
@@ -205,7 +248,7 @@ async def main_async(args):
             job=case[label]
             # Isolate offline WASM graphs between clips; no accumulating
             # worklet contexts while rendering a large review batch.
-            async with Browser() as browser:
+            async with Browser(kits=base) as browser:
                 value=await asyncio.wait_for(browser.evaluate(RENDER_JS.replace('JOB',json.dumps(job))),120)
             pcm=np.frombuffer(base64.b64decode(value['pcm']),dtype='<f4').reshape(-1,2)
             sf.write(out/f'{case["id"]}-{label}.wav',pcm,value['sampleRate'],subtype='FLOAT')

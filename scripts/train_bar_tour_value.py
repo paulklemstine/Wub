@@ -3,8 +3,8 @@
 
 The corpus supplies the trajectories: consecutive 4-bar phrases of an original
 song give a chain of 32-d cells.  Immediate reward is the acoustic teacher's
-join quality; the target is a discounted sum of the next 32 bars of that chain.
-Track-disjoint splits prevent memorising a recording.  The exported 56->32->1
+join quality; the target is a discounted sum of the next eight consecutive source bars.
+Track-disjoint splits prevent memorising a recording.  The exported 72->32->1
 tanh net is loaded by the bar-tour beam search (and optionally by the browser
 gate) as a soft estimate of where a route is heading.
 """
@@ -43,25 +43,33 @@ def build_dataset(base: Path) -> Tuple[np.ndarray, np.ndarray, List[bool]]:
         phrases.sort(key=lambda p: int(p.get("start_bar", 0)))
         if len(phrases) < 2:
             continue
+        bar_sec = 240 / max(40., float(kit.get("bpm", 120)))
         for stem_index, stem in enumerate(STEMS):
-            chain: List[np.ndarray] = []
+            chronological = {}
             for phrase in phrases:
                 for bar in range(4):
                     vec = features[rows[phrase["id"]], stem_index, bar]
                     if vec.any():
-                        chain.append(np.asarray(vec, dtype=np.float64))
-            if len(chain) < horizon + 2:
-                continue
-            rewards = [acoustic_teacher(chain[i], chain[i + 1], stem)
-                       for i in range(len(chain) - 1)]
-            for t in range(len(chain) - horizon - 1):
-                history = chain[max(0, t - 8):t]
-                repetitions = sum(1 for c in history if np.allclose(c, chain[t])) / max(1, len(history))
-                state = value_features(chain[t], history, t * 0.5, repetitions)
-                future = sum(gamma ** k * rewards[t + k] for k in range(horizon))
-                x.append(state)
-                y.append(future)
-                val.append(is_val(track))
+                        chronological.setdefault(int(phrase["start_bar"]) + bar, np.asarray(vec, np.float64))
+            runs = []; chain = []; previous = None
+            for bar, vec in sorted(chronological.items()):
+                if previous is not None and bar != previous + 1:
+                    if chain: runs.append(chain)
+                    chain = []
+                chain.append(vec); previous = bar
+            if chain: runs.append(chain)
+            for chain in runs:
+                if len(chain) < horizon + 1:
+                    continue
+                rewards = [acoustic_teacher(chain[i], chain[i + 1], stem) for i in range(len(chain) - 1)]
+                for t in range(len(chain) - horizon):
+                    history = chain[max(0, t - 4):t]
+                    repetitions = sum(float(np.abs(c - chain[t]).mean()) < .02 for c in history) / max(1, len(history))
+                    state = value_features(chain[t], history, t * bar_sec, repetitions)
+                    future = sum(gamma ** k * rewards[t + k] for k in range(horizon))
+                    x.append(state); y.append(future); val.append(is_val(track))
+    if not x:
+        raise ValueError("no contiguous source runs long enough for the value horizon")
     return np.stack(x), np.asarray(y, np.float32), val
 
 
@@ -75,12 +83,14 @@ def main() -> None:
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
+    torch.set_num_threads(4)
     x, y, val = build_dataset(Path(args.kits))
     val_mask = np.asarray(val)
     if val_mask.sum() < 16 or (~val_mask).sum() < 16:
         raise SystemExit("value dataset partition too small")
     mean = x[~val_mask].mean(axis=0)
-    std = np.maximum(x[~val_mask].std(axis=0), 1e-3)
+    raw_std = x[~val_mask].std(axis=0)
+    std = np.maximum(raw_std, .03)
     device = torch.device(args.device)
     xt = torch.tensor((x[~val_mask] - mean) / std, dtype=torch.float32, device=device)
     yt = torch.tensor(y[~val_mask], dtype=torch.float32, device=device)
@@ -103,13 +113,16 @@ def main() -> None:
             opt.step()
     net.eval()
     with torch.no_grad():
+        net[0].weight[:, torch.tensor(raw_std < 1e-5, device=device)] = 0
         pred = net(xv).squeeze(-1).cpu().numpy()
     mse = float(mean_squared_error(y[val_mask], pred))
     baseline = float(mean_squared_error(y[val_mask], np.full_like(pred, y[~val_mask].mean())))
     state = net.state_dict()
     artifact = {
         "format": "wub-bar-tour-value-v1",
-        "version": 1,
+        "version": 2,
+        "value_scale": sum(.9 ** k for k in range(8)),
+        "horizon_bars": 8,
         "input_dim": VALUE_INPUT_DIM,
         "net": {
             "mean": mean.tolist(), "std": std.tolist(),
@@ -120,8 +133,13 @@ def main() -> None:
             "samples": int(len(x)), "train": int((~val_mask).sum()),
             "validation": int(val_mask.sum()), "val_mse": mse,
             "baseline_mse": baseline,
+            "chronology": "consecutive_source_bars_only", "age_unit": "seconds",
+            "train_track_ids": [str(k["track_id"]) for k in json.loads((Path(args.kits)/"kit_manifest.json").read_text())["kits"] if not is_val(str(k["track_id"]))],
+            "validation_track_ids": [str(k["track_id"]) for k in json.loads((Path(args.kits)/"kit_manifest.json").read_text())["kits"] if is_val(str(k["track_id"]))],
         },
     }
+    if not np.isfinite(mse) or mse >= baseline:
+        raise RuntimeError("value head failed held-out baseline; shipping model unchanged")
     out = Path(args.out)
     out.write_text(json.dumps(artifact, separators=(",", ":")) + "\n")
     print(f"[value] {len(x)} states, val MSE {mse:.4f} (constant baseline {baseline:.4f}) -> {out}")

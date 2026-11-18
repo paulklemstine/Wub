@@ -39,31 +39,30 @@ def is_val(track: str) -> bool:
     return int(hashlib.sha256(track.encode()).hexdigest()[:8], 16) % 10 == 0
 
 
-def load_cells(kits: Path) -> Tuple[Dict[Tuple[str, str, int, int], np.ndarray], List[str]]:
+def load_cells(kits: Path):
     artifact = json.loads((kits / "slice_flow.json").read_text())
     if artifact.get("format") != "slice_flow_v1" or artifact.get("feature_dim") != DIM:
-        raise SystemExit("slice_flow.json has an unexpected format or feature dimension")
-    feature_path = kits / artifact["feature_file"]
-    features = np.fromfile(feature_path, dtype=np.float32)
+        raise ValueError("slice_flow feature schema mismatch")
+    features = np.fromfile(kits / artifact["feature_file"], dtype="<f4")
     ids = artifact["phrase_ids"]
-    if features.size != len(ids) * 16 * DIM:
-        raise SystemExit("slice_flow feature file length does not match phrase_ids")
-    cells: Dict[Tuple[str, str, int, int], np.ndarray] = {}
-    tracks: set[str] = set()
-    for phrase_index, pid in enumerate(ids):
-        match = PID_RE.match(str(pid))
-        if not match:
-            continue
-        track = match.group(1)
-        tracks.add(track)
-        for stem_index, stem in enumerate(STEMS):
-            for bar in range(4):
-                offset = ((phrase_index * 4 + stem_index) * 4 + bar) * DIM
-                vec = features[offset:offset + DIM].astype(np.float64)
-                if not np.all(np.isfinite(vec)) or not np.any(vec):
-                    continue
-                cells[(stem, track, phrase_index, bar)] = vec
-    return cells, sorted(tracks)
+    if features.size != len(ids) * 16 * DIM or not np.isfinite(features).all():
+        raise ValueError("invalid slice-flow features")
+    rows = {pid: i for i, pid in enumerate(ids)}
+    manifest = json.loads((kits / "kit_manifest.json").read_text())
+    cells = {}
+    for kit in manifest["kits"]:
+        track = str(kit["track_id"])
+        for phrase in sorted(kit["phrases"], key=lambda p: (int(p["start_bar"]), p["id"])):
+            if phrase["id"] not in rows:
+                continue
+            for si, stem in enumerate(STEMS):
+                for bar in range(4):
+                    offset = ((rows[phrase["id"]] * 4 + si) * 4 + bar) * DIM
+                    vec = features[offset:offset + DIM].astype(np.float64)
+                    if vec.any():
+                        # Dictionary positions and phrase ordinals are NOT time.
+                        cells.setdefault((stem, track, int(phrase["start_bar"]) + bar), vec)
+    return cells, sorted({key[1] for key in cells})
 
 
 def make_features(a: np.ndarray, b: np.ndarray, stem: int, lag: int, age: float) -> np.ndarray:
@@ -77,59 +76,50 @@ def make_features(a: np.ndarray, b: np.ndarray, stem: int, lag: int, age: float)
     return out
 
 
-def build_pairs(cells: Dict[Tuple[str, str, int, int], np.ndarray],
-                tracks: List[str], seed: int):
+def build_pairs(cells, tracks: List[str], seed: int):
     rng = np.random.default_rng(seed)
-    by_stem: Dict[str, Dict[str, List[Tuple[int, int]]]] = {
-        stem: {} for stem in STEMS
-    }
-    for (stem, track, phrase, bar) in cells:
-        by_stem[stem].setdefault(track, []).append((phrase, bar))
-
-    x_pos: List[np.ndarray] = []
-    x_neg: List[np.ndarray] = []
-    train_tracks = [t for t in tracks if not is_val(t)]
-    for stem_index, stem in enumerate(STEMS):
+    by_stem = {stem: {} for stem in STEMS}
+    for stem, track, bar in cells:
+        by_stem[stem].setdefault(track, []).append(bar)
+    vectors, labels, split = [], [], []
+    donors_used = {False: set(), True: set()}
+    for si, stem in enumerate(STEMS):
         groups = by_stem[stem]
-        sources = [t for t in groups if len(groups[t]) >= 3]
-        for track in sources:
-            anchors = groups[track]
-            for phrase, bar in anchors:
+        for track, anchors in sorted(groups.items()):
+            held = is_val(track)
+            donors = sorted(t for t in groups if t != track and is_val(t) == held)
+            if not donors:
+                continue
+            for bar in sorted(anchors):
                 for lag_index, lag in enumerate(LAGS):
-                    target = cells.get((stem, track, phrase + lag // 4, bar))
+                    target = cells.get((stem, track, bar + lag))
                     if target is None:
                         continue
-                    age = float(rng.uniform(0.1, 1.4))
-                    x_pos.append(make_features(cells[(stem, track, phrase, bar)],
-                                               target, stem_index, lag_index, age))
-                    # Cross-song distractor at the same acoustic distance.
-                    other = track
-                    for _ in range(8):
-                        other = str(rng.choice(train_tracks))
-                        if other != track and other in groups:
-                            break
-                    if other != track and other in groups:
-                        donor = groups[other][int(rng.integers(len(groups[other])))]
-                        donor_vec = cells.get((stem, other, donor[0], donor[1]))
-                        if donor_vec is not None:
-                            x_neg.append(make_features(cells[(stem, track, phrase, bar)],
-                                                       donor_vec, stem_index, lag_index, age))
-                    # Same-song but too far apart to be a reprise: blocks the
-                    # shortcut of learning only "this is the same record".
-                    far = cells.get((stem, track, phrase + HARD_LAG // 4, bar))
+                    age = lag / 16  # normalized elapsed time; runtime supplies exact tempo
+                    anchor = cells[(stem, track, bar)]
+                    vectors.append(make_features(anchor, target, si, lag_index, age))
+                    labels.append(1.); split.append(held)
+                    other = donors[int(rng.integers(len(donors)))]
+                    donor_bar = int(rng.choice(groups[other]))
+                    vectors.append(make_features(anchor, cells[(stem, other, donor_bar)], si, lag_index, age))
+                    labels.append(0.); split.append(held)
+                    donors_used[held].add(other)
+                    far = cells.get((stem, track, bar + HARD_LAG))
                     if far is not None:
-                        x_neg.append(make_features(cells[(stem, track, phrase, bar)],
-                                                   far, stem_index, lag_index, 2.0))
-    if len(x_pos) < 64 or len(x_neg) < 64:
-        raise SystemExit("not enough same-song reprise pairs in the shipped bank")
-    n = min(len(x_pos), len(x_neg))
-    order_pos = rng.permutation(len(x_pos))[:n]
-    order_neg = rng.permutation(len(x_neg))[:n]
-    x = np.stack([x_pos[i] for i in order_pos] + [x_neg[i] for i in order_neg])
-    y = np.concatenate([np.ones(n, dtype=np.float32), np.zeros(n, dtype=np.float32)])
-    split = np.asarray([is_val(t) for t in tracks])  # only for the report
-    return x, y, {"pairs": int(2 * n), "tracks": len(tracks),
-                  "validation_tracks": int(split.sum())}
+                        # Keep context identical: lag/age must not reveal the label.
+                        vectors.append(make_features(anchor, far, si, lag_index, age))
+                        labels.append(0.); split.append(held)
+    x = np.asarray(vectors, np.float32); y = np.asarray(labels, np.float32)
+    val = np.asarray(split, bool)
+    if min(int(val.sum()), int((~val).sum())) < 32:
+        raise ValueError("not enough track-disjoint motif examples")
+    return x, y, val, {"pairs": len(y), "tracks": len(tracks),
+        "validation_tracks": sum(is_val(t) for t in tracks),
+        "train_track_ids": [t for t in tracks if not is_val(t)],
+        "validation_track_ids": [t for t in tracks if is_val(t)],
+        "training_donor_tracks": sorted(donors_used[False]),
+        "validation_donor_tracks": sorted(donors_used[True]),
+        "split_method": "track_hash_before_pairing", "lag_unit": "source_bars", "age_unit": "16_bars"}
 
 
 def export(net: torch.nn.Module, mean: np.ndarray, std: np.ndarray) -> dict:
@@ -155,14 +145,12 @@ def main() -> None:
     device = torch.device(args.device)
     kits = Path(args.kits)
     cells, tracks = load_cells(kits)
-    x, y, counts = build_pairs(cells, tracks, args.seed)
-    rng = np.random.default_rng(args.seed + 1)
-    order = rng.permutation(len(y))
-    val_count = max(1, int(len(order) * 0.2))
-    val_idx, train_idx = order[:val_count], order[val_count:]
-
-    mean = x[train_idx].mean(axis=0)
-    std = np.maximum(x[train_idx].std(axis=0), 1e-3)
+    x, y, val_mask, counts = build_pairs(cells, tracks, args.seed)
+    torch.set_num_threads(4)
+    train_idx = np.flatnonzero(~val_mask); val_idx = np.flatnonzero(val_mask)
+    mean = x[train_idx].mean(axis=0, dtype=np.float64).astype(np.float32)
+    raw_std = x[train_idx].astype(np.float64).std(axis=0)
+    std = np.maximum(raw_std, .03).astype(np.float32)
     xt = torch.tensor((x[train_idx] - mean) / std, dtype=torch.float32, device=device)
     yt = torch.tensor(y[train_idx], dtype=torch.float32, device=device)
     xv = torch.tensor((x[val_idx] - mean) / std, dtype=torch.float32, device=device)
@@ -175,8 +163,9 @@ def main() -> None:
     loss_fn = torch.nn.BCEWithLogitsLoss()
     for epoch in range(args.epochs):
         net.train()
+        order = torch.randperm(len(xt), device=device)
         for start in range(0, len(xt), 2048):
-            batch = slice(start, start + 2048)
+            batch = order[start:start + 2048]
             opt.zero_grad()
             loss = loss_fn(net(xt[batch]).squeeze(-1), yt[batch])
             loss.backward()
@@ -184,11 +173,12 @@ def main() -> None:
 
     net.eval()
     with torch.no_grad():
+        net[0].weight[:, torch.tensor(raw_std < 1e-5, device=device)] = 0
         logits = net(xv).squeeze(-1).cpu().numpy()
     auc = float(roc_auc_score(y[val_idx], logits))
     artifact = {
         "format": MOTIF_FORMAT,
-        "version": 1,
+        "version": 2,
         "feature_dim": DIM,
         "input_dim": INPUT_DIM,
         "lags": list(LAGS),
@@ -200,6 +190,8 @@ def main() -> None:
             "input_dim": INPUT_DIM,
         },
     }
+    if not np.isfinite(auc) or auc < .6:
+        raise RuntimeError("motif validation did not pass; shipping model unchanged")
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(artifact, separators=(",", ":")) + "\n")

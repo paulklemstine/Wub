@@ -14,23 +14,24 @@ const VALUE_FORMAT = "wub-bar-tour-value-v1";
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
 interface Network { mean: number[]; std: number[]; w1: number[][]; b1: number[]; w2: number[][]; b2: number[] }
 interface MotifArtifact { format: string; input_dim: number; net: Network }
-interface ValueArtifact { format: string; input_dim: number; net: Network }
+interface ValueArtifact { format: string; input_dim: number; net: Network; value_scale?: number }
 interface Artifact {
   format: string; feature_dim: number; phrase_ids: string[]; feature_file: string;
   critic: Network; mix: Network; planner: Network; foundation_seconds: number;
 }
 export interface FlowEntry {
   phrase: { id: string }; kit: { track_id: string }; stem: StemName;
-  keyShift: number; rate: number;
+  keyShift: number; rate: number; gain?: number;
 }
 export interface FlowTask<T extends FlowEntry> {
   stem: StemName; run: T[]; slices?: SliceSpec[]; baseSemitones?: number;
   pitchPoints?: PitchAutomationPoint[];
+  voiceRate?: number;
 }
 export interface FlowCell {
   phraseId: string; trackId: string; stem: StemName; bar: number;
   startFrac: number; endFrac: number; bars: number; gain: number; endGain: number;
-  semitones: number; rate: number;
+  semitones: number; rate: number; mixerGain?: number;
 }
 export interface FlowContext {
   at: number; bars: number; bpm: number; section: string; targetEnergy: number;
@@ -85,7 +86,8 @@ export function describeFlowTask<T extends FlowEntry>(task: FlowTask<T>, bars: n
     for (const point of task.pitchPoints ?? []) if (point.offsetSec <= position * barSec + 1e-6) shift = point.semitones;
     out.push({ phraseId: entry.phrase.id, trackId: entry.kit.track_id, stem: task.stem,
       bar: Math.min(3, Math.floor(start * 4 + 1e-6)), startFrac: start, endFrac: end,
-      bars: duration, gain, endGain, semitones: task.stem === "drums" ? 0 : shift, rate: entry.rate });
+      bars: duration, gain, endGain, semitones: task.stem === "drums" ? 0 : shift, rate: task.voiceRate ?? task.run[0]?.rate ?? entry.rate,
+      mixerGain: task.run[0]?.gain ?? 1 });
     position += duration;
   };
   if (task.slices?.length) {
@@ -135,6 +137,7 @@ export class SliceFlow {
   private artifact: Artifact | null = null;
   private motif: Network | null = null;
   private tourValue: Network | null = null;
+  private valueScale: number | null = null;
   private features: Float32Array | null = null;
   private rows = new Map<string, number>();
   private tails: Partial<Record<StemName, FlowCell>> = {};
@@ -152,14 +155,16 @@ export class SliceFlow {
   get ready(): boolean { return this.artifact !== null && this.features !== null; }
 
   async load(base: string): Promise<boolean> {
+    this.artifact = null; this.features = null; this.motif = null; this.tourValue = null; this.valueScale = null;
+    this.rows.clear();
     try {
-      const response = await fetch(`${base}/slice_flow.json`);
+      const response = await fetch(`${base}/slice_flow.json`, { signal: AbortSignal.timeout(8000) });
       if (!response.ok) return false;
       const artifact = await response.json() as Artifact;
       if (artifact.format !== "slice_flow_v1" || artifact.feature_dim !== FLOW_DIM || !Array.isArray(artifact.phrase_ids)
         || !validNetwork(artifact.critic, FLOW_INPUT_DIM, 1) || !validNetwork(artifact.mix, 16, 1) || !validNetwork(artifact.planner, 8, 3)
         || !Number.isFinite(artifact.foundation_seconds) || !/^[\w.-]+$/.test(artifact.feature_file)) return false;
-      const data = await fetch(`${base}/${artifact.feature_file}`);
+      const data = await fetch(`${base}/${artifact.feature_file}`, { signal: AbortSignal.timeout(15000) });
       if (!data.ok) return false;
       const bytes = await data.arrayBuffer();
       if (bytes.byteLength !== artifact.phrase_ids.length * 16 * FLOW_DIM * 4) return false;
@@ -170,7 +175,7 @@ export class SliceFlow {
       // Motif-return is optional: the acoustic critic alone still works if
       // this sidecar is missing from an older bank.
       try {
-        const response = await fetch(`${base}/motif_return.json`);
+        const response = await fetch(`${base}/motif_return.json`, { signal: AbortSignal.timeout(5000) });
         if (response.ok) {
           const model = await response.json() as MotifArtifact;
           if (model.format === MOTIF_FORMAT && model.input_dim === MOTIF_INPUT_DIM
@@ -178,11 +183,14 @@ export class SliceFlow {
         }
       } catch { /* optional model */ }
       try {
-        const response = await fetch(`${base}/bar_tour_value.json`);
+        const response = await fetch(`${base}/bar_tour_value.json`, { signal: AbortSignal.timeout(5000) });
         if (response.ok) {
           const model = await response.json() as ValueArtifact;
           if (model.format === VALUE_FORMAT && model.input_dim === VALUE_INPUT_DIM
-            && validNetwork(model.net, VALUE_INPUT_DIM, 1)) this.tourValue = model.net;
+            && validNetwork(model.net, VALUE_INPUT_DIM, 1)) {
+            this.tourValue = model.net;
+            this.valueScale = typeof model.value_scale === "number" && Number.isFinite(model.value_scale) && model.value_scale > 0 ? model.value_scale : null;
+          }
         }
       } catch { /* optional model */ }
       console.info(`[SliceFlow] acoustic critic + development planner ready (${artifact.phrase_ids.length} phrases)`);
@@ -200,7 +208,7 @@ export class SliceFlow {
     if (row === undefined || !this.features) return null;
     const offset = ((row * 4 + STEMS.indexOf(cell.stem)) * 4 + cell.bar) * FLOW_DIM;
     const out = this.features.slice(offset, offset + FLOW_DIM);
-    const gain = (cell.gain + cell.endGain) / 2;
+    const gain = (cell.gain + cell.endGain) / 2 * (cell.mixerGain ?? 1);
     if (gain <= 1e-5) return out.fill(0);
     const delta = 20 * Math.log10(gain) / 60;
     for (let i = 0; i < 3; i++) out[i] = clamp(out[i] + delta);
@@ -210,12 +218,28 @@ export class SliceFlow {
     return out;
   }
 
+  /** Locate a genuinely earlier played cell, not the latest foundation tail. */
+  private motifAnchor(stem: StemName, at: number): FlowCell | null {
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      const record = this.records[i];
+      if (record.stem !== stem || record.at > at || record.endAt <= at) continue;
+      const bars = record.cells.reduce((sum, cell) => sum + cell.bars, 0);
+      const position = (at - record.at) / Math.max(1e-8, record.endAt - record.at) * bars;
+      let offset = 0;
+      for (const cell of record.cells) {
+        offset += cell.bars;
+        if (position < offset) return cell;
+      }
+    }
+    return null;
+  }
+
   score(cells: readonly FlowCell[], context: FlowContext): { score: number; seamFeatures: number[] | null; returnScore: number } {
     if (!this.artifact || !cells.length) return { score: .5, seamFeatures: null, returnScore: .5 };
     let previous = this.tails[cells[0].stem];
     let sum = 0, count = 0, minimum = 1;
     let seamFeatures: number[] | null = null;
-    let returnSum = 0, returnCount = 0;
+    let returnSum = 0, returnCount = 0, outputBars = 0;
     for (const cell of cells) {
       const a = previous ? this.cellFeatures(previous) : null;
       const b = this.cellFeatures(cell);
@@ -226,17 +250,20 @@ export class SliceFlow {
         if (!seamFeatures) seamFeatures = Array.from(input);
         minimum = Math.min(minimum, score); sum += score; count++;
       }
-      if (this.motif && b && cell.startFrac === 0) {
-        const foundation = this.foundations[cell.stem];
-        const anchor = foundation ? this.cellFeatures(foundation) : null;
-        if (anchor) {
-          const seconds = Math.max(0, context.at - (this.identitySince[cell.stem] ?? context.at));
-          const lag = seconds < 20 ? 0 : seconds < 40 ? 1 : 2;
-          const input = motifFeatures(anchor, b, STEMS.indexOf(cell.stem), lag, clamp(seconds / 60, 0, 2));
-          returnSum += 1 / (1 + Math.exp(-infer(this.motif, input)[0]));
-          returnCount++;
+      if (this.motif && b && Math.abs(outputBars - Math.round(outputBars)) < 1e-6) {
+        let bestReturn = 0, available = false;
+        for (const [lagIndex, lagBars] of [8, 16, 32].entries()) {
+          const time = context.at + (outputBars - lagBars) * 240 / context.bpm;
+          const remembered = this.motifAnchor(cell.stem, time);
+          const anchor = remembered ? this.cellFeatures(remembered) : null;
+          if (!anchor) continue;
+          const input = motifFeatures(anchor, b, STEMS.indexOf(cell.stem), lagIndex, lagBars / 16);
+          bestReturn = Math.max(bestReturn, 1 / (1 + Math.exp(-infer(this.motif, input)[0])));
+          available = true;
         }
+        if (available) { returnSum += bestReturn; returnCount++; }
       }
+      outputBars += cell.bars;
       previous = cell;
     }
     return {
@@ -262,13 +289,17 @@ export class SliceFlow {
     if (!this.tourValue || !cells.length) return 0;
     const first = this.cellFeatures(cells[0]);
     if (!first) return 0;
-    const tail = this.tails[cells[0].stem];
-    const recent = (tail ? this.cellFeatures(tail) : null) ?? first;
+    const recentCells = this.records.filter(r=>r.stem===cells[0].stem && r.at<context.at)
+      .slice(-4).flatMap(r=>r.cells).slice(-4);
+    const vectors = recentCells.map(cell=>this.cellFeatures(cell)).filter((v): v is Float32Array=>v!==null);
+    const recent = new Float32Array(FLOW_DIM);
+    if (vectors.length) for (const vector of vectors) for (let i=0;i<FLOW_DIM;i++) recent[i]+=vector[i]/vectors.length;
+    else recent.set(first);
     const age = Math.max(0, context.at - (this.identitySince[cells[0].stem] ?? context.at));
-    const repeated = this.history.length
-      ? this.history.filter(h => h.signature.includes(cells[0].phraseId)).length / this.history.length : 0;
+    const repeated = vectors.length ? vectors.filter(vector=>vector.reduce((sum,v,i)=>sum+Math.abs(v-first[i]),0)/FLOW_DIM < .02).length/vectors.length : 0;
     const x = valueFeatures(first, recent, age, repeated);
-    return 1 / (1 + Math.exp(-infer(this.tourValue, x)[0]));
+    const raw = infer(this.tourValue, x)[0];
+    return this.valueScale ? clamp(raw / this.valueScale) : 1 / (1 + Math.exp(-raw));
   }
 
   mixScore<T extends FlowEntry>(tasks: readonly FlowTask<T>[], context: FlowContext): number {
@@ -306,12 +337,13 @@ export class SliceFlow {
     const logits = infer(this.artifact.planner, [Math.min(2,age/120),lastEnergy,context.targetEnergy-lastEnergy,density,context.targetEnergy-(recent[0]?.energy??context.targetEnergy),repeated,.8,Number(context.sectionChanged)]);
     this.lastIntent = ["hold", "vary", "handoff"][logits.indexOf(Math.max(...logits))];
     const candidates = tasks.map(task => {
-      if (pinned.has(task.stem)) return { task, fallback: null, changed: false, priority: 1 };
+      if (pinned.has(task.stem)) return { task, fallback: null, canHold: false, changed: false, priority: 1 };
       const prior = this.foundations[task.stem];
       const candidate = this.score(describeFlowTask(task, context.bars, 240/context.bpm), context);
       const fallback = hold(task.stem);
       const fallbackAssessment = fallback ? this.score(describeFlowTask(fallback,context.bars,240/context.bpm),context) : null;
       const fallbackScore = fallbackAssessment?.score ?? 0;
+      const canHold = Boolean(prior && fallback?.run[0]?.kit.track_id === prior.trackId);
       const motifGain = .28 * (candidate.returnScore - (fallbackAssessment?.returnScore ?? .5));
       const candidateCells = describeFlowTask(task, context.bars, 240/context.bpm);
       const valueGain = .10 * (this.valueGain(candidateCells, context)
@@ -321,16 +353,16 @@ export class SliceFlow {
       const stableAge = Math.max(0,context.at-(this.identitySince[task.stem]??context.at));
       const foundation = task.stem === "drums" || task.stem === "bass";
       const protectedFoundation = foundation && stableAge < this.artifact!.foundation_seconds && !context.rotation && !context.bridge;
-      if (fallback && ((changed && protectedFoundation && !context.sectionChanged) || (!context.bridge && candidate.score + .18 < fallbackScore - motifGain))) {
-        return { task: fallback, fallback, changed: false, priority: 0 };
+      if (fallback && ((changed && protectedFoundation && !context.sectionChanged) || (!context.bridge && candidate.score + .18 < fallbackScore))) {
+        return { task: fallback, fallback, canHold, changed: !canHold, priority: 0 };
       }
       const noveltyGain = .15 * (this.sourceNovelty(String(first?.kit.track_id ?? ""))
         - (fallback ? this.sourceNovelty(String(fallback.run[0]?.kit.track_id ?? "")) : .5));
-      return { task, fallback, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + noveltyGain + (foundation ? 0 : .02) };
+      return { task, fallback, canHold, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + noveltyGain + (foundation ? 0 : .02) };
     });
     // Preserve a recognizable anchor even when the old arc requests a reset.
     const maxChanges = context.bars <= 4 || this.lastIntent === "hold" || context.rotation ? 1 : 2;
-    const changed = candidates.filter(c => c.changed && c.fallback).sort((a,b)=>b.priority-a.priority);
+    const changed = candidates.filter(c => c.changed && c.fallback && c.canHold).sort((a,b)=>b.priority-a.priority);
     for (const item of changed.slice(maxChanges)) if (item.fallback) item.task = item.fallback;
     let selected = candidates.map(c=>c.task);
     let mix = this.mixScore(selected,context);
@@ -374,6 +406,7 @@ export class SliceFlow {
   retime(after: number, ratio: number): void {
     if (!(ratio > 0) || !Number.isFinite(ratio)) return;
     for (const record of this.records) {
+      if (record.endAt <= after) continue;
       if (record.at > after) record.at = after+(record.at-after)*ratio;
       if (record.endAt > after) record.endAt = after+(record.endAt-after)*ratio;
       for (const cell of record.cells) cell.rate /= ratio;

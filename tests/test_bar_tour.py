@@ -61,7 +61,7 @@ def test_plan_tour_respects_cooldown_and_change_budget():
     # No immediate repeat, and the cooldown window stays disjoint.
     assert all(route[i] != route[i - 1] for i in range(1, len(route)))
     assert len(set(route[-3:])) == 3
-    changes = sum(cells[i].track != cells[i - 1].track for i in route[1:])
+    changes = sum(cells[route[i]].track != cells[route[i - 1]].track for i in range(1, len(route)))
     assert changes <= 1
 
 
@@ -95,3 +95,21 @@ def test_coverage_tracker_pushes_toward_the_whole_spectrum():
         tracker.observe(known)
     assert tracker.novelty(known) < tracker.novelty(fresh)
     assert set(tracker.bins(known)) == set(CoverageTracker.DIMS)
+
+
+def test_zero_change_budget_keeps_the_current_source_and_stem():
+    cells = [Cell(f'a{i}', 'a', 'bass', i, np.full(32,.3)) for i in range(6)]
+    cells += [Cell(f'b{i}', 'b', 'bass', i, np.full(32,.9)) for i in range(6)]
+    cells += [Cell('wrong-stem', 'a', 'drums', 0, np.full(32,1.))]
+    route = plan_tour(cells,0,4,{'critic':_net(108)},max_changes=0,beam=4,branch=4)
+    assert len(route)==5
+    assert all(cells[i].track=='a' and cells[i].stem=='bass' for i in route)
+
+
+def test_coverage_accounts_for_proposed_route_without_mutating_visits():
+    from wub_core.bar_tour import CoverageTracker
+    a=Cell('a','a','bass',0,np.ones(32),{'style':'wave','key':'C minor','bpm':'90','energy':'.5'})
+    b=Cell('b','b','bass',0,np.ones(32),{'style':'house','key':'G minor','bpm':'125','energy':'.8'})
+    tracker=CoverageTracker()
+    assert tracker.novelty(a,[a,a]) < tracker.novelty(b,[a,a])
+    assert tracker.novelty(a)==1  # speculative visits never become listening history

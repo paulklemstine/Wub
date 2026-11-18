@@ -76,9 +76,10 @@ const task=(stem,id)=>({stem,run:[entry(stem,id)]});
  assert.ok(rotated.filter(t=>t.run[0].phrase.id==='b').length<=1);
  const pinned=flow.select(wanted,{...ctx,at:8},s=>task(s,'a'),new Set(['drums']));
  assert.equal(pinned.find(t=>t.stem==='drums').run[0].phrase.id,'b');
- const edited={stem:'other',run:[entry('other','a'),entry('other','b')],slices:[{itemIndex:1,startFrac:.5,endFrac:.75,targetBars:1,gain:.5},{itemIndex:0,startFrac:.75,endFrac:1,targetBars:1}],pitchPoints:[{offsetSec:2,semitones:-3}]};
+ const edited={stem:'other',run:[{...entry('other','a'),gain:2},entry('other','b')],voiceRate:1.02,slices:[{itemIndex:1,startFrac:.5,endFrac:.75,targetBars:1,gain:.5},{itemIndex:0,startFrac:.75,endFrac:1,targetBars:1}],pitchPoints:[{offsetSec:2,semitones:-3}]};
  const cells=describeFlowTask(edited,2,2);
  assert.equal(cells[0].phraseId,'b');assert.equal(cells[0].bar,2);assert.equal(cells[0].gain,.5);
+ assert.equal(cells[0].mixerGain,2);assert.equal(cells[0].rate,1.02);assert.equal(cells[1].rate,1.02);
  assert.equal(cells[1].phraseId,'a');assert.equal(cells[1].semitones,-3);
  assert.equal(cells.reduce((n,c)=>n+c.bars,0),2);
  flow.record(edited,50,2,120);
@@ -86,6 +87,10 @@ const task=(stem,id)=>({stem,run:[entry(stem,id)]});
  assert.equal(flow.trace(50).records.at(-1).cells[0].phraseId,'b');
  const copy=flow.trace();copy.records[0].cells[0].phraseId='mutated';
  assert.equal(flow.trace().records[0].cells[0].phraseId,'a');
+ assert.equal(flow.motifAnchor('other',2).bar,1);
+ assert.equal(flow.motifAnchor('other',49),null); // no invented history across gaps
+ flow.retime(49,2);
+ assert.equal(flow.trace().records[0].cells[0].rate,1); // finished history is immutable
  for(let i=0;i<300;i++)flow.record(task('drums','a'),100+i*8,4,120);
  assert.equal(flow.trace().records.length,256);
  flow.reset();assert.equal(flow.trace().records.length,0);
@@ -231,8 +236,11 @@ def test_auto_review_decides_without_human_input(tmp_path):
     rows=load_feedback(out)
     assert len(rows)==2
     for row in rows:
-        assert row['origin']=='auto-reward-v1'
-        assert row['winner'] in ('a','b')
+        assert row['origin']=='auto-reward-v2'
+        assert row['winner'] in ('a','b','tie')
+        assert row['tested_stem']=='other'
+        assert row['a'] != row['b']
+        assert row['renderer']=='shipping-pcm-signalsmith-chrome'
         assert len(row['a'])==INPUT_DIM and len(row['b'])==INPUT_DIM
 
 
@@ -268,3 +276,65 @@ global.fetch=async url=>{
 '''
     result=subprocess.run(['node','-e',script,str(out),json.dumps(artifact),value,raw],capture_output=True,text=True)
     assert result.returncode==0, result.stderr
+
+
+def test_motif_pairs_use_source_time_and_partition_every_donor():
+    from scripts.train_motif_return import build_pairs,is_val
+    train=[f't{i}' for i in range(200) if not is_val(f't{i}')][:2]
+    held=[f't{i}' for i in range(200) if is_val(f't{i}')][:2]
+    tracks=train+held;cells={}
+    for ti,track in enumerate(tracks):
+        for stem in ('drums','bass','other','vocals'):
+            for bar in range(80):
+                vec=np.zeros(DIM);vec[0]=bar/100;vec[1]=ti
+                cells[(stem,track,bar)]=vec
+    x,y,val,report=build_pairs(cells,tracks,505)
+    assert report['lag_unit']=='source_bars'
+    assert set(report['training_donor_tracks'])<=set(train)
+    assert set(report['validation_donor_tracks'])<=set(held)
+    assert set(x[~val,1])<=set([0,1]) and set(x[~val,DIM+1])<=set([0,1])
+    assert set(x[val,1])<=set([2,3]) and set(x[val,DIM+1])<=set([2,3])
+    elapsed=np.round((x[y==1,DIM]-x[y==1,0])*100)
+    assert set(elapsed)<=set([8,16,32])
+    lag=np.array([8,16,32])[x[:,100:103].argmax(axis=1)]
+    assert np.allclose(x[:,-1],lag/16)  # negatives cannot reveal themselves via age
+
+
+def test_value_trajectories_do_not_jump_over_unshipped_sections(tmp_path):
+    from scripts.train_bar_tour_value import build_dataset
+    ids=[f'p{i}' for i in range(6)]
+    data=np.full((6,4,4,DIM),.3,np.float32)
+    data.tofile(tmp_path/'f.f32')
+    (tmp_path/'slice_flow.json').write_text(json.dumps({'feature_file':'f.f32','phrase_ids':ids}))
+    starts=[0,4,8,100,104,108]
+    (tmp_path/'kit_manifest.json').write_text(json.dumps({'kits':[{'track_id':'one','bpm':120,'phrases':[{'id':p,'start_bar':b} for p,b in zip(ids,starts)]}]}))
+    x,y,val=build_dataset(tmp_path)
+    assert len(x)==32  # two real 12-bar runs; no invented link across the 88-bar gap
+    from scripts.train_motif_return import load_cells
+    model=json.loads((tmp_path/'slice_flow.json').read_text())
+    model.update(format='slice_flow_v1',feature_dim=DIM)
+    (tmp_path/'slice_flow.json').write_text(json.dumps(model))
+    cells,tracks=load_cells(tmp_path)
+    assert ('bass','one',100) in cells and ('bass','one',16) not in cells
+    assert x.shape[1]==72 and np.isfinite(y).all()
+
+
+def test_cluster_handoff_respects_the_selected_styles(tmp_path):
+    out=tmp_path/'remix.mjs'
+    subprocess.run([str(ROOT/'frontend/node_modules/.bin/esbuild'),str(ROOT/'frontend/src/stem_remix.ts'),'--bundle','--platform=browser','--format=esm','--define:import.meta.env={}',f'--outfile={out}'],check=True,capture_output=True)
+    script=f"import {{StemRemixPlayer}} from {json.dumps(out.as_uri())};\n"+r'''
+import assert from 'node:assert/strict';
+const player=Object.create(StemRemixPlayer.prototype);
+const wave={id:'wave88',style:'wave',bpm:88,key:'C minor'};
+const house={id:'house96',style:'house',bpm:96,key:'C minor'};
+const later={id:'wave110',style:'wave',bpm:110,key:'C minor'};
+player.cluster=wave;player.clusters=[wave,house,later];player.ladderDirection=1;
+player.styleFilter=new Set(['wave']);
+assert.equal(player.chooseNeighbourCluster().id,'wave110');
+player.cluster=later;
+assert.equal(player.chooseNeighbourCluster().id,'wave88');
+player.cluster=wave;player.styleFilter=null;player.ladderDirection=1;
+assert.equal(player.chooseNeighbourCluster().id,'house96');
+'''
+    result=subprocess.run(['node','--input-type=module','-e',script],capture_output=True,text=True)
+    assert result.returncode==0,result.stderr

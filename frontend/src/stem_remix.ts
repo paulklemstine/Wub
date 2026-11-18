@@ -2903,8 +2903,25 @@ export class StemRemixPlayer {
       }, (stem) => {
         const old = flowContinuation[stem];
         const entry = old ? this.entryById.get(`${old.phrase.id}:${stem}`) : null;
-        if (!entry || this.failedKits.has(entry.kit.track_id)) return null;
-        return { stem, run: this.runFor(entry, phrasesPerStem) };
+        if (entry && !this.failedKits.has(entry.kit.track_id)) {
+          return { stem, run: this.runFor(entry, phrasesPerStem) };
+        }
+        if (!rotation) return null;
+        // A tempo/key rung can make the outgoing source illegal. Do not
+        // bypass the acoustic judge merely because it cannot be held: find
+        // a compatible incoming run from the NEW legal pool instead.
+        const candidates = [...this.pools[stem]].filter(item=>!this.failedKits.has(item.kit.track_id))
+          .sort((a,b)=>Math.abs(a.energy-targetEnergy)-Math.abs(b.energy-targetEnergy)).slice(0,24);
+        let best: { stem: StemName; run: StemPoolEntry[] } | null = null;
+        let quality = -Infinity;
+        for (const candidate of candidates) {
+          const task = { stem, run: this.runFor(candidate, phrasesPerStem) };
+          const score = this.sliceFlow.score(describeFlowTask(task,bars,this.barSec), {
+            at,bars,bpm:this.sessionBpm,section:normalized,targetEnergy,sectionChanged:true,rotation:true,bridge:false,
+          }).score;
+          if (score > quality) { quality = score; best = task; }
+        }
+        return best;
       }, pinned);
       tasks.splice(0, tasks.length, ...accepted);
     }
@@ -4410,7 +4427,7 @@ export class StemRemixPlayer {
       this.scheduledRuns[stem] = scheduled;
       if (!resume) {
         for (const entry of run) this.recordPlayed(stem, entry);
-        const flowTask = { stem, run: [...run], slices, baseSemitones, pitchPoints: pitchPoints ? [...pitchPoints] : undefined };
+        const flowTask = { stem, run: [...run], slices, baseSemitones, voiceRate: rate, pitchPoints: pitchPoints ? [...pitchPoints] : undefined };
         this.sliceFlow.record(flowTask, startedAt, bars, this.sessionBpm);
         const cells = describeFlowTask(flowTask, bars, this.barSec);
         const tail = cells[cells.length - 1];
@@ -4863,7 +4880,7 @@ export class StemRemixPlayer {
     // in session.  Walking the ladder systematically brings every tempo
     // group into range over successive sets; any-key transposition makes the
     // key jump at the set boundary safe (fresh anchor record).
-    const ladder = [...this.clusters].sort((a, b) => {
+    const ladder = this.clusters.filter(cluster => this.styleFilter === null || this.styleFilter.has(cluster.style)).sort((a, b) => {
       if (a.bpm !== b.bpm) return a.bpm - b.bpm;
       return a.key.localeCompare(b.key) || a.id.localeCompare(b.id);
     });

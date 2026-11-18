@@ -26,14 +26,16 @@ def load_models(base: Path) -> dict:
         models["motif"] = json.loads(motif.read_text())
     value = base / "bar_tour_value.json"
     if value.exists():
-        models["value"] = json.loads(value.read_text())["net"]
+        artifact = json.loads(value.read_text())
+        models["value"] = {**artifact["net"], "value_scale": artifact.get("value_scale")}
     return models
 
 
 def route_metrics(cells, route, models):
     from wub_core.bar_tour import edge_scores, net_forward, sigmoid, VALUE_INPUT_DIM
     feats = np.stack([cells[i].features for i in route])
-    edges = [edge_scores(feats[i], feats[i + 1:i + 2], cells[route[i]].stem, models)[0]
+    edges = [edge_scores(feats[i], feats[i + 1:i + 2], cells[route[i]].stem, models,
+                         motif_anchor=feats[i+1-8] if i+1>=8 else None)[0]
              for i in range(len(route) - 1)]
     return {
         "flow": float(np.mean(edges)) if edges else 0.0,
@@ -76,7 +78,7 @@ def main() -> None:
                          key=lambda p: int(p.get("start_bar", 0)))
         for stem_index, stem in enumerate(STEMS):
             pool_phrases = [p for k in manifest["kits"]
-                            if k["track_id"] != kit["track_id"]
+                            if k["track_id"] != kit["track_id"] and partition(str(k["track_id"]))
                             and abs(float(k.get("bpm", 120)) / max(1.0, float(kit.get("bpm", 120))) - 1) <= 0.12
                             for p in k["phrases"] if p["id"] in rows]
             chosen = phrases[:2] + [pool_phrases[int(i)] for i in

@@ -1,0 +1,215 @@
+{
+  "format": "wub-slice-flow-release-validation-v1",
+  "date_local": "2026-11-18",
+  "scope": "software, training split, actual rendering and live Web Audio validation; not a human listening verdict",
+  "corpus": {
+    "phrases": 3670,
+    "audio_cells": 58720,
+    "train_tracks": 443,
+    "development_tracks": 241,
+    "development_examples": 6769
+  },
+  "held_out_tracks": 57,
+  "critic": {
+    "critic_examples": 176336,
+    "validation_mae": 0.012108225375413895,
+    "validation_auc_weak_labels": 0.9992212526472113,
+    "cross_song_positive_examples": 27436,
+    "mix_validation_mae": 0.0325776531916255
+  },
+  "development": {
+    "development_accuracy": 0.64,
+    "development_majority_accuracy": 0.5927272727272728,
+    "foundation_seconds": 60.0
+  },
+  "motif": {
+    "pairs": 83332,
+    "tracks": 500,
+    "validation_tracks": 57,
+    "val_auc": 0.8513606406619838,
+    "split_method": "track_hash_before_pairing",
+    "lag_unit": "source_bars",
+    "age_unit": "16_bars"
+  },
+  "future_flow": {
+    "samples": 25760,
+    "train": 22592,
+    "validation": 3168,
+    "val_mse": 0.3496236801147461,
+    "baseline_mse": 0.5316765308380127,
+    "chronology": "consecutive_source_bars_only",
+    "age_unit": "seconds"
+  },
+  "feedback": {
+    "playback_examples": 176,
+    "feedback_pairs": 0,
+    "human_feedback_pairs": 0,
+    "automatic_feedback_pairs": 0
+  },
+  "automatic_refinement": {
+    "attempted": true,
+    "accepted": false,
+    "baseline_validation_mae": 0.012108225375413895,
+    "candidate_validation_mae": 0.01548077818006277,
+    "criterion": "no automatic update beyond max(0.001, 5%) held-out MAE regression"
+  },
+  "checks": {
+    "pytest": {
+      "passed": 315,
+      "warnings": 7
+    },
+    "frontend_build": "npm run build passed",
+    "long_audio_endurance": {
+      "ready": true,
+      "bpm": 120,
+      "errors": [],
+      "records": 128,
+      "clusters": [
+        "wave_fs_minor_110",
+        "house_c_minor_120"
+      ],
+      "voiceCounts": {
+        "drums": 2,
+        "bass": 2,
+        "other": 2,
+        "vocals": 2
+      },
+      "seconds": 330,
+      "forced_rotation": false,
+      "max_digital_zero_seconds": 0.0,
+      "level_percentiles": [
+        6.026883268915748e-08,
+        0.10008823539254944,
+        0.15458081843782384,
+        0.24589905198976736,
+        0.3049429580663681
+      ],
+      "long_task_count": 5,
+      "max_long_task_ms": 75,
+      "renderer": "Chrome AudioContext / shipping StemRemixPlayer",
+      "scope": "endurance run before the final style-filter correction; use final_style_filtered_handoff for final filter policy"
+    },
+    "final_style_filtered_handoff": {
+      "ready": true,
+      "bpm": 99,
+      "errors": [],
+      "records": 40,
+      "clusters": [
+        "wave_d_minor_96",
+        "wave_e_minor_99"
+      ],
+      "voiceCounts": {
+        "drums": 2,
+        "bass": 2,
+        "other": 2,
+        "vocals": 2
+      },
+      "seconds": 95,
+      "forced_rotation": true,
+      "max_digital_zero_seconds": 0.0,
+      "level_percentiles": [
+        5.463420865411435e-08,
+        0.10514244605970964,
+        0.16332412525015183,
+        0.2530090474215525,
+        0.3420357444195929
+      ],
+      "long_task_count": 2,
+      "max_long_task_ms": 66,
+      "renderer": "Chrome AudioContext / shipping StemRemixPlayer"
+    },
+    "final_gate_benchmark": {
+      "iterations": 100,
+      "block_bars": 16,
+      "median_ms": 8.783564999999953,
+      "p95_ms": 13.793348999999978,
+      "max_ms": 15.639447000000018,
+      "scope": "local final assembled-plan gate, with acoustic/mix/motif/value heads; not browser FPS"
+    },
+    "blind_pack_render": {
+      "format": "slice_flow_render_report_v1",
+      "renderer": "shipping kit_pcm + Signalsmith Stretch + master safety stage in Chrome OfflineAudioContext",
+      "cases": [
+        {
+          "id": "flow-505-0-48674748f1",
+          "variant": "a",
+          "rms": 0.18422013521194458,
+          "peak": 0.9308871030807495,
+          "seam_dip_db": 5.198090274036885,
+          "finite": true
+        },
+        {
+          "id": "flow-505-0-48674748f1",
+          "variant": "b",
+          "rms": 0.18374161422252655,
+          "peak": 0.9308871030807495,
+          "seam_dip_db": 5.198162280730344,
+          "finite": true
+        },
+        {
+          "id": "flow-505-1-4d178239bd",
+          "variant": "a",
+          "rms": 0.13027659058570862,
+          "peak": 0.7391840219497681,
+          "seam_dip_db": -2.3768556599105186,
+          "finite": true
+        },
+        {
+          "id": "flow-505-1-4d178239bd",
+          "variant": "b",
+          "rms": 0.1378299742937088,
+          "peak": 0.6882961392402649,
+          "seam_dip_db": -2.3769121397042343,
+          "finite": true
+        },
+        {
+          "id": "flow-505-2-2c26c44317",
+          "variant": "a",
+          "rms": 0.1768757551908493,
+          "peak": 0.8379620313644409,
+          "seam_dip_db": 0.896440283083486,
+          "finite": true
+        },
+        {
+          "id": "flow-505-2-2c26c44317",
+          "variant": "b",
+          "rms": 0.17891182005405426,
+          "peak": 0.8937452435493469,
+          "seam_dip_db": 0.8963487595673852,
+          "finite": true
+        }
+      ]
+    },
+    "review_page_controls": {
+      "cards": 3,
+      "players": 6,
+      "exportedRows": 1,
+      "vectorLength": 108,
+      "downloadName": "slice-flow-preferences.jsonl",
+      "overflow": false
+    },
+    "review_audio": {
+      "duration": 20.109274,
+      "currentTime": 0.393903,
+      "paused": false,
+      "error": null
+    }
+  },
+  "tour_benchmark": {
+    "command": "eval_bar_tour.py --tracks 6 --pool 80 --horizon 8",
+    "output": [
+      "[tour] greedy        flow 0.7157  changes 2.75  distinct 5.2  styles 2.0  keys 2.7  tempo 10.1  tracks 3.2",
+      "[tour] beam          flow 0.7385  changes 2.62  distinct 5.4  styles 1.9  keys 2.6  tempo 10.7  tracks 3.0",
+      "[tour] beam+value    flow 0.7388  changes 2.54  distinct 5.2  styles 1.9  keys 2.8  tempo 10.7  tracks 3.2",
+      "[tour] beam+coverage flow 0.7221  changes 3.00  distinct 6.1  styles 2.5  keys 3.7  tempo 16.1  tracks 3.9"
+    ],
+    "meaning": "proxy scores and source-bank coverage on held-out donors; not perceived key changes or listening preference"
+  },
+  "limits": [
+    "Acoustic/development/motif labels are weak corpus-derived targets, not human taste ground truth.",
+    "The long endurance run exposed a style-filter rollover issue; the final filtered handoff run and regression test verify its correction.",
+    "The current audio bank is mono; unobserved stereo-width columns are masked.",
+    "Live smoke samples the master bus and scheduling errors, not subjective groove or full-app GPU FPS.",
+    "Runtime descriptors of sub-bar edits approximate the containing source bars; offline review uses rendered PCM."
+  ]
+}

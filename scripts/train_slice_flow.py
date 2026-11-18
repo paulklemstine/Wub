@@ -105,7 +105,9 @@ def train_net(x, y, val, epochs, device, classes=1, feedback=()):
                 a=torch.tensor((np.array([p['a'] for p in pairs],np.float32)-mean)/std,device=device)
                 b=torch.tensor((np.array([p['b'] for p in pairs],np.float32)-mean)/std,device=device)
                 target=torch.tensor([1. if p['winner']=='a' else 0. if p['winner']=='b' else .5 for p in pairs],device=device)
-                loss=loss+.3*torch.nn.functional.binary_cross_entropy_with_logits(net(a)[:,0]-net(b)[:,0],target)
+                weights=torch.tensor([.1 if str(p.get('origin','human')).startswith('auto-reward-') else .3 for p in pairs],device=device)
+                pair_loss=torch.nn.functional.binary_cross_entropy_with_logits(net(a)[:,0]-net(b)[:,0],target,reduction='none')
+                loss=loss+(weights*pair_loss).mean()
             opt.zero_grad();loss.backward();opt.step()
         net.eval()
         with torch.no_grad():
@@ -155,7 +157,7 @@ def trace_examples(paths,features,phrase_ids):
                     previous.pop(stem,None);continue
                 bar=int(cell['bar'])
                 if stem not in STEMS or bar not in range(4):raise ValueError('invalid trace cell')
-                current=transform(features[rows[pid],STEMS.index(stem),bar],cell['semitones'],(cell['gain']+cell['endGain'])/2)
+                current=transform(features[rows[pid],STEMS.index(stem),bar],cell['semitones'],(cell['gain']+cell['endGain'])/2*cell.get('mixerGain',1))
                 if stem in previous:
                     old,old_track=previous[stem]
                     context=[0,old_track!=cell['trackId'],1,cell['startFrac']==0,.5,0,.7,.25]
@@ -223,7 +225,7 @@ def main():
     feedback=load_feedback(args.feedback)
     model,pred,loss=train_net(x,y,val,args.epochs,args.device,feedback=feedback)
     kinds=np.array(kinds);binary=y[val]>.65
-    report={'format':'slice_flow_report_v1','seed':505,'phrases':len(phrase_ids),'audio_cells':int(features.shape[0]*16),'train_tracks':len(set(np.array(tracks)[~np.array([partition(t) for t in tracks])])),'validation_tracks':sorted(set(np.array(tracks)[np.array([partition(t) for t in tracks])])),'critic_examples':len(x),'validation_mae':float(mean_absolute_error(y[val],pred)),'validation_auc_weak_labels':float(roc_auc_score(binary,pred)),'cross_song_positive_examples':int(np.sum((kinds=='cross')&(y>.65))),'feedback_pairs':len(feedback),'playback_examples':len(captured),'label_provenance':'natural chronology + graded acoustic weak supervision; not human preference','device':args.device}
+    report={'format':'slice_flow_report_v1','seed':505,'phrases':len(phrase_ids),'audio_cells':int(features.shape[0]*16),'train_tracks':len(set(np.array(tracks)[~np.array([partition(t) for t in tracks])])),'validation_tracks':sorted(set(np.array(tracks)[np.array([partition(t) for t in tracks])])),'critic_examples':len(x),'validation_mae':float(mean_absolute_error(y[val],pred)),'validation_auc_weak_labels':float(roc_auc_score(binary,pred)),'cross_song_positive_examples':int(np.sum((kinds=='cross')&(y>.65))),'feedback_pairs':len(feedback),'human_feedback_pairs':sum(not str(p.get('origin','human')).startswith('auto-reward-') for p in feedback),'automatic_feedback_pairs':sum(str(p.get('origin','human')).startswith('auto-reward-') for p in feedback),'playback_examples':len(captured),'label_provenance':'natural chronology + graded acoustic weak supervision; not human preference','device':args.device}
     mx=[];my=[];mv=[]
     for p,track in enumerate(tracks):
         flag=partition(track)
