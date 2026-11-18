@@ -792,6 +792,7 @@ def main() -> None:
         "cell_chroma": (out_dir / "cell_chroma.json").exists(),
         "pattern_bar_model": (out_dir / "pattern_bar_model.json").exists(),
         "harmony_continuity": (out_dir / "harmony_continuity.json").exists(),
+        "song_arc_model": (out_dir / "song_arc_model.json").exists(),
     }
     (out_dir / "sidecars.json").write_text(json.dumps(sidecars_flag, indent=2) + "\n")
     summary = {"arc": arc_res, "progression": prog_res, "rhythm_vocal": rhy_res, "syntax": syn_res}

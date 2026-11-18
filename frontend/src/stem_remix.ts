@@ -34,6 +34,7 @@ import {
   type ArcModelArtifact, type ArcPrediction,
 } from "./arc_inference";
 import { JointRanker } from "./joint_ranker";
+import { sampleSongArc, songArcTargetAt, type SampledArcSegment, type SongArcArtifact } from "./learned_arc";
 import { MixCompatModel, type MixCompatPhrase } from "./mix_compat";
 import {
   rhythmMixScore,
@@ -73,6 +74,13 @@ export interface TransitionCohort {
     max_changes_section: number;
     min_changes_section: number;
     pitch_cohort: string[];
+  };
+  handoff?: {
+    enabled: boolean;
+    probability: number;
+    max_per_source: number;
+    max_stems: number;
+    note?: string;
   };
 }
 
@@ -648,6 +656,10 @@ export class StemRemixPlayer {
   private readonly sliceFlow = new SliceFlow();
   /** Optional learned cohort policy for section boundaries; null = old behavior. */
   private transitionCohort: TransitionCohort | null = null;
+  /** Optional corpus-mined song arc; null = fixed 104-bar blueprint. */
+  private songArcModel: SongArcArtifact | null = null;
+  private sampledArc: SampledArcSegment[] | null = null;
+  private sampledArcKey = "";
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -912,6 +924,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("vocal_bar_model")) setupLoads.push(this.loadVocalBarModel(base));
     if (this.sidecarEnabled("vocal_phrases")) setupLoads.push(this.loadVocalPhrases(base));
     if (this.sidecarEnabled("transition_cohort")) setupLoads.push(this.loadTransitionCohort(base));
+    if (this.sidecarEnabled("song_arc_model")) setupLoads.push(this.loadSongArc(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1399,6 +1412,41 @@ export class StemRemixPlayer {
     } catch {
       // Optional prior; the historical 1-2 stem budget remains in force.
     }
+  }
+
+  /** Corpus-mined section transition/duration/energy model. */
+  private async loadSongArc(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/song_arc_model.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as SongArcArtifact;
+      if (doc?.format === "wub-song-arc-v1" && doc.tracks >= 100
+        && doc.transition && doc.lengths && doc.section_energy) {
+        this.songArcModel = doc;
+        console.info(`[StemRemix] Song arc loaded (${doc.tracks} songs)`);
+      }
+    } catch {
+      // Optional; the fixed 104-bar blueprint stays in force.
+    }
+  }
+
+  /** Deterministic per-set sampled arc point at a session bar. */
+  private sampledArcTarget(startBar: number): SampledArcSegment | null {
+    const model = this.songArcModel;
+    if (!model) return null;
+    const key = `${this.cluster?.id ?? ""}:${Math.round(this.sessionBpm)}`;
+    if (key !== this.sampledArcKey || !this.sampledArc) {
+      this.sampledArcKey = key;
+      this.sampledArc = sampleSongArc(model, Math.floor(hashRoll(`songarc:${key}`) * 4294967296));
+    }
+    return songArcTargetAt(this.sampledArc, startBar);
+  }
+
+  /** Rare, deterministic-random full-source takeover at a section change. */
+  private handoffAllowed(startBar: number): boolean {
+    const h = this.transitionCohort?.handoff;
+    if (!h?.enabled || !(h.probability > 0)) return false;
+    return hashRoll(`handoff:${this.sampledArcKey}:${startBar}`) < h.probability;
   }
 
   /** Learned probability of a changed-stem cohort at a section boundary. */
@@ -2693,6 +2741,7 @@ export class StemRemixPlayer {
     // transitions/durations) for infinite navigation; fall back to the fixed
     // 104-bar arc. The ranker/arc-models remain 5-class (base section).
     const arc = targetAt(startBar);
+    const sampledArc = this.sampledArcTarget(startBar);
     const barsForTarget = rotation ? 4 : this.blockBarsAt(startBar);
     let normalized = arc.section;
     let displaySection: string = arc.phase;
@@ -2767,14 +2816,22 @@ export class StemRemixPlayer {
       displaySection = secCtx.role;
       targetEnergy = secCtx.targetEnergy;
     }
+    // The architect overrode the navigator's energy with its blueprint. Blend
+    // the corpus-mined arc back in *after* that override so section changes
+    // build/fade like the training songs instead of snapping to a fixed table.
+    if (sampledArc && !bridge && !rotation) {
+      targetEnergy = clamp01(0.60 * targetEnergy + 0.40 * sampledArc.energy);
+    }
     this.composedStats.mode = this.songArchitect.getMode();
     this.composedStats.role = displaySection;
     this.composedStats.chords = secCtx.progression
       .map((c) => `${(parsedSessionKey.root + c.relRoot) % 12}:${c.quality.slice(0, 3)}`)
       .join(" ");
-    const budget = movementBudgetAt(
+    const handoffThisBlock = sectionChanged && !bridge && !rotation && this.handoffAllowed(startBar);
+    const rawBudget = movementBudgetAt(
       startBar, bars, sectionChanged, this.transitionCohort?.policy.max_changes_section,
     );
+    const budget = handoffThisBlock ? { ...rawBudget, maxChanges: 4 } : rawBudget;
 
     // Pins are measured in session bars.  Release at the first block boundary
     // at or after 32 bars; the manual hold voice fades at the same boundary.
@@ -2845,6 +2902,7 @@ export class StemRemixPlayer {
     const joint = !opening && !bridge && !rotation && rankerReady
       ? this.selectJoint(
         normalized, targetEnergy, phrasesPerStem, startBar, sectionChanged, forceMove,
+        handoffThisBlock,
       )
       : null;
     const jointMs = performance.now() - jointT0;
@@ -3044,9 +3102,11 @@ export class StemRemixPlayer {
       const accepted = this.sliceFlow.select(tasks, {
         at, bars, bpm: this.sessionBpm, section: normalized, targetEnergy,
         sectionChanged, rotation, bridge,
-        cohortMaxChanges: sectionChanged
-          ? this.transitionCohort?.policy.max_changes_section
-          : undefined,
+        cohortMaxChanges: handoffThisBlock
+          ? Math.max(4, this.transitionCohort?.handoff?.max_stems ?? 4)
+          : sectionChanged
+            ? this.transitionCohort?.policy.max_changes_section
+            : undefined,
       }, (stem) => {
         const old = flowContinuation[stem];
         const entry = old ? this.entryById.get(`${old.phrase.id}:${stem}`) : null;
@@ -3345,6 +3405,7 @@ export class StemRemixPlayer {
     startBar: number,
     sectionChanged: boolean,
     forceMove: boolean,
+    handoff = false,
   ): {
     entries: Partial<Record<StemName, StemPoolEntry>>;
     changed: StemName[];
@@ -3354,9 +3415,11 @@ export class StemRemixPlayer {
     ranker.beginBatch();
     const nextBlockBars = phrases * 4;
     const threshold = ranker.thresholdFor(nextBlockBars);
-    const budget = movementBudgetAt(
+    const rawBudget = movementBudgetAt(
       startBar, nextBlockBars, sectionChanged, this.transitionCohort?.policy.max_changes_section,
     );
+    const budget = handoff ? { ...rawBudget, maxChanges: 4 } : rawBudget;
+    const sourceCap = handoff ? Math.max(2, Math.min(4, this.transitionCohort?.handoff?.max_per_source ?? 4)) : 2;
     const allowVocals = vocalChangeAllowed(startBar, this.lastVocalChangeBar, sectionChanged);
     // A drum track can stay for a long time while bass/pads carry the mix.
     // After 24 bars, prefer a drum-inclusive candidate when it is nearly as
@@ -3432,6 +3495,11 @@ export class StemRemixPlayer {
         for (let j = i + 1; j < unpinned.length; j++) {
           for (let k = j + 1; k < unpinned.length; k++) {
             subsets.push([unpinned[i], unpinned[j], unpinned[k]]);
+            if (handoff && budget.maxChanges >= 4) {
+              for (let l = k + 1; l < unpinned.length; l++) {
+                subsets.push([unpinned[i], unpinned[j], unpinned[k], unpinned[l]]);
+              }
+            }
           }
         }
       }
@@ -3493,7 +3561,7 @@ export class StemRemixPlayer {
         }
         let maxCount = 0;
         for (const count of sourceCounts.values()) if (count > maxCount) maxCount = count;
-        if (maxCount > 2) {
+        if (maxCount > sourceCap) {
           let curMax = 0;
           const curCounts = new Map<string, number>();
           for (const stem of STEMS) {
@@ -3501,7 +3569,7 @@ export class StemRemixPlayer {
             if (tid) curCounts.set(tid, (curCounts.get(tid) ?? 0) + 1);
           }
           for (const count of curCounts.values()) if (count > curMax) curMax = count;
-          if (curMax <= 2 || maxCount >= curMax) return;
+          if (curMax <= sourceCap || maxCount >= curMax) return;
         }
       }
       const candidateState = this.jointState(candidate);
@@ -3512,7 +3580,7 @@ export class StemRemixPlayer {
       const rawScore = ranker.score(
         previousState, currentState, candidateState, changed, section, targetEnergy,
         this.currentBlockBars, nextBlockBars,
-      ) * (subset.length === 3 ? 0.97 : 1);
+      ) * (subset.length === 4 ? 0.94 : subset.length === 3 ? 0.97 : 1);
       let candidateEnergy = 0;
       let harmony = 0;
       let repetition = 0;
@@ -3707,12 +3775,12 @@ export class StemRemixPlayer {
           if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
         }
         for (const entry of lists[0]) {
-          if ((heldCounts.get(entry.kit.track_id) ?? 0) + 1 > 2) continue;
+          if ((heldCounts.get(entry.kit.track_id) ?? 0) + 1 > sourceCap) continue;
           consider(subset, [entry]);
         }
-      } else if (subset.length === 3) {
-        // Section-boundary cohort: three stems moving to a fresh handoff.
-        // Keep the same <=2 stems-per-source recombination cap as pairs.
+      } else if (subset.length >= 3) {
+        // Section-boundary cohort: three/four stems moving to a fresh handoff.
+        // The recombination source cap is relaxed only for a rare full takeover.
         const heldCounts = new Map<string, number>();
         for (const stem of STEMS) {
           if (subset.includes(stem)) continue;
@@ -3720,20 +3788,23 @@ export class StemRemixPlayer {
           if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
         }
         const lists3 = subset.map((s) => (options.get(s) ?? []).slice(0, PAIR_TOP_N));
-        for (const a of lists3[0]) {
-          for (const b of lists3[1]) {
-            for (const c of lists3[2]) {
-              const extra = new Map<string, number>();
-              let ok = true;
-              for (const tid of [a.kit.track_id, b.kit.track_id, c.kit.track_id]) {
-                const n = (extra.get(tid) ?? 0) + 1;
-                extra.set(tid, n);
-                if ((heldCounts.get(tid) ?? 0) + n > 2) { ok = false; break; }
-              }
-              if (ok) consider(subset, [a, b, c]);
-            }
+        const recurse = (depth: number, picks: StemPoolEntry[], extra: Map<string, number>): void => {
+          if (depth === lists3.length) {
+            if (picks.length >= 3) consider(subset, [...picks]);
+            return;
           }
-        }
+          for (const entry of lists3[depth]) {
+            const tid = entry.kit.track_id;
+            const n = (extra.get(tid) ?? 0) + 1;
+            if ((heldCounts.get(tid) ?? 0) + n > sourceCap) continue;
+            extra.set(tid, n);
+            picks.push(entry);
+            recurse(depth + 1, picks, extra);
+            picks.pop();
+            if (n === 1) extra.delete(tid); else extra.set(tid, n - 1);
+          }
+        };
+        recurse(0, [], new Map<string, number>());
       } else {
         // Pair scoring is the expensive part (a 2k-d MLP per combo).  Only
         // combine the top-ranked entries from each stem; jointOptions has
@@ -3745,14 +3816,14 @@ export class StemRemixPlayer {
           if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
         }
         const wouldExceedCap = (tid: string, extra: number): boolean =>
-          (heldCounts.get(tid) ?? 0) + extra > 2;
+          (heldCounts.get(tid) ?? 0) + extra > sourceCap;
         const firsts = lists[0].slice(0, PAIR_TOP_N);
         const seconds = lists[1].slice(0, PAIR_TOP_N);
         for (const first of firsts) {
           if (wouldExceedCap(first.kit.track_id, 1)) continue;
           for (const second of seconds) {
             if (first.kit.track_id === second.kit.track_id) {
-              // Two stems from the same source: allowed only if that brings it to 2.
+              // Two stems from the same source: allowed up to the source cap.
               if (wouldExceedCap(first.kit.track_id, 2)) continue;
             } else if (wouldExceedCap(second.kit.track_id, 1)) {
               continue;

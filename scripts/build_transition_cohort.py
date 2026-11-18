@@ -199,6 +199,13 @@ def mine(processed: Path, max_tracks: int) -> Dict[str, Any]:
             "min_changes_section": 1,
             "pitch_cohort": ["bass", "other", "vocals"],
         },
+        "handoff": {
+            "enabled": True,
+            "probability": 0.10,
+            "max_per_source": 4,
+            "max_stems": 4,
+            "note": "rare deterministic-random full-source takeover at a section change",
+        },
         "report": {
             "source": "data/processed/*.json (real 4-stem songs)",
             "section_labels": "wub_core.section_arcs.segment_sections",

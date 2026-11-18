@@ -20,5 +20,6 @@
   "transition_cohort": true,
   "cell_chroma": true,
   "pattern_bar_model": true,
-  "harmony_continuity": true
+  "harmony_continuity": true,
+  "song_arc_model": true
 }

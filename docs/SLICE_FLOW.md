@@ -327,3 +327,25 @@ the same audio and DSP used for the index; the rebuilt `cell_index.json` is
 byte-identical to the shipped one. All three sidecars are optional
 (`sidecars.json` flags `cell_chroma`, `pattern_bar_model`,
 `harmony_continuity`); without them the learned terms are exactly neutral.
+
+## Learned set arc and rare full-source takeovers
+
+`song_arc_model.json` (mined by `scripts/build_song_arc.py` from 1,895 real
+songs) records section transition probabilities, duration percentiles, section
+energy and energy slope. `learned_arc.ts` samples a full 104-bar arc from those
+tables with a deterministic per-set seed (cluster + BPM). Crucially, the
+sampled energy is blended **after** `SongArchitect.describeBlock()` — the
+architect's fixed blueprint was overwriting the learned navigator/arc-model
+energy and was the main source of "the drop feels like the previous section".
+Real slopes are used as intended: intros and buildups rise, breakdowns fade.
+The fixed `ARC_SEGMENTS` table and `targetAt()` are untouched; the sidecar
+(`song_arc_model` flag) is optional.
+
+`transition_cohort.json` now also carries a `handoff` policy: at a section
+change, a deterministic hash gives a **10% chance** of a rare all-in moment
+where up to four stems move to one source track. The old ≤2-stems-per-source
+recombination cap remains everywhere else. During a takeover the section
+budget is raised to four and the final `SliceFlow` gate is told to accept four;
+the joint ranker's raw score is discounted (0.94) because it was trained only
+on 1–2 stem moves. This directly targets the reported "mashup feel" without
+turning the set into a cover of one record.

@@ -364,5 +364,12 @@
     "label_provenance": "acoustic section detection, not human annotation",
     "track_disjoint": true,
     "note": "cohort priors only; no audio is regenerated or repitched"
+  },
+  "handoff": {
+    "enabled": true,
+    "probability": 0.1,
+    "max_per_source": 4,
+    "max_stems": 4,
+    "note": "rare deterministic-random full-source takeover at a section change"
   }
 }
