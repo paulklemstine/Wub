@@ -229,16 +229,28 @@ export class BarComposer {
     rotation: number,
   ): T[] {
     if (pool.length === 0) return [];
-    const priors = this.vocalFlow;
-    const priorTarget = priors
-      ? priors.distinct_bars_per_active[String(pool.length)]
-      : undefined;
-    const target = Math.max(pool.length >= 2 ? 2 : 1,
-      Math.min(pool.length, Math.round(priorTarget ?? Math.min(pool.length, 4))));
-    const chosen = pool.slice(0, Math.max(1, target));
+    // Real vocal passages are long, but a 16-bar hold still has to *develop*.
+    // The mined "distinct chroma bars" prior is perceptually too conservative
+    // (sustained notes collapse to one chroma), so use every active bar we
+    // have and vary the 4-bar motif with the block rotation.  A single-bar
+    // motif is never repeated verbatim across a long hold.
+    const chosen = pool.slice(0, Math.max(1, Math.min(pool.length, 4)));
+    const motifs = [
+      [0, 1, 2, 3],
+      [0, 1, 0, 2],
+      [0, 2, 1, 3],
+      [0, 0, 1, 2],
+      [0, 1, 3, 2],
+    ];
     const out: T[] = [];
+    let last = -1;
     for (let b = 0; b < outputBars; b++) {
-      out.push(chosen[(b + rotation) % chosen.length]);
+      const cycle = Math.floor(b / 4);
+      const motif = motifs[(rotation + cycle) % motifs.length];
+      let index = motif[b % 4] % chosen.length;
+      if (index === last && chosen.length > 1) index = (index + 1) % chosen.length;
+      out.push(chosen[index]);
+      last = index;
     }
     return out;
   }
@@ -832,7 +844,7 @@ export class BarComposer {
           // donor instead of copying that bar into every output slot.
           const pool: Array<{ itemIndex: number; srcBar: number; meta: CellStemMeta; semitones: number }> =
             activeSrcBars.map((bar) => ({ itemIndex: 0, srcBar: bar, meta: pMeta, semitones: phraseKeyShift }));
-          if (pool.length < 2 && secondary && sMeta) {
+          if (pool.length < 4 && secondary && sMeta) {
             const secActive = [0, 1, 2, 3].filter((bar) => this.isVocalBarActive(secondary.phrase.id, bar, sMeta));
             const secShift = this.solvePhraseKeyShift("vocals", secondary, sMeta, ch0, sessionRoot);
             for (const bar of secActive) {

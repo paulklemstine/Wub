@@ -264,8 +264,10 @@ bars the vocal actually uses (measured from bar chroma, not mere activity).  In
 
 The old repair path copied the phrase's only active bar into every output bar
 (`activeSrcBars[b % 1]`), which is exactly the one-bar vocal loop.  It now builds
-a small pool of active bars — borrowing from the secondary vocal donor when the
-primary has only one — and `developVocalBars()` cycles through at least two
-distinct bars, using the learned distinct-bar target and rotating per block.
+a pool of **all** active bars, borrowing from the secondary vocal donor whenever
+fewer than four are available.  `developVocalBars()` uses every bar in that pool
+and rotates a 4-bar motif per block (with an anti-immediate-repeat guard), so a
+16-bar vocal hold develops instead of looping one or two cells; the chroma-based
+distinct-bar prior proved too conservative for that purpose.
 The chorus hook loop applies the same rule instead of alternating two fixed
 bars.  With no sidecar the composer falls back to all active bars.
