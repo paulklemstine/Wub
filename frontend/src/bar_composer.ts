@@ -44,54 +44,6 @@ export interface ComposingPoolEntry {
   rmsDb: number;
 }
 
-export interface VocalBarNet {
-  mean: number[];
-  std: number[];
-  w1: number[][];
-  b1: number[];
-  w2: number[][];
-  b2: number[];
-}
-
-export interface VocalBarModel {
-  format: string;
-  version: number;
-  input_dim: number;
-  next_dim: number;
-  next: VocalBarNet;
-  length: VocalBarNet;
-}
-
-export interface VocalFlowPriors {
-  format: string;
-  run_lengths: Record<string, number>;
-  distinct_bars_per_active: Record<string, number>;
-  variation_rate: number;
-}
-
-/** One mined multi-bar vocal performance (a contiguous chain of 4-bar cells). */
-export interface VocalPhraseUnit {
-  ids: string[];
-  bars: number;
-  start_bar: number;
-  features: number[];
-  recurrence: number;
-  repeat: number;
-  score: number;
-}
-
-/** Learned chorus/loop model over mined multi-bar vocal units. */
-export interface VocalPhraseModel {
-  format: string;
-  version: number;
-  feature_names: string[];
-  mean: number[];
-  scale: number[];
-  weights: number[];
-  bias: number;
-  tracks: Record<string, VocalPhraseUnit[]>;
-}
-
 export interface ComposedStemPlan<TEntry extends ComposingPoolEntry> {
   stem: StemName;
   /** Distinct donor pool entries loaded for slicing (`itemIndex` indexes into this array). */
@@ -151,13 +103,6 @@ export interface VocalActivityInfo {
 const SCHEMAS: readonly MotifSchema[] = ["AAAB", "ABAB", "ABAC", "AABB"];
 
 export class BarComposer {
-  /** Optional learned next-vocal-bar model (activity/chroma + run length). */
-  vocalBarModel: VocalBarModel | null = null;
-  /** Optional learned vocal-development prior from real songs. */
-  vocalFlow: VocalFlowPriors | null = null;
-  /** Optional mined multi-bar vocal phrase unit model (chorus/loop ranking). */
-  vocalPhraseModel: VocalPhraseModel | null = null;
-
   private index: CellIndexData | null = null;
   private loaded = false;
   private lastBlockTail: Partial<Record<StemName, PrevBarTransitionContext>> = {};
@@ -263,91 +208,6 @@ export class BarComposer {
     return SCHEMAS[blockIdx % SCHEMAS.length];
   }
 
-  private inferVocal(net: VocalBarNet, x: readonly number[]): number[] {
-    const hidden = new Array<number>(net.b1.length).fill(0);
-    for (let j = 0; j < net.b1.length; j++) {
-      let sum = net.b1[j];
-      for (let i = 0; i < x.length; i++) {
-        sum += net.w1[j][i] * (x[i] - net.mean[i]) / net.std[i];
-      }
-      hidden[j] = Math.tanh(sum);
-    }
-    return net.w2.map((row, j) => row.reduce((s, w, i) => s + w * hidden[i], net.b2[j]));
-  }
-
-  private vocalBarVec(meta: CellStemMeta, bar: number): number[] {
-    const v = new Array<number>(30).fill(0);
-    const mask = meta.o[bar] ?? 0;
-    const count = popcount16(mask);
-    v[0] = count >= 2 ? 1 : 0;
-    v[1] = Math.min(1, count / 8);
-    const root = meta.r[bar] ?? -1;
-    v[2 + (root >= 0 ? root % 12 : 11)] = 1;
-    for (let i = 0; i < 16; i++) v[14 + i] = (mask >> i) & 1;
-    return v;
-  }
-
-  /**
-   * Build a vocal bar schedule that develops instead of repeating one cell.
-   * The distinct-bar target comes from real songs: a 4-bar vocal phrase with
-   * four active bars uses about two different melodic bars, not one.
-   */
-  private developVocalBars<T extends { itemIndex: number; srcBar: number; meta?: CellStemMeta }>(
-    pool: ReadonlyArray<T>,
-    outputBars: number,
-    rotation: number,
-  ): T[] {
-    if (pool.length === 0) return [];
-    let attention = 1;
-    let prediction: number[] | null = null;
-    const model = this.vocalBarModel;
-    if (model && pool[0].meta) {
-      const meta = pool[0].meta;
-      const here = pool[0].srcBar;
-      const at = (offset: number): number[] => this.vocalBarVec(meta, Math.max(0, Math.min(3, here + offset)));
-      // Training layout: [bar-2, bar, bar-1, bar].
-      const input = [...at(-2), ...at(0), ...at(-1), ...at(0)];
-      prediction = this.inferVocal(model.next, input);
-      const runBars = Math.max(2, Math.min(16, Math.round((this.inferVocal(model.length, input)[0] ?? 0.25) * 16)));
-      attention = Math.max(2, Math.round(runBars / 4));
-    }
-    // Real vocal passages are long, but a 16-bar hold still has to *develop*.
-    // The mined "distinct chroma bars" prior is perceptually too conservative
-    // (sustained notes collapse to one chroma), so use every active bar we
-    // have and vary the 4-bar motif with the block rotation.  A single-bar
-    // motif is never repeated verbatim across a long hold.
-    const chosen = pool.slice(0, Math.max(1, Math.min(pool.length, 4)));
-    if (prediction && chosen.some((item) => item.meta)) {
-      const similarity = (item: T): number => {
-        if (!item.meta) return 0;
-        const vec = this.vocalBarVec(item.meta, item.srcBar);
-        let score = 0;
-        for (let i = 0; i < 12; i++) score += vec[2 + i] * prediction[i];
-        for (let i = 0; i < 16; i++) score += vec[14 + i] * prediction[12 + i] * 0.5;
-        return score;
-      };
-      chosen.sort((a, b) => similarity(b) - similarity(a));
-    }
-    const motifs = [
-      [0, 1, 2, 3],
-      [0, 1, 0, 2],
-      [0, 2, 1, 3],
-      [0, 0, 1, 2],
-      [0, 1, 3, 2],
-    ];
-    const out: T[] = [];
-    let last = -1;
-    for (let b = 0; b < outputBars; b++) {
-      const cycle = Math.floor(b / (4 * attention));
-      const motif = motifs[(rotation + cycle) % motifs.length];
-      let index = motif[b % 4] % chosen.length;
-      if (index === last && chosen.length > 1) index = (index + 1) % chosen.length;
-      out.push(chosen[index]);
-      last = index;
-    }
-    return out;
-  }
-
   private chooseVocalPrimary<TEntry extends ComposingPoolEntry>(
     fallback: TEntry,
     pool: readonly TEntry[],
@@ -420,19 +280,6 @@ export class BarComposer {
       if (e.phrase.id === fallback.phrase.id) {
         s += fallbackIsSparse ? -0.4 : 0.20;
       }
-      // Prefer phrases that belong to a mined multi-bar performance.  A real
-      // 8-16 bar verse/chorus is musical; an isolated cell is not.  Continuing
-      // a unit already underway is worth more than restarting one, so the held
-      // run finishes before the policy looks elsewhere.
-      const unit = this.vocalPhraseModel?.tracks?.[e.kit.track_id]
-        ?.find((candidate) => candidate.ids.includes(e.phrase.id));
-      if (unit) {
-        s += 0.28 + unit.score * 0.35 + (unit.bars >= 8 ? 0.12 : 0);
-        const pos = unit.ids.indexOf(e.phrase.id);
-        if (e.phrase.id === fallback.phrase.id && pos > 0) {
-          s += 0.22 + unit.score * 0.25;
-        }
-      }
       scored.push({ entry: e, score: s, strategy: strat });
     }
 
@@ -441,114 +288,8 @@ export class BarComposer {
     return { entry: scored[0].entry, strategy: scored[0].strategy };
   }
 
-  /** Section fit of a mined vocal unit (chorus/hook vs airy intro vs verse). */
-  private vocalUnitSectionBonus<TEntry extends ComposingPoolEntry>(
-    entries: readonly TEntry[],
-    ctx: SectionPlanContext,
-  ): number {
-    const isChorus = ctxIsChorus(ctx) || ctx.kitSection === "DROP";
-    const isAiry = ctx.kitSection === "INTRO" || ctx.kitSection === "BREAKDOWN";
-    let bonus = 0;
-    for (const entry of entries) {
-      const meta = this.getPhraseMeta(entry.phrase.id, "vocals");
-      if (!meta) continue;
-      if (isChorus) {
-        if (meta.hook) bonus += 0.05;
-        if (meta.vr === "hook_2bar") bonus += 0.09;
-        if (meta.vr === "hook_1bar") bonus += 0.05;
-      } else if (isAiry) {
-        if (meta.vr === "airy" || meta.vr === "teaser") bonus += 0.08;
-        if (meta.hook) bonus -= 0.03;
-      } else if (ctx.isBuildup) {
-        if (meta.vr === "hook_1bar" || meta.vr === "chop") bonus += 0.07;
-      } else if (meta.vr === "verse" || meta.vr === "chop") {
-        bonus += 0.05;
-      }
-    }
-    return bonus;
-  }
-
-  /**
-   * Choose a real multi-bar vocal performance (a contiguous chain of 4-bar
-   * cells) instead of a single cell or a stitched single bar.  The learned
-   * unit model ranks choruses/loops by how often the same melodic window
-   * recurred in the original song; a local contiguity chain keeps working when
-   * the sidecar is absent.  Returns the phrases *from the incoming position*
-   * so a unit that is already underway continues instead of restarting.
-   */
-  private vocalUnitChain<TEntry extends ComposingPoolEntry>(
-    primary: TEntry,
-    pool: readonly TEntry[],
-    ctx: SectionPlanContext,
-    blockBars: number,
-  ): { entries: TEntry[]; startPos: number; unit: VocalPhraseUnit | null } | null {
-    if (pool.length === 0) return null;
-    const byId = new Map<string, TEntry>();
-    for (const entry of pool) byId.set(entry.phrase.id, entry);
-    const needed = Math.max(1, Math.ceil(blockBars / 4));
-    const neededBars = blockBars * 4;
-    let best: {
-      unit: VocalPhraseUnit;
-      entries: TEntry[];
-      startPos: number;
-      score: number;
-    } | null = null;
-
-    const units = this.vocalPhraseModel?.tracks?.[primary.kit.track_id] ?? [];
-    for (const unit of units) {
-      const startPos = unit.ids.indexOf(primary.phrase.id);
-      if (startPos < 0) continue;
-      const entries: TEntry[] = [];
-      let usable = true;
-      for (const id of unit.ids) {
-        const entry = byId.get(id);
-        if (!entry) { usable = false; break; }
-        if (Math.abs(entry.rate - primary.rate) > 0.04) { usable = false; break; }
-        entries.push(entry);
-      }
-      if (!usable || entries.length === 0) continue;
-      let score = unit.score + unit.recurrence * 0.14;
-      score += this.vocalUnitSectionBonus(entries, ctx);
-      if (unit.bars >= neededBars) score += 0.12;
-      else score -= 0.16 * (neededBars - unit.bars) / Math.max(4, neededBars);
-      if (unit.bars > neededBars + 4) score -= 0.18;
-      if (startPos === 0) score += 0.10;
-      score -= Math.abs(entries[0].rate - primary.rate) * 2.0;
-      if (!best || score > best.score) {
-        best = { unit, entries, startPos, score };
-      }
-    }
-
-    if (best) {
-      const ordered: TEntry[] = [];
-      for (let i = 0; i < needed; i++) {
-        ordered.push(best.entries[(best.startPos + i) % best.entries.length]);
-      }
-      return { entries: ordered, startPos: best.startPos, unit: best.unit };
-    }
-
-    // No mined unit contains this phrase (or the sidecar is missing): keep the
-    // real +4-bar successors of the same track together as a local chain.
-    const local: TEntry[] = [primary];
-    let cursor = primary;
-    for (let i = 1; i < needed; i++) {
-      const nextBar = Number(cursor.phrase.start_bar) + 4;
-      const next = pool.find((candidate) =>
-        candidate.kit.track_id === primary.kit.track_id
-        && Number(candidate.phrase.start_bar) === nextBar
-        && Math.abs(candidate.rate - primary.rate) <= 0.04,
-      );
-      if (!next) break;
-      local.push(next);
-      cursor = next;
-    }
-    if (local.length < 2) return null;
-    const ordered: TEntry[] = [];
-    for (let i = 0; i < needed; i++) ordered.push(local[i % local.length]);
-    return { entries: ordered, startPos: 0, unit: null };
-  }
-
-  private defaultMeta(stem: StemName, sessionRoot: number): CellStemMeta {    return {
+  private defaultMeta(stem: StemName, sessionRoot: number): CellStemMeta {
+    return {
       s: "AAAB",
       p: [0.5, 0.5, 0.5, 0.5],
       r: [sessionRoot, sessionRoot, sessionRoot, sessionRoot],
@@ -944,8 +685,6 @@ export class BarComposer {
     for (const stem of order) {
       let primary = baseEntries[stem];
       let vocalStrategy: ComposedStemPlan<TEntry>["vocalStrategy"] | undefined;
-      let vocalChain: TEntry[] | null = null;
-      let vocalUnit: VocalPhraseUnit | null = null;
       if (stem === "vocals") {
         const chosen = this.chooseVocalPrimary(
           primary,
@@ -955,25 +694,10 @@ export class BarComposer {
         );
         primary = chosen.entry;
         vocalStrategy = chosen.strategy;
-        if (!pinnedStems.has("vocals")) {
-          const chain = this.vocalUnitChain(
-            primary,
-            pools.vocals ?? [],
-            sectionCtx,
-            blockBars,
-          );
-          if (chain) {
-            primary = chain.entries[0];
-            vocalChain = chain.entries;
-            vocalUnit = chain.unit;
-            for (const entry of chain.entries) activeTracks.add(entry.kit.track_id);
-            if (chain.entries.length > 1) vocalStrategy = "hook_loop";
-          }
-        }
       }
 
       const canSplit = !pinnedStems.has(stem) && !(isBridgeBlock && (stem === "drums" || stem === "bass"));
-      const secondary = canSplit && !vocalChain
+      const secondary = canSplit
         ? this.findSecondaryDonor(stem, primary, pools[stem] ?? [], activeTracks, sectionCtx)
         : null;
       const pMeta = this.getPhraseMeta(primary.phrase.id, stem) ?? this.defaultMeta(stem, sessionRoot);
@@ -981,31 +705,9 @@ export class BarComposer {
 
       const ch0 = sectionCtx.progression[0] ?? { relRoot: 0, quality: "minor" as const };
       let phraseKeyShift = this.solvePhraseKeyShift(stem, primary, pMeta, ch0, sessionRoot);
-      let selectedBars = this.buildContiguous4BarCells(primary, pMeta, stem, blockBars, phraseKeyShift);
-      if (vocalChain) {
-        selectedBars = [];
-        for (let b = 0; b < blockBars; b++) {
-          const entry = vocalChain[Math.floor(b / 4) % vocalChain.length];
-          const meta = this.getPhraseMeta(entry.phrase.id, "vocals") ?? pMeta;
-          const srcBar = b % 4;
-          const purity = meta.p[srcBar] ?? 0.5;
-          selectedBars.push({
-            entry,
-            itemIndex: 0,
-            srcBar,
-            purity,
-            semitones: phraseKeyShift,
-            onsetMask: meta.o[srcBar] ?? 0,
-            quality: meta.q[srcBar] ?? "mono",
-            meta,
-            essentialScore: meta.es?.[srcBar] ?? purity,
-            essentialRole: meta.er?.[srcBar] ?? "A",
-          });
-        }
-      }
+      const selectedBars = this.buildContiguous4BarCells(primary, pMeta, stem, blockBars, phraseKeyShift);
 
       let schema: MotifSchema = pMeta.s ?? "AAAB";
-      if (vocalUnit && vocalUnit.repeat > 0.5 && vocalChain && vocalChain.length > 1) schema = "ABAB";
       let hasSpliceOrGainEdit = false;
 
       // 2. Selective surgical splices on top of contiguous 4-bar flow (gated by acoustic + neural seam score)
@@ -1082,7 +784,7 @@ export class BarComposer {
             hasSpliceOrGainEdit = true;
           }
         }
-      } else if (stem === "vocals" && !vocalChain) {
+      } else if (stem === "vocals") {
         // First repair dead/silent bars in the primary vocal phrase so the
         // vocal track never plays empty silence gaps between lines.
         const activeSrcBars: number[] = [];
@@ -1090,37 +792,23 @@ export class BarComposer {
           if (this.isVocalBarActive(primary.phrase.id, bIdx, pMeta)) activeSrcBars.push(bIdx);
         }
         if (activeSrcBars.length > 0 && activeSrcBars.length < 4 && !pinnedStems.has("vocals")) {
-          // Real songs develop a vocal line across several different bars.
-          // A phrase with one active bar borrows active bars from the secondary
-          // donor instead of copying that bar into every output slot.
-          const pool: Array<{ itemIndex: number; srcBar: number; meta: CellStemMeta; semitones: number }> =
-            activeSrcBars.map((bar) => ({ itemIndex: 0, srcBar: bar, meta: pMeta, semitones: phraseKeyShift }));
-          if (pool.length < 4 && secondary && sMeta) {
-            const secActive = [0, 1, 2, 3].filter((bar) => this.isVocalBarActive(secondary.phrase.id, bar, sMeta));
-            const secShift = this.solvePhraseKeyShift("vocals", secondary, sMeta, ch0, sessionRoot);
-            for (const bar of secActive) {
-              pool.push({ itemIndex: 1, srcBar: bar, meta: sMeta, semitones: secShift });
+          for (let b = 0; b < blockBars; b++) {
+            const cur = selectedBars[b];
+            if (!this.isVocalBarActive(primary.phrase.id, cur.srcBar, pMeta)) {
+              const donorBar = activeSrcBars[b % activeSrcBars.length];
+              selectedBars[b] = {
+                ...cur,
+                itemIndex: 0,
+                srcBar: donorBar,
+                purity: pMeta.p[donorBar] ?? cur.purity,
+                onsetMask: pMeta.o[donorBar] ?? cur.onsetMask,
+                quality: pMeta.q[donorBar] ?? cur.quality,
+                essentialScore: pMeta.es?.[donorBar] ?? (pMeta.p[donorBar] ?? cur.essentialScore),
+                essentialRole: pMeta.er?.[donorBar] ?? cur.essentialRole,
+              };
+              hasSpliceOrGainEdit = true;
             }
           }
-          const schedule = this.developVocalBars(pool, blockBars, blockIndex);
-          for (let b = 0; b < blockBars; b++) {
-            const pick = schedule[b];
-            if (!pick) continue;
-            selectedBars[b] = {
-              ...selectedBars[b],
-              entry: pick.itemIndex === 0 ? primary : (secondary ?? primary),
-              itemIndex: pick.itemIndex,
-              srcBar: pick.srcBar,
-              purity: pick.meta.p[pick.srcBar] ?? selectedBars[b].purity,
-              semitones: pick.semitones,
-              onsetMask: pick.meta.o[pick.srcBar] ?? selectedBars[b].onsetMask,
-              quality: pick.meta.q[pick.srcBar] ?? selectedBars[b].quality,
-              essentialScore: pick.meta.es?.[pick.srcBar] ?? (pick.meta.p[pick.srcBar] ?? selectedBars[b].essentialScore),
-              essentialRole: pick.meta.er?.[pick.srcBar] ?? selectedBars[b].essentialRole,
-              meta: pick.meta,
-            };
-          }
-          hasSpliceOrGainEdit = true;
         } else if (activeSrcBars.length === 0 && secondary && sMeta && !pinnedStems.has("vocals")) {
           const secActive: number[] = [];
           for (let bIdx = 0; bIdx < 4; bIdx++) {
@@ -1167,14 +855,9 @@ export class BarComposer {
             compatScorer,
           });
           if (loopSeam >= 0.68) {
-            const hookPool = [0, 1]
-              .filter((bar) => this.isVocalBarActive(primary.phrase.id, bar, pMeta))
-              .map((bar) => ({ itemIndex: 0, srcBar: bar, meta: pMeta }));
-            const hookBars = this.developVocalBars(hookPool, blockBars, blockIndex);
-            const source = selectedBars.slice();
             for (let b = 0; b < blockBars; b++) {
-              const bar = hookBars[b]?.srcBar ?? b % 2;
-              selectedBars[b] = { ...source[bar], srcBar: bar };
+              const hkBar = b % 2;
+              selectedBars[b] = { ...selectedBars[hkBar], srcBar: hkBar };
             }
             schema = "ABAB";
             hasSpliceOrGainEdit = true;
@@ -1257,85 +940,13 @@ export class BarComposer {
       }
 
       // Drop secondary donor when unused so audio cache never fetches an unused file
-      const usedSecondary = !vocalChain
-        && Boolean(secondary && selectedBars.some((c) => c.itemIndex === 1));
-      let donors: TEntry[];
-      if (vocalChain) {
-        donors = [];
-        for (const cell of selectedBars) {
-          let index = donors.findIndex((donor) => donor.phrase.id === cell.entry.phrase.id);
-          if (index < 0) {
-            donors.push(cell.entry);
-            index = donors.length - 1;
-          }
-          cell.itemIndex = index;
-        }
-      } else {
-        donors = usedSecondary && secondary ? [primary, secondary] : [primary];
-      }
+      const usedSecondary = Boolean(secondary && selectedBars.some((c) => c.itemIndex === 1));
+      const donors: TEntry[] = usedSecondary && secondary ? [primary, secondary] : [primary];
       if (usedSecondary && secondary) activeTracks.add(secondary.kit.track_id);
 
       const slices: SliceSpec[] = [];
       const pitchPoints: PitchAutomationPoint[] = [];
       let baseSemitones = phraseKeyShift;
-
-      // The next-vocal-bar head drives the actual slices, not just the bar
-      // ranking: for every boundary it predicts the next bar's chroma/onsets
-      // and we select the donor bar that best realises that prediction.
-      if (stem === "vocals" && this.vocalBarModel && !pinnedStems.has("vocals")) {
-        const model = this.vocalBarModel;
-        const vecAt = (index: number): number[] => {
-          const cell = selectedBars[Math.max(0, Math.min(blockBars - 1, index))];
-          const meta = cell?.meta ?? pMeta;
-          return this.vocalBarVec(meta, cell?.srcBar ?? 0);
-        };
-        for (let b = 1; b < blockBars; b++) {
-          const input = [...vecAt(b - 2), ...vecAt(b - 1), ...vecAt(b - 1), ...vecAt(b - 1)];
-          const prediction = this.inferVocal(model.next, input);
-          let bestScore = -Infinity;
-          let best: { itemIndex: number; srcBar: number; meta: CellStemMeta } | null = null;
-          for (let itemIndex = 0; itemIndex < donors.length; itemIndex++) {
-            const meta = this.getPhraseMeta(donors[itemIndex].phrase.id, "vocals");
-            if (!meta) continue;
-            for (let srcBar = 0; srcBar < 4; srcBar++) {
-              const vec = this.vocalBarVec(meta, srcBar);
-              if (vec[0] < 0.5 && prediction[28] > 0.5) continue;
-              let score = 0;
-              for (let i = 0; i < 12; i++) score += vec[2 + i] * prediction[i];
-              for (let i = 0; i < 16; i++) score += vec[14 + i] * prediction[12 + i] * 0.5;
-              score += vec[0] * prediction[28] * 0.8;
-              if (b > 0 && selectedBars[b - 1].srcBar === srcBar
-                && selectedBars[b - 1].itemIndex === itemIndex) score -= 0.35;
-              if (score > bestScore) {
-                bestScore = score;
-                best = { itemIndex, srcBar, meta };
-              }
-            }
-          }
-          if (!best) continue;
-          const chord = sectionCtx.progression[b % 4] ?? ch0;
-          const root = best.meta.r[best.srcBar] ?? -1;
-          const solved = root >= 0
-            ? solveCellPitchShift("vocals", root, best.meta.q[best.srcBar] ?? "mono",
-                sessionRoot, chord.relRoot, chord.quality, 6, true)
-            : null;
-          const semitones = solved && Math.abs(solved.semitones - phraseKeyShift) <= 6
-            ? solved.semitones : phraseKeyShift;
-          selectedBars[b] = {
-            ...selectedBars[b],
-            itemIndex: best.itemIndex,
-            srcBar: best.srcBar,
-            meta: best.meta,
-            semitones,
-            purity: best.meta.p[best.srcBar] ?? selectedBars[b].purity,
-            onsetMask: best.meta.o[best.srcBar] ?? selectedBars[b].onsetMask,
-            quality: best.meta.q[best.srcBar] ?? selectedBars[b].quality,
-          };
-          if (semitones !== phraseKeyShift && !pitchPoints.some((p) => Math.abs(p.offsetSec - b * barOutSec) < 1e-6)) {
-            pitchPoints.push({ offsetSec: b * barOutSec, semitones });
-          }
-        }
-      }
 
       // Single key shift per 4-bar phrase; allow per-bar pitchPoints ONLY when repeating a stationary 1-bar mono cell
       const firstCell = selectedBars[0];

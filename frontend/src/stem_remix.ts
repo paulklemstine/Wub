@@ -20,7 +20,7 @@ import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
 import { StretchVoice, type PitchAutomationPoint } from "./stretch_voice";
-import { BarComposer, type VocalActivityInfo, type VocalBarModel, type VocalFlowPriors, type VocalPhraseModel } from "./bar_composer";
+import { BarComposer, type VocalActivityInfo } from "./bar_composer";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
@@ -693,8 +693,6 @@ export class StemRemixPlayer {
   /** Session bar of the last track change per stem (8-bar cooldown is per stem). */
   private lastChangeBar: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private lastVocalChangeBar = -1;
-  /** Last bar a mined vocal unit wrapped to its first phrase. */
-  private lastVocalWrapBar = -1;
   private lastDrumChangeBar = 0;
   /** Scheduled blocks, so a mid-block drag can find the block it is inside. */
   private blockGrid: Array<{ startAt: number; endAt: number; startBar: number; bars: number }> = [];
@@ -888,9 +886,6 @@ export class StemRemixPlayer {
       setupLoads.push(this.cellCompat.load(`${base}/cell_compat.json`));
     }
     if (this.sidecarEnabled("slice_flow")) setupLoads.push(this.sliceFlow.load(base));
-    if (this.sidecarEnabled("vocal_flow")) setupLoads.push(this.loadVocalFlow(base));
-    if (this.sidecarEnabled("vocal_bar_model")) setupLoads.push(this.loadVocalBarModel(base));
-    if (this.sidecarEnabled("vocal_phrases")) setupLoads.push(this.loadVocalPhrases(base));
     if (setupLoads.length > 0) {
       await Promise.all(setupLoads);
     }
@@ -1320,52 +1315,6 @@ export class StemRemixPlayer {
     }
   }
 
-  /** Learned vocal-development prior (run lengths / distinct-bar targets). */
-  private async loadVocalFlow(base: string): Promise<void> {
-    try {
-      const res = await fetch(`${base}/vocal_flow.json`);
-      if (!res.ok) return;
-      const doc = (await res.json()) as VocalFlowPriors;
-      if (doc?.format === "wub-vocal-flow-v1" && doc.distinct_bars_per_active) {
-        this.barComposer.vocalFlow = doc;
-      }
-    } catch {
-      // Optional prior; the composer falls back to all active bars.
-    }
-  }
-
-  /** Learned next-vocal-bar + run-length model. */
-  private async loadVocalBarModel(base: string): Promise<void> {
-    try {
-      const res = await fetch(`${base}/vocal_bar_model.json`);
-      if (!res.ok) return;
-      const doc = (await res.json()) as VocalBarModel;
-      if (doc?.format === "wub-vocal-bar-v1" && doc.input_dim === 120
-        && doc.next?.w1?.length && doc.length?.w1?.length) {
-        this.barComposer.vocalBarModel = doc;
-      }
-    } catch {
-      // Optional model; heuristics remain in force.
-    }
-  }
-
-  /** Learned multi-bar vocal phrase-unit model (chorus/loop ranking). */
-  private async loadVocalPhrases(base: string): Promise<void> {
-    try {
-      const res = await fetch(`${base}/vocal_phrases.json`);
-      if (!res.ok) return;
-      const doc = (await res.json()) as VocalPhraseModel;
-      if (doc?.format === "wub-vocal-phrases-v1"
-        && doc.tracks && typeof doc.tracks === "object") {
-        this.barComposer.vocalPhraseModel = doc;
-        const units = Object.values(doc.tracks).reduce((sum, list) => sum + list.length, 0);
-        console.info(`[StemRemix] Vocal phrase units loaded (${units} units / ${Object.keys(doc.tracks).length} tracks)`);
-      }
-    } catch {
-      // Optional model; local contiguity chains remain in force.
-    }
-  }
-
   /**
    * Rhythm-mesh mean pair fit (0..1) of a candidate 4-stem mix, or
    * undefined when the artifacts/entries are missing (exactly neutral).
@@ -1619,7 +1568,6 @@ export class StemRemixPlayer {
     this.lastMoveBar = 0;
     this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
     this.lastVocalChangeBar = -1;
-    this.lastVocalWrapBar = -1;
     this.lastDrumChangeBar = 0;
     this.styleRecent = [];
     this.lastSignatureBar = { drums: -1, bass: -1, other: -1, vocals: -1 };
@@ -2045,7 +1993,6 @@ export class StemRemixPlayer {
     this.lastMoveBar = 0;
     this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
     this.lastVocalChangeBar = -1;
-    this.lastVocalWrapBar = -1;
     this.lastDrumChangeBar = 0;
     this.pendingTechniques = {};
     // Signatures are per-cluster (session key/tempo): reselect against the
@@ -3712,35 +3659,13 @@ export class StemRemixPlayer {
       && this.entryById.has(`${candidate.id}:${stem}`)
       && !(candidate.once && this.playedOnce.has(candidate.id)),
     );
-    if (!nextPhrase) {
-      return stem === "vocals" ? this.vocalUnitWrap(entry) : null;
-    }
+    if (!nextPhrase) return null;
     const before = Number(entry.phrase.duration_sec) || 0;
     const after = Number(nextPhrase.duration_sec) || 0;
     if (before > 0 && after > 0 && Math.abs(after - before) / before > 0.01) {
       return null;
     }
     return this.entryById.get(`${nextPhrase.id}:${stem}`) ?? null;
-  }
-
-  /**
-   * End of a mined multi-bar vocal performance: wrap back to its first phrase
-   * so a real chorus loops as a unit (never the last 4-bar cell over and over).
-   * At most one extra pass per 16 bars, then the normal movement policy takes
-   * over and finds fresh material.
-   */
-  private vocalUnitWrap(entry: StemPoolEntry): StemPoolEntry | null {
-    const units = this.barComposer.vocalPhraseModel?.tracks?.[entry.kit.track_id];
-    if (!units || units.length === 0) return null;
-    for (const unit of units) {
-      if (unit.ids.length < 2 || unit.ids[unit.ids.length - 1] !== entry.phrase.id) continue;
-      if (this.sessionBar - this.lastVocalWrapBar < 16) return null;
-      const first = this.entryById.get(`${unit.ids[0]}:vocals`);
-      if (!first || Math.abs(first.rate - entry.rate) > 0.04) return null;
-      this.lastVocalWrapBar = this.sessionBar;
-      return first;
-    }
-    return null;
   }
 
   /**
