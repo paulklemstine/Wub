@@ -151,8 +151,12 @@ the trained singing-head articulation).  Its position drifts across the
 lightshow canvas on a butterfly/figure-eight orbit around the centre: the same
 frequency bands that animate the background widen and lift the orbit and speed
 it up, while a depth-derived scale (0.72–1.34) swells the face as it swings
-toward the viewer.  The face is drawn into the existing offscreen buffer and composited into `#lightshow-bear-overlay`, so no
-extra texture or per-frame readback is needed.
+toward the viewer.  The eye and mouth drawing is copied **verbatim** from the
+v0.2.315 arrangement (anime waveform eyes and the detailed red lipstick mouth
+with teeth, tongue and throat glow); `renderFloatingFace()` only supplies that
+context and the orbit position.  The face is drawn into the existing offscreen
+buffer and composited into `#lightshow-bear-overlay`, so no extra texture or
+per-frame readback is needed.
 
 ### 3D camera subsystems (removed)
 

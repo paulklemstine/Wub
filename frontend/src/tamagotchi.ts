@@ -600,9 +600,15 @@ export class TamagotchiAvatar {
     }
 
     this.renderFloatingFace(
+      meta,
+      isDropGap,
       waveform,
+      drumWaveform,
+      bassWaveform,
       dt,
       bpm,
+      drumLevel ?? 0,
+      bassLevel ?? 0,
       vocalsLevel ?? 0,
       rmsLevel,
       freqBins
@@ -1101,14 +1107,19 @@ export class TamagotchiAvatar {
   }
 
   /**
-   * The eye + mouth Wub Creature: no head, halo, bow or border.  Its position
-   * drifts with the background spectrum, so the face seems to be pushed around
-   * the visualiser by the music itself.
+   * One floating face: the eye and mouth drawing copied verbatim from the
+   * v0.2.315 arrangement, flown around the centre with the butterfly orbit.
    */
   private renderFloatingFace(
-    wave: Uint8Array | null | undefined,
+    meta: GrooveboxMeta | null,
+    isDropGap: boolean,
+    waveform: Uint8Array | null | undefined,
+    drumWaveform: Uint8Array | null | undefined,
+    bassWaveform: Uint8Array | null | undefined,
     dt: number,
     bpm: number,
+    drumLevel: number,
+    bassLevel: number,
     vocalsLevel: number,
     rmsLevel: number,
     freqBins?: Uint8Array | null
@@ -1132,10 +1143,6 @@ export class TamagotchiAvatar {
     const bass = band(1, 10);
     const mid = band(10, 40);
     const treble = band(40, Math.min(120, freqBins?.length ?? 40));
-
-    // Fly a butterfly/figure-eight around the centre of the visualisation.
-    // The background spectrum widens/lifts the orbit and speeds it up, but the
-    // centre stays the focus instead of the face wandering to the edges.
     const now = performance.now() / 1000;
     this.orbitPhase += dt * (0.34 + 0.42 * (bass + treble) + 0.18 * mid);
     const phase = this.orbitPhase;
@@ -1143,218 +1150,436 @@ export class TamagotchiAvatar {
     const lift = 0.12 + 0.07 * treble;
     this.driftX = 0.5 + spread * Math.sin(phase);
     this.driftY = 0.5 + lift * Math.sin(phase * 2) * Math.cos(phase * 0.5);
-    // Pseudo-3D depth: scale swells as the face swings toward the viewer.
     const depth = 0.5 + 0.5 * Math.cos(phase * 2 + 0.6);
     const perspective = 0.72 + 0.62 * depth;
-
     const cx = this.driftX * w;
     const cy = this.driftY * h;
-    const energy = TamagotchiAvatar.waveEnergy(wave);
-    const amp = Math.max(vocalsLevel, energy, this.smoothedVocalAmp * 0.7);
-    const beat = (now / Math.max(60, bpm)) % 1;
-    const breath = 1 + 0.05 * Math.sin(beat * Math.PI * 2) + 0.04 * amp;
-    const scale = (Math.min(w, h) / 320) * perspective;
-    const eyeGap = 21 * breath * scale;
-    const eyeY = cy - 13 * breath * scale;
-    const blink = Math.sin(now * 1.7) > 0.985 ? 0.15 : 1;
-    const lookX = Math.cos(phase);
-    const lookY = Math.cos(phase * 2) * Math.cos(phase * 0.5);
 
-    const lipColor = this.visualConfig.mouthStyle === "acid"
-      ? "#9dff00"
-      : this.visualConfig.mouthStyle === "cyber"
-      ? "#00f0ff"
-      : "#ff2e93";
+    // Context the copied v315 drawing blocks expect.
+    const sec = meta?.section ?? "GROOVE_A";
+    let accentColor = "#00ffff";
+    if (this.stage === 2) accentColor = "#00ffcc";
+    else if (this.stage === 3) accentColor = "#ffe600";
+    else if (this.stage === 4) accentColor = "#ff00e6";
+    const t = now;
+    const vis = this.visualConfig;
+    const vowel = this.vocalVowelFormant || meta?.vocalVowel || "";
+    const isSinging = Boolean(meta?.vocalSyllable) || vocalsLevel >= 0.008;
+    const scale = (Math.min(w, h) / 320) * perspective;
+    const scaleX = scale;
+    const scaleY = scale;
+    const baseScale = scale;
+
+    // 9. BIG EXPRESSIVE ANIME WAVEFORM EYES
+    // -------------------------------------------------------------------------
+    const eyeSpacing = 18 * scaleX;
+    const eyeY = cy - 11 * scaleY;
+    const leftEyeX = cx - eyeSpacing;
+    const rightEyeX = cx + eyeSpacing;
 
     ctx.save();
-    ctx.shadowColor = lipColor;
-    ctx.shadowBlur = 10 + amp * 18;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = accentColor;
+    ctx.strokeStyle = accentColor;
+    ctx.fillStyle = accentColor;
+    ctx.lineWidth = 2.2;
 
-    for (const side of [-1, 1]) {
-      const ex = cx + side * eyeGap;
-      const ry = 15 * breath * blink;
-      ctx.beginPath();
-      ctx.ellipse(ex, eyeY, 12 * scale * breath, ry * scale, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffffff";
-      ctx.fill();
-      ctx.beginPath();
-      ctx.ellipse(ex + lookX * 3, eyeY + lookY * 2 + amp * 1.5,
-        6 * scale * breath, 8 * scale * blink, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#0b0620";
-      ctx.fill();
-      ctx.beginPath();
-      ctx.ellipse(ex - 2 + lookX * 2, eyeY - 3 + lookY * 2, 2.4 * scale, 3 * scale, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.fill();
+    if (this.isBlinking) {
+      this.drawAnimeBlinkEye(ctx, leftEyeX, eyeY, accentColor, sec === "DROP");
+      this.drawAnimeBlinkEye(ctx, rightEyeX, eyeY, accentColor, sec === "DROP");
+    } else if (this.temporaryAction === "PET") {
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = "#ff69b4";
+      ctx.fillStyle = "#ff69b4";
+      this.drawHeart(ctx, leftEyeX, eyeY, 11);
+      this.drawHeart(ctx, rightEyeX, eyeY, 11);
+    } else {
+      this.drawWaveformEye(
+        ctx, leftEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel,
+        sec === "DROP", isDropGap, accentColor, cx
+      );
+      this.drawWaveformEye(
+        ctx, rightEyeX, eyeY, drumWaveform, bassWaveform, drumLevel, bassLevel,
+        sec === "DROP", isDropGap, accentColor, cx
+      );
     }
-
-    const live = this.liveMouth?.active ? this.liveMouth.art : null;
-    const aperture = live
-      ? Math.max(0, Math.min(1, live.aperture))
-      : Math.max(0, Math.min(1, amp * 1.15));
-    const width = live
-      ? 0.55 + Math.max(0, Math.min(1, live.width)) * 0.65
-      : 0.85 + amp * 0.5;
-    const roundness = live ? Math.max(0, Math.min(1, live.roundness)) : 0.2;
-    const vowel = live?.topVowel ?? (amp > 0.35 ? "AH" : "EE");
-    const my = eyeY + 33 * scale * breath;
-    this.drawFloatingLips(ctx, cx, my, aperture, width, roundness, vowel,
-      wave, this.visualConfig.mouthGain, scale, lipColor, performance.now() / 1000);
     ctx.restore();
-    void rmsLevel;
-  }
 
-  /**
-   * The lipstick mouth developed for the full bear, lifted out so it can float
-   * without a head: Cupid's-bow outline, glossy red gradient, liner, seam,
-   * teeth, tongue and a throat glow that opens with the vocal articulation.
-   */
-  private drawFloatingLips(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    my: number,
-    aperture: number,
-    width: number,
-    roundness: number,
-    vowel: string,
-    wave: Uint8Array | null | undefined,
-    gain: number,
-    scale: number,
-    lipColor: string,
-    timeSec: number
-  ): void {
-    const ruby = lipColor === "#9dff00"
-      ? { top: "#eaff7b", mid: "#9dff00", shade: "#008f4c", bot: "#5cff9d", liner: "#005e36" }
-      : lipColor === "#00f0ff"
-      ? { top: "#a6f6ff", mid: "#00c8ff", shade: "#4c1d95", bot: "#ff66e5", liner: "#2e1065" }
-      : { top: "#ff6b9d", mid: "#e00751", shade: "#8f0030", bot: "#ff266e", liner: "#610021" };
-    const open = Math.max(0, Math.min(1, aperture));
-    const rw = Math.max(6 * scale, 16 * scale * width * gain);
-    const rh = Math.max(1.2 * scale, 11 * scale * open * gain);
-    const steps = 64;
-    const cupid = (cosP: number): number => {
-      const cleft = Math.exp(-Math.pow(cosP * 4.2, 2));
-      const peaks = Math.exp(-Math.pow((Math.abs(cosP) - 0.36) * 4.4, 2));
-      return (peaks * 1.15 - cleft * 0.65) * (1 - 0.55 * roundness);
-    };
-    const outline = (): void => {
-      ctx.beginPath();
-      for (let j = 0; j <= steps; j++) {
-        const phi = (j / steps) * Math.PI * 2;
-        const cosP = Math.cos(phi);
-        const sinP = Math.sin(phi);
-        const x = cx + rw * cosP;
-        const y = sinP <= 0
-          ? my - rh * Math.pow(-sinP, 0.85) - cupid(cosP) * rh * 0.42
-          : my + rh * Math.pow(sinP, 0.85) * 1.25;
-        if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.closePath();
-    };
+    // -------------------------------------------------------------------------
+
+    // 12. THE LIVE VOCAL WAVEFORM AUDIO REACTIVE MOUTH
+    //     Sexy real lipstick lips + visible teeth, tongue, oral cavity & throat
+    //     driven instantaneously by the Singing Head / CHIMERA synth params.
+    // -------------------------------------------------------------------------
+    const lm = this.liveMouth;
+    const lmActive = Boolean(lm?.active);
+    const liveArt = lm?.rawArt ?? lm?.art;
+    const liveTract = lm?.rawTract ?? lm?.tract;
+    const mouthY = cy + 13.5 * scaleY
+      // Pitch lift: higher F0 rides the mouth up a touch (subtle, ±2px).
+      + (this.vocalF0Hz > 0
+        ? Math.max(-0.35, Math.min(0.55, (this.vocalF0Hz - 220) / 700)) * 3.0 * scaleY
+        : 0);
+    // Responsive aperture: blend fast acoustic follower with low-latency Head Synth aperture.
+    const mouthAperture = Math.max(
+      0,
+      Math.min(
+        1,
+        Math.max(
+          this.smoothedVocalAmp * 2.5,
+          lmActive && liveArt ? Math.max(liveArt.aperture, liveArt.jawDrop * 0.9) : 0
+        )
+      )
+    );
+    const activeSing = isSinging || lmActive || vocalsLevel >= 0.004 || mouthAperture > 0.04;
+
+    const mouthSteps = 64;
+    const mouthGlow = activeSing ? "#ff2e93" : "#ff4da6";
 
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.shadowColor = lipColor;
-    ctx.shadowBlur = 8 + open * 16;
 
-    if (open < 0.16) {
-      // Slightly parted glossy pout.
-      outline();
-      const grad = ctx.createLinearGradient(cx, my - rh, cx, my + rh * 1.3);
-      grad.addColorStop(0, ruby.top);
-      grad.addColorStop(0.42, ruby.mid);
-      grad.addColorStop(0.58, ruby.shade);
-      grad.addColorStop(1, ruby.bot);
-      ctx.fillStyle = grad;
-      ctx.fill();
-      ctx.strokeStyle = ruby.liner;
-      ctx.lineWidth = 1.1 * scale;
-      ctx.stroke();
+    const buildLipColors = (): { top: string; mid: string; shade: string; bot: string; liner: string } => {
+      if (vis.mouthStyle === "acid") {
+        return { top: "#eaff7b", mid: "#9dff00", shade: "#008f4c", bot: "#5cff9d", liner: "#005e36" };
+      }
+      if (vis.mouthStyle === "cyber") {
+        return { top: "#a6f6ff", mid: "#00c8ff", shade: "#4c1d95", bot: "#ff66e5", liner: "#2e1065" };
+      }
+      // Classic glossy ruby-rose real lipstick
+      return { top: "#ff6b9d", mid: "#e00751", shade: "#8f0030", bot: "#ff266e", liner: "#610021" };
+    };
+    const lc = buildLipColors();
+
+    // Sexy Cupid's bow + pillowy bottom contour helper (parametric true ellipse)
+    const cupidWave = (cosP: number, roundFrac: number): number => {
+      // Twin M-arch peaks around |cosP| ~ 0.38 with subtle center cleft dip
+      const centerCleft = Math.exp(-Math.pow(cosP * 4.2, 2));
+      const sidePeaks = Math.exp(-Math.pow((Math.abs(cosP) - 0.36) * 4.4, 2));
+      return (sidePeaks * 1.15 - centerCleft * 0.65) * (1 - 0.55 * roundFrac);
+    };
+
+    if (!activeSing) {
+      // Sexy slightly-parted glossy resting lipstick pout (Cupid's bow + plush lower pillow)
+      const breathe = Math.sin(t * 2.4) * 0.45;
+      const rw = (11.2 + breathe * 0.5) * scaleX * (0.8 + 0.2 * vis.mouthGain);
+      const rhUpper = (3.4 + breathe * 0.25) * scaleY * vis.mouthGain;
+      const rhLower = (4.8 + breathe * 0.3) * scaleY * vis.mouthGain;
+
       ctx.beginPath();
-      ctx.moveTo(cx - rw * 0.9, my);
-      ctx.quadraticCurveTo(cx, my + 1.6 * scale, cx + rw * 0.9, my);
-      ctx.strokeStyle = "#2b0010";
-      ctx.lineWidth = 1.35 * scale;
+      for (let j = 0; j <= mouthSteps; j++) {
+        const phi = (j / mouthSteps) * Math.PI * 2;
+        const cosP = Math.cos(phi);
+        const sinP = Math.sin(phi);
+        const x = cx + rw * cosP;
+        let y: number;
+        if (sinP <= 0) {
+          // Taper cleanly to corners (sinP == 0 -> y = mouthY)
+          const bow = cupidWave(cosP, 0.1) * 2.2 * scaleY;
+          y = mouthY + rhUpper * sinP - bow * Math.pow(-sinP, 0.6);
+        } else {
+          y = mouthY + rhLower * Math.pow(sinP, 0.85);
+        }
+        if (j === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+
+      const lipGrad = ctx.createLinearGradient(cx, mouthY - rhUpper, cx, mouthY + rhLower);
+      lipGrad.addColorStop(0.0, lc.top);
+      lipGrad.addColorStop(0.42, lc.mid);
+      lipGrad.addColorStop(0.55, lc.shade);
+      lipGrad.addColorStop(1.0, lc.bot);
+      ctx.fillStyle = lipGrad;
+      ctx.shadowBlur = 9;
+      ctx.shadowColor = mouthGlow;
+      ctx.fill();
+      ctx.strokeStyle = lc.liner;
+      ctx.lineWidth = 1.05;
       ctx.stroke();
-      ctx.fillStyle = "rgba(255,255,255,0.78)";
-      for (const side of [-1, 1]) {
+
+      // Natural slightly-curved sensual lip parting seam
+      ctx.beginPath();
+      ctx.moveTo(cx - rw * 0.94, mouthY);
+      ctx.quadraticCurveTo(cx - rw * 0.35, mouthY + 1.0 * scaleY, cx, mouthY + 0.2 * scaleY);
+      ctx.quadraticCurveTo(cx + rw * 0.35, mouthY + 1.0 * scaleY, cx + rw * 0.94, mouthY);
+      ctx.strokeStyle = "#2b0010";
+      ctx.lineWidth = 1.45;
+      ctx.stroke();
+
+      // Twin Cupid's bow glints + lush wet lower-lip specular gloss
+      ctx.fillStyle = "rgba(255, 255, 255, 0.72)";
+      for (const s of [-1, 1]) {
         ctx.beginPath();
-        ctx.ellipse(cx + side * rw * 0.27, my - rh * 0.5, 1.8 * scale, 0.7 * scale, side * -0.25, 0, Math.PI * 2);
+        ctx.ellipse(cx + s * rw * 0.26, mouthY - rhUpper * 0.58, 1.8 * baseScale, 0.65 * baseScale, s * -0.25, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.beginPath();
-      ctx.ellipse(cx, my + rh * 0.62, rw * 0.34, 1.1 * scale, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx, mouthY + rhLower * 0.52, rw * 0.36, 1.15 * scaleY, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.78)";
+      ctx.fill();
+    } else {
+      // Live responsive articulation from low-latency Head Synth / Singing Head params
+      const upVowel = ((liveArt && lmActive ? liveArt.topVowel : vowel) || "AH").toUpperCase();
+
+      let baseW = 13.5;
+      let baseH = 9.5;
+      if (upVowel === "EE") { baseW = 17.0; baseH = 5.2; }
+      else if (upVowel === "OH") { baseW = 9.6; baseH = 12.2; }
+      else if (upVowel === "OO") { baseW = 7.4; baseH = 6.8; }
+      else if (upVowel === "AY") { baseW = 15.2; baseH = 8.4; }
+
+      if (this.vocalF2 > 500) {
+        baseW *= Math.max(0.68, Math.min(1.35, 0.84 + (this.vocalF2 - 1200) / 1500));
+      }
+
+      const artRound = liveTract ? Math.max(0, Math.min(1, liveTract.lipRound)) : (liveArt?.roundness ?? 0.2);
+      const artWidth = liveArt ? Math.max(0, Math.min(1, liveArt.width)) : 0.55;
+      const artOpen = liveArt
+        ? Math.max(liveArt.aperture, liveArt.jawDrop * 0.92) + Math.max(0, liveTract?.lipOpen ?? 0) * 0.35
+        : mouthAperture;
+
+      const artW = lmActive && liveArt
+        ? 9.2 + 9.4 * artWidth - 5.4 * artRound
+        : baseW * (0.68 + 0.52 * mouthAperture);
+      const artH = lmActive && liveArt
+        ? 1.4 + 12.6 * Math.min(1.15, artOpen)
+        : baseH * (0.35 + 0.95 * mouthAperture);
+
+      const vibWobble = 1 + Math.sin(t * Math.PI * 2 * 5.0)
+        * Math.min(0.14, this.vocalVibratoSemis * 0.14);
+      const curW = Math.max(6.8, artW * vibWobble) * scaleX * (0.78 + 0.22 * vis.mouthGain);
+      const curH = Math.max(1.8, artH * vibWobble) * scaleY * vis.mouthGain;
+
+      const lipRound = artRound;
+      const lipTuck = liveTract ? Math.max(0, Math.min(1, liveTract.lipTuck)) : 0;
+      const velumOpen = liveTract ? Math.max(0, Math.min(1, liveTract.velum)) : 0.25;
+      const tX = liveTract ? Math.max(-1.4, Math.min(1.4, liveTract.tongueX)) : (upVowel === "EE" ? 0.7 : upVowel === "OH" ? -0.5 : 0);
+      const tY = liveTract ? Math.max(-1.2, Math.min(1.3, liveTract.tongueY)) : (upVowel === "EE" || upVowel === "OO" ? 0.75 : upVowel === "AH" ? -0.45 : 0.1);
+      const tipLift = liveTract ? Math.max(-0.8, Math.min(1.2, liveTract.tipY)) : (upVowel === "EE" ? 0.4 : 0);
+
+      // Compute true elliptical inner cavity & tapered outer sexy lipstick lips (64 steps)
+      const innerPts: { x: number; y: number }[] = [];
+      const outerPts: { x: number; y: number }[] = [];
+      const upperThickMax = (3.1 + 1.1 * lipRound) * scaleY * (0.8 + 0.2 * vis.mouthGain);
+      const lowerThickMax = (4.3 + 1.3 * lipRound) * (1 - 0.35 * lipTuck) * scaleY * (0.8 + 0.2 * vis.mouthGain);
+      const waveLen = waveform ? waveform.length : 0;
+
+      for (let j = 0; j <= mouthSteps; j++) {
+        const phi = (j / mouthSteps) * Math.PI * 2;
+        const cosP = Math.cos(phi);
+        const sinP = Math.sin(phi);
+        let sampleNorm = 0;
+        if (waveform && waveLen > 0) {
+          const wIdx = Math.floor((j / mouthSteps) * (waveLen - 1));
+          sampleNorm = (waveform[wIdx] - 128) / 128.0;
+        } else {
+          sampleNorm = Math.sin(phi * 3.0 + t * 14.0) * 0.25;
+        }
+
+        // Exact ellipse point + subtle acoustic rim vibration (never distorts corners)
+        const cornerWeight = Math.pow(Math.abs(sinP), 0.72);
+        const waveDisp = sampleNorm * (1.5 * mouthAperture + 0.35) * cornerWeight;
+        const innerBow = sinP < 0 ? cupidWave(cosP, lipRound) * 0.65 * scaleY * (-sinP) : 0;
+        const ix = cx + curW * cosP;
+        const iy = mouthY + (curH + waveDisp) * sinP - innerBow;
+        innerPts.push({ x: ix, y: iy });
+
+        // Outer lipstick contour tapers gracefully cleanly to the sharp corners!
+        let oy: number;
+        const ox = cx + (curW + 0.8 * lipRound * cornerWeight) * cosP;
+        if (sinP <= 0) {
+          const upperBow = cupidWave(cosP, lipRound) * 2.4 * scaleY * Math.pow(-sinP, 0.55);
+          oy = iy - upperThickMax * Math.pow(-sinP, 0.72) - upperBow;
+        } else {
+          oy = iy + lowerThickMax * Math.pow(sinP, 0.78);
+        }
+        outerPts.push({ x: ox, y: oy });
+      }
+
+      const traceLoop = (pts: { x: number; y: number }[]) => {
+        ctx.beginPath();
+        for (let i = 0; i < pts.length; i++) {
+          if (i === 0) ctx.moveTo(pts[i].x, pts[i].y);
+          else ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        ctx.closePath();
+      };
+
+      // A) Deep Dark Oral Cavity + Glowing Back Throat (Pharynx / Soft Palate / Uvula)
+      ctx.save();
+      traceLoop(innerPts);
+      ctx.clip();
+
+      const throatGrad = ctx.createRadialGradient(
+        cx, mouthY - curH * 0.1, curH * 0.08,
+        cx, mouthY, Math.max(curW, curH) * 1.25
+      );
+      throatGrad.addColorStop(0.0, `rgba(255, 55, 130, ${0.38 + 0.55 * mouthAperture})`);
+      throatGrad.addColorStop(0.45, "#590425");
+      throatGrad.addColorStop(1.0, "#120108");
+      ctx.fillStyle = throatGrad;
+      ctx.fillRect(cx - curW * 1.3, mouthY - curH * 1.4, curW * 2.6, curH * 2.8);
+
+      // Soft palate arches & dangling uvula at back of throat when open
+      if (curH > 4.2) {
+        const uvulaY = mouthY - curH * (0.28 - velumOpen * 0.14);
+        const uvSway = Math.sin(t * 22) * 1.0 * mouthAperture;
+        ctx.strokeStyle = "rgba(255, 115, 175, 0.58)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(cx, uvulaY + curH * 0.14, curW * 0.42, Math.PI * 1.15, Math.PI * 1.85);
+        ctx.stroke();
+
+        ctx.fillStyle = `rgba(255, 125, 185, ${0.75 + 0.25 * mouthAperture})`;
+        ctx.beginPath();
+        ctx.ellipse(cx + uvSway, uvulaY, 1.8 * scaleX, 2.8 * scaleY, uvSway * 0.08, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // B) Articulated Shaded Tongue Body & Tip
+      const tongueCenterY = mouthY + curH * (0.52 - 0.36 * tY - 0.15 * tipLift);
+      const tongueCenterX = cx + tX * curW * 0.14;
+      const tongueW = curW * 0.72;
+      const tongueH = Math.max(3.0, curH * 0.52);
+      const tongueGrad = ctx.createRadialGradient(
+        tongueCenterX, tongueCenterY - tongueH * 0.3, 1,
+        tongueCenterX, tongueCenterY, tongueW
+      );
+      if (vis.mouthStyle === "acid") {
+        tongueGrad.addColorStop(0.0, "#a5f3fc");
+        tongueGrad.addColorStop(0.55, "#00f0ff");
+        tongueGrad.addColorStop(1.0, "#0055ff");
+      } else if (vis.mouthStyle === "cyber") {
+        tongueGrad.addColorStop(0.0, "#f5d0fe");
+        tongueGrad.addColorStop(0.55, "#ff00e6");
+        tongueGrad.addColorStop(1.0, "#5b0099");
+      } else {
+        tongueGrad.addColorStop(0.0, "#ffa6cb");
+        tongueGrad.addColorStop(0.55, "#f04286");
+        tongueGrad.addColorStop(1.0, "#9e144b");
+      }
+      ctx.fillStyle = tongueGrad;
+      ctx.beginPath();
+      ctx.ellipse(tongueCenterX, tongueCenterY + tongueH * 0.2, tongueW, tongueH, 0, Math.PI, Math.PI * 2);
+      ctx.ellipse(tongueCenterX, tongueCenterY + tongueH * 0.2, tongueW, tongueH * 0.65, 0, 0, Math.PI);
+      ctx.fill();
+
+      // Tongue dorsal groove + wet highlight
+      ctx.strokeStyle = "rgba(120, 10, 50, 0.55)";
+      ctx.lineWidth = 1.0;
+      ctx.beginPath();
+      ctx.moveTo(tongueCenterX, tongueCenterY - tongueH * 0.4);
+      ctx.lineTo(tongueCenterX, tongueCenterY + tongueH * 0.15);
+      ctx.stroke();
+
+      // C) Curved Pearl Teeth Rows
+      const toothVis = Math.max(0, Math.min(1, (curH - 2.6) / 4.5));
+      if (toothVis > 0.05) {
+        const toothCount = 6;
+        const archW = curW * 1.38;
+        const cellW = archW / toothCount;
+        const startX = cx - archW * 0.5;
+        const upperToothH = Math.max(1.8, Math.min(4.2, curH * 0.26)) * toothVis;
+        const upperY = mouthY - curH * 0.98;
+
+        ctx.fillStyle = "rgba(255, 252, 250, 0.96)";
+        ctx.strokeStyle = "rgba(210, 195, 215, 0.6)";
+        ctx.lineWidth = 0.65;
+        for (let k = 0; k < toothCount; k++) {
+          const distFromCtr = Math.abs((k + 0.5) / toothCount - 0.5) * 2;
+          const curveDrop = (1 - distFromCtr * distFromCtr) * 0.9 * scaleY;
+          const tx = startX + k * cellW + 0.45;
+          const tw = Math.max(1.6, cellW - 0.9);
+          ctx.beginPath();
+          ctx.roundRect(tx, upperY + curveDrop, tw, upperToothH, [0, 0, 1.8, 1.8]);
+          ctx.fill();
+          ctx.stroke();
+        }
+
+        if (curH > 6.8 && lipTuck < 0.45) {
+          const lowerToothH = Math.max(1.4, Math.min(3.2, curH * 0.18)) * toothVis;
+          const lowerY = mouthY + curH * 0.98 - lowerToothH;
+          for (let k = 0; k < toothCount; k++) {
+            const tx = startX + k * cellW + 0.7;
+            const tw = Math.max(1.4, cellW - 1.4);
+            ctx.beginPath();
+            ctx.roundRect(tx, lowerY, tw, lowerToothH, [1.5, 1.5, 0, 0]);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+      }
+      ctx.restore();
+
+      // D) Sculpted Sexy Lipstick Cushion Ring (Even-Odd fill between outerPts & innerPts)
+      ctx.save();
+      ctx.beginPath();
+      for (let i = 0; i < outerPts.length; i++) {
+        if (i === 0) ctx.moveTo(outerPts[i].x, outerPts[i].y);
+        else ctx.lineTo(outerPts[i].x, outerPts[i].y);
+      }
+      ctx.closePath();
+      for (let i = innerPts.length - 1; i >= 0; i--) {
+        if (i === innerPts.length - 1) ctx.moveTo(innerPts[i].x, innerPts[i].y);
+        else ctx.lineTo(innerPts[i].x, innerPts[i].y);
+      }
+      ctx.closePath();
+
+      const lipGrad = ctx.createLinearGradient(cx, mouthY - curH - upperThickMax, cx, mouthY + curH + lowerThickMax);
+      lipGrad.addColorStop(0.0, lc.top);
+      lipGrad.addColorStop(0.35, lc.mid);
+      lipGrad.addColorStop(0.58, lc.shade);
+      lipGrad.addColorStop(1.0, lc.bot);
+      ctx.fillStyle = lipGrad;
+      ctx.shadowBlur = 10 + 14 * mouthAperture;
+      ctx.shadowColor = mouthGlow;
+      ctx.fill("evenodd");
+
+      // Sensual darker lip-liner rim & inner shadow
+      traceLoop(outerPts);
+      ctx.strokeStyle = lc.liner;
+      ctx.lineWidth = 1.05;
+      ctx.stroke();
+
+      traceLoop(innerPts);
+      ctx.strokeStyle = "#360012";
+      ctx.lineWidth = 0.95;
+      ctx.stroke();
+
+      // Glossy wet lipstick specular highlights (Cupid's bow peaks + plush bottom lip)
+      ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.ellipse(
+          cx + s * curW * 0.28,
+          mouthY - curH - upperThickMax * 0.42,
+          Math.max(1.4, curW * 0.14),
+          0.65 * scaleY,
+          s * -0.22,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.ellipse(
+        cx,
+        mouthY + curH + lowerThickMax * 0.48,
+        curW * 0.36,
+        Math.max(0.85, lowerThickMax * 0.24),
+        0,
+        0,
+        Math.PI * 2
+      );
+      ctx.fillStyle = "rgba(255, 255, 255, 0.78)";
       ctx.fill();
       ctx.restore();
-      return;
     }
-
-    // Open mouth: lip rim, dark cavity, teeth, tongue, throat glow.
-    outline();
-    const grad = ctx.createLinearGradient(cx, my - rh, cx, my + rh * 1.25);
-    grad.addColorStop(0, ruby.top);
-    grad.addColorStop(0.4, ruby.mid);
-    grad.addColorStop(0.56, ruby.shade);
-    grad.addColorStop(1, ruby.bot);
-    ctx.fillStyle = grad;
-    ctx.fill();
-    ctx.strokeStyle = ruby.liner;
-    ctx.lineWidth = 1.2 * scale;
-    ctx.stroke();
-
-    const cavityH = rh * (vowel === "EE" ? 0.66 : vowel === "OO" ? 0.78 : 0.92);
-    const cavityW = rw * (vowel === "OO" ? 0.62 : vowel === "EE" ? 0.86 : 0.76);
-    ctx.beginPath();
-    ctx.ellipse(cx, my + rh * 0.1, cavityW, Math.max(1.4 * scale, cavityH), 0, 0, Math.PI * 2);
-    ctx.fillStyle = "#2a0016";
-    ctx.fill();
-
-    // Throat glow behind the tongue.
-    const throat = ctx.createRadialGradient(cx, my + rh * 0.5, 0.5 * scale, cx, my + rh * 0.5, rh * 1.1);
-    throat.addColorStop(0, `rgba(255, 70, 140, ${0.35 + open * 0.45})`);
-    throat.addColorStop(1, "rgba(255, 70, 140, 0)");
-    ctx.fillStyle = throat;
-    ctx.fill();
-
-    // Upper teeth row, gently following the waveform.
-    const sample = wave && wave.length > 8
-      ? (wave[Math.floor(wave.length * 0.25)] - 128) / 128 : 0;
-    ctx.beginPath();
-    ctx.moveTo(cx - cavityW * 0.82, my - cavityH * 0.28);
-    for (let j = 0; j <= 12; j++) {
-      const u = j / 12;
-      const x = cx - cavityW * 0.82 + cavityW * 1.64 * u;
-      const y = my - cavityH * 0.34 + Math.cos(u * Math.PI) * cavityH * 0.12 + sample * 1.2 * scale;
-      ctx.lineTo(x, y);
-    }
-    ctx.quadraticCurveTo(cx, my - cavityH * 0.08, cx - cavityW * 0.82, my - cavityH * 0.28);
-    ctx.closePath();
-    ctx.fillStyle = "#fff6f8";
-    ctx.fill();
-
-    // Tongue.
-    ctx.beginPath();
-    ctx.ellipse(cx + (vowel === "EE" ? 2 * scale : -1 * scale),
-      my + cavityH * 0.52,
-      cavityW * 0.48, Math.max(1 * scale, cavityH * 0.36),
-      0, 0, Math.PI * 2);
-    ctx.fillStyle = "#ff7a9c";
-    ctx.fill();
-
-    // Wet highlights on the pillowy lower lip.
-    ctx.fillStyle = "rgba(255,255,255,0.72)";
-    ctx.beginPath();
-    ctx.ellipse(cx - rw * 0.3, my - rh * 0.62, 1.7 * scale, 0.6 * scale, -0.3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(cx + rw * 0.28, my - rh * 0.58, 1.5 * scale, 0.55 * scale, 0.3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(cx, my + rh * 1.02 + Math.sin(timeSec * 3) * 0.3 * scale,
-      rw * 0.38, 1.2 * scale, 0, 0, Math.PI * 2);
-    ctx.fill();
     ctx.restore();
+
+    void rmsLevel;
   }
 
   private renderCanvas(
@@ -2543,7 +2768,7 @@ export class TamagotchiAvatar {
   }
 
   public render(): void {
-    this.renderFloatingFace(null, 0.016, 126, 0, 0, null);
+    this.renderFloatingFace(null, false, null, null, null, 0.016, 126, 0, 0, 0, 0, null);
     this.renderASCII(null, false);
     this.updateDashboard();
   }
