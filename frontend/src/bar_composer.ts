@@ -1082,6 +1082,64 @@ export class BarComposer {
       const pitchPoints: PitchAutomationPoint[] = [];
       let baseSemitones = phraseKeyShift;
 
+      // The next-vocal-bar head drives the actual slices, not just the bar
+      // ranking: for every boundary it predicts the next bar's chroma/onsets
+      // and we select the donor bar that best realises that prediction.
+      if (stem === "vocals" && this.vocalBarModel && !pinnedStems.has("vocals")) {
+        const model = this.vocalBarModel;
+        const vecAt = (index: number): number[] => {
+          const cell = selectedBars[Math.max(0, Math.min(blockBars - 1, index))];
+          const meta = cell?.meta ?? pMeta;
+          return this.vocalBarVec(meta, cell?.srcBar ?? 0);
+        };
+        for (let b = 1; b < blockBars; b++) {
+          const input = [...vecAt(b - 2), ...vecAt(b - 1), ...vecAt(b - 1), ...vecAt(b - 1)];
+          const prediction = this.inferVocal(model.next, input);
+          let bestScore = -Infinity;
+          let best: { itemIndex: number; srcBar: number; meta: CellStemMeta } | null = null;
+          for (let itemIndex = 0; itemIndex < donors.length; itemIndex++) {
+            const meta = this.getPhraseMeta(donors[itemIndex].phrase.id, "vocals");
+            if (!meta) continue;
+            for (let srcBar = 0; srcBar < 4; srcBar++) {
+              const vec = this.vocalBarVec(meta, srcBar);
+              if (vec[0] < 0.5 && prediction[28] > 0.5) continue;
+              let score = 0;
+              for (let i = 0; i < 12; i++) score += vec[2 + i] * prediction[i];
+              for (let i = 0; i < 16; i++) score += vec[14 + i] * prediction[12 + i] * 0.5;
+              score += vec[0] * prediction[28] * 0.8;
+              if (b > 0 && selectedBars[b - 1].srcBar === srcBar
+                && selectedBars[b - 1].itemIndex === itemIndex) score -= 0.35;
+              if (score > bestScore) {
+                bestScore = score;
+                best = { itemIndex, srcBar, meta };
+              }
+            }
+          }
+          if (!best) continue;
+          const chord = sectionCtx.progression[b % 4] ?? ch0;
+          const root = best.meta.r[best.srcBar] ?? -1;
+          const solved = root >= 0
+            ? solveCellPitchShift("vocals", root, best.meta.q[best.srcBar] ?? "mono",
+                sessionRoot, chord.relRoot, chord.quality, 6, true)
+            : null;
+          const semitones = solved && Math.abs(solved.semitones - phraseKeyShift) <= 6
+            ? solved.semitones : phraseKeyShift;
+          selectedBars[b] = {
+            ...selectedBars[b],
+            itemIndex: best.itemIndex,
+            srcBar: best.srcBar,
+            meta: best.meta,
+            semitones,
+            purity: best.meta.p[best.srcBar] ?? selectedBars[b].purity,
+            onsetMask: best.meta.o[best.srcBar] ?? selectedBars[b].onsetMask,
+            quality: best.meta.q[best.srcBar] ?? selectedBars[b].quality,
+          };
+          if (semitones !== phraseKeyShift && !pitchPoints.some((p) => Math.abs(p.offsetSec - b * barOutSec) < 1e-6)) {
+            pitchPoints.push({ offsetSec: b * barOutSec, semitones });
+          }
+        }
+      }
+
       // Single key shift per 4-bar phrase; allow per-bar pitchPoints ONLY when repeating a stationary 1-bar mono cell
       const firstCell = selectedBars[0];
       const allSameCell = Boolean(

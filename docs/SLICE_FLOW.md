@@ -289,3 +289,10 @@ held-out run-length MAE 0.024 vs 0.181 constant baseline.  The exported
 the prediction ranks candidate bars and the predicted run length sets how long
 a motif holds before developing.  The MAE is measured against activity-derived
 labels, not perception — the listening loop remains the final judge.
+
+The predictions now drive the **slices themselves**: at each bar boundary
+`BarComposer` infers the next vocal bar's chroma/onset vector, searches the
+loaded donors' four source bars for the closest realisation, switches the
+slice's `itemIndex`/`srcBar` to it, and adds a pitch-automation point when the
+predicted root needs a new shift.  A test asserts that composing with the model
+produces different scheduled slices than composing without it.

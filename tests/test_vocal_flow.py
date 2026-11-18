@@ -85,3 +85,44 @@ assert.ok(learned.some((v,i)=>v!==plain[i]));
 """
     result = subprocess.run(["node", "-e", script, str(out), str(model_path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_next_bar_prediction_selects_the_slices_that_get_scheduled(tmp_path):
+    out = tmp_path / "slices.cjs"
+    subprocess.run([
+        str(ROOT / "frontend/node_modules/.bin/esbuild"),
+        str(ROOT / "frontend/src/bar_composer.ts"), "--bundle", "--platform=node",
+        "--format=cjs", f"--outfile={out}",
+    ], check=True, capture_output=True, text=True)
+    model_path = tmp_path / "vocal_bar_model.json"
+    model_path.write_text((ROOT / "frontend/public/data/kits/vocal_bar_model.json").read_text())
+    script = r"""
+const assert=require('node:assert/strict');
+const {BarComposer}=require(process.argv[1]);
+const model=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
+const meta=(root,mask)=>({s:'AAAB',p:[.8,.7,.6,.5],r:[root,(root+2)%12,(root+7)%12,(root+4)%12],
+ q:['mono','mono','mono','mono'],o:[mask,mask>>1,mask>>2,mask>>3],es:[.7,.6,.5,.4],er:['A','A','A','T']});
+const entry=(stem,id)=>({kit:{track_id:id,bpm:120,key:'C minor',style:'house'},
+ phrase:{id,section:'GROOVE_A',start_bar:0,duration_sec:7.5},stem,keyShift:0,rate:1,
+ energy:.7,section:'GROOVE_A',rmsDb:-18});
+const base={drums:entry('drums','d'),bass:entry('bass','b'),other:entry('other','o'),vocals:entry('vocals','v0')};
+const pools={drums:[base.drums],bass:[base.bass],other:[base.other],
+ vocals:[base.vocals,entry('vocals','v1')]};
+const sectionCtx={mode:'song',role:'VERSE_A',kitSection:'GROOVE_A',targetEnergy:.7,
+ progressionIndex:0,progression:[0,1,2,3].map(i=>({relRoot:i,quality:'minor'})),
+ isBuildup:false,isPreDrop:false,isDropDownbeat:false,isBreakdownStart:false,
+ recalledVocalPhraseId:null,recalledDonorPhraseIds:{},sectionStartBar:0,sectionEndBar:32};
+const args={baseEntries:base,pools,sectionCtx,blockBars:4,blockDurationSec:7.5,blockIndex:0,
+ sessionRoot:0,sessionMode:'minor',isBridgeBlock:false,pinnedStems:new Set(),commit:false};
+const c=new BarComposer();
+c.index={phrases:{v0:{vocals:meta(0,0b1010101010101010)},v1:{vocals:meta(5,0b0101010101010101)}}};
+c.loaded=true;
+const plain=c.composeBlock(args).stems.vocals.slices.map(s=>s.startFrac+':'+s.targetBars).join(',');
+c.vocalBarModel=model;
+let calls=0;const orig=c.inferVocal.bind(c);c.inferVocal=(n,x)=>{calls++;return orig(n,x);};
+const learned=c.composeBlock(args).stems.vocals.slices.map(s=>s.startFrac+':'+s.targetBars).join(',');
+assert.ok(calls>0,'next-bar inference must run during composition');
+assert.notEqual(learned,plain,'predictions must change the scheduled slices');
+"""
+    result = subprocess.run(["node", "-e", script, str(out), str(model_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
