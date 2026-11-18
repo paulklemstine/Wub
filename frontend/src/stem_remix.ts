@@ -20,7 +20,11 @@ import type { StemName } from "./types";
 import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
 import type { NebulaPoint } from "./visualizer";
 import { StretchVoice, type PitchAutomationPoint } from "./stretch_voice";
-import { BarComposer, type VocalActivityInfo, type VocalBarModel, type VocalPhraseModel } from "./bar_composer";
+import {
+  BarComposer,
+  type VocalActivityInfo, type VocalBarModel, type VocalPhraseModel,
+  type CellChromaDoc, type HarmonyContinuity, type PatternBarModel,
+} from "./bar_composer";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
@@ -908,6 +912,9 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("vocal_bar_model")) setupLoads.push(this.loadVocalBarModel(base));
     if (this.sidecarEnabled("vocal_phrases")) setupLoads.push(this.loadVocalPhrases(base));
     if (this.sidecarEnabled("transition_cohort")) setupLoads.push(this.loadTransitionCohort(base));
+    if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
+    if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
+    if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
     if (setupLoads.length > 0) {
       await Promise.all(setupLoads);
     }
@@ -1401,6 +1408,53 @@ export class StemRemixPlayer {
     const wanted = [...changed].sort().join("+");
     const row = doc.cohorts.find((c) => c.kind === "section" && c.stems.slice().sort().join("+") === wanted);
     return row ? row.p : 0.5;
+  }
+
+  /** Per-bar chroma for the shipped phrases (real audio, not a proxy). */
+  private async loadCellChroma(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/cell_chroma.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as CellChromaDoc;
+      if (doc?.format === "cell_chroma_v1" && doc.phrases) {
+        this.barComposer.loadCellChroma(doc);
+        console.info(`[StemRemix] Per-bar chroma loaded (${Object.keys(doc.phrases).length} phrases)`);
+      }
+    } catch {
+      // Optional; per-bar harmony check stays neutral.
+    }
+  }
+
+  /** Learned next-bar pattern heads for drums/bass/other. */
+  private async loadPatternBarModel(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/pattern_bar_model.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as PatternBarModel;
+      if (doc?.format === "wub-pattern-bars-v1" && doc.input_dim === 55
+        && doc.output_dim === 48 && doc.hidden === 64 && doc.stems) {
+        this.barComposer.patternBarModel = doc;
+        console.info("[StemRemix] Next-bar pattern model loaded (drums/bass/other)");
+      }
+    } catch {
+      // Optional; static cell scoring remains in force.
+    }
+  }
+
+  /** Learned real-song chroma floors for the assembled quartet. */
+  private async loadHarmonyContinuity(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/harmony_continuity.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as HarmonyContinuity;
+      if (doc?.format === "wub-harmony-continuity-v1" && doc.policy
+        && Number.isFinite(doc.policy.min_bar_pair_cos)
+        && Number.isFinite(doc.policy.min_boundary_cos)) {
+        this.barComposer.harmonyContinuity = doc;
+      }
+    } catch {
+      // Optional; no harmony penalty when absent.
+    }
   }
 
   /**
@@ -3597,6 +3651,13 @@ export class StemRemixPlayer {
         policy.score = Math.max(0, Math.min(1,
           policy.score + 0.10 * (this.cohortPriorFor(subset) - 0.2)));
         if (this.cohortPriorFor(subset) >= 0.19) policy.reasons.push("cohort-prior");
+      }
+      // Learned per-bar quartet harmony: penalize mixes whose pitched stems
+      // clash below the real-song chroma floor or break the previous tail.
+      const clash = this.barComposer.harmonyPenaltyFor(candidate);
+      if (clash > 0) {
+        policy.score = Math.max(0, policy.score - 0.5 * clash);
+        policy.reasons.push("harmony-clash");
       }
       // Blend mix-compat (rhythm-first, worst-bar aware) on top of the policy
       // score.  When unavailable these stay undefined and the score is unchanged.

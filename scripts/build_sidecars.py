@@ -789,6 +789,9 @@ def main() -> None:
         "vocal_bar_model": (out_dir / "vocal_bar_model.json").exists(),
         "vocal_phrases": (out_dir / "vocal_phrases.json").exists(),
         "transition_cohort": (out_dir / "transition_cohort.json").exists(),
+        "cell_chroma": (out_dir / "cell_chroma.json").exists(),
+        "pattern_bar_model": (out_dir / "pattern_bar_model.json").exists(),
+        "harmony_continuity": (out_dir / "harmony_continuity.json").exists(),
     }
     (out_dir / "sidecars.json").write_text(json.dumps(sidecars_flag, indent=2) + "\n")
     summary = {"arc": arc_res, "progression": prog_res, "rhythm_vocal": rhy_res, "syntax": syn_res}

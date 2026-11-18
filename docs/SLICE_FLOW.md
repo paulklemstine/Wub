@@ -300,3 +300,30 @@ small centered tie-break toward the mined cohort probabilities. No audio is
 regenerated, repitched or resliced; the judge/ranker still decides which
 phrase each stem plays. With the sidecar missing or disabled, behavior is
 byte-for-byte the previous 1-2 stem budget.
+
+## Next-bar pattern heads and quartet harmony floors
+
+Two more sidecars are learned from the real corpus (`scripts/build_bar_models.py`,
+track-disjoint 90/10, 254,927 bars from `data/processed/*.json`):
+
+- `pattern_bar_model.json` — three 55→64→48 tanh heads (drums, bass, other)
+  predict the *next bar's* onset grid, density, downbeats, quarters, root and
+  chroma from the current bar plus section/energy context. Validation MSE beats
+  the mean baseline for every stem (drums 0.034 vs 0.082, bass 0.041 vs 0.061,
+  other 0.039 vs 0.059). `BarComposer.pickBestCellForBar()` adds a small cosine
+  fit term (**≤ ±0.20**) to its existing bar score; it never changes the donor
+  phrase, key shift or timing.
+- `harmony_continuity.json` — real-song chroma floors: the worst pairwise
+  chroma cosine between pitched stems in one bar has p10 = 0.655, and the
+  per-stem chroma cosine across a 4-bar boundary has p10 = 0.898. Candidate
+  mixes below those floors receive a bounded ranking penalty (≤ 0.17 from the
+  per-bar floor and ≤ 0.11 from a broken tail) in `selectJoint()`. The judged
+  phrase, stretch rate and pitch shifts are untouched.
+
+The browser needs true per-bar chroma for these checks, which `cell_index.json`
+never shipped: `scripts/build_cell_index.py --emit-chroma` now writes
+`cell_chroma.json` (3,670 phrases × 3 pitched stems × 4 bars × 12 bins) from
+the same audio and DSP used for the index; the rebuilt `cell_index.json` is
+byte-identical to the shipped one. All three sidecars are optional
+(`sidecars.json` flags `cell_chroma`, `pattern_bar_model`,
+`harmony_continuity`); without them the learned terms are exactly neutral.

@@ -318,6 +318,7 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
             proc_data = None
 
     kit_results: Dict[str, Dict[str, Any]] = {}
+    phrase_chroma_out: Dict[str, Dict[str, List[List[float]]]] = {}
     section_schema_samples: List[Tuple[str, str, str, float]] = []
     chord_seqs: List[Tuple[List[Tuple[int, str]], float]] = []
     kit_bars_by_stem: Dict[str, List[Dict[str, Any]]] = {s: [] for s in STEMS}
@@ -335,6 +336,7 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
         onsets_4 = onset_rows.get(pid) if onset_rows is not None else None
 
         phrase_out: Dict[str, Any] = {}
+        phrase_chroma: Dict[str, List[List[float]]] = {}
         bar_chord_votes: List[Tuple[int, str, float]] = [(-1, "mono", 0.0) for _ in range(4)]
 
         for s_idx, stem in enumerate(STEMS):
@@ -508,11 +510,16 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
                 })
 
             phrase_out[stem] = entry
+            if stem != "drums":
+                phrase_chroma[stem] = [
+                    [round(float(x), 4) for x in bar_chromas[b]] for b in range(4)
+                ]
             mean_pur = sum(bar_purities) / 4.0
             if mean_pur >= 0.25:
                 section_schema_samples.append((section, stem, schema, mean_pur))
 
         kit_results[pid] = phrase_out
+        phrase_chroma_out[pid] = phrase_chroma
 
         # Record full-bar tonal progressions for style progression mining
         if all(v[0] >= 0 for v in bar_chord_votes):
@@ -537,6 +544,7 @@ def _process_kit(task: Dict[str, Any]) -> Dict[str, Any]:
         "style": style,
         "mode": key_mode,
         "phrases": kit_results,
+        "chroma": phrase_chroma_out,
         "schema_samples": section_schema_samples,
         "chord_seqs": chord_seqs,
         "mean_fidelity": float(essential_info["mean_fidelity"]),
@@ -606,6 +614,8 @@ def main() -> None:
     parser.add_argument("--kits-dir", type=Path, default=Path("frontend/public/data/kits"))
     parser.add_argument("--processed-dir", type=Path, default=Path("data/processed"))
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--emit-chroma", action="store_true",
+                        help="also write cell_chroma.json (per-bar chroma for the quartet harmony check)")
     parser.add_argument("--workers", type=int, default=min(12, os.cpu_count() or 4))
     args = parser.parse_args()
 
@@ -650,6 +660,7 @@ def main() -> None:
         )
 
     phrases_out: Dict[str, Dict[str, Any]] = {}
+    chroma_out: Dict[str, Dict[str, List[List[float]]]] = {}
     all_schema_samples: List[Tuple[str, str, str, float]] = []
     raw_progs: Dict[Tuple[str, str], List[Tuple[List[Tuple[int, str]], float]]] = defaultdict(list)
     kit_fidelities: List[float] = []
@@ -665,6 +676,8 @@ def main() -> None:
         for fut in as_completed(futures):
             res = fut.result()
             phrases_out.update(res["phrases"])
+            if args.emit_chroma:
+                chroma_out.update(res.get("chroma") or {})
             all_schema_samples.extend(res["schema_samples"])
             raw_progs[(res["style"], res["mode"])].extend(res["chord_seqs"])
             kit_fidelities.append(float(res.get("mean_fidelity", 0.0)))
@@ -737,6 +750,14 @@ def main() -> None:
 
     with open(out_path, "w") as f:
         json.dump(payload, f, separators=(",", ":"))
+
+    if args.emit_chroma:
+        chroma_path = kits_dir / "cell_chroma.json"
+        with open(chroma_path, "w") as f:
+            json.dump({
+                "format": "cell_chroma_v1", "version": 1, "phrases": chroma_out,
+            }, f, separators=(",", ":"))
+        print(f"Wrote per-bar chroma for {len(chroma_out)} phrases to {chroma_path}")
 
     sidecars_path = kits_dir / "sidecars.json"
     if sidecars_path.exists():

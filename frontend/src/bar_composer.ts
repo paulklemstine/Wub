@@ -85,6 +85,42 @@ export interface VocalPhraseModel {
   tracks: Record<string, VocalPhraseUnit[]>;
 }
 
+/** Next-bar pattern head: 55-d context+pattern in, 48-d next pattern out. */
+export interface PatternBarNet {
+  mean: number[];
+  std: number[];
+  w1: number[][];
+  b1: number[];
+  w2: number[][];
+  b2: number[];
+}
+
+export interface PatternBarModel {
+  format: string;
+  version: number;
+  input_dim: number;
+  output_dim: number;
+  hidden: number;
+  stems: Record<string, PatternBarNet>;
+  report?: { bars?: number; val_mse?: number; baseline_mse?: number };
+}
+
+/** Real-song chroma thresholds for the assembled quartet. */
+export interface HarmonyContinuity {
+  format: string;
+  version: number;
+  pair_chroma_cos: { raw: { p10: number; p50: number }; triad: { p10: number; p50: number } };
+  boundary_chroma_cos: { p10: number; p50: number };
+  root_agreement_rate: number;
+  policy: { min_bar_pair_cos: number; min_boundary_cos: number; max_clash_penalty: number };
+}
+
+export interface CellChromaDoc {
+  format: string;
+  version: number;
+  phrases: Record<string, Record<string, number[][]>>;
+}
+
 export interface ComposedStemPlan<TEntry extends ComposingPoolEntry> {
   stem: StemName;
   /** Distinct donor pool entries loaded for slicing (`itemIndex` indexes into this array). */
@@ -143,6 +179,26 @@ export interface VocalActivityInfo {
 
 const SCHEMAS: readonly MotifSchema[] = ["AAAB", "ABAB", "ABAC", "AABB"];
 
+function rotateChroma12(vec: readonly number[] | null | undefined, semitones: number): number[] | null {
+  if (!vec || vec.length !== 12) return null;
+  const s = ((Math.round(semitones) % 12) + 12) % 12;
+  if (s === 0) return [...vec];
+  const out = new Array<number>(12);
+  for (let i = 0; i < 12; i++) out[i] = vec[(i - s + 12) % 12];
+  return out;
+}
+
+function cosine12(a: readonly number[] | null, b: readonly number[] | null): number {
+  if (!a || !b || a.length < 12 || b.length < 12) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < 12; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  return na > 1e-10 && nb > 1e-10 ? Math.max(-1, Math.min(1, dot / Math.sqrt(na * nb))) : 0;
+}
+
 export class BarComposer {
   private index: CellIndexData | null = null;
   private loaded = false;
@@ -152,9 +208,135 @@ export class BarComposer {
   vocalBarModel: VocalBarModel | null = null;
   /** Optional mined multi-bar unit model; biases phrase selection only. */
   vocalPhraseModel: VocalPhraseModel | null = null;
+  /** Optional per-bar chroma for the shipped phrases (cell_chroma.json). */
+  private cellChroma: Map<string, Record<string, number[][]>> | null = null;
+  /** Optional learned next-bar pattern heads (drums/bass/other). */
+  patternBarModel: PatternBarModel | null = null;
+  /** Optional learned quartet harmony thresholds. */
+  harmonyContinuity: HarmonyContinuity | null = null;
 
   setVocalActivity(map: Map<string, VocalActivityInfo> | null): void {
     this.vocalActivity = map;
+  }
+
+  /** Attach the optional per-bar chroma sidecar to phrase metadata. */
+  loadCellChroma(doc: CellChromaDoc | null): void {
+    if (!doc || doc.format !== "cell_chroma_v1" || !doc.phrases) {
+      this.cellChroma = null;
+      return;
+    }
+    this.cellChroma = new Map(Object.entries(doc.phrases));
+  }
+
+  /** Chroma for one source bar, already rotated into session-key space. */
+  barChroma(phraseId: string, stem: StemName, bar: number, semitones = 0): number[] | null {
+    const raw = this.cellChroma?.get(phraseId)?.[stem]?.[bar] ?? null;
+    return rotateChroma12(raw, semitones);
+  }
+
+  /**
+   * Learned quartet harmony penalty for a candidate mix (0 = neutral).
+   * Compares the candidate's pitched stems per bar against the real-song
+   * p10 chroma floors and the previous block's tail. Ranking only: it never
+   * changes pitches, bars or scheduling.
+   */
+  harmonyPenaltyFor(candidate: Readonly<Partial<Record<StemName, { phrase: { id: string }; keyShift: number }>>>): number {
+    const policy = this.harmonyContinuity?.policy;
+    if (!policy || !this.cellChroma) return 0;
+    const pitched = (["bass", "other", "vocals"] as const).filter((s) => candidate[s]);
+    if (pitched.length < 2) return 0;
+    const vectors = pitched.map((s) => {
+      const item = candidate[s]!;
+      return this.barChroma(item.phrase.id, s, 0, item.keyShift);
+    });
+    let worst = 1;
+    for (let i = 0; i < vectors.length; i++) {
+      for (let j = i + 1; j < vectors.length; j++) {
+        const c = cosine12(vectors[i], vectors[j]);
+        if (c < worst) worst = c;
+      }
+    }
+    const floor = policy.min_bar_pair_cos;
+    let penalty = worst < floor ? policy.max_clash_penalty * (floor - worst) : 0;
+    // Cross-block boundary: does the incoming harmony continue the tail?
+    let boundary = 1;
+    for (const stem of pitched) {
+      const tail = this.lastBlockTail[stem];
+      if (!tail) continue;
+      const from = rotateChroma12(tail.meta.chroma?.[tail.srcBar] ?? null, tail.semitones);
+      const item = candidate[stem]!;
+      const to = this.barChroma(item.phrase.id, stem, 0, item.keyShift);
+      if (!from || !to) continue;
+      const c = cosine12(from, to);
+      if (c < boundary) boundary = c;
+    }
+    if (boundary < policy.min_boundary_cos) {
+      penalty += policy.max_clash_penalty * 0.5 * (policy.min_boundary_cos - boundary);
+    }
+    return Math.max(0, Math.min(0.34, penalty));
+  }
+
+  /** 55-d next-bar pattern input (48-d bar pattern + 7-d section/energy context). */
+  private patternBarVec(meta: CellStemMeta, bar: number, kitSection: string): number[] {
+    const v = new Array<number>(55).fill(0);
+    const mask = meta.o[bar] ?? 0;
+    for (let step = 0; step < 16; step++) v[step] = (mask >> step) & 1;
+    const count = popcount16(mask);
+    v[16] = count / 16;
+    v[17] = ([0, 4, 8, 12].reduce((n, s) => n + ((mask >> s) & 1), 0)) / 4;
+    v[18] = ([1, 3, 5, 7, 9, 11, 13, 15].reduce((n, s) => n + ((mask >> s) & 1), 0)) / 8;
+    for (let q = 0; q < 4; q++) {
+      v[19 + q] = ([0, 1, 2, 3].reduce((n, i) => n + ((mask >> (q * 4 + i)) & 1), 0)) / 4;
+    }
+    const root = meta.r[bar] ?? -1;
+    if (root >= 0) v[23 + (root % 12)] = 1;
+    const chroma = meta.chroma?.[bar];
+    if (chroma) {
+      let sum = 0;
+      for (let i = 0; i < 12; i++) sum += Math.max(0, chroma[i] ?? 0);
+      if (sum > 1e-6) for (let i = 0; i < 12; i++) v[35 + i] = Math.max(0, chroma[i] ?? 0) / sum;
+    }
+    v[47] = count > 0 || (meta.p[bar] ?? 0) > 0 ? 1 : 0;
+    const sections = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
+    const sec = Math.max(0, sections.indexOf(kitSection));
+    v[48 + sec] = 1;
+    v[53] = 0.5; // learned with real energy deltas; neutral here (no per-bar energy in the index)
+    v[54] = 0.5;
+    return v;
+  }
+
+  /** Cosine fit of a candidate bar to the learned next-bar pattern prediction. */
+  private patternBarFit(prediction: readonly number[], candidate: readonly number[]): number {
+    let dot = 0, na = 0, nb = 0;
+    for (let i = 0; i < 48; i++) {
+      dot += prediction[i] * candidate[i];
+      na += prediction[i] * prediction[i];
+      nb += candidate[i] * candidate[i];
+    }
+    if (na <= 1e-10 || nb <= 1e-10) return 0.5;
+    return Math.max(0, Math.min(1, dot / Math.sqrt(na * nb)));
+  }
+
+  /** Score a candidate source bar with the learned per-stem next-pattern head. */
+  private patternBarScore(
+    stem: StemName,
+    prevMeta: CellStemMeta,
+    prevBar: number,
+    candidateMeta: CellStemMeta,
+    bar: number,
+    kitSection: string,
+  ): number {
+    const net = this.patternBarModel?.stems[stem];
+    if (!net || net.w1?.length !== this.patternBarModel?.hidden) return 0;
+    const input = this.patternBarVec(prevMeta, prevBar, kitSection);
+    let prediction: number[];
+    try {
+      prediction = this.inferVocal(net, input);
+    } catch {
+      return 0;
+    }
+    if (prediction.length < 48) return 0;
+    return 0.40 * (this.patternBarFit(prediction, this.patternBarVec(candidateMeta, bar, kitSection)) - 0.5);
   }
 
   private inferVocal(net: VocalBarNet, x: readonly number[]): number[] {
@@ -276,7 +458,11 @@ export class BarComposer {
   }
 
   getPhraseMeta(phraseId: string, stem: StemName): CellStemMeta | null {
-    return this.index?.phrases[phraseId]?.[stem] ?? null;
+    const base = this.index?.phrases[phraseId]?.[stem] ?? null;
+    if (!base) return null;
+    const chroma = this.cellChroma?.get(phraseId)?.[stem];
+    if (!chroma) return base;
+    return { ...base, chroma };
   }
 
   /** Commit only accepted audio; rejected proposals must not become context. */
@@ -581,6 +767,10 @@ export class BarComposer {
       if (cand.section.toUpperCase() === ctx.kitSection) s += 0.10;
       if (stem === "drums" && meta.fill) s += 0.28;
       if (stem === "vocals" && meta.hook && (ctx.role === "CHORUS_1" || ctx.role === "CHORUS_2")) s += 0.22;
+      if (this.patternBarModel && pMeta) {
+        // Learned next-bar pattern continuation of the donor's splice cell.
+        s += this.patternBarScore(stem, pMeta, 2, meta, targetBar, ctx.kitSection);
+      }
 
       if (s > bestScore) {
         bestScore = s;
@@ -604,6 +794,7 @@ export class BarComposer {
     isSectionBoundary?: boolean,
     desiredRole?: EssentialRole,
     compatScorer?: CellCompatScorer,
+    kitSection = "",
   ): SelectedCell<TEntry> {
     const entry = donors[itemIdx];
     const meta = this.getPhraseMeta(entry.phrase.id, stem) ?? {
@@ -686,6 +877,12 @@ export class BarComposer {
           isSectionBoundary: Boolean(isSectionBoundary),
         });
         score += 0.45 * (arrProb - 0.5);
+      }
+
+      if (prevContext && this.patternBarModel) {
+        score += this.patternBarScore(
+          stem, prevContext.meta, prevContext.srcBar, meta, b, kitSection,
+        );
       }
 
       if (score > bestScore) {
@@ -851,6 +1048,7 @@ export class BarComposer {
             false,
             "T",
             compatScorer,
+            sectionCtx.kitSection,
           );
           if (prevCell) {
             const seamIn = this.evaluateSeamGate({

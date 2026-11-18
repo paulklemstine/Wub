@@ -17,5 +17,8 @@
   "bar_tour_value": true,
   "vocal_bar_model": true,
   "vocal_phrases": true,
-  "transition_cohort": true
+  "transition_cohort": true,
+  "cell_chroma": true,
+  "pattern_bar_model": true,
+  "harmony_continuity": true
 }

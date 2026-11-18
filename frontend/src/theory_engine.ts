@@ -55,6 +55,8 @@ export interface CellStemMeta {
   tc?: [number, number, number, number];
   /** Per-bar internal boundary seam smoothness to bar+1 (0..1) */
   sm?: [number, number, number, number];
+  /** Optional per-bar 12-bin chroma (normalized), from cell_chroma.json. */
+  chroma?: readonly (readonly number[])[];
 }
 
 export interface CellIndexData {
