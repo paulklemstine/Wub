@@ -142,6 +142,15 @@ The background visualizer (`frontend/src/psychedelic_bg.ts`) runs a GPU fragment
    - `LSD`: Shifting rainbow spectrum with liquid melting domain distortion.
    - `Mescaline`: Warm earthen golds, oranges, ambers, and fiery reds.
 
+### Seamless polar wrapping
+
+Radial shaders wrap their angular/lattice coordinates with mirror repetition
+(`mirrorWrap` in `psychedelic_bg.ts`) instead of raw `fract`, so value matches
+on both sides of a tile edge.  The SuperAcid "space tubes" star field hashes a
+wrapped angular cell index and the post-process kaleidoscope folds the full
+`TAU` period, so the polar cut at `atan(-π/π)` no longer produces a visible
+seam — the field reads like infinite wallpaper.
+
 ### Floating eye + mouth Wub Creature
 
 The visualiser shows a single disembodied face: two eyes and a mouth, with no

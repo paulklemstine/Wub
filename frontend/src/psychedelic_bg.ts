@@ -41,6 +41,12 @@ uniform int u_palette;  // 0: Neon Hyper, 1: Acid Rainbow, 2: Solar Amber, 3: Cy
 #define PI 3.14159265359
 #define TAU 6.28318530718
 
+// Mirror repetition is C0-continuous at every tile edge: fract() jumps from
+// 1 to 0, but the folded triangle meets itself.  Use it wherever a polar or
+// lattice coordinate wraps, so the field behaves like infinite wallpaper.
+float mirrorWrap(float x) { return abs(fract(x * 0.5) * 2.0 - 1.0); }
+vec2 mirrorWrap2(vec2 p) { return abs(fract(p * 0.5) * 2.0 - 1.0); }
+
 // 2D Rotation matrix
 mat2 rot(float a) {
   float s = sin(a), c = cos(a);
@@ -116,8 +122,9 @@ vec3 renderDMT(vec2 uv, float t) {
   float twist = t * 0.12 + u_mid * 0.3;
   float sectorAngle = TAU / sectors;
   float na = (a + twist) / sectorAngle;
-  // Continuous triangle wave reflection ensures seamless borderless angular wrapping without discontinuities
-  float wrappedA = (abs(fract(na) - 0.5) * 2.0 - 0.5) * sectorAngle;
+  // Continuous triangle reflection: the last tatum of one sector meets the
+  // first of the next with no jump, so the angular seam disappears.
+  float wrappedA = (mirrorWrap(na) - 0.5) * sectorAngle;
   p = vec2(cos(wrappedA), sin(wrappedA)) * r;
 
   // Multi-tier DMT liquid melting domain warping

@@ -71,6 +71,8 @@ const SPACETUBES_BUILTIN: LightshowPresetMeta = {
   defaults: {},
   frag: `
 precision highp float;
+#define PI 3.14159265359
+#define TAU 6.28318530718
 varying vec2 vUv;
 uniform float uTime;
 uniform float uKick;
@@ -99,7 +101,10 @@ void main() {
   float z = 1.6 / r + time * (2.6 + b * 2.2);
   float rib = pow(abs(sin(z * 2.4)), 10.0);
   float rail = smoothstep(0.92, 1.0, abs(sin(ang * 6.0 + sin(z * 0.45) * 1.8)));
-  float star = smoothstep(0.985, 1.0, hash21(floor(vec2(ang * 12.0, z * 3.0)))) * (0.6 + uSpectrum6 * 1.4);
+  // Wrap the angular cell index so the x=-pi/x=+pi seam hashes the same cell.
+  // Without this the star field jumps at the polar cut instead of tiling.
+  float starCell = mod(floor(((ang + PI) / TAU) * 12.0), 12.0);
+  float star = smoothstep(0.985, 1.0, hash21(vec2(starCell, floor(z * 3.0)))) * (0.6 + uSpectrum6 * 1.4);
   float hue = fract(z * 0.08 + uPalette * 0.25 + time * 0.05);
   vec3 neon1 = hsv2rgb(hue, 0.95, 1.0);
   vec3 neon2 = hsv2rgb(fract(hue + 0.42), 0.92, 1.0);
