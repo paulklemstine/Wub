@@ -212,6 +212,8 @@ export class BarComposer {
   private cellChroma: Map<string, Record<string, number[][]>> | null = null;
   /** Optional learned next-bar pattern heads (drums/bass/other). */
   patternBarModel: PatternBarModel | null = null;
+  /** Enable learned per-slot bar choice inside a phrase (same phrase only). */
+  horizonBarSelect = false;
   /** Optional learned quartet harmony thresholds. */
   harmonyContinuity: HarmonyContinuity | null = null;
 
@@ -337,6 +339,20 @@ export class BarComposer {
     }
     if (prediction.length < 48) return 0;
     return 0.40 * (this.patternBarFit(prediction, this.patternBarVec(candidateMeta, bar, kitSection)) - 0.5);
+  }
+
+  /** Learned fit of a candidate phrase's first bar to the current block tail. */
+  patternFitForNext(stem: StemName, phraseId: string, kitSection: string): number {
+    const tail = this.lastBlockTail[stem];
+    const meta = this.getPhraseMeta(phraseId, stem);
+    if (!tail || !meta || !this.patternBarModel) return 0;
+    let firstBar = 0;
+    let bestP = -1;
+    for (let b = 0; b < 4; b++) {
+      const p = (meta.p[b] ?? 0) + (meta.es?.[b] ?? 0) * 0.3;
+      if (p > bestP) { bestP = p; firstBar = b; }
+    }
+    return this.patternBarScore(stem, tail.meta, tail.srcBar, meta, firstBar, kitSection);
   }
 
   private inferVocal(net: VocalBarNet, x: readonly number[]): number[] {
@@ -686,10 +702,40 @@ export class BarComposer {
     stem: StemName,
     blockBars: number,
     phraseKeyShift: number,
+    kitSection = "",
   ): SelectedCell<TEntry>[] {
     const out: SelectedCell<TEntry>[] = [];
+    const learned = this.horizonBarSelect && this.patternBarModel !== null;
+    let prevMeta: CellStemMeta | null = learned ? (this.lastBlockTail[stem]?.meta ?? null) : null;
+    let prevBar: number | null = learned ? (this.lastBlockTail[stem]?.srcBar ?? null) : null;
+    const used = new Set<number>();
     for (let b = 0; b < blockBars; b++) {
-      const m = b % 4;
+      let m = b % 4;
+      if (learned) {
+        // Rank this phrase's OWN four bars for the slot. No cross-song splice,
+        // no new bar, and each bar is used at most once in the same phrase run.
+        let bestScore = -Infinity;
+        for (let cand = 0; cand < 4; cand++) {
+          if (used.has(cand)) continue;
+          let score = (meta.p[cand] ?? 0) * 0.5 + (meta.es?.[cand] ?? 0) * 0.3;
+          if (prevMeta && prevBar !== null) {
+            score += 1.5 * this.patternBarScore(stem, prevMeta, prevBar, meta, cand, kitSection);
+            score += 0.25 * scoreBarSeamContinuity({
+              stem,
+              prevMeta,
+              prevBar,
+              nextMeta: meta,
+              nextBar: cand,
+              isContiguousSamePhrase: false,
+              isSectionBoundary: false,
+            });
+          }
+          if (score > bestScore) { bestScore = score; m = cand; }
+        }
+        used.add(m);
+        prevMeta = meta;
+        prevBar = m;
+      }
       const qual = meta.q[m] ?? (stem === "drums" ? "perc" : "mono");
       const pur = meta.p[m] ?? 0.5;
       out.push({
@@ -1016,7 +1062,9 @@ export class BarComposer {
 
       const ch0 = sectionCtx.progression[0] ?? { relRoot: 0, quality: "minor" as const };
       let phraseKeyShift = this.solvePhraseKeyShift(stem, primary, pMeta, ch0, sessionRoot);
-      const selectedBars = this.buildContiguous4BarCells(primary, pMeta, stem, blockBars, phraseKeyShift);
+      const selectedBars = this.buildContiguous4BarCells(
+        primary, pMeta, stem, blockBars, phraseKeyShift, sectionCtx.kitSection,
+      );
 
       let schema: MotifSchema = pMeta.s ?? "AAAB";
       let hasSpliceOrGainEdit = false;

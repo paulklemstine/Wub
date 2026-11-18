@@ -84,6 +84,16 @@ export interface TransitionCohort {
   };
 }
 
+/** Policy config for the unified short-horizon ranking bias. */
+interface HorizonPlannerConfig {
+  format: string;
+  version: number;
+  horizon_blocks: number;
+  weights: { bar: number; phrase: number; sequence: number };
+  max_score: number;
+  arc_tolerance: number;
+}
+
 /** Real-song motif return / freshness rates, keyed by stem and bars. */
 interface MotifCalendar {
   format: string;
@@ -684,6 +694,8 @@ export class StemRemixPlayer {
   private vocalCadence: VocalCadence | null = null;
   /** Optional corpus-measured seam gain correction; null = equal-gain handoff. */
   private levelCorrection: Partial<Record<StemName, number>> | null = null;
+  /** Optional unified short-horizon planner config. */
+  private horizonConfig: HorizonPlannerConfig | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -952,6 +964,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("motif_calendar")) setupLoads.push(this.loadMotifCalendar(base));
     if (this.sidecarEnabled("vocal_cadence")) setupLoads.push(this.loadVocalCadence(base));
     if (this.sidecarEnabled("level_seam")) setupLoads.push(this.loadLevelSeam(base));
+    if (this.sidecarEnabled("horizon_planner")) setupLoads.push(this.loadHorizonPlanner(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1483,6 +1496,60 @@ export class StemRemixPlayer {
   private seamGain(stem: StemName, gain: number): number {
     const correction = this.levelCorrection?.[stem] ?? 1;
     return Math.max(0.2, Math.min(3, gain * correction));
+  }
+
+  /** Unified short-horizon planner config (rank bias only). */
+  private async loadHorizonPlanner(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/horizon_planner.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as HorizonPlannerConfig;
+      if (doc?.format === "wub-horizon-planner-v1" && doc.weights
+        && Number.isFinite(doc.max_score) && doc.max_score > 0) {
+        this.horizonConfig = doc;
+        this.barComposer.horizonBarSelect = true;
+      }
+    } catch {
+      // Optional; greedy per-block selection stays in force.
+    }
+  }
+
+  /**
+   * One bounded score over three horizons: the next bar inside the phrase,
+   * the next phrase/donor value, and the 2-3 block sequence fit to the arc.
+   * It is added to the existing policy score; nothing is scheduled by it.
+   */
+  private horizonScoreFor(
+    subset: readonly StemName[],
+    picks: readonly StemPoolEntry[],
+    startBar: number,
+    candidateEnergy: number,
+    kitSection: string,
+  ): number {
+    const cfg = this.horizonConfig;
+    if (!cfg || subset.length === 0) return 0;
+    let bar = 0;
+    let phrase = 0;
+    for (let i = 0; i < subset.length; i++) {
+      const entry = picks[i];
+      if (!entry) continue;
+      // -0.2..0.2 -> 0..1, neutral at 0.5.
+      bar += 0.5 + this.barComposer.patternFitForNext(subset[i], entry.phrase.id, kitSection) / 0.4;
+      phrase += entry.earQ;
+    }
+    bar /= subset.length;
+    phrase /= subset.length;
+    const futureBar = startBar + Math.max(1, cfg.horizon_blocks) * 4;
+    const future = this.sampledArcTarget(futureBar);
+    const futureEnergy = future ? future.energy : targetAt(futureBar).energy;
+    const tolerance = Math.max(0.04, cfg.arc_tolerance);
+    const arcFit = clamp01(1 - Math.abs(candidateEnergy - futureEnergy) / tolerance);
+    const cohort = this.transitionCohort?.p_3plus?.section ?? 0.5;
+    const sequence = 0.6 * arcFit + 0.4 * clamp01(cohort);
+    const combined = cfg.weights.bar * (bar - 0.5)
+      + cfg.weights.phrase * (phrase - 0.5)
+      + cfg.weights.sequence * (sequence - 0.5);
+    return Math.max(-cfg.max_score, Math.min(cfg.max_score, combined * 2));
   }
 
   /** Motif return / freshness priors from real songs. */
@@ -3847,6 +3914,12 @@ export class StemRemixPlayer {
       }
       if (sectionChanged && subset.includes("vocals") && this.vocalCadence) {
         policy.score = Math.min(1, policy.score + this.vocalCadence.policy.section_change_bonus);
+      }
+      // Unified short-horizon bias: best next bar / phrase / 2-3 block arc fit.
+      const horizon = this.horizonScoreFor(subset, picks, startBar, candidateEnergy, section);
+      if (horizon !== 0) {
+        policy.score = Math.max(0, Math.min(1, policy.score + horizon));
+        policy.reasons.push(`horizon ${horizon.toFixed(3)}`);
       }
       // Blend mix-compat (rhythm-first, worst-bar aware) on top of the policy
       // score.  When unavailable these stay undefined and the score is unchanged.

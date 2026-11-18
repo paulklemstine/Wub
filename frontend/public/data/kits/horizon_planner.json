@@ -1,0 +1,21 @@
+{
+  "format": "wub-horizon-planner-v1",
+  "version": 1,
+  "horizon_blocks": 3,
+  "weights": {
+    "bar": 0.30,
+    "phrase": 0.25,
+    "sequence": 0.45
+  },
+  "max_score": 0.18,
+  "arc_tolerance": 0.12,
+  "report": {
+    "source": "policy config over corpus-learned signals",
+    "signals": [
+      "pattern_bar_model (next-bar fit from 254,927 real bars)",
+      "phrase earQ / taste quality",
+      "song_arc_model future energy target + transition_cohort cohort prior"
+    ],
+    "use": "additive ranking bias only; never schedules, repitches, retimes or changes phrase boundaries"
+  }
+}

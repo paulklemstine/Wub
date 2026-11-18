@@ -388,3 +388,21 @@ bonus is 0.116, and three rank biases were softened: the current-phrase bonus
 in `chooseVocalPrimary` 0.20 → 0.05, the mined-unit prior 0.15+0.20·score →
 0.06+0.10·score, and the long-segment bonus in `scoreTransition` 0.15 → 0.08.
 Theme recall still wins outright when a hook is deliberately recalled.
+
+## Unified short-horizon planner
+
+`horizon_planner.json` is a small policy config (not a new acoustic model) that
+turns three already-learned signals into one **additive ranking bias**:
+
+1. **bar** — `pattern_bar_model` fits a candidate phrase's best bar to the
+   current block tail. When enabled, `buildContiguous4BarCells()` ranks the
+   phrase's *own* four bars per output slot (each used once) instead of
+   blindly taking `b % 4`. No new bar is introduced, no cross-song splice.
+2. **phrase** — the candidate's learned `earQ` / taste quality.
+3. **sequence** — fit to the corpus-mined arc energy 2–3 blocks ahead, blended
+   with the learned section-cohort prior.
+
+The combined bias is clamped to ±0.18 and added to the existing policy score;
+the joint ranker, movement budget, pins, source cap and final SliceFlow gate
+still make every hard decision. With the sidecar absent, bar selection returns
+to contiguous `b % 4` and the score is exactly zero.

@@ -24,5 +24,6 @@
   "song_arc_model": true,
   "motif_calendar": true,
   "vocal_cadence": true,
-  "level_seam": true
+  "level_seam": true,
+  "horizon_planner": true
 }
