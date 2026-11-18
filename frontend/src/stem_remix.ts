@@ -682,6 +682,8 @@ export class StemRemixPlayer {
   private sampledArcKey = "";
   private motifCalendar: MotifCalendar | null = null;
   private vocalCadence: VocalCadence | null = null;
+  /** Optional corpus-measured seam gain correction; null = equal-gain handoff. */
+  private levelCorrection: Partial<Record<StemName, number>> | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -949,6 +951,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("song_arc_model")) setupLoads.push(this.loadSongArc(base));
     if (this.sidecarEnabled("motif_calendar")) setupLoads.push(this.loadMotifCalendar(base));
     if (this.sidecarEnabled("vocal_cadence")) setupLoads.push(this.loadVocalCadence(base));
+    if (this.sidecarEnabled("level_seam")) setupLoads.push(this.loadLevelSeam(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1452,6 +1455,34 @@ export class StemRemixPlayer {
     } catch {
       // Optional; the fixed 104-bar blueprint stays in force.
     }
+  }
+
+  /** Per-stem 20 ms seam level correction measured from the shipped audio. */
+  private async loadLevelSeam(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/level_seam.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as {
+        format: string; correction?: Partial<Record<StemName, number>>;
+      };
+      const c = doc?.correction;
+      if (doc?.format === "wub-level-seam-v1" && c) {
+        const clean: Partial<Record<StemName, number>> = {};
+        for (const stem of STEMS) {
+          const value = c[stem];
+          if (Number.isFinite(value) && value! > 0.8 && value! < 1.2) clean[stem] = value;
+        }
+        this.levelCorrection = clean;
+      }
+    } catch {
+      // Optional; equal-gain handoff stays in force.
+    }
+  }
+
+  /** Apply the learned seam correction only to the hand-off start gain. */
+  private seamGain(stem: StemName, gain: number): number {
+    const correction = this.levelCorrection?.[stem] ?? 1;
+    return Math.max(0.2, Math.min(3, gain * correction));
   }
 
   /** Motif return / freshness priors from real songs. */
@@ -4735,7 +4766,7 @@ export class StemRemixPlayer {
         // Equal-gain hand-off: fade in at the outgoing voice's level so a
         // quiet/loud phrase splice can't dip, then settle to this gain.
         handoffGain: previous && previous.voice !== voice
-          ? previous.voice.outputGainTarget
+          ? this.seamGain(stem, previous.voice.outputGainTarget)
           : undefined,
       });
       if (!resume && pitchPoints && pitchPoints.length > 0 && stem !== "drums") {
@@ -4955,7 +4986,7 @@ export class StemRemixPlayer {
         fadeInSec: crossfadeSec,
         gain: runEntry.gain,
         handoffGain: previous && previous.voice !== voice
-          ? previous.voice.outputGainTarget
+          ? this.seamGain(stem, previous.voice.outputGainTarget)
           : undefined,
       });
       voice.fadeOut(endAt, STEM_FADE_OUT[stem]);

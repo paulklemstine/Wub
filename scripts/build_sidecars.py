@@ -795,6 +795,7 @@ def main() -> None:
         "song_arc_model": (out_dir / "song_arc_model.json").exists(),
         "motif_calendar": (out_dir / "motif_calendar.json").exists(),
         "vocal_cadence": (out_dir / "vocal_cadence.json").exists(),
+        "level_seam": (out_dir / "level_seam.json").exists(),
     }
     (out_dir / "sidecars.json").write_text(json.dumps(sidecars_flag, indent=2) + "\n")
     summary = {"arc": arc_res, "progression": prog_res, "rhythm_vocal": rhy_res, "syntax": syn_res}

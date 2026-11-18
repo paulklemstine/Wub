@@ -23,5 +23,6 @@
   "harmony_continuity": true,
   "song_arc_model": true,
   "motif_calendar": true,
-  "vocal_cadence": true
+  "vocal_cadence": true,
+  "level_seam": true
 }

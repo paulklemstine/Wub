@@ -367,3 +367,14 @@ boundary change rates (73% inside a section, 77% at section changes).
 of the fixed 16-bar hold; section changes still always release, and 3-argument
 callers keep the old 16-bar behavior. Both sidecars are optional and neutral
 when absent.
+
+## Seam level polish
+
+`scripts/build_level_seam.py` measures the RMS of the first and last 20 ms of
+every shipped phrase/stem (3,670 phrases each) and exports a bounded per-stem
+ratio (`level_seam.json`). The engine already starts an incoming voice at the
+outgoing voice's gain; this sidecar nudges only that *start* gain (drums 1.12,
+bass 0.995, other 1.021, vocals 0.936) so the equal-power crossfade begins at
+an acoustically equal level, then settles to the phrase's own gain. It is a
+small polish term, not a new limiter, and is fully neutral when the sidecar is
+absent.
