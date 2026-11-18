@@ -406,3 +406,11 @@ The combined bias is clamped to ±0.18 and added to the existing policy score;
 the joint ranker, movement budget, pins, source cap and final SliceFlow gate
 still make every hard decision. With the sidecar absent, bar selection returns
 to contiguous `b % 4` and the score is exactly zero.
+
+### Phrase-freshness tuning
+
+Listener feedback: high-`earQ` phrases were being replayed too often. The phrase
+horizon term now blends taste quality with recency (`0.6·earQ + 0.4·freshness`,
+where a phrase unseen in this stem's 32-entry history is fully fresh), and its
+weight dropped from 0.25 to 0.12 with the budget moved to bar (0.38) and
+sequence (0.50). `scripts/build_horizon_planner.py` reproduces the config.

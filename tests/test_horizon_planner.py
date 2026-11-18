@@ -73,6 +73,12 @@ const s=p.horizonScoreFor(['bass'],picks,16,.7,'DROP');
 assert.ok(Number.isFinite(s) && Math.abs(s)<=cfg.max_score+1e-9,'bounded: '+s);
 p.horizonConfig=null;
 assert.equal(p.horizonScoreFor(['bass'],picks,16,.7,'DROP'),0);
+p.horizonConfig=cfg;
+p.transitionCohort={p_3plus:{section:0}};
+p.stemHistory.bass=['a','a','a'];
+const stale=p.horizonScoreFor(['bass'],[entry('a')],16,.7,'DROP');
+const fresh=p.horizonScoreFor(['bass'],[entry('brand-new')],16,.7,'DROP');
+assert.ok(fresh>stale,'a recently used phrase is downweighted: '+stale+' vs '+fresh);
 """
     result = subprocess.run(
         ["node", "-e", script, str(out), json.dumps(doc)],

@@ -1535,7 +1535,13 @@ export class StemRemixPlayer {
       if (!entry) continue;
       // -0.2..0.2 -> 0..1, neutral at 0.5.
       bar += 0.5 + this.barComposer.patternFitForNext(subset[i], entry.phrase.id, kitSection) / 0.4;
-      phrase += entry.earQ;
+      // Quality alone makes the explorer replay the same "best" phrase. Blend
+      // in how long ago this stem last used it (unseen = fully fresh).
+      const history = this.stemHistory[subset[i]] ?? [];
+      const idx = history.lastIndexOf(entry.phrase.id);
+      const age = idx < 0 ? 99 : history.length - 1 - idx;
+      const freshness = idx < 0 ? 1 : clamp01(age / 8);
+      phrase += 0.6 * entry.earQ + 0.4 * freshness;
     }
     bar /= subset.length;
     phrase /= subset.length;

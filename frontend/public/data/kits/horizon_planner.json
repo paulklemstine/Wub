@@ -3,9 +3,9 @@
   "version": 1,
   "horizon_blocks": 3,
   "weights": {
-    "bar": 0.30,
-    "phrase": 0.25,
-    "sequence": 0.45
+    "bar": 0.38,
+    "phrase": 0.12,
+    "sequence": 0.5
   },
   "max_score": 0.18,
   "arc_tolerance": 0.12,
@@ -16,6 +16,6 @@
       "phrase earQ / taste quality",
       "song_arc_model future energy target + transition_cohort cohort prior"
     ],
-    "use": "additive ranking bias only; never schedules, repitches, retimes or changes phrase boundaries"
+    "use": "additive ranking bias only; never schedules, repitches, retimes or changes phrase boundaries; phrase term blends learned quality with recency freshness"
   }
 }
