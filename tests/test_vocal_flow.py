@@ -126,3 +126,107 @@ assert.notEqual(learned,plain,'predictions must change the scheduled slices');
 """
     result = subprocess.run(["node", "-e", script, str(out), str(model_path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_vocal_phrase_model_is_mined_from_real_songs():
+    base = ROOT / "frontend/public/data/kits"
+    model = json.loads((base / "vocal_phrases.json").read_text())
+    assert model["format"] == "wub-vocal-phrases-v1"
+    assert len(model["feature_names"]) == len(model["weights"]) == len(model["mean"])
+    assert model["report"]["tracks"] >= 300
+    assert model["report"]["units"] >= 1000
+    assert model["report"]["val_auc"] > 0.6
+    manifest = json.loads((base / "kit_manifest.json").read_text())
+    known = {p["id"] for kit in manifest["kits"] for p in kit["phrases"]}
+    units = [unit for track in model["tracks"].values() for unit in track]
+    assert any(unit["bars"] >= 16 for unit in units)
+    assert any(unit["repeat"] == 1 for unit in units)
+    for unit in units:
+        assert unit["bars"] == len(unit["ids"]) * 4
+        assert all(phrase_id in known for phrase_id in unit["ids"])
+    assert json.loads((base / "sidecars.json").read_text())["vocal_phrases"] is True
+
+
+def test_composer_schedules_whole_mined_phrase_units(tmp_path):
+    out = tmp_path / "vocal_units.cjs"
+    subprocess.run([
+        str(ROOT / "frontend/node_modules/.bin/esbuild"),
+        str(ROOT / "frontend/src/bar_composer.ts"), "--bundle", "--platform=node",
+        "--format=cjs", f"--outfile={out}",
+    ], check=True, capture_output=True, text=True)
+    script = r"""
+const assert=require('node:assert/strict');
+const {BarComposer}=require(process.argv[1]);
+const meta=(root)=>({s:'ABAB',p:[.8,.8,.8,.8],r:[root,(root+2)%12,(root+3)%12,(root+5)%12],
+ q:['mono','mono','mono','mono'],o:[0b1010101010101010,0b0101010101010101,0b1100110011001100,0b0011001100110011],
+ es:[.8,.8,.8,.8],er:['A','A','A','A'],fid:.9,vr:'verse'});
+const entry=(id,track,bar,stem)=>({kit:{track_id:track,bpm:120,key:'C minor',style:'house'},
+ phrase:{id,section:'GROOVE_A',start_bar:bar,duration_sec:7.5},stem,keyShift:0,rate:1,
+ energy:.7,section:'GROOVE_A',rmsDb:-18});
+const ids=['v1','v2','v3','v4'];
+const vocals=ids.map((id,i)=>entry(id,'trk',i*4,'vocals'));
+const base={drums:entry('d','dtrk',0,'drums'),bass:entry('b','btrk',0,'bass'),
+ other:entry('o','otrk',0,'other'),vocals:vocals[0]};
+const pools={drums:[base.drums],bass:[base.bass],other:[base.other],vocals:vocals.slice()};
+const c=new BarComposer(); c.index={phrases:{}}; c.loaded=true;
+ids.forEach((id,i)=>{c.index.phrases[id]={vocals:meta(i)}});
+for(const k of ['drums','bass','other']) c.index.phrases[base[k].phrase.id]={[k]:meta(0)};
+const ctx={mode:'song',role:'CHORUS_1',kitSection:'DROP',targetEnergy:.9,progressionIndex:1,
+ progression:[0,1,2,3].map(i=>({relRoot:i,quality:'minor'})),isBuildup:false,isPreDrop:false,
+ isDropDownbeat:false,isBreakdownStart:false,recalledVocalPhraseId:null,recalledDonorPhraseIds:{},
+ sectionStartBar:0,sectionEndBar:32};
+const args={baseEntries:base,pools,sectionCtx:ctx,blockBars:16,blockDurationSec:30,blockIndex:0,
+ sessionRoot:0,sessionMode:'minor',isBridgeBlock:false,pinnedStems:new Set(),commit:false};
+c.vocalPhraseModel={format:'wub-vocal-phrases-v1',version:1,feature_names:[],mean:[],scale:[],
+ weights:[],bias:0,tracks:{trk:[{ids,bars:16,start_bar:0,features:[],recurrence:1,repeat:1,score:.95}]}};
+const plan=c.composeBlock(args).stems.vocals;
+assert.deepEqual(plan.donors.map(d=>d.phrase.id),ids);
+assert.equal(plan.slices.reduce((sum,s)=>sum+(s.targetBars||0),0),16);
+// Each phrase's own four bars must play in order before the next phrase.
+const spans=[];
+for(const slice of plan.slices){
+  const last=spans[spans.length-1];
+  if(last && last.item===slice.itemIndex) last.end=slice.endFrac;
+  else spans.push({item:slice.itemIndex,start:slice.startFrac,end:slice.endFrac});
+}
+assert.deepEqual(spans.map(s=>s.item),[0,1,2,3]);
+for(let i=0;i<spans.length;i++){
+  assert.equal(spans[i].start,0);
+  assert.equal(spans[i].end,1);
+}
+assert.equal(plan.pitchPoints.length,0,'one key shift for the whole performance');
+"""
+    result = subprocess.run(["node", "-e", script, str(out)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_vocal_unit_wrap_loops_the_whole_chorus_not_the_last_cell(tmp_path):
+    out = tmp_path / "stem_remix.cjs"
+    subprocess.run([
+        str(ROOT / "frontend/node_modules/.bin/esbuild"),
+        str(ROOT / "frontend/src/stem_remix.ts"), "--bundle", "--platform=node",
+        "--format=cjs", f"--outfile={out}",
+    ], check=True, capture_output=True, text=True)
+    script = r"""
+const assert=require('node:assert/strict');
+const {StemRemixPlayer}=require(process.argv[1]);
+const player=new StemRemixPlayer({now:()=>0});
+const entry=(id,bar)=>({kit:{track_id:'trk',bpm:120,key:'C minor',style:'house'},
+ phrase:{id,section:'DROP',start_bar:bar,duration_sec:7.5},stem:'vocals',keyShift:0,rate:1,
+ energy:.8,section:'DROP',rmsDb:-18});
+player.entryById=new Map([['v1:vocals',entry('v1',0)],['v2:vocals',entry('v2',4)],['v3:vocals',entry('v3',8)]]);
+player.barComposer.vocalPhraseModel={format:'wub-vocal-phrases-v1',version:1,feature_names:[],
+ mean:[],scale:[],weights:[],bias:0,tracks:{trk:[{ids:['v1','v2','v3'],bars:12,start_bar:0,
+ features:[],recurrence:1,repeat:1,score:.9}]}};
+const last=player.entryById.get('v3:vocals');
+const middle=player.entryById.get('v2:vocals');
+player.sessionBar=40; player.lastVocalWrapBar=-1;
+assert.equal(player.vocalUnitWrap(middle),null,'only the unit end wraps');
+assert.equal(player.vocalUnitWrap(last).phrase.id,'v1','wrap to the unit start, not the last cell');
+player.sessionBar=44;
+assert.equal(player.vocalUnitWrap(last),null,'one extra pass per 16 bars');
+player.sessionBar=60;
+assert.equal(player.vocalUnitWrap(last).phrase.id,'v1','a later hold may loop again');
+"""
+    result = subprocess.run(["node", "-e", script, str(out)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

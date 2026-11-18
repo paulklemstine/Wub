@@ -788,6 +788,7 @@ def main() -> None:
         "bar_tour_value": (out_dir / "bar_tour_value.json").exists(),
         "vocal_flow": (out_dir / "vocal_flow.json").exists(),
         "vocal_bar_model": (out_dir / "vocal_bar_model.json").exists(),
+        "vocal_phrases": (out_dir / "vocal_phrases.json").exists(),
     }
     (out_dir / "sidecars.json").write_text(json.dumps(sidecars_flag, indent=2) + "\n")
     summary = {"arc": arc_res, "progression": prog_res, "rhythm_vocal": rhy_res, "syntax": syn_res}

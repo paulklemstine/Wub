@@ -296,3 +296,34 @@ loaded donors' four source bars for the closest realisation, switches the
 slice's `itemIndex`/`srcBar` to it, and adds a pitch-automation point when the
 predicted root needs a new shift.  A test asserts that composing with the model
 produces different scheduled slices than composing without it.
+
+## Multi-bar phrase units (choruses, verses)
+
+Per-bar prediction fixes *which* bar follows, but the bank still played one
+4-bar cell at a time, and a 4-bar block could not contain a real 8/16-bar vocal
+performance.  `scripts/build_vocal_phrases.py` mines the missing unit:
+
+* every contiguous chain of shipped phrases in a track (8, 12, 16, 20, 24 and
+  32 bars of one continuous performance),
+* its activity coverage, melodic variety, density, silence gaps, purity and
+  loop seam from `cell_index.json`, and
+* whether the same melodic window recurs elsewhere in the original song
+  (`data/processed`), which is the chorus/hook signal.
+
+A track-disjoint logistic model predicts that recurrence from the browser-side
+features (428 tracks, 1,620 units, held-out AUC 0.67).  The exported
+`vocal_phrases.json` ranks units by learned recurrence, chorus role and seam.
+
+`BarComposer.vocalUnitChain()` now selects a whole unit and maps **each output
+bar to the matching source bar of the unit** (`phrase = floor(bar/4)`,
+`srcBar = bar % 4`), looping the unit when a 16-bar block is longer.  It
+continues from the current position when a unit is already underway, so a
+16-bar chorus is held across four 4-bar block boundaries instead of restarting.
+A local `start_bar + 4` chain keeps the same behaviour without the sidecar.
+Per-bar inference still fills the no-unit and repair paths; it no longer
+governs a real multi-bar performance.
+
+At the end of a mined unit the run wraps back to the unit's **first** phrase
+(at most one extra pass per 16 bars), so a real chorus loops as a whole
+performance.  Before this, the held-run fallback repeated the last 4-bar cell
+because it had no +4-bar successor.
