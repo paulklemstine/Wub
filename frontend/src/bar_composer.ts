@@ -115,6 +115,35 @@ export interface HarmonyContinuity {
   policy: { min_bar_pair_cos: number; min_boundary_cos: number; max_clash_penalty: number };
 }
 
+/** Learned 4/8/16-bar sung-section lengths and backing cohorts. */
+export interface VocalSectionModel {
+  format: string;
+  version: number;
+  tracks: number;
+  lengths: Record<string, Record<string, number>>;
+  backing_change: Record<string, Record<string, number>>;
+  backing_presence: Record<string, Record<string, number>>;
+  all_backing_change: Record<string, number>;
+}
+
+export function vocalSectionCategory(
+  role: string,
+  kitSection: string,
+  isBuildup = false,
+): string {
+  if (role === "CHORUS_1" || role === "CHORUS_2" || kitSection === "DROP") return "CHORUS";
+  if (role.startsWith("VERSE") || kitSection === "GROOVE_A") return "VERSE";
+  if (isBuildup || kitSection === "BUILDUP") return "BUILDUP";
+  if (kitSection === "BREAKDOWN") return "BREAKDOWN";
+  return "VERSE";
+}
+
+export function vocalLengthBin(bars: number): 4 | 8 | 16 {
+  if (bars <= 6) return 4;
+  if (bars <= 12) return 8;
+  return 16;
+}
+
 export interface CellChromaDoc {
   format: string;
   version: number;
@@ -208,6 +237,8 @@ export class BarComposer {
   vocalBarModel: VocalBarModel | null = null;
   /** Optional mined multi-bar unit model; biases phrase selection only. */
   vocalPhraseModel: VocalPhraseModel | null = null;
+  /** Optional learned 4/8/16-bar section lengths and backing cohorts. */
+  vocalSectionModel: VocalSectionModel | null = null;
   /** Optional per-bar chroma for the shipped phrases (cell_chroma.json). */
   private cellChroma: Map<string, Record<string, number[][]>> | null = null;
   /** Optional learned next-bar pattern heads (drums/bass/other). */
@@ -513,6 +544,14 @@ export class BarComposer {
     return SCHEMAS[blockIdx % SCHEMAS.length];
   }
 
+  /** Learned bonus when a candidate's sung-unit length fits the section. */
+  private vocalSectionBonus(unit: VocalPhraseUnit | undefined, ctx: SectionPlanContext): number {
+    if (!this.vocalSectionModel || !unit) return 0;
+    const cat = vocalSectionCategory(ctx.role, ctx.kitSection, ctx.isBuildup);
+    const p = this.vocalSectionModel.lengths[cat]?.[String(vocalLengthBin(unit.bars))] ?? 0;
+    return 0.04 + 0.28 * p;
+  }
+
   private chooseVocalPrimary<TEntry extends ComposingPoolEntry>(
     fallback: TEntry,
     pool: readonly TEntry[],
@@ -595,6 +634,7 @@ export class BarComposer {
       if (unit) {
         s += 0.06 + unit.score * 0.10;
         if (unit.repeat && (ctxIsChorus(ctx) || ctx.kitSection === "DROP")) s += 0.04;
+        s += this.vocalSectionBonus(unit, ctx);
       }
       if (ctx.vocalFreshness && ctx.vocalFreshnessWeight) {
         s += ctx.vocalFreshnessWeight * (ctx.vocalFreshness(e.phrase.id) - 0.5);

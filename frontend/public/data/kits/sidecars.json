@@ -26,5 +26,6 @@
   "vocal_cadence": true,
   "level_seam": true,
   "horizon_planner": true,
-  "variety_prior": true
+  "variety_prior": true,
+  "vocal_section_model": true
 }

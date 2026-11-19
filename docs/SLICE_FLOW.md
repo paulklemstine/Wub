@@ -444,3 +444,22 @@ fallback morph multiplier 4 → 2, reserve 4 → 3, SliceFlow source novelty
 CHORUS_2 block may recall the hook, but sub-block replay stays disabled. The
 two real fixes (no repeated hook in every sub-block, some vocal freshness)
 remain.
+
+## 4/8/16-bar sung sections and their backing
+
+`scripts/build_vocal_section_model.py` combines the 1,620 mined multi-bar vocal
+units with direct 4-bar activity detection and the corpus section labels.
+It learns, per section category (CHORUS / VERSE / BUILDUP / BREAKDOWN):
+
+- sung-section length distribution in **4 / 8 / 16 bars** (4-bar sections now
+  measured directly because the unit miner only emits 8+ bar chains),
+- probability that drums / bass / other change when the sung section starts,
+- which backing stems are present under it.
+
+In the corpus, a new chorus vocal changes bass 55% and other 58% of the time but
+drums only 9%; a verse changes bass 61% / other 64% / drums 10%. The shipped
+`vocal_section_model.json` feeds two bounded biases: `chooseVocalPrimary()` gets
+a bonus when a candidate unit's length fits the section (short sections win in
+breakdowns, 16-bar units slightly favoured in choruses), and `selectJoint()`
+nudges bass/other to move with a new vocal section while drums hold. The
+sidecar is optional and changes no bars, pitches, rates or slice boundaries.

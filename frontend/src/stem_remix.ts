@@ -24,6 +24,7 @@ import {
   BarComposer,
   type VocalActivityInfo, type VocalBarModel, type VocalPhraseModel,
   type CellChromaDoc, type HarmonyContinuity, type PatternBarModel,
+  type VocalSectionModel, vocalSectionCategory,
 } from "./bar_composer";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
@@ -710,6 +711,8 @@ export class StemRemixPlayer {
   private horizonConfig: HorizonPlannerConfig | null = null;
   /** Optional variety policy from the variety_prior.json sidecar. */
   private varietyPrior: VarietyPrior | null = null;
+  /** Optional learned vocal-section length/backing model. */
+  private vocalSectionModel: VocalSectionModel | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -980,6 +983,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("level_seam")) setupLoads.push(this.loadLevelSeam(base));
     if (this.sidecarEnabled("horizon_planner")) setupLoads.push(this.loadHorizonPlanner(base));
     if (this.sidecarEnabled("variety_prior")) setupLoads.push(this.loadVarietyPrior(base));
+    if (this.sidecarEnabled("vocal_section_model")) setupLoads.push(this.loadVocalSectionModel(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1555,6 +1559,36 @@ export class StemRemixPlayer {
     if (!cfg) return 0;
     const used = this.trackUseCount(stem, trackId);
     return cfg.track_reuse_penalty * (1 / (1 + used) - 0.5);
+  }
+
+  /** Learned 4/8/16-bar vocal sections and their backing cohorts. */
+  private async loadVocalSectionModel(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_section_model.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalSectionModel;
+      if (doc?.format === "wub-vocal-section-v1" && doc.tracks >= 100
+        && doc.lengths && doc.backing_change) {
+        this.vocalSectionModel = doc;
+        this.barComposer.vocalSectionModel = doc;
+      }
+    } catch {
+      // Optional; static vocal-role heuristics remain in force.
+    }
+  }
+
+  /** Bias drums/bass/other to change with a new sung section, as in songs. */
+  private vocalBackingBonus(section: string, changed: readonly StemName[]): number {
+    const model = this.vocalSectionModel;
+    if (!model || !changed.includes("vocals")) return 0;
+    const cat = vocalSectionCategory(this.targetKind || section, section);
+    let bonus = 0;
+    for (const stem of ["drums", "bass", "other"] as const) {
+      if (!changed.includes(stem)) continue;
+      const p = model.backing_change[cat]?.[stem] ?? 0.4;
+      bonus += 0.12 * (p - 0.35);
+    }
+    return Math.max(-0.12, Math.min(0.18, bonus));
   }
 
   /** Unified short-horizon planner config (rank bias only). */
@@ -3997,6 +4031,11 @@ export class StemRemixPlayer {
       }
       if (variety !== 0) {
         policy.score = Math.max(0, Math.min(1, policy.score + variety / Math.max(1, subset.length)));
+      }
+      // Backing instruments follow the learned vocal-section cohort.
+      const backing = this.vocalBackingBonus(section, subset);
+      if (backing !== 0) {
+        policy.score = Math.max(0, Math.min(1, policy.score + backing));
       }
       // Unified short-horizon bias: best next bar / phrase / 2-3 block arc fit.
       const horizon = this.horizonScoreFor(subset, picks, startBar, candidateEnergy, section);
