@@ -509,3 +509,16 @@ This is the first learned term that judges the *whole assembled quartet* rather
 than one seam or one head, and it is the foundation for later preference
 fine-tuning: real-song versus cross-song labels can be replaced by A/B or
 like/skip labels without changing the browser path.
+
+## Bounded final-gate beam search
+
+`beam_search.json` enables a small search at the final cut instead of accepting
+the first locally-good proposal. For each stem the gate keeps the candidate cut
+plus its held fallback (pins and foundation-protected stems only have one legal
+option), enumerates the resulting whole-quartet plans, and ranks them by
+existing per-stem priority + quartet `mixScore` + a one-block-ahead viability
+estimate from distinct sources and foundation stability, plus the bounded
+song-critic adjustment. Depth 3 / width 4 / lookahead 0.25 keeps this tiny — at
+most 16 plans per boundary — and every hard gate (pins, foundation, change cap,
+critic-bounded veto) still applies. With the sidecar absent the original greedy
+final gate is unchanged.

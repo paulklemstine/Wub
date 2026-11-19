@@ -42,11 +42,24 @@ export interface FlowContext {
   sourceNoveltyWeight?: number;
   /** Bounded song-critic adjustment to the final cut decision. */
   songCriticAdjustment?: number;
+  /** Optional bounded beam over next-cut combinations (1 = greedy fallback). */
+  beamDepth?: number;
+  beamWidth?: number;
+  lookaheadWeight?: number;
 }
 export interface SliceFlowTrace {
   id: number; stem: StemName; at: number; endAt: number; section: string;
   cells: FlowCell[]; score: number; returnScore: number; seamFeatures: number[] | null;
 }
+interface FinalCutOption<Task extends FlowTask<FlowEntry>> {
+  task: Task;
+  fallback: Task | null;
+  canHold: boolean;
+  changed: boolean;
+  priority: number;
+  forced: boolean;
+}
+
 const clamp = (x: number, lo = 0, hi = 1): number => Math.max(lo, Math.min(hi, x));
 
 export function flowTransitionFeatures(a: ArrayLike<number>, b: ArrayLike<number>, stem: StemName, ctx: readonly number[]): Float32Array {
@@ -330,6 +343,55 @@ export class SliceFlow {
     return .6*sum/Math.max(1,context.bars)+.4*minimum;
   }
 
+  /**
+   * Bounded beam over the possible next-cut combinations. Depth/width are
+   * small on purpose: this is a ranked shortlist of whole-quartet plans, not a
+   * full search, and every hard gate (pins, foundation, change cap) still applies.
+   */
+  private beamSelect<Task extends FlowTask<FlowEntry>>(
+    candidates: ReadonlyArray<FinalCutOption<Task>>,
+    context: FlowContext,
+    pinned: ReadonlySet<StemName>,
+    maxChanges: number,
+    criticAdjust: number,
+  ): Task[] {
+    const depth = Math.max(2, Math.min(4, Math.floor(context.beamDepth ?? 2)));
+    const width = Math.max(2, Math.min(8, Math.floor(context.beamWidth ?? 4)));
+    const lookahead = Math.max(0, Math.min(0.6, context.lookaheadWeight ?? 0.25));
+    const options = candidates.map((c) => {
+      const list: Task[] = [c.task];
+      if (!c.forced && c.fallback && c.canHold && !pinned.has(c.task.stem)) list.push(c.fallback);
+      return list;
+    });
+    const scored: Array<{ tasks: Task[]; score: number }> = [];
+    const walk = (i: number, chosen: Task[], priority: number, changes: number): void => {
+      if (scored.length > depth * width * 8) return;
+      if (i === options.length) {
+        if (changes > maxChanges) return;
+        const mix = this.mixScore(chosen, context);
+        const distinct = new Set(chosen.map((t) => t.run[0]?.kit.track_id ?? "")).size;
+        let stable = 0;
+        for (const task of chosen) {
+          const foundation = this.foundations[task.stem];
+          if (foundation && task.run[0]?.kit.track_id === foundation.trackId) stable += 1;
+        }
+        const future = lookahead * (0.5 * distinct / 4 + 0.5 * stable / 4);
+        scored.push({ tasks: [...chosen], score: priority + 0.6 * mix + future + criticAdjust });
+        return;
+      }
+      for (const task of options[i]) {
+        const candidate = candidates[i];
+        const isChange = candidate.changed && task === candidate.task;
+        walk(i + 1, [...chosen, task],
+          priority + (task === candidate.task ? candidate.priority : 0),
+          changes + (isChange ? 1 : 0));
+      }
+    };
+    walk(0, [], 0, 0);
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, width)[0]?.tasks ?? candidates.map((c) => c.task);
+  }
+
   /** Plan first, then gate the FINAL composed cuts, including source changes. */
   select<T extends FlowEntry, Task extends FlowTask<T>>(tasks: Task[], context: FlowContext,
     hold: (stem: StemName) => Task | null, pinned: ReadonlySet<StemName>): Task[] {
@@ -344,7 +406,7 @@ export class SliceFlow {
     this.lastIntent = ["hold", "vary", "handoff"][logits.indexOf(Math.max(...logits))];
     const criticAdjust = Math.max(-0.1, Math.min(0.1, context.songCriticAdjustment ?? 0));
     const candidates = tasks.map(task => {
-      if (pinned.has(task.stem)) return { task, fallback: null, canHold: false, changed: false, priority: 1 };
+      if (pinned.has(task.stem)) return { task, fallback: null, canHold: false, changed: false, priority: 1, forced: false };
       const prior = this.foundations[task.stem];
       const candidate = this.score(describeFlowTask(task, context.bars, 240/context.bpm), context);
       const fallback = hold(task.stem);
@@ -362,11 +424,11 @@ export class SliceFlow {
       const protectedFoundation = foundation && stableAge < this.artifact!.foundation_seconds && !context.rotation && !context.bridge;
       if (fallback && ((changed && protectedFoundation && !context.sectionChanged)
         || (!context.bridge && candidate.score + .18 - criticAdjust < fallbackScore))) {
-        return { task: fallback, fallback, canHold, changed: !canHold, priority: 0 };
+        return { task: fallback, fallback, canHold, changed: !canHold, priority: 0, forced: true };
       }
       const noveltyGain = (context.sourceNoveltyWeight ?? .15) * (this.sourceNovelty(String(first?.kit.track_id ?? ""))
         - (fallback ? this.sourceNovelty(String(fallback.run[0]?.kit.track_id ?? "")) : .5));
-      return { task, fallback, canHold, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + noveltyGain + (foundation ? 0 : .02) };
+      return { task, fallback, canHold, changed, priority: candidate.score-fallbackScore + motifGain + valueGain + noveltyGain + (foundation ? 0 : .02), forced: false };
     });
     // Preserve a recognizable anchor even when the old arc requests a reset.
     // A real section change is the one place the learned cohort prior may
@@ -376,16 +438,21 @@ export class SliceFlow {
       && Number.isFinite(context.cohortMaxChanges)) {
       maxChanges = Math.max(maxChanges, Math.min(4, Math.floor(context.cohortMaxChanges!)));
     }
-    const changed = candidates.filter(c => c.changed && c.fallback && c.canHold).sort((a,b)=>b.priority-a.priority);
-    for (const item of changed.slice(maxChanges)) if (item.fallback) item.task = item.fallback;
-    let selected = candidates.map(c=>c.task);
-    let mix = this.mixScore(selected,context);
-    // Inspect the complete assembled quartet, not just independent stem joins.
-    for (const option of candidates) {
-      if (!option.fallback || pinned.has(option.task.stem)) continue;
-      const trial = selected.map(task=>task.stem===option.task.stem ? option.fallback! : task);
-      const quality = this.mixScore(trial,context);
-      if (quality > mix + .08) { selected=trial; mix=quality; }
+    let selected: Task[];
+    if ((context.beamDepth ?? 1) > 1) {
+      selected = this.beamSelect(candidates, context, pinned, maxChanges, criticAdjust);
+    } else {
+      const changed = candidates.filter(c => c.changed && c.fallback && c.canHold).sort((a,b)=>b.priority-a.priority);
+      for (const item of changed.slice(maxChanges)) if (item.fallback) item.task = item.fallback;
+      selected = candidates.map(c=>c.task);
+      let mix = this.mixScore(selected,context);
+      // Inspect the complete assembled quartet, not just independent stem joins.
+      for (const option of candidates) {
+        if (!option.fallback || pinned.has(option.task.stem)) continue;
+        const trial = selected.map(task=>task.stem===option.task.stem ? option.fallback! : task);
+        const quality = this.mixScore(trial,context);
+        if (quality > mix + .08) { selected=trial; mix=quality; }
+      }
     }
     return selected;
   }

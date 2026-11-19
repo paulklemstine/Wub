@@ -110,6 +110,15 @@ interface VarietyPrior {
   max_recall_per_set: number;
 }
 
+/** Optional bounded final-gate beam search config. */
+interface BeamSearchConfig {
+  format: string;
+  version: number;
+  depth: number;
+  width: number;
+  lookahead_weight: number;
+}
+
 /** Policy config for the unified short-horizon ranking bias. */
 interface HorizonPlannerConfig {
   format: string;
@@ -737,6 +746,8 @@ export class StemRemixPlayer {
   private phraseConductor: PhraseConductorArtifact | null = null;
   /** Learned four-stem song-ness critic. */
   private songCritic: SongCriticArtifact | null = null;
+  /** Optional bounded final-gate beam search config. */
+  private beamSearch: BeamSearchConfig | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -1012,6 +1023,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("bank_transition")) setupLoads.push(this.loadBankTransition(base));
     if (this.sidecarEnabled("phrase_conductor")) setupLoads.push(this.loadPhraseConductor(base));
     if (this.sidecarEnabled("song_critic")) setupLoads.push(this.loadSongCritic(base));
+    if (this.sidecarEnabled("beam_search")) setupLoads.push(this.loadBeamSearch(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1587,6 +1599,20 @@ export class StemRemixPlayer {
     if (!cfg) return 0;
     const used = this.trackUseCount(stem, trackId);
     return cfg.track_reuse_penalty * (1 / (1 + used) - 0.5);
+  }
+
+  /** Bounded final-gate beam search config. */
+  private async loadBeamSearch(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/beam_search.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as BeamSearchConfig;
+      if (doc?.format === "wub-beam-search-v1" && doc.depth >= 2 && doc.width >= 2) {
+        this.beamSearch = doc;
+      }
+    } catch {
+      // Optional; greedy final gate stays in force.
+    }
   }
 
   /** Learned four-stem song-ness critic (bounded final-gate adjustment). */
@@ -3576,6 +3602,9 @@ export class StemRemixPlayer {
         sectionChanged, rotation, bridge,
         sourceNoveltyWeight: this.varietyPrior?.source_novelty_weight,
         songCriticAdjustment: this.barComposer.lastSongCriticAdjustment,
+        beamDepth: this.beamSearch?.depth,
+        beamWidth: this.beamSearch?.width,
+        lookaheadWeight: this.beamSearch?.lookahead_weight,
         cohortMaxChanges: handoffThisBlock
           ? Math.max(4, this.transitionCohort?.handoff?.max_stems ?? 4)
           : sectionChanged

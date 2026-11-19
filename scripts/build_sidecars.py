@@ -803,6 +803,7 @@ def main() -> None:
         "bank_transition": (out_dir / "bank_transition.json").exists(),
         "phrase_conductor": (out_dir / "phrase_conductor.json").exists(),
         "song_critic": (out_dir / "song_critic.json").exists(),
+        "beam_search": (out_dir / "beam_search.json").exists(),
     }
     (out_dir / "sidecars.json").write_text(json.dumps(sidecars_flag, indent=2) + "\n")
     summary = {"arc": arc_res, "progression": prog_res, "rhythm_vocal": rhy_res, "syntax": syn_res}
