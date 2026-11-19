@@ -245,6 +245,8 @@ export class BarComposer {
   patternBarModel: PatternBarModel | null = null;
   /** Enable learned per-slot bar choice inside a phrase (same phrase only). */
   horizonBarSelect = false;
+  /** Next-pattern heads from the offline conductor, keyed by stem. */
+  conductorNextPatterns: Partial<Record<StemName, number[]>> | null = null;
   /** Optional learned quartet harmony thresholds. */
   harmonyContinuity: HarmonyContinuity | null = null;
 
@@ -370,6 +372,17 @@ export class BarComposer {
     }
     if (prediction.length < 48) return 0;
     return 0.40 * (this.patternBarFit(prediction, this.patternBarVec(candidateMeta, bar, kitSection)) - 0.5);
+  }
+
+  /** 48-d pattern vector for a phrase bar, rotated into session-key space. */
+  cellPatternVec(phraseId: string, stem: StemName, bar: number, semitones: number, kitSection: string): number[] {
+    const meta = this.getPhraseMeta(phraseId, stem);
+    if (!meta) return new Array<number>(48).fill(0);
+    const chroma: number[][] = [];
+    for (let b = 0; b < 4; b++) {
+      chroma.push([...(this.barChroma(phraseId, stem, b, semitones) ?? meta.chroma?.[b] ?? new Array(12).fill(0))]);
+    }
+    return this.patternBarVec({ ...meta, chroma }, bar, kitSection).slice(0, 48);
   }
 
   /** Learned fit of a candidate phrase's first bar to the current block tail. */
@@ -748,7 +761,8 @@ export class BarComposer {
     kitSection = "",
   ): SelectedCell<TEntry>[] {
     const out: SelectedCell<TEntry>[] = [];
-    const learned = this.horizonBarSelect && this.patternBarModel !== null;
+    const learned = this.horizonBarSelect
+      && (this.patternBarModel !== null || this.conductorNextPatterns !== null);
     let prevMeta: CellStemMeta | null = learned ? (this.lastBlockTail[stem]?.meta ?? null) : null;
     let prevBar: number | null = learned ? (this.lastBlockTail[stem]?.srcBar ?? null) : null;
     const used = new Set<number>();
@@ -761,6 +775,12 @@ export class BarComposer {
         for (let cand = 0; cand < 4; cand++) {
           if (used.has(cand)) continue;
           let score = (meta.p[cand] ?? 0) * 0.5 + (meta.es?.[cand] ?? 0) * 0.3;
+          const conductorPattern = this.conductorNextPatterns?.[stem];
+          if (conductorPattern && conductorPattern.length === 48) {
+            score += 1.2 * (this.patternBarFit(
+              conductorPattern, this.patternBarVec(meta, cand, kitSection).slice(0, 48),
+            ) - 0.5);
+          }
           if (prevMeta && prevBar !== null) {
             score += 1.5 * this.patternBarScore(stem, prevMeta, prevBar, meta, cand, kitSection);
             score += 0.25 * scoreBarSeamContinuity({

@@ -463,3 +463,12 @@ a bonus when a candidate unit's length fits the section (short sections win in
 breakdowns, 16-bar units slightly favoured in choruses), and `selectJoint()`
 nudges bass/other to move with a new vocal section while drums hold. The
 sidecar is optional and changes no bars, pitches, rates or slice boundaries.
+
+## Learned conductor
+
+`conductor.json` (a 392→128→128→202 MLP trained on 57,347 real-song boundaries,
+track-disjoint) now supplies the next section, energy, stem-change mask and
+per-stem next-bar patterns at every block. With `authority: 1.0` it replaces the
+hand-written section/energy arbitration and drives bar choice and stem-change
+ranking; the curated rules remain the fallback and all hard gates stay in
+force. See docs/CONDUCTOR.md for the training recipe, metrics and rollback knob.

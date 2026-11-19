@@ -36,6 +36,10 @@ import {
 } from "./arc_inference";
 import { JointRanker } from "./joint_ranker";
 import { sampleSongArc, songArcTargetAt, type SampledArcSegment, type SongArcArtifact } from "./learned_arc";
+import {
+  CONDUCTOR_STEMS, conductorState, inferConductor, isConductorArtifact,
+  type ConductorArtifact, type ConductorDecision,
+} from "./conductor";
 import { MixCompatModel, type MixCompatPhrase } from "./mix_compat";
 import {
   rhythmMixScore,
@@ -713,6 +717,9 @@ export class StemRemixPlayer {
   private varietyPrior: VarietyPrior | null = null;
   /** Optional learned vocal-section length/backing model. */
   private vocalSectionModel: VocalSectionModel | null = null;
+  /** Offline-trained conductor and its current block decision. */
+  private conductorModel: ConductorArtifact | null = null;
+  private conductorDecision: ConductorDecision | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -984,6 +991,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("horizon_planner")) setupLoads.push(this.loadHorizonPlanner(base));
     if (this.sidecarEnabled("variety_prior")) setupLoads.push(this.loadVarietyPrior(base));
     if (this.sidecarEnabled("vocal_section_model")) setupLoads.push(this.loadVocalSectionModel(base));
+    if (this.sidecarEnabled("conductor")) setupLoads.push(this.loadConductor(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1559,6 +1567,68 @@ export class StemRemixPlayer {
     if (!cfg) return 0;
     const used = this.trackUseCount(stem, trackId);
     return cfg.track_reuse_penalty * (1 / (1 + used) - 0.5);
+  }
+
+  /** Offline-trained end-to-end conductor (section, energy, changes, patterns). */
+  private async loadConductor(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/conductor.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as ConductorArtifact;
+      if (isConductorArtifact(doc)) {
+        this.conductorModel = doc;
+        console.info(
+          `[StemRemix] Conductor ready (authority ${doc.authority.toFixed(2)}, ` +
+          `${doc.report?.change_auc ? Object.keys(doc.report.change_auc).length : 0} stems)`,
+        );
+      }
+    } catch {
+      // Optional; hand-written rules stay in force.
+    }
+  }
+
+  /** Ask the conductor for this block's section/energy/change/pattern decision. */
+  private runConductor(startBar: number, section: string, energy: number): ConductorDecision | null {
+    const model = this.conductorModel;
+    if (!model) return null;
+    const older = CONDUCTOR_STEMS.map((stem) => {
+      const prev = this.previousEntries[stem] ?? this.current[stem]?.entry;
+      return prev
+        ? this.barComposer.cellPatternVec(prev.phrase.id, stem, 3, prev.keyShift, section)
+        : new Array<number>(48).fill(0);
+    });
+    const current = CONDUCTOR_STEMS.map((stem) => {
+      const entry = this.lastBlockEntries[stem] ?? this.current[stem]?.entry;
+      return entry ? this.barComposer.cellPatternVec(entry.phrase.id, stem, 3, entry.keyShift, section)
+        : new Array<number>(48).fill(0);
+    });
+    const delta = (this.composedStats.lastMeanTheoryScore ?? 0.5) - 0.5;
+    const state = conductorState(
+      older, current, section, energy, delta,
+      (((startBar % 104) + 104) % 104) / 104,
+    );
+    try {
+      const decision = inferConductor(model, state);
+      this.conductorDecision = decision;
+      const patterns: Partial<Record<StemName, number[]>> = {};
+      CONDUCTOR_STEMS.forEach((stem, i) => { patterns[stem] = decision.patterns[i] ?? []; });
+      this.barComposer.conductorNextPatterns = patterns;
+      return decision;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Bounded score term from the conductor's per-stem change head. */
+  private conductorChangeBonus(subset: readonly StemName[]): number {
+    const conductor = this.conductorDecision;
+    if (!conductor || conductor.authority <= 0) return 0;
+    let bonus = 0;
+    for (const stem of subset) {
+      const idx = CONDUCTOR_STEMS.indexOf(stem as (typeof CONDUCTOR_STEMS)[number]);
+      if (idx >= 0) bonus += conductor.change[idx] - 0.5;
+    }
+    return conductor.authority * 0.30 * bonus / Math.max(1, subset.length);
   }
 
   /** Learned 4/8/16-bar vocal sections and their backing cohorts. */
@@ -3059,7 +3129,7 @@ export class StemRemixPlayer {
     }
     // Stash for selection helpers (base 5-class stays in `normalized`).
     this.targetKind = targetKind;
-    const sectionChanged = normalized !== this.lastSection;
+    let sectionChanged = normalized !== this.lastSection;
     this.lastSection = normalized;
     if (bridge && this.nextCluster === null) {
       this.nextCluster = this.chooseNeighbourCluster();
@@ -3096,6 +3166,20 @@ export class StemRemixPlayer {
     // build/fade like the training songs instead of snapping to a fixed table.
     if (sampledArc && !bridge && !rotation) {
       targetEnergy = clamp01(0.60 * targetEnergy + 0.40 * sampledArc.energy);
+    }
+    // The learned conductor is the final arbiter of section and energy. With
+    // authority 1.0 it replaces the hand-written arc outright; lowering that
+    // single artifact field blends it back toward the curated rules.
+    const decision = !bridge && !rotation ? this.runConductor(startBar, normalized, targetEnergy) : null;
+    if (decision && decision.authority > 0) {
+      const authority = decision.authority;
+      normalized = decision.section;
+      targetKind = decision.section;
+      displaySection = decision.section;
+      targetEnergy = clamp01((1 - authority) * targetEnergy + authority * decision.energy);
+      secCtx.kitSection = decision.section as typeof secCtx.kitSection;
+      sectionChanged = normalized !== this.lastSection;
+      this.lastSection = normalized;
     }
     this.composedStats.mode = this.songArchitect.getMode();
     this.composedStats.role = displaySection;
@@ -4036,6 +4120,11 @@ export class StemRemixPlayer {
       const backing = this.vocalBackingBonus(section, subset);
       if (backing !== 0) {
         policy.score = Math.max(0, Math.min(1, policy.score + backing));
+      }
+      // The conductor's change head decides which stems should move here.
+      const changeBonus = this.conductorChangeBonus(subset);
+      if (changeBonus !== 0) {
+        policy.score = Math.max(0, Math.min(1, policy.score + changeBonus));
       }
       // Unified short-horizon bias: best next bar / phrase / 2-3 block arc fit.
       const horizon = this.horizonScoreFor(subset, picks, startBar, candidateEnergy, section);
