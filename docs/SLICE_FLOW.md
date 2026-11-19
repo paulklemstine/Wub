@@ -472,3 +472,24 @@ per-stem next-bar patterns at every block. With `authority: 1.0` it replaces the
 hand-written section/energy arbitration and drives bar choice and stem-change
 ranking; the curated rules remain the fallback and all hard gates stay in
 force. See docs/CONDUCTOR.md for the training recipe, metrics and rollback knob.
+
+## Learning from the #300-era pipeline (bank-space transitions)
+
+Comparing build #300 (`73a164e140`) to HEAD showed the older engine used the
+same learned models (joint ranker, arc model, section navigator, cell/mix
+compat) as **bounded scorers inside the selector**. Newer work added higher-layer
+arbiters — most importantly the conductor with `authority: 1.0`, which replaced
+the curated arc with a 5-class model that is wrong ~36% of the time. Nothing was
+rolled back: the conductor is now shipped with `authority: 0.30`, so it biases
+sections/energies/changes/bar choice but no longer overrides the hand-written
+arc outright.
+
+The bigger training fix is representational: conductor v2 learned from raw song
+cells, while the browser can only choose shipped phrases. `scripts/train_bank_transition.py`
+now maps real 4-bar windows to their **actual shipped phrase ids** (2,199 real
+consecutive pairs from 428 tracks) and trains a 136→32→1 scorer on phrase
+embeddings, section, energy delta and bpm/key distance, plus a mined top-K
+successor table. Validation AUC is 0.984. `bank_transition.json` adds a bounded
+`±0.075` ranking term to `jointOptions()`, so combinations that actually follow
+one another in the training songs are preferred — without changing any audio,
+phrase boundary or hard scheduling rule.

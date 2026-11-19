@@ -800,6 +800,7 @@ def main() -> None:
         "variety_prior": (out_dir / "variety_prior.json").exists(),
         "vocal_section_model": (out_dir / "vocal_section_model.json").exists(),
         "conductor": (out_dir / "conductor.json").exists(),
+        "bank_transition": (out_dir / "bank_transition.json").exists(),
     }
     (out_dir / "sidecars.json").write_text(json.dumps(sidecars_flag, indent=2) + "\n")
     summary = {"arc": arc_res, "progression": prog_res, "rhythm_vocal": rhy_res, "syntax": syn_res}

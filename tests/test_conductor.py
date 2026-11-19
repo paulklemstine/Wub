@@ -22,7 +22,7 @@ def test_conductor_artifact_is_trained_track_disjoint_and_beats_baselines():
     doc = json.loads((KITS / "conductor.json").read_text())
     assert doc["format"] == "wub-conductor-v2"
     assert (doc["state_dim"], doc["target_dim"], doc["hidden"], doc["history_cells"]) == (1202, 202, 256, 6)
-    assert doc["authority"] == 1.0
+    assert 0.2 <= doc["authority"] <= 0.5
     assert len(doc["layers"]) == 3
     assert len(doc["mean"]) == len(doc["std"]) == 1202
     assert len(doc["layers"][0]["w"]) == 256
@@ -62,7 +62,7 @@ assert.equal(d.change.length,4);
 assert.ok(d.change.every(v=>v>=0&&v<=1));
 assert.equal(d.patterns.length,4);
 assert.ok(d.patterns.every(p=>p.length===48&&p.every(v=>v>=0&&v<=1)));
-assert.equal(d.authority,1);
+assert.ok(d.authority>0 && d.authority<1,'bias, not arbiter');
 """
     path = Path("/tmp/opencode/conductor_artifact.json")
     path.write_text(json.dumps(doc))

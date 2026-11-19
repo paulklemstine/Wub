@@ -26,6 +26,10 @@ import {
   type CellChromaDoc, type HarmonyContinuity, type PatternBarModel,
   type VocalSectionModel, vocalSectionCategory,
 } from "./bar_composer";
+import {
+  bankTransitionScore, isBankTransitionArtifact,
+  type BankPhrase, type BankTransitionArtifact,
+} from "./bank_transition";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
@@ -722,6 +726,8 @@ export class StemRemixPlayer {
   private conductorDecision: ConductorDecision | null = null;
   private conductorSectionHistory: string[] = [];
   private conductorEnergyHistory: number[] = [];
+  /** Learned real-song phrase-transition prior in bank space. */
+  private bankTransition: BankTransitionArtifact | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -994,6 +1000,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("variety_prior")) setupLoads.push(this.loadVarietyPrior(base));
     if (this.sidecarEnabled("vocal_section_model")) setupLoads.push(this.loadVocalSectionModel(base));
     if (this.sidecarEnabled("conductor")) setupLoads.push(this.loadConductor(base));
+    if (this.sidecarEnabled("bank_transition")) setupLoads.push(this.loadBankTransition(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1569,6 +1576,37 @@ export class StemRemixPlayer {
     if (!cfg) return 0;
     const used = this.trackUseCount(stem, trackId);
     return cfg.track_reuse_penalty * (1 / (1 + used) - 0.5);
+  }
+
+  /** Learned real-chronology phrase-transition prior. */
+  private async loadBankTransition(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/bank_transition.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as BankTransitionArtifact;
+      if (isBankTransitionArtifact(doc)) {
+        this.bankTransition = doc;
+        console.info(
+          `[StemRemix] Bank transition prior ready ` +
+          `(${doc.report?.real_transitions ?? 0} real pairs, val AUC ${doc.report?.val_auc ?? 0})`,
+        );
+      }
+    } catch {
+      // Optional; joint ranker remains authoritative.
+    }
+  }
+
+  /** BankPhrase view of a pool entry for the transition prior. */
+  private bankPhraseOf(entry: StemPoolEntry): BankPhrase {
+    const phrase = entry.phrase as unknown as { id: string; embedding?: number[]; section?: string };
+    return {
+      id: phrase.id,
+      section: phrase.section,
+      embedding: phrase.embedding,
+      energy: entry.energy,
+      bpm: entry.kit.bpm,
+      keyRoot: parseTheoryKey(entry.kit.key).root,
+    };
   }
 
   /** Offline-trained end-to-end conductor (section, energy, changes, patterns). */
@@ -3714,11 +3752,17 @@ export class StemRemixPlayer {
       const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
       const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
       const variety = this.varietyBonusFor(stem, entry.kit.track_id);
+      const bank = this.bankTransition
+        ? 0.15 * (bankTransitionScore(
+          this.bankTransition, this.bankPhraseOf(current), this.bankPhraseOf(entry), section,
+        ) - 0.5)
+        : 0;
       return {
         entry,
         full: legal,
         judge,
-        score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus + signatureBonus + timbre + vocalActBonus + variety,
+        score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
+          + signatureBonus + timbre + vocalActBonus + variety + bank,
       };
     });
     const full = scored.filter((item) => item.full);

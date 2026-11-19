@@ -28,5 +28,6 @@
   "horizon_planner": true,
   "variety_prior": true,
   "vocal_section_model": true,
-  "conductor": true
+  "conductor": true,
+  "bank_transition": true
 }

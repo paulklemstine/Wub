@@ -48,8 +48,8 @@ PYTHONPATH=. python3 scripts/train_conductor_v2.py \
 runs the three dense layers and decodes every head. `StemRemixPlayer` loads it
 as the optional `conductor` sidecar and, at each block, calls `runConductor()`
 from the current/previous phrase cells. With the shipped
-`"authority": 1.0`, the conductor's section and energy **replace** the
-hand-written arc; its change head biases which stems move, and its pattern
+`"authority": 0.30`, the conductor is a **bias** on top of the curated arc,
+not an arbiter that replaces it; its change head biases which stems move, and its pattern
 heads drive per-slot bar choice in `BarComposer`.
 
 The hand-written rules are still the fallback when the sidecar is absent or
