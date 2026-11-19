@@ -138,8 +138,9 @@ def mine(processed: Path, max_tracks: int):
             continue
         cells = [cell(bars, c * 4) for c in range(len(bars) // 4)]
         all_energy.extend(c["energy"] for c in cells)
-        for i in range(2, len(cells) - 1):
-            prev2, prev1, nxt = cells[i - 2], cells[i - 1], cells[i + 1]
+        for i in range(2, len(cells)):
+            # State ends at cells[i-1]; predict the immediately following cell.
+            prev2, prev1, nxt = cells[i - 2], cells[i - 1], cells[i]
             x = list(prev2["pattern"]) + list(prev1["pattern"])
             sec = np.zeros(5, dtype=np.float32)
             if prev1["section"] in SECTIONS:

@@ -10,28 +10,36 @@ things at once instead of scoring one narrow seam:
 
 ## Training data
 
-`scripts/train_conductor.py` reads the real-song analyses in
+The shipped model is **v2**, trained by `scripts/train_conductor_v2.py`.
+`scripts/train_conductor.py` is the original two-cell prototype and reads the real-song analyses in
 `data/processed/*.json`. For each 4-bar boundary it builds a 392-d state from
 the previous two 4-bar cells of all four stems (onset grid, density,
 downbeats, quarters, root, chroma, activity) plus section/energy context, and
 trains a 392→128→128→202 tanh MLP against the *observed* next cell.
 
-The first run used **1,894 songs / 57,347 examples**, a track-disjoint 90/10
-split (1,705 / 189 tracks), 18 epochs on the WSL GPU:
+v2 uses a six-cell (24-bar) history, a 1202→256→256→202 MLP and 25 epochs.
+The v1 data prep accidentally predicted the cell **two** steps ahead; fixing
+that and extending the context produced a large gain. Final track-disjoint run:
+**1,881 songs / 46,323 examples**, 1,693 / 188 train/val tracks.
 
-| head | model | baseline |
-|---|---|---|
-| section accuracy | 0.549 | 0.515 (majority) |
-| energy MAE | 0.0717 | 0.0730 (mean) |
-| change AUC | drums 0.787 / bass 0.715 / other 0.738 / vocals 0.723 | 0.5 |
-| pattern MSE | 0.0681 | 0.0880 (mean) |
+| head | v2 | v1 | baseline |
+|---|---|---|---|
+| section accuracy | **0.637** | 0.549 | 0.550 (majority) |
+| section macro F1 | **0.549** | – | – |
+| energy MAE | **0.050** | 0.072 | 0.064 (mean) |
+| change AUC | drums 0.795 / bass 0.730 / other 0.737 / vocals 0.634 | 0.72–0.79 | 0.5 |
+| pattern MSE | **0.0631** | 0.0681 | 0.0869 (mean) |
+
+Class balancing and 40 epochs were also tried and were worse (0.618 section,
+0.773 drums AUC), so the shipped recipe is the unweighted 25-epoch run.
 
 Retrain with:
 
 ```bash
-PYTHONPATH=. python3 scripts/train_conductor.py \
+PYTHONPATH=. python3 scripts/train_conductor_v2.py \
   --processed /mnt/e/Wub/data/processed \
-  --out frontend/public/data/kits/conductor.json --epochs 18
+  --out frontend/public/data/kits/conductor.json \
+  --epochs 25 --lr 0.0008 --no-balance
 ```
 
 ## Browser use

@@ -37,7 +37,7 @@ import {
 import { JointRanker } from "./joint_ranker";
 import { sampleSongArc, songArcTargetAt, type SampledArcSegment, type SongArcArtifact } from "./learned_arc";
 import {
-  CONDUCTOR_STEMS, conductorState, inferConductor, isConductorArtifact,
+  CONDUCTOR_STEMS, conductorState, conductorStateV2, inferConductor, isConductorArtifact,
   type ConductorArtifact, type ConductorDecision,
 } from "./conductor";
 import { MixCompatModel, type MixCompatPhrase } from "./mix_compat";
@@ -720,6 +720,8 @@ export class StemRemixPlayer {
   /** Offline-trained conductor and its current block decision. */
   private conductorModel: ConductorArtifact | null = null;
   private conductorDecision: ConductorDecision | null = null;
+  private conductorSectionHistory: string[] = [];
+  private conductorEnergyHistory: number[] = [];
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -1591,22 +1593,42 @@ export class StemRemixPlayer {
   private runConductor(startBar: number, section: string, energy: number): ConductorDecision | null {
     const model = this.conductorModel;
     if (!model) return null;
-    const older = CONDUCTOR_STEMS.map((stem) => {
-      const prev = this.previousEntries[stem] ?? this.current[stem]?.entry;
-      return prev
-        ? this.barComposer.cellPatternVec(prev.phrase.id, stem, 3, prev.keyShift, section)
-        : new Array<number>(48).fill(0);
-    });
     const current = CONDUCTOR_STEMS.map((stem) => {
       const entry = this.lastBlockEntries[stem] ?? this.current[stem]?.entry;
       return entry ? this.barComposer.cellPatternVec(entry.phrase.id, stem, 3, entry.keyShift, section)
         : new Array<number>(48).fill(0);
     });
-    const delta = (this.composedStats.lastMeanTheoryScore ?? 0.5) - 0.5;
-    const state = conductorState(
-      older, current, section, energy, delta,
-      (((startBar % 104) + 104) % 104) / 104,
-    );
+    const phase = (((startBar % 104) + 104) % 104) / 104;
+    const energyDb = -20 + energy * 40;
+    let state: number[];
+    if (model.version >= 2) {
+      const history: number[][][] = [];
+      for (let age = 5; age >= 0; age--) {
+        const cells = CONDUCTOR_STEMS.map((stem) => {
+          const ids = this.stemHistory[stem] ?? [];
+          const id = ids[ids.length - 1 - age];
+          const entry = id ? this.entryById.get(`${id}:${stem}`) : undefined;
+          return entry
+            ? this.barComposer.cellPatternVec(entry.phrase.id, stem, 3, entry.keyShift, section)
+            : new Array<number>(48).fill(0);
+        });
+        history.push(cells);
+      }
+      const sections = this.conductorSectionHistory.slice(-6);
+      const energies = this.conductorEnergyHistory.slice(-6);
+      const lastEnergy = energies.length ? energies[energies.length - 1] : energyDb;
+      state = conductorStateV2(history, sections, energies, section, energyDb,
+        energyDb - lastEnergy, phase);
+    } else {
+      const older = CONDUCTOR_STEMS.map((stem) => {
+        const prev = this.previousEntries[stem] ?? this.current[stem]?.entry;
+        return prev
+          ? this.barComposer.cellPatternVec(prev.phrase.id, stem, 3, prev.keyShift, section)
+          : new Array<number>(48).fill(0);
+      });
+      const delta = (this.composedStats.lastMeanTheoryScore ?? 0.5) - 0.5;
+      state = conductorState(older, current, section, energy, delta, phase);
+    }
     try {
       const decision = inferConductor(model, state);
       this.conductorDecision = decision;
@@ -3180,6 +3202,12 @@ export class StemRemixPlayer {
       secCtx.kitSection = decision.section as typeof secCtx.kitSection;
       sectionChanged = normalized !== this.lastSection;
       this.lastSection = normalized;
+    }
+    if (this.conductorModel) {
+      this.conductorSectionHistory.push(normalized);
+      this.conductorEnergyHistory.push(-20 + targetEnergy * 40);
+      if (this.conductorSectionHistory.length > 6) this.conductorSectionHistory.shift();
+      if (this.conductorEnergyHistory.length > 6) this.conductorEnergyHistory.shift();
     }
     this.composedStats.mode = this.songArchitect.getMode();
     this.composedStats.role = displaySection;

@@ -20,21 +20,22 @@ def bundle(name: str, source: str) -> Path:
 
 def test_conductor_artifact_is_trained_track_disjoint_and_beats_baselines():
     doc = json.loads((KITS / "conductor.json").read_text())
-    assert doc["format"] == "wub-conductor-v1"
-    assert (doc["state_dim"], doc["target_dim"], doc["hidden"]) == (392, 202, 128)
+    assert doc["format"] == "wub-conductor-v2"
+    assert (doc["state_dim"], doc["target_dim"], doc["hidden"], doc["history_cells"]) == (1202, 202, 256, 6)
     assert doc["authority"] == 1.0
     assert len(doc["layers"]) == 3
-    assert len(doc["mean"]) == len(doc["std"]) == 392
-    assert len(doc["layers"][0]["w"]) == 128
+    assert len(doc["mean"]) == len(doc["std"]) == 1202
+    assert len(doc["layers"][0]["w"]) == 256
     assert len(doc["layers"][2]["w"]) == 202
     r = doc["report"]
     assert r["train_tracks"] >= 1500 and r["val_tracks"] >= 100
-    assert r["section_accuracy"] > r["section_majority"]
-    assert r["pattern_mse"] < r["pattern_baseline_mse"] * 0.9
-    assert r["energy_mae"] <= r["energy_baseline_mae"]
+    assert r["section_accuracy"] > r["section_majority"] + 0.05
+    assert r["section_macro_f1"] > 0.5
+    assert r["pattern_mse"] < r["pattern_baseline_mse"] * 0.85
+    assert r["energy_mae"] < r["energy_baseline_mae"] * 0.9
     assert all(0.6 < v < 1.0 for v in r["change_auc"].values())
     assert json.loads((KITS / "sidecars.json").read_text())["conductor"] is True
-    assert "wub-conductor-v1" in (ROOT / "scripts/train_conductor.py").read_text()
+    assert "wub-conductor-v2" in (ROOT / "scripts/train_conductor_v2.py").read_text()
 
 
 def test_conductor_state_layout_and_inference_decodes_every_head():
@@ -42,15 +43,17 @@ def test_conductor_state_layout_and_inference_decodes_every_head():
     doc = json.loads((KITS / "conductor.json").read_text())
     script = r"""
 const assert=require('node:assert/strict');
-const {conductorState,inferConductor,isConductorArtifact}=require(process.argv[1]);
+const {conductorStateV2,inferConductor,isConductorArtifact}=require(process.argv[1]);
 const model=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
 assert.ok(isConductorArtifact(model),'artifact passes validation');
 const cell=(v)=>Array.from({length:4},()=>new Array(48).fill(v));
-const st=conductorState(cell(0),cell(1),'DROP',-10,2,.5);
-assert.equal(st.length,392);
-assert.equal(st[387],1,'DROP one-hot at 384+3');
-assert.equal(st[192],1,'newer cell starts at 192');
-assert.ok(Math.abs(st[389]-50/60)<1e-6,'energy scaling');
+const hist=Array.from({length:6},(_,i)=>cell(i===5?1:0));
+const st=conductorStateV2(hist,['INTRO','GROOVE_A','GROOVE_A','BUILDUP','GROOVE_A','DROP'],
+ [-30,-25,-22,-18,-15,-12],'DROP',-10,2,.5);
+assert.equal(st.length,1202);
+assert.equal(st[1191],1,'DROP one-hot at 1188+3');
+assert.equal(st[192],1,'first stem of second cell starts at 192');
+assert.ok(Math.abs(st[1193]-50/60)<1e-6,'context energy scaling');
 const d=inferConductor(model,st);
 assert.ok(model.sections.includes(d.section));
 assert.ok(d.sectionConfidence>=0 && d.sectionConfidence<=1);

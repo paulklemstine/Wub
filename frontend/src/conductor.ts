@@ -10,7 +10,9 @@
  * every bar it picks still comes from the shipped phrase bank. Hand-written
  * rules remain as fallback when this sidecar is absent or invalid.
  */
-export const CONDUCTOR_STATE_DIM = 392;
+export const CONDUCTOR_STATE_DIM_V1 = 392;
+export const CONDUCTOR_STATE_DIM = 1202;
+export const CONDUCTOR_STATE_DIM_LEGACY = CONDUCTOR_STATE_DIM_V1;
 export const CONDUCTOR_TARGET_DIM = 202;
 export const CONDUCTOR_PATTERN_DIM = 48;
 export const CONDUCTOR_STEMS = ["drums", "bass", "other", "vocals"] as const;
@@ -24,6 +26,7 @@ interface Dense { w: number[][]; b: number[] }
 export interface ConductorArtifact {
   format: string;
   version: number;
+  history_cells?: number;
   state_dim: number;
   target_dim: number;
   hidden: number;
@@ -54,11 +57,12 @@ export interface ConductorDecision {
 
 export function isConductorArtifact(value: unknown): value is ConductorArtifact {
   const d = value as ConductorArtifact;
+  const validDim = d?.state_dim === CONDUCTOR_STATE_DIM || d?.state_dim === CONDUCTOR_STATE_DIM_V1;
   return Boolean(
-    d && d.format === "wub-conductor-v1" && d.state_dim === CONDUCTOR_STATE_DIM
-    && d.target_dim === CONDUCTOR_TARGET_DIM && d.pattern_dim === CONDUCTOR_PATTERN_DIM
+    d && (d.format === "wub-conductor-v1" || d.format === "wub-conductor-v2")
+    && validDim && d.target_dim === CONDUCTOR_TARGET_DIM && d.pattern_dim === CONDUCTOR_PATTERN_DIM
     && d.sections?.length === 5 && d.stems?.length === 4
-    && d.mean?.length === CONDUCTOR_STATE_DIM && d.std?.length === CONDUCTOR_STATE_DIM
+    && d.mean?.length === d.state_dim && d.std?.length === d.state_dim
     && d.layers?.length === 3 && Number.isFinite(d.authority)
     && d.layers[0].w.length === d.hidden && d.layers[1].w.length === d.hidden
     && d.layers[2].w.length === CONDUCTOR_TARGET_DIM,
@@ -89,7 +93,68 @@ export function conductorState(
   return state;
 }
 
-/** Run the compact 392->128->128->202 tanh MLP and decode every head. */
+/** Six-cell state used by conductor v2 (1202-d). */
+export function conductorStateV2(
+  history: readonly (readonly number[][])[],
+  historySections: readonly string[],
+  historyEnergyDb: readonly number[],
+  section: string,
+  energyDb: number,
+  energyDeltaDb: number,
+  phase: number,
+): number[] {
+  const state: number[] = [];
+  for (let h = 0; h < 6; h++) {
+    const cell = history[history.length - 6 + h];
+    for (let s = 0; s < 4; s++) {
+      const vec = cell?.[s] ?? [];
+      for (let i = 0; i < CONDUCTOR_PATTERN_DIM; i++) state.push(vec[i] ?? 0);
+    }
+    const label = historySections[historySections.length - 6 + h] ?? section;
+    const idx = CONDUCTOR_SECTIONS.indexOf(label as (typeof CONDUCTOR_SECTIONS)[number]);
+    for (let k = 0; k < 5; k++) state.push(k === Math.max(0, idx) ? 1 : 0);
+    const e = historyEnergyDb[historyEnergyDb.length - 6 + h] ?? energyDb;
+    state.push(clamp01((e + 60) / 60));
+  }
+  const idx = CONDUCTOR_SECTIONS.indexOf(section as (typeof CONDUCTOR_SECTIONS)[number]);
+  for (let k = 0; k < 5; k++) state.push(k === Math.max(0, idx) ? 1 : 0);
+  state.push(clamp01((energyDb + 60) / 60));
+  state.push(clamp01((energyDeltaDb + 12) / 24));
+  state.push(clamp01(phase));
+
+  // Harmonic alignment of the most recent cell: pairwise chroma cosine and
+  // root-distance of the three pitched stems (bass, other, vocals).
+  const last = history[history.length - 1] ?? [];
+  const chroma = [1, 2, 3].map((s) => {
+    const vec = last[s] ?? [];
+    const out = new Array<number>(12).fill(0);
+    for (let i = 0; i < 12; i++) out[i] = vec[35 + i] ?? 0;
+    return out;
+  });
+  const roots = [1, 2, 3].map((s) => {
+    const vec = last[s] ?? [];
+    let best = 0, bestV = -1;
+    for (let i = 0; i < 12; i++) if ((vec[23 + i] ?? 0) > bestV) { bestV = vec[23 + i] ?? 0; best = i; }
+    return best;
+  });
+  const dot = (a: number[], b: number[]): number => a.reduce((s, v, i) => s + v * b[i], 0);
+  const norm = (a: number[]): number => Math.sqrt(dot(a, a));
+  for (let a = 0; a < 3; a++) {
+    for (let b = a + 1; b < 3; b++) {
+      const d = norm(chroma[a]) * norm(chroma[b]);
+      state.push(d > 1e-8 ? dot(chroma[a], chroma[b]) / d : 0);
+    }
+  }
+  for (let a = 0; a < 3; a++) {
+    for (let b = a + 1; b < 3; b++) {
+      const dist = Math.abs(roots[a] - roots[b]) % 12;
+      state.push(1 - Math.min(dist, 12 - dist) / 6);
+    }
+  }
+  return state.slice(0, CONDUCTOR_STATE_DIM);
+}
+
+/** Run the compact MLP and decode every head. */
 export function inferConductor(model: ConductorArtifact, rawState: readonly number[]): ConductorDecision {
   if (rawState.length !== CONDUCTOR_STATE_DIM) {
     throw new Error(`conductor state dim ${rawState.length} != ${CONDUCTOR_STATE_DIM}`);
