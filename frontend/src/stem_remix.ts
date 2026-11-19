@@ -119,6 +119,26 @@ interface BeamSearchConfig {
   lookahead_weight: number;
 }
 
+/** Implicit preference event inferred from a reticule/pin gesture. */
+export interface PreferenceEvent {
+  kind: "retarget" | "hold" | "release";
+  at: number;
+  bar: number;
+  stem: StemName;
+  from: string | null;
+  to: string | null;
+  fromTrack: string | null;
+  toTrack: string | null;
+  section: string | null;
+  style: string | null;
+  x: number;
+  y: number;
+  dropX: number;
+  dropY: number;
+  snapped?: boolean;
+  untilBar?: number;
+}
+
 /** Policy config for the unified short-horizon ranking bias. */
 interface HorizonPlannerConfig {
   format: string;
@@ -748,6 +768,8 @@ export class StemRemixPlayer {
   private songCritic: SongCriticArtifact | null = null;
   /** Optional bounded final-gate beam search config. */
   private beamSearch: BeamSearchConfig | null = null;
+  /** Capped implicit preference log from reticule/pin gestures. */
+  private preferenceLog: PreferenceEvent[] = [];
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -846,7 +868,31 @@ export class StemRemixPlayer {
         const link = document.createElement("a"); link.href = url; link.download = "wub-slice-trace.json"; link.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       };
+      (window as unknown as {
+        __wubPreferenceLog?: () => readonly PreferenceEvent[];
+        __wubPreferenceExport?: () => void;
+      }).__wubPreferenceLog = () => this.preferenceLog;
+      (window as unknown as { __wubPreferenceExport?: () => void }).__wubPreferenceExport = () => {
+        const body = JSON.stringify({
+          version: 1, source: "wub-reticle-preferences", events: this.preferenceLog,
+        }, null, 2);
+        const blob = new Blob([body], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a"); link.href = url; link.download = "wub-preferences.json"; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
     }
+  }
+
+  /** Append a capped implicit preference event. */
+  recordPreference(event: PreferenceEvent): void {
+    this.preferenceLog.push(event);
+    if (this.preferenceLog.length > 400) this.preferenceLog.splice(0, this.preferenceLog.length - 400);
+  }
+
+  /** Exported for offline preference fine-tuning. */
+  getPreferenceLog(): readonly PreferenceEvent[] {
+    return this.preferenceLog;
   }
 
   get ready(): boolean {
@@ -5322,6 +5368,27 @@ export class StemRemixPlayer {
       this.onStatus?.(`${stem}: target outside the ${stem} cloud, snapped to the nearest legal phrase`);
     }
     const distance = current ? Math.hypot(nearest.x - current.x, nearest.y - current.y) : 1;
+    // Implicit preference: a drop near the playing phrase means "keep this";
+    // a drop elsewhere means "replace this stem with that territory". The
+    // outgoing and incoming phrase ids coexist only here, so log at this point.
+    this.recordPreference({
+      kind: distance <= 0.06 ? "hold" : "retarget",
+      at,
+      bar: blockStartBar + offsetBars,
+      stem,
+      from: current?.phrase.id ?? null,
+      to: nearest?.phrase.id ?? null,
+      fromTrack: current?.kit.track_id ?? null,
+      toTrack: nearest?.kit.track_id ?? null,
+      section: nearest?.phrase.section ?? null,
+      style: nearest?.kit.style ?? null,
+      x: pinX,
+      y: pinY,
+      dropX: cx,
+      dropY: cy,
+      snapped: Math.hypot(nearest.x - cx, nearest.y - cy) > 0.15,
+      untilBar: releaseBar,
+    });
     const generation = (this.pinGeneration[stem] ?? 0) + 1;
     this.pinGeneration[stem] = generation;
     this.pinning.add(stem);
@@ -5503,11 +5570,28 @@ export class StemRemixPlayer {
   }
 
   release(stem: StemName): void {
+    const manual = this.manualPins[stem];
+    const outgoing = manual?.entry ?? this.current[stem]?.entry;
+    this.recordPreference({
+      kind: "release",
+      at: this.engine.now(),
+      bar: this.sessionBar,
+      stem,
+      from: outgoing?.phrase.id ?? null,
+      to: null,
+      fromTrack: outgoing?.kit.track_id ?? null,
+      toTrack: null,
+      section: outgoing?.phrase.section ?? null,
+      style: outgoing?.kit.style ?? null,
+      x: outgoing?.x ?? 0,
+      y: outgoing?.y ?? 0,
+      dropX: 0,
+      dropY: 0,
+    });
     delete this.pins[stem];
     delete this.pending[stem];
     this.pinGeneration[stem] = (this.pinGeneration[stem] ?? 0) + 1;
     this.pinning.delete(stem);
-    const manual = this.manualPins[stem];
     if (manual) {
       try {
         manual.voice.fadeOut(this.engine.now() + 0.02, 0.05);

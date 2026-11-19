@@ -54,6 +54,7 @@ def load_manifest(kits_dir: Path):
                 "style": str(kit.get("style") or "house"),
                 "bpm": float(kit.get("bpm") or 120),
                 "key": str(kit.get("key") or ""),
+                "energy": float(p.get("energy") or 0.5),
             }
     return manifest, by_track, phrase_info
 
