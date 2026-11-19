@@ -42,7 +42,7 @@ import {
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
-import { parseKey as parseTheoryKey } from "./theory_engine";
+import { parseKey as parseTheoryKey, type ProgressionChord } from "./theory_engine";
 import {
   ARC_SECTIONS, arcPredictNext, isArcModelArtifact,
   type ArcModelArtifact, type ArcPrediction,
@@ -775,6 +775,8 @@ export class StemRemixPlayer {
   /** Capped implicit preference log from reticule/pin gestures. */
   private preferenceLog: PreferenceEvent[] = [];
   private qualityHistory: ArrangementEntry[] = [];
+  private sessionRootParsed = 0;
+  private currentProgression: ProgressionChord[] = [];
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -3353,6 +3355,8 @@ export class StemRemixPlayer {
       normalized,
       this.barComposer.getStyleProgressions(),
     );
+    this.sessionRootParsed = parsedSessionKey.root;
+    this.currentProgression = secCtx.progression as ProgressionChord[];
     if (this.varietyPrior) {
       secCtx.vocalFreshness = (phraseId) => this.vocalFreshnessOf(phraseId);
       secCtx.vocalFreshnessWeight = this.varietyPrior.vocal_freshness_weight;
@@ -3855,6 +3859,10 @@ export class StemRemixPlayer {
       });
       predictedPhraseEmbedding = inferPhraseConductor(this.phraseConductor, state);
     }
+    const recentTracks = new Set(
+      (this.stemHistory[stem] ?? []).slice(-4)
+        .map((id) => this.entryById.get(`${id}:${stem}`)?.kit.track_id),
+    );
     const candidates = this.pools[stem].filter((entry) => {
       if (entry.kit.track_id === current.kit.track_id) return false;
       if (this.failedKits.has(entry.kit.track_id)) return false;
@@ -3929,6 +3937,7 @@ export class StemRemixPlayer {
       const keyFit = root === null ? 0.5
         : 1 - Math.min((root - sessionRoot + 12) % 12, (sessionRoot - root + 12) % 12) / 6;
       const harmonyFit = 0.5 * (keyFit - 0.5);
+      const cooldown = recentTracks.has(entry.kit.track_id) ? -0.6 : 0;
       const candidateEmbedding = (entry.phrase as unknown as { embedding?: number[] }).embedding ?? [];
       const phraseConductor = predictedPhraseEmbedding && candidateEmbedding.length
         ? 0.20 * (phraseConductorScore(predictedPhraseEmbedding, candidateEmbedding) - 0.5)
@@ -3938,7 +3947,7 @@ export class StemRemixPlayer {
         full: legal,
         judge,
         score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
-          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor + harmonyFit,
+          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor + harmonyFit + cooldown,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -4382,6 +4391,13 @@ export class StemRemixPlayer {
       if (changeBonus !== 0) {
         policy.score = Math.max(0, Math.min(1, policy.score + changeBonus));
       }
+      // Per-bar quartet harmony against the session progression: the selector
+      // now sees the assembled four-stem chord motion, not only phrase keys.
+      const quartet = this.barComposer.quartetHarmonyFit(
+        candidate, this.sessionRootParsed, this.currentProgression,
+      );
+      policy.score = Math.max(0, Math.min(1, policy.score + 0.5 * (quartet - 0.5)));
+      (policy.reasons as string[]).push(`quartet-harmony ${quartet.toFixed(3)}`);
       // Unified short-horizon bias: best next bar / phrase / 2-3 block arc fit.
       const horizon = this.horizonScoreFor(subset, picks, startBar, candidateEnergy, section);
       if (horizon !== 0) {

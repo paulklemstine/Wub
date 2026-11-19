@@ -319,6 +319,60 @@ export class BarComposer {
     return Math.max(0, Math.min(0.34, penalty));
   }
 
+  /**
+   * Per-bar quartet harmony fit for a candidate set of stem entries, scored
+   * against the session chord progression. Used at selection time so the
+   * engine picks combinations whose four-bar chord motion matches, not just
+   * combinations that happen to be transposed into the same key.
+   */
+  quartetHarmonyFit(
+    entries: Readonly<Partial<Record<StemName, { phrase: { id: string }; keyShift: number }>>>,
+    sessionRoot: number,
+    progression: readonly ProgressionChord[],
+  ): number {
+    const pitched = ["bass", "other", "vocals"] as const;
+    const present = pitched.filter((s) => entries[s]);
+    if (present.length < 2 || !progression.length) return 0.5;
+    let total = 0;
+    let bars = 0;
+    for (let b = 0; b < 4; b++) {
+      const target = progression[b % progression.length];
+      const targetRoot = (((sessionRoot + target.relRoot) % 12) + 12) % 12;
+      const triad = chordTriadPcs(targetRoot, target.quality);
+      const targetVec = new Array<number>(12).fill(0);
+      for (const pc of triad) targetVec[pc] = 1;
+      const vectors: number[][] = [];
+      let rootScore = 1;
+      for (const stem of present) {
+        const entry = entries[stem]!;
+        let vec = this.barChroma(entry.phrase.id, stem, b, entry.keyShift);
+        if (!vec || !vec.some((v) => v > 1e-6)) {
+          // Fallback: synthesize a triad from the bar's inferred root.
+          const meta = this.getPhraseMeta(entry.phrase.id, stem);
+          const raw = meta?.r[b] ?? -1;
+          const root = raw >= 0 ? (((raw + entry.keyShift) % 12) + 12) % 12 : targetRoot;
+          vec = new Array<number>(12).fill(0);
+          for (const pc of chordTriadPcs(root, "minor")) vec[pc] = 1;
+        }
+        vectors.push(vec);
+        let best = 0, bestV = -1;
+        for (let i = 0; i < 12; i++) if (vec[i] > bestV) { bestV = vec[i]; best = i; }
+        const dist = Math.min((best - targetRoot + 12) % 12, (targetRoot - best + 12) % 12);
+        rootScore = Math.min(rootScore, 1 - dist / 6);
+      }
+      let minCos = 1;
+      for (let i = 0; i < vectors.length; i++) {
+        for (let j = i + 1; j < vectors.length; j++) {
+          minCos = Math.min(minCos, cosine12(vectors[i], vectors[j]));
+        }
+      }
+      const chordFit = Math.max(...vectors.map((v) => cosine12(v, targetVec)));
+      total += 0.35 * minCos + 0.35 * rootScore + 0.30 * chordFit;
+      bars += 1;
+    }
+    return Math.max(0, Math.min(1, total / Math.max(1, bars)));
+  }
+
   /** Measure quartet harmony over the last composed block. */
   measureHarmony<TEntry extends ComposingPoolEntry>(
     cells: Partial<Record<StemName, readonly SelectedCell<TEntry>[]>>,

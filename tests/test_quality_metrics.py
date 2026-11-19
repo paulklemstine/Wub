@@ -25,6 +25,31 @@ def test_quality_hook_is_wired_in_main():
     assert "measureHarmony" in (ROOT / "frontend/src/bar_composer.ts").read_text()
 
 
+def test_per_bar_quartet_harmony_objective():
+    out = bundle("quartet_harmony", "bar_composer.ts")
+    script = r"""
+const assert=require('node:assert/strict');
+const {BarComposer}=require(process.argv[1]);
+const c=new BarComposer();
+const major=(root)=>{const v=new Array(12).fill(0);for(const p of [root,(root+4)%12,(root+7)%12])v[p]=1;return v;};
+const bars=(root)=>[major(root),major(root),major(root),major(root)];
+c.cellChroma=new Map([
+ ['good',{bass:bars(0),other:bars(0),vocals:bars(0)}],
+ ['bad',{bass:bars(0),other:bars(6),vocals:bars(3)}],
+]);
+const prog=[{relRoot:0,quality:'major'},{relRoot:5,quality:'major'},
+            {relRoot:7,quality:'major'},{relRoot:5,quality:'major'}];
+const entry=(id)=>({bass:{phrase:{id},keyShift:0},other:{phrase:{id},keyShift:0},
+ vocals:{phrase:{id},keyShift:0}});
+const good=c.quartetHarmonyFit(entry('good'),0,prog);
+const bad=c.quartetHarmonyFit(entry('bad'),0,prog);
+assert.ok(good>bad+0.15,'aligned quartet scores higher than clashing: '+good+' vs '+bad);
+assert.ok(good>=0&&good<=1&&bad>=0&&bad<=1);
+"""
+    result = subprocess.run(["node", "-e", script, str(out)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_phrase_key_shift_fits_all_four_bars():
     out = bundle("harmony_shift", "bar_composer.ts")
     script = r"""
