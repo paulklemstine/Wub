@@ -30,5 +30,6 @@
   "vocal_section_model": true,
   "conductor": true,
   "bank_transition": true,
-  "phrase_conductor": true
+  "phrase_conductor": true,
+  "song_critic": true
 }

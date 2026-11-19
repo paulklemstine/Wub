@@ -493,3 +493,19 @@ successor table. Validation AUC is 0.984. `bank_transition.json` adds a bounded
 `±0.075` ranking term to `jointOptions()`, so combinations that actually follow
 one another in the training songs are preferred — without changing any audio,
 phrase boundary or hard scheduling rule.
+
+## Song-ness critic: sounding like the training songs
+
+`scripts/train_song_critic.py` trains a 218→64→32→1 critic on **58,097 real
+four-stem 4-bar windows** from the analyzed songs versus **116,194 cross-song
+recombinations** (two stems swapped with a similar key/tempo/section song),
+with a 155/17 track-disjoint split. Held-out AUC is 0.643 — a weak but real
+signal — so it is deliberately used only as a **bounded adjustment (±0.08)** at
+the final `SliceFlow` gate: it lowers the acceptance threshold for a proposed
+cut when the assembled quartet looks like real songs, and tightens it when it
+does not. It never renders, repitches, retimes or reschedules audio.
+
+This is the first learned term that judges the *whole assembled quartet* rather
+than one seam or one head, and it is the foundation for later preference
+fine-tuning: real-song versus cross-song labels can be replaced by A/B or
+like/skip labels without changing the browser path.

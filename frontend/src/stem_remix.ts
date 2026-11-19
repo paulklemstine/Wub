@@ -34,6 +34,7 @@ import {
   inferPhraseConductor, isPhraseConductorArtifact, phraseConductorScore, phraseConductorState,
   type PhraseConductorArtifact,
 } from "./phrase_conductor";
+import { isSongCriticArtifact, type SongCriticArtifact } from "./song_critic";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
@@ -734,6 +735,8 @@ export class StemRemixPlayer {
   private bankTransition: BankTransitionArtifact | null = null;
   /** Phrase-space conductor (predicts the next phrase embedding). */
   private phraseConductor: PhraseConductorArtifact | null = null;
+  /** Learned four-stem song-ness critic. */
+  private songCritic: SongCriticArtifact | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -1008,6 +1011,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("conductor")) setupLoads.push(this.loadConductor(base));
     if (this.sidecarEnabled("bank_transition")) setupLoads.push(this.loadBankTransition(base));
     if (this.sidecarEnabled("phrase_conductor")) setupLoads.push(this.loadPhraseConductor(base));
+    if (this.sidecarEnabled("song_critic")) setupLoads.push(this.loadSongCritic(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1583,6 +1587,21 @@ export class StemRemixPlayer {
     if (!cfg) return 0;
     const used = this.trackUseCount(stem, trackId);
     return cfg.track_reuse_penalty * (1 / (1 + used) - 0.5);
+  }
+
+  /** Learned four-stem song-ness critic (bounded final-gate adjustment). */
+  private async loadSongCritic(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/song_critic.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as SongCriticArtifact;
+      if (isSongCriticArtifact(doc)) {
+        this.songCritic = doc;
+        this.barComposer.songCritic = doc;
+      }
+    } catch {
+      // Optional; final gate stays purely acoustic.
+    }
   }
 
   /** Phrase-space conductor trained on real song phrase chronology. */
@@ -3556,6 +3575,7 @@ export class StemRemixPlayer {
         at, bars, bpm: this.sessionBpm, section: normalized, targetEnergy,
         sectionChanged, rotation, bridge,
         sourceNoveltyWeight: this.varietyPrior?.source_novelty_weight,
+        songCriticAdjustment: this.barComposer.lastSongCriticAdjustment,
         cohortMaxChanges: handoffThisBlock
           ? Math.max(4, this.transitionCohort?.handoff?.max_stems ?? 4)
           : sectionChanged

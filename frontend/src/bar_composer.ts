@@ -15,6 +15,7 @@
  */
 
 import { CellCompatScorer } from "./cell_compat";
+import { inferSongCritic, type SongCriticArtifact } from "./song_critic";
 import { isContiguousFullPhrase, SliceSpec } from "./kit_pcm";
 import { SectionPlanContext } from "./song_architect";
 import { PitchAutomationPoint } from "./stretch_voice";
@@ -239,6 +240,10 @@ export class BarComposer {
   vocalPhraseModel: VocalPhraseModel | null = null;
   /** Optional learned 4/8/16-bar section lengths and backing cohorts. */
   vocalSectionModel: VocalSectionModel | null = null;
+  /** Optional song-ness critic (bounded final-gate adjustment). */
+  songCritic: SongCriticArtifact | null = null;
+  /** Last bounded song-ness adjustment, exposed for telemetry. */
+  lastSongCriticAdjustment = 0;
   /** Optional per-bar chroma for the shipped phrases (cell_chroma.json). */
   private cellChroma: Map<string, Record<string, number[][]>> | null = null;
   /** Optional learned next-bar pattern heads (drums/bass/other). */
@@ -309,6 +314,68 @@ export class BarComposer {
       penalty += policy.max_clash_penalty * 0.5 * (policy.min_boundary_cos - boundary);
     }
     return Math.max(0, Math.min(0.34, penalty));
+  }
+
+  /** Learned song-ness score (0..1) for the assembled four-stem quartet. */
+  songCriticScore<TEntry extends ComposingPoolEntry>(
+    cells: Partial<Record<StemName, readonly SelectedCell<TEntry>[]>>,
+    kitSection: string,
+    energy: number,
+    bpm: number,
+  ): number {
+    const model = this.songCritic;
+    if (!model) return 0.5;
+    const v = new Array<number>(218).fill(0);
+    const masks: Partial<Record<StemName, number>> = {};
+    const chromas: Partial<Record<StemName, number[] | null>> = {};
+    const pitched = ["bass", "other", "vocals"] as const;
+    const allStems: readonly StemName[] = ["drums", "bass", "other", "vocals"];
+    allStems.forEach((stem, si) => {
+      const list = (cells[stem] ?? []).slice(0, 4);
+      let mask = 0;
+      let present = 0;
+      const ch: number[][] = [];
+      for (const cell of list) {
+        mask |= cell.onsetMask ?? cell.meta.o[cell.srcBar] ?? 0;
+        present += popcount16(cell.onsetMask ?? cell.meta.o[cell.srcBar] ?? 0) / 16;
+        const rotated = this.barChroma(cell.entry.phrase.id, stem, cell.srcBar, cell.semitones);
+        if (rotated) ch.push(rotated);
+      }
+      masks[stem] = mask;
+      const count = popcount16(mask);
+      const base = si * 50;
+      for (let step = 0; step < 16; step++) v[base + step] = (mask >> step) & 1;
+      v[base + 16] = count / 16;
+      v[base + 17] = ([0, 4, 8, 12].reduce((n, s) => n + ((mask >> s) & 1), 0)) / 4;
+      v[base + 18] = ([1, 3, 5, 7, 9, 11, 13, 15].reduce((n, s) => n + ((mask >> s) & 1), 0)) / 8;
+      for (let q = 0; q < 4; q++) {
+        v[base + 19 + q] = ([0, 1, 2, 3].reduce((n, i) => n + ((mask >> (q * 4 + i)) & 1), 0)) / 4;
+      }
+      v[base + 47] = present > 0 ? 1 : 0;
+      v[base + 48] = Math.min(1, present);
+      v[base + 49] = Math.max(0, Math.min(1, energy));
+      if (stem !== "drums") {
+        const mean = new Array<number>(12).fill(0);
+        for (const vec of ch) for (let i = 0; i < 12; i++) mean[i] += vec[i] / Math.max(1, ch.length);
+        chromas[stem] = mean;
+      }
+    });
+    let o = 200;
+    for (const stem of pitched) v[o++] = chromas[stem] ? 1 : 0;
+    for (let i = 0; i < pitched.length; i++) {
+      for (let j = i + 1; j < pitched.length; j++) {
+        v[o++] = cosine12(chromas[pitched[i]] ?? null, chromas[pitched[j]] ?? null);
+        const a = masks[pitched[i]] ?? 0, b = masks[pitched[j]] ?? 0;
+        v[o++] = (a || b) ? popcount16(a & b) / popcount16(a | b) : 0;
+      }
+    }
+    const sections = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
+    for (const s of sections) v[o++] = s === kitSection ? 1 : 0;
+    v[o++] = Math.max(0, Math.min(1, energy));
+    v[o++] = 0; // energy delta: unknown at composition time, neutral
+    v[o++] = Math.min(1, bpm / 200);
+    v[o++] = 0; // key distance placeholder
+    return inferSongCritic(model, v);
   }
 
   /** 55-d next-bar pattern input (48-d bar pattern + 7-d section/energy context). */
@@ -1611,6 +1678,19 @@ export class BarComposer {
         other: { stem: "other", meta: barSelectedCells.other[0].meta, barIdx: barSelectedCells.other[0].srcBar, semitonesShift: barSelectedCells.other[0].semitones, targetQuality: ch0.quality },
         vocals: { stem: "vocals", meta: barSelectedCells.vocals[0].meta, barIdx: barSelectedCells.vocals[0].srcBar, semitonesShift: barSelectedCells.vocals[0].semitones, targetQuality: ch0.quality },
       });
+    }
+
+    this.lastSongCriticAdjustment = 0;
+    if (this.songCritic && barSelectedCells.drums?.[0] && barSelectedCells.bass?.[0]
+      && barSelectedCells.other?.[0] && barSelectedCells.vocals?.[0]) {
+      const criticScore = this.songCriticScore(
+        barSelectedCells,
+        sectionCtx.kitSection,
+        sectionCtx.targetEnergy,
+        baseEntries.vocals?.kit.bpm ?? 120,
+      );
+      // ±0.08, applied only at the final SliceFlow gate.
+      this.lastSongCriticAdjustment = Math.max(-0.08, Math.min(0.08, 0.16 * (criticScore - 0.5)));
     }
 
     const stems = drumOut as Record<StemName, ComposedStemPlan<TEntry>>;

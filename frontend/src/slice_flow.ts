@@ -40,6 +40,8 @@ export interface FlowContext {
   cohortMaxChanges?: number;
   /** Optional variety weight for source-track novelty in the final gate. */
   sourceNoveltyWeight?: number;
+  /** Bounded song-critic adjustment to the final cut decision. */
+  songCriticAdjustment?: number;
 }
 export interface SliceFlowTrace {
   id: number; stem: StemName; at: number; endAt: number; section: string;
@@ -340,6 +342,7 @@ export class SliceFlow {
     const density = STEMS.map(stem=>this.tails[stem]).reduce((sum,cell)=>sum+(cell?this.cellFeatures(cell)?.[11]??0:0),0)/4;
     const logits = infer(this.artifact.planner, [Math.min(2,age/120),lastEnergy,context.targetEnergy-lastEnergy,density,context.targetEnergy-(recent[0]?.energy??context.targetEnergy),repeated,.8,Number(context.sectionChanged)]);
     this.lastIntent = ["hold", "vary", "handoff"][logits.indexOf(Math.max(...logits))];
+    const criticAdjust = Math.max(-0.1, Math.min(0.1, context.songCriticAdjustment ?? 0));
     const candidates = tasks.map(task => {
       if (pinned.has(task.stem)) return { task, fallback: null, canHold: false, changed: false, priority: 1 };
       const prior = this.foundations[task.stem];
@@ -357,7 +360,8 @@ export class SliceFlow {
       const stableAge = Math.max(0,context.at-(this.identitySince[task.stem]??context.at));
       const foundation = task.stem === "drums" || task.stem === "bass";
       const protectedFoundation = foundation && stableAge < this.artifact!.foundation_seconds && !context.rotation && !context.bridge;
-      if (fallback && ((changed && protectedFoundation && !context.sectionChanged) || (!context.bridge && candidate.score + .18 < fallbackScore))) {
+      if (fallback && ((changed && protectedFoundation && !context.sectionChanged)
+        || (!context.bridge && candidate.score + .18 - criticAdjust < fallbackScore))) {
         return { task: fallback, fallback, canHold, changed: !canHold, priority: 0 };
       }
       const noveltyGain = (context.sourceNoveltyWeight ?? .15) * (this.sourceNovelty(String(first?.kit.track_id ?? ""))
