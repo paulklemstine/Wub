@@ -19,6 +19,7 @@ import torch.nn as nn
 from sklearn.metrics import roc_auc_score
 
 from wub_core.section_arcs import bar_features, segment_sections
+from audio_critic_features import critic_score, load_bank, load_critic, phrase_features
 
 STEMS = ("drums", "bass", "other", "vocals")
 SECTIONS = ("INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN")
@@ -172,12 +173,21 @@ def main():
     ap.add_argument("--processed", type=Path, default=Path("data/processed"))
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--critic", type=Path, default=None,
+                    help="song_critic.json weights real pairs by audio-derived song-ness")
     args = ap.parse_args()
     torch.manual_seed(617)
     np.random.seed(617)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     by_track, info = load_bank(args.kits_dir)
     x, y, tracks, pairs = mine(args.kits_dir, args.processed, info, by_track)
+    critic = load_critic(args.critic) if args.critic else None
+    bank_phrases = load_bank(args.kits_dir) if critic else {}
+    weights = np.ones(len(pairs), dtype=np.float32)
+    if critic:
+        for i, (_, nid, _) in enumerate(pairs):
+            if nid in bank_phrases:
+                weights[i] = 0.25 + 2.0 * critic_score(phrase_features(nid, bank_phrases), critic)
     unique = sorted(set(tracks))
     rng = np.random.default_rng(617)
     rng.shuffle(unique)
@@ -189,6 +199,7 @@ def main():
     std[std < 1e-4] = 1.0
     xt = torch.tensor((x[tr] - mean) / std, dtype=torch.float32, device=device)
     yt = torch.tensor(y[tr], dtype=torch.float32, device=device)
+    wt = torch.tensor(weights[tr], dtype=torch.float32, device=device)
     xv = torch.tensor((x[val] - mean) / std, dtype=torch.float32, device=device)
     yv = torch.tensor(y[val], dtype=torch.float32, device=device)
     net = PhraseConductor().to(device)
@@ -199,7 +210,8 @@ def main():
         for s in range(0, perm.numel(), 512):
             idx = perm[s:s + 512]
             pred = net(xt[idx])
-            emb = torch.nn.functional.mse_loss(pred[:, :EMBED_DIM], yt[idx][:, :EMBED_DIM])
+            emb = (torch.nn.functional.mse_loss(
+                pred[:, :EMBED_DIM], yt[idx][:, :EMBED_DIM], reduction="none").mean(dim=1) * wt[idx]).mean()
             sec = torch.nn.functional.cross_entropy(pred[:, 64:69], yt[idx][:, 64:69].argmax(1))
             energy = torch.nn.functional.mse_loss(pred[:, 69], yt[idx][:, 69])
             loss = emb + 0.5 * sec + 0.5 * energy
@@ -242,6 +254,7 @@ def main():
             "val_tracks": len(val_tracks),
             "train_examples": int(tr.sum()), "val_examples": int(val.sum()),
             "epochs": args.epochs, "device": str(device),
+            "audio_critic_weighted": bool(critic),
             "val_embedding_cosine": round(float(cos.mean()), 4),
             "baseline_cosine": round(float(base.mean()), 4),
             "section_accuracy": round(sec_acc, 4), "section_majority": round(majority, 4),

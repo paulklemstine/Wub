@@ -24,6 +24,7 @@ import torch.nn as nn
 from sklearn.metrics import roc_auc_score
 
 from wub_core.section_arcs import bar_features, segment_sections
+from audio_critic_features import critic_score, load_bank, load_critic, phrase_features
 
 SECTIONS = ("INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN")
 INPUT_DIM = 136  # 64 current + 64 next + 5 section + 1 energy delta + 1 bpm + 1 key
@@ -102,6 +103,8 @@ def main():
     ap.add_argument("--processed", type=Path, default=Path("data/processed"))
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--epochs", type=int, default=20)
+    ap.add_argument("--critic", type=Path, default=None,
+                    help="song_critic.json used to weight examples by audio-derived song-ness")
     args = ap.parse_args()
     torch.manual_seed(809)
     np.random.seed(809)
@@ -139,11 +142,22 @@ def main():
     for pid, meta in info.items():
         by_section[meta["section"] if meta["section"] in SECTIONS else "GROOVE_A"].append(pid)
 
-    xs, ys, track_of = [], [], []
+    critic = load_critic(args.critic) if args.critic else None
+    bank_phrases = load_bank(args.kits_dir) if critic else {}
+    sample_weights: List[float] = []
+
+    def critic_of(pid: str) -> float:
+        if not critic or pid not in bank_phrases:
+            return 0.5
+        return float(critic_score(phrase_features(pid, bank_phrases), critic))
+
+    xs, ys, binary_y, track_of = [], [], [], []
     for cur, nxt, section, delta, tid in pos:
         xs.append(features(cur, nxt, section, delta, info))
         ys.append(1.0)
+        binary_y.append(1.0)
         track_of.append(tid)
+        sample_weights.append(0.5 + critic_of(nxt))
         for _ in range(2):
             pool = by_section.get(section) or list(info)
             neg = random.choice(pool)
@@ -151,7 +165,9 @@ def main():
                 continue
             xs.append(features(cur, neg, section, delta, info))
             ys.append(0.0)
+            binary_y.append(0.0)
             track_of.append(tid)
+            sample_weights.append(0.5 + critic_of(neg))
     x = np.stack(xs).astype(np.float32)
     y = np.asarray(ys, dtype=np.float32)
     val = np.asarray([t in val_tracks for t in track_of], dtype=bool)
@@ -161,6 +177,7 @@ def main():
     std[std < 1e-4] = 1.0
     xt = torch.tensor((x[tr] - mean) / std, dtype=torch.float32, device=device)
     yt = torch.tensor(y[tr], dtype=torch.float32, device=device)
+    wt = torch.tensor(np.asarray(sample_weights, dtype=np.float32)[tr], dtype=torch.float32, device=device)
     xv = torch.tensor((x[val] - mean) / std, dtype=torch.float32, device=device)
     net = nn.Sequential(nn.Linear(INPUT_DIM, HIDDEN), nn.Tanh(), nn.Linear(HIDDEN, 1)).to(device)
     opt = torch.optim.Adam(net.parameters(), lr=0.002)
@@ -168,7 +185,8 @@ def main():
         perm = torch.randperm(xt.shape[0], device=device)
         for s in range(0, perm.numel(), 512):
             idx = perm[s:s + 512]
-            loss = torch.nn.functional.binary_cross_entropy_with_logits(net(xt[idx]).squeeze(1), yt[idx])
+            loss = (torch.nn.functional.binary_cross_entropy_with_logits(
+                net(xt[idx]).squeeze(1), yt[idx], reduction="none") * wt[idx]).mean()
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -205,6 +223,7 @@ def main():
             "train_tracks": len(unique) - len(val_tracks), "val_tracks": len(val_tracks),
             "train_examples": int(tr.sum()), "val_examples": int(val.sum()),
             "val_auc": round(auc, 4), "epochs": args.epochs, "device": str(device),
+            "audio_critic_weighted": bool(critic),
             "use": "bounded ranking prior over shipped phrases; no audio changes",
         },
     }

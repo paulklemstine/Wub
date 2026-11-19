@@ -542,3 +542,17 @@ the ±0.08 final-gate adjustment and the bounded beam search are unchanged.
 This is the first playback signal learned from audio rather than metadata —
 the foundation for training the remaining heads (phrase, bar, cohort) against
 the same teacher instead of hand-derived labels.
+
+### Audio-derived reweighting of phrase heads
+
+`scripts/audio_critic_features.py` lets the offline trainers compute the
+distilled critic's 218-D features for any bank phrase without decoding audio.
+`train_bank_transition.py` and `train_phrase_conductor.py` can now be rerun with
+`--critic frontend/public/data/kits/song_critic.json`: real pairs that sound
+like songs, and cross-song pairs that fool the critic, get extra training
+weight. Both shipped artifacts were retrained this way. Measured validation
+was essentially unchanged (bank AUC 0.9838, phrase cosine 0.6426), and an
+experiment using critic scores as *soft targets* collapsed bank AUC to 0.53 and
+was reverted — the critic is a gate/teacher, not a good direct regression
+target for these heads. The audio-derived gain remains concentrated in
+`song_critic.json` (AUC 0.705) at the final gate.
