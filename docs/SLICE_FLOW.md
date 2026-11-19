@@ -522,3 +522,23 @@ song-critic adjustment. Depth 3 / width 4 / lookahead 0.25 keeps this tiny — a
 most 16 plans per boundary — and every hard gate (pins, foundation, change cap,
 critic-bounded veto) still applies. With the sidecar absent the original greedy
 final gate is unchanged.
+
+## Audio-level teacher and distilled song critic
+
+`scripts/train_audio_judge.py` is the first model trained on the **actual
+waveforms** of the training corpus (WSL box, RTX 4050): it renders 3,976 real
+four-stem 4-bar windows from 200 songs at 16 kHz, builds log-mel + per-stem
+RMS/centroid features, and trains a 1164→128→64→1 judge against cross-song
+recombinations. Held-out AUC **0.774**. The teacher lives at
+`data/audio_judge.json` (training-only, not shipped to the browser).
+
+Its labels then train the 218-d browser critic on the *analysis* features the
+engine can actually compute (`cell_index` + `cell_chroma`), with real negatives
+built from donor song features. Distilled validation AUC **0.705**, up from
+0.643 for the hand-labeled analysis critic. The browser artifact
+`song_critic.json` has the same format/dims as before (v2), so `song_critic.ts`,
+the ±0.08 final-gate adjustment and the bounded beam search are unchanged.
+
+This is the first playback signal learned from audio rather than metadata —
+the foundation for training the remaining heads (phrase, bar, cohort) against
+the same teacher instead of hand-derived labels.
