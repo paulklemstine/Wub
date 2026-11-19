@@ -29,5 +29,6 @@
   "variety_prior": true,
   "vocal_section_model": true,
   "conductor": true,
-  "bank_transition": true
+  "bank_transition": true,
+  "phrase_conductor": true
 }

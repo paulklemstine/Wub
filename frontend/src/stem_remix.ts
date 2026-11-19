@@ -30,6 +30,10 @@ import {
   bankTransitionScore, isBankTransitionArtifact,
   type BankPhrase, type BankTransitionArtifact,
 } from "./bank_transition";
+import {
+  inferPhraseConductor, isPhraseConductorArtifact, phraseConductorScore, phraseConductorState,
+  type PhraseConductorArtifact,
+} from "./phrase_conductor";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
@@ -728,6 +732,8 @@ export class StemRemixPlayer {
   private conductorEnergyHistory: number[] = [];
   /** Learned real-song phrase-transition prior in bank space. */
   private bankTransition: BankTransitionArtifact | null = null;
+  /** Phrase-space conductor (predicts the next phrase embedding). */
+  private phraseConductor: PhraseConductorArtifact | null = null;
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -1001,6 +1007,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("vocal_section_model")) setupLoads.push(this.loadVocalSectionModel(base));
     if (this.sidecarEnabled("conductor")) setupLoads.push(this.loadConductor(base));
     if (this.sidecarEnabled("bank_transition")) setupLoads.push(this.loadBankTransition(base));
+    if (this.sidecarEnabled("phrase_conductor")) setupLoads.push(this.loadPhraseConductor(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
     if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
@@ -1576,6 +1583,24 @@ export class StemRemixPlayer {
     if (!cfg) return 0;
     const used = this.trackUseCount(stem, trackId);
     return cfg.track_reuse_penalty * (1 / (1 + used) - 0.5);
+  }
+
+  /** Phrase-space conductor trained on real song phrase chronology. */
+  private async loadPhraseConductor(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/phrase_conductor.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as PhraseConductorArtifact;
+      if (isPhraseConductorArtifact(doc)) {
+        this.phraseConductor = doc;
+        console.info(
+          `[StemRemix] Phrase conductor ready ` +
+          `(${doc.report?.pairs ?? 0} phrase pairs, cosine ${doc.report?.val_embedding_cosine ?? 0})`,
+        );
+      }
+    } catch {
+      // Optional; bank transition + joint ranker remain in force.
+    }
   }
 
   /** Learned real-chronology phrase-transition prior. */
@@ -3691,6 +3716,23 @@ export class StemRemixPlayer {
       for (const runEntry of this.lastBlockRuns[stem] ?? []) avoid.add(runEntry.phrase.id);
     }
     const outroAllowed = this.blockIndex >= BLOCKS_PER_SET - 2;
+    // Phrase-space conductor: one prediction per boundary, scored against
+    // every candidate phrase embedding. Trained on real phrase chronology.
+    let predictedPhraseEmbedding: number[] | null = null;
+    if (this.phraseConductor) {
+      const phrase = current.phrase as unknown as { embedding?: number[] };
+      const patterns = CONDUCTOR_STEMS.map((s) =>
+        this.barComposer.cellPatternVec(current.phrase.id, s, 0, current.keyShift, section));
+      const state = phraseConductorState({
+        embedding: phrase.embedding ?? [],
+        patterns,
+        section,
+        energy: current.energy,
+        bpm: current.kit.bpm,
+        keyRoot: parseTheoryKey(current.kit.key).root,
+      });
+      predictedPhraseEmbedding = inferPhraseConductor(this.phraseConductor, state);
+    }
     const candidates = this.pools[stem].filter((entry) => {
       if (entry.kit.track_id === current.kit.track_id) return false;
       if (this.failedKits.has(entry.kit.track_id)) return false;
@@ -3757,12 +3799,16 @@ export class StemRemixPlayer {
           this.bankTransition, this.bankPhraseOf(current), this.bankPhraseOf(entry), section,
         ) - 0.5)
         : 0;
+      const candidateEmbedding = (entry.phrase as unknown as { embedding?: number[] }).embedding ?? [];
+      const phraseConductor = predictedPhraseEmbedding && candidateEmbedding.length
+        ? 0.20 * (phraseConductorScore(predictedPhraseEmbedding, candidateEmbedding) - 0.5)
+        : 0;
       return {
         entry,
         full: legal,
         judge,
         score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
-          + signatureBonus + timbre + vocalActBonus + variety + bank,
+          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor,
       };
     });
     const full = scored.filter((item) => item.full);

@@ -60,3 +60,15 @@ back toward the curated rules; changing only that field is the rollback knob.
 
 Listener feedback is not yet part of training. The next iteration should add
 A/B or like/skip pairs and fine-tune the policy head with preference loss.
+
+## Phrase-space conductor (what shipped after listener feedback)
+
+`phrase_conductor.json` is the retrained version that fixes the representation
+mismatch: it is trained on **4,776 real phrase-to-phrase pairs** (mapped from
+song chronology to shipped ids, 450 tracks, 405/45 track-disjoint split) and
+sees the same four stem cell-vectors the browser has. Its 264→128→128→70 MLP
+predicts the next phrase embedding; browser inference scores candidates by
+cosine against that prediction. Validation embedding cosine **0.643 vs 0.506
+baseline**, section accuracy 0.589 vs 0.490 majority. It is shipped as an
+optional `phrase_conductor` sidecar and adds only a bounded `±0.10` term to
+`jointOptions()`, alongside the separate bank-transition prior.
