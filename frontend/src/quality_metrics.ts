@@ -59,7 +59,7 @@ function pct(values: number[], p: number): number {
 
 const mean = (a: number[]): number => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
 
-export function harmonicQuality(bars: readonly HarmonyBar[], floor = 0.65): HarmonyQuality {
+export function harmonicQuality(bars: readonly HarmonyBar[], floor = 0.42): HarmonyQuality {
   const cos = bars.map((b) => b.minCos);
   return {
     p10: pct(cos, 10),

@@ -25,6 +25,27 @@ def test_quality_hook_is_wired_in_main():
     assert "measureHarmony" in (ROOT / "frontend/src/bar_composer.ts").read_text()
 
 
+def test_phrase_key_shift_fits_all_four_bars():
+    out = bundle("harmony_shift", "bar_composer.ts")
+    script = r"""
+const assert=require('node:assert/strict');
+const {BarComposer}=require(process.argv[1]);
+const c=new BarComposer();
+c.cellChroma=new Map();
+const meta={p:[.8,.8,.8,.8],r:[0,0,0,0],q:['minor','minor','minor','minor'],
+ o:[0b1,0b1,0b1,0b1],es:[.8,.8,.8,.8]};
+const entry={phrase:{id:'p'},keyShift:0};
+const chord={relRoot:2,quality:'minor'};
+const oldShift=c.solvePhraseKeyShift('bass',entry,meta,chord,0);
+const prog=[2,5,7,5].map(relRoot=>({relRoot,quality:'minor'}));
+const newShift=c.solvePhraseKeyShift('bass',entry,meta,chord,0,prog,'p');
+assert.equal(oldShift,2,'old method only fits the first chord');
+assert.equal(newShift,5,'new method fits all four bars');
+"""
+    result = subprocess.run(["node", "-e", script, str(out)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_quality_score_penalizes_each_failure_mode():
     out = bundle("quality_metrics", "quality_metrics.ts")
     script = r"""

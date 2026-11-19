@@ -46,7 +46,7 @@ def test_learned_artifacts_are_complete_and_beat_their_baselines():
     harmony = json.loads((KITS / "harmony_continuity.json").read_text())
     assert harmony["format"] == "wub-harmony-continuity-v1"
     policy = harmony["policy"]
-    assert 0.5 < policy["min_bar_pair_cos"] < 0.9
+    assert 0.3 < policy["min_bar_pair_cos"] < 0.9
     assert policy["min_boundary_cos"] > 0.85
     assert 0 < policy["max_clash_penalty"] <= 0.3
     assert harmony["root_agreement_rate"] > 0

@@ -3921,6 +3921,14 @@ export class StemRemixPlayer {
           this.bankTransition, this.bankPhraseOf(current), this.bankPhraseOf(entry), section,
         ) - 0.5)
         : 0;
+      // Harmony: prefer phrases whose bass root already sits in the session key.
+      // Arbitrary cross-key phrases can be transposed, but their 4-bar chord
+      // motion still clashes with the other stems.
+      const sessionRoot = parseTheoryKey(this.sessionKey).root;
+      const root = entry.bassRoot;
+      const keyFit = root === null ? 0.5
+        : 1 - Math.min((root - sessionRoot + 12) % 12, (sessionRoot - root + 12) % 12) / 6;
+      const harmonyFit = 0.5 * (keyFit - 0.5);
       const candidateEmbedding = (entry.phrase as unknown as { embedding?: number[] }).embedding ?? [];
       const phraseConductor = predictedPhraseEmbedding && candidateEmbedding.length
         ? 0.20 * (phraseConductorScore(predictedPhraseEmbedding, candidateEmbedding) - 0.5)
@@ -3930,7 +3938,7 @@ export class StemRemixPlayer {
         full: legal,
         judge,
         score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
-          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor,
+          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor + harmonyFit,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -4355,6 +4363,14 @@ export class StemRemixPlayer {
       }
       if (variety !== 0) {
         policy.score = Math.max(0, Math.min(1, policy.score + variety / Math.max(1, subset.length)));
+      }
+      // Coherent handoffs: when several stems move together, prefer one source
+      // song. Real songs never have four unrelated chord progressions at once.
+      if (subset.length > 1) {
+        const movingTracks = new Set(subset.map((_, i) => picks[i]?.kit.track_id ?? ""));
+        if (movingTracks.size === 1) {
+          policy.score = Math.min(1, policy.score + 0.08);
+        }
       }
       // Backing instruments follow the learned vocal-section cohort.
       const backing = this.vocalBackingBonus(section, subset);

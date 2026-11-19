@@ -33,6 +33,7 @@ import {
   scoreKickBassPocket,
   scoreSynthVocalUnmasking,
   solveCellPitchShift,
+  chordTriadPcs,
 } from "./theory_engine";
 
 export interface ComposingPoolEntry {
@@ -785,8 +786,41 @@ export class BarComposer {
     meta: CellStemMeta,
     chord: ProgressionChord,
     sessionRoot: number,
+    progression?: readonly ProgressionChord[],
+    phraseId?: string,
   ): number {
     if (stem === "drums") return 0;
+    // Fit the WHOLE 4-bar phrase to the session progression, not just the one
+    // representative bar. A single shift chosen from bar 0 leaves bars 1-3 in
+    // the old key — the main cause of clashes in the assembled quartet.
+    if (progression && phraseId && this.cellChroma) {
+      let bestShift = primary.keyShift;
+      let bestScore = -Infinity;
+      for (let shift = -6; shift <= 6; shift++) {
+        let score = 0;
+        for (let b = 0; b < 4; b++) {
+          const target = progression[b % progression.length] ?? chord;
+          const targetRoot = (((sessionRoot + target.relRoot) % 12) + 12) % 12;
+          const weight = (meta.p[b] ?? 0) + 0.1;
+          const root = meta.r[b] ?? -1;
+          if (root >= 0) {
+            const rotated = (((root + shift) % 12) + 12) % 12;
+            const dist = Math.min((rotated - targetRoot + 12) % 12, (targetRoot - rotated + 12) % 12);
+            score += (1 - dist / 6) * weight;
+          }
+          const chroma = this.barChroma(phraseId, stem, b, shift);
+          if (chroma && chroma.some((v) => v > 1e-6)) {
+            const pcs = chordTriadPcs(targetRoot, target.quality);
+            const triad = new Array<number>(12).fill(0);
+            for (const pc of pcs) triad[pc] = 1;
+            score += 0.8 * cosine12(chroma, triad) * weight;
+          }
+        }
+        score -= Math.abs(shift) * 0.04;
+        if (score > bestScore) { bestScore = score; bestShift = shift; }
+      }
+      return bestShift;
+    }
     let bestBar = 0;
     let bestW = -1;
     for (let b = 0; b < 4; b++) {
@@ -1233,7 +1267,9 @@ export class BarComposer {
       const sMeta = secondary ? (this.getPhraseMeta(secondary.phrase.id, stem) ?? null) : null;
 
       const ch0 = sectionCtx.progression[0] ?? { relRoot: 0, quality: "minor" as const };
-      let phraseKeyShift = this.solvePhraseKeyShift(stem, primary, pMeta, ch0, sessionRoot);
+      let phraseKeyShift = this.solvePhraseKeyShift(
+        stem, primary, pMeta, ch0, sessionRoot, sectionCtx.progression, primary.phrase.id,
+      );
       const selectedBars = this.buildContiguous4BarCells(
         primary, pMeta, stem, blockBars, phraseKeyShift, sectionCtx.kitSection,
       );
@@ -1348,7 +1384,9 @@ export class BarComposer {
             if (this.isVocalBarActive(secondary.phrase.id, bIdx, sMeta)) secActive.push(bIdx);
           }
           if (secActive.length > 0) {
-            const secShift = this.solvePhraseKeyShift("vocals", secondary, sMeta, ch0, sessionRoot);
+            const secShift = this.solvePhraseKeyShift(
+              "vocals", secondary, sMeta, ch0, sessionRoot, sectionCtx.progression, secondary.phrase.id,
+            );
             const orderedSec = this.orderVocalActiveBars(sMeta, secActive);
             for (let b = 0; b < blockBars; b++) {
               const sb = orderedSec[b % orderedSec.length];

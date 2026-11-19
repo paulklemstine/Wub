@@ -367,7 +367,7 @@
   },
   "handoff": {
     "enabled": true,
-    "probability": 0.1,
+    "probability": 0.22,
     "max_per_source": 4,
     "max_stems": 4,
     "note": "rare deterministic-random full-source takeover at a section change"

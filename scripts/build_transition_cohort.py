@@ -201,7 +201,7 @@ def mine(processed: Path, max_tracks: int) -> Dict[str, Any]:
         },
         "handoff": {
             "enabled": True,
-            "probability": 0.10,
+            "probability": 0.20,
             "max_per_source": 4,
             "max_stems": 4,
             "note": "rare deterministic-random full-source takeover at a section change",

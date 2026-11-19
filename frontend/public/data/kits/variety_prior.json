@@ -2,7 +2,7 @@
   "format": "wub-variety-prior-v1",
   "version": 1,
   "track_history_bars": 16,
-  "track_reuse_penalty": 0.08,
+  "track_reuse_penalty": 0.35,
   "vocal_freshness_weight": 0.12,
   "joint_reserve": 3,
   "source_novelty_weight": 0.2,

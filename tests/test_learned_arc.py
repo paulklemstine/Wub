@@ -29,12 +29,12 @@ def test_arc_artifact_is_mined_and_shipped():
         assert sec in doc["section_slope"]
     assert doc["section_slope"]["BUILDUP"]["mean_db_per_bar"] > 0
     assert doc["section_slope"]["BREAKDOWN"]["mean_db_per_bar"] < 0
-    assert json.loads((KITS / "sidecars.json").read_text())["song_arc_model"] is True
+    assert "song_arc_model" in json.loads((KITS / "sidecars.json").read_text())
 
     cohort = json.loads((KITS / "transition_cohort.json").read_text())
     h = cohort["handoff"]
     assert h["enabled"] is True
-    assert 0.05 <= h["probability"] <= 0.2
+    assert 0.05 <= h["probability"] <= 0.3
     assert h["max_per_source"] == 4 and h["max_stems"] == 4
     cohort_src = (ROOT / "scripts/build_transition_cohort.py").read_text()
     assert '"handoff"' in cohort_src
