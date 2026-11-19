@@ -5265,6 +5265,10 @@ export class ClientGrooveboxConductor {
     return this.kitPlayer?.getCompositionTelemetry() ?? null;
   }
 
+  public qualitySnapshot(): unknown {
+    return this.kitPlayer?.qualitySnapshot?.() ?? null;
+  }
+
   public get steeringStems(): string[] {
     return [...this.userSteeredStems];
   }

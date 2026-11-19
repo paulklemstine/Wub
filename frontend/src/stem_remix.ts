@@ -35,6 +35,10 @@ import {
   type PhraseConductorArtifact,
 } from "./phrase_conductor";
 import { isSongCriticArtifact, type SongCriticArtifact } from "./song_critic";
+import {
+  arrangementQuality, churnQuality,
+  type ArrangementEntry, type HarmonyQuality, type ArrangementQuality, type ChurnQuality,
+} from "./quality_metrics";
 import { SliceFlow, describeFlowTask } from "./slice_flow";
 import { CellCompatScorer } from "./cell_compat";
 import { SongArchitect, type SongMode } from "./song_architect";
@@ -770,6 +774,7 @@ export class StemRemixPlayer {
   private beamSearch: BeamSearchConfig | null = null;
   /** Capped implicit preference log from reticule/pin gestures. */
   private preferenceLog: PreferenceEvent[] = [];
+  private qualityHistory: ArrangementEntry[] = [];
   private composedStats: {
     mode: SongMode;
     role: string;
@@ -893,6 +898,26 @@ export class StemRemixPlayer {
   /** Exported for offline preference fine-tuning. */
   getPreferenceLog(): readonly PreferenceEvent[] {
     return this.preferenceLog;
+  }
+
+  /** Three engine-side quality dimensions; seams/mix are added by main.ts. */
+  qualitySnapshot(): {
+    harmony: HarmonyQuality;
+    arrangement: ArrangementQuality;
+    churn: ChurnQuality;
+  } {
+    const floor = this.barComposer.harmonyContinuity?.policy?.min_bar_pair_cos ?? 0.65;
+    const targets = Array.from({ length: 104 }, (_, i) =>
+      this.sampledArcTarget(i)?.energy ?? targetAt(i).energy);
+    const histories: Record<string, string[]> = {};
+    for (const stem of STEMS) histories[stem] = [...(this.stemHistory[stem] ?? [])];
+    const trackIds = Object.entries(histories).flatMap(([stem, ids]) =>
+      ids.map((id) => this.entryById.get(`${id}:${stem}`)?.kit.track_id ?? ""));
+    return {
+      harmony: this.barComposer.harmonySummary(floor),
+      arrangement: arrangementQuality(this.qualityHistory, targets),
+      churn: churnQuality(histories, trackIds),
+    };
   }
 
   get ready(): boolean {
@@ -3363,6 +3388,8 @@ export class StemRemixPlayer {
       if (this.conductorSectionHistory.length > 6) this.conductorSectionHistory.shift();
       if (this.conductorEnergyHistory.length > 6) this.conductorEnergyHistory.shift();
     }
+    this.qualityHistory.push({ bar: startBar, section: normalized, energy: targetEnergy });
+    if (this.qualityHistory.length > 104) this.qualityHistory.shift();
     this.composedStats.mode = this.songArchitect.getMode();
     this.composedStats.role = displaySection;
     this.composedStats.chords = secCtx.progression

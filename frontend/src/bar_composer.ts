@@ -16,6 +16,7 @@
 
 import { CellCompatScorer } from "./cell_compat";
 import { inferSongCritic, type SongCriticArtifact } from "./song_critic";
+import { harmonicQuality, type HarmonyBar, type HarmonyQuality } from "./quality_metrics";
 import { isContiguousFullPhrase, SliceSpec } from "./kit_pcm";
 import { SectionPlanContext } from "./song_architect";
 import { PitchAutomationPoint } from "./stretch_voice";
@@ -244,6 +245,7 @@ export class BarComposer {
   songCritic: SongCriticArtifact | null = null;
   /** Last bounded song-ness adjustment, exposed for telemetry. */
   lastSongCriticAdjustment = 0;
+  private lastHarmonyBars: HarmonyBar[] = [];
   /** Optional per-bar chroma for the shipped phrases (cell_chroma.json). */
   private cellChroma: Map<string, Record<string, number[][]>> | null = null;
   /** Optional learned next-bar pattern heads (drums/bass/other). */
@@ -314,6 +316,46 @@ export class BarComposer {
       penalty += policy.max_clash_penalty * 0.5 * (policy.min_boundary_cos - boundary);
     }
     return Math.max(0, Math.min(0.34, penalty));
+  }
+
+  /** Measure quartet harmony over the last composed block. */
+  measureHarmony<TEntry extends ComposingPoolEntry>(
+    cells: Partial<Record<StemName, readonly SelectedCell<TEntry>[]>>,
+    bars: number,
+  ): void {
+    const pitched = ["bass", "other", "vocals"] as const;
+    const out: HarmonyBar[] = [];
+    for (let b = 0; b < bars; b++) {
+      const vectors: number[][] = [];
+      const roots: number[] = [];
+      for (const stem of pitched) {
+        const cell = cells[stem]?.[b];
+        if (!cell) continue;
+        const vec = this.barChroma(cell.entry.phrase.id, stem, cell.srcBar, cell.semitones);
+        if (vec) vectors.push(vec);
+        const root = cell.meta.r[cell.srcBar] ?? -1;
+        if (root >= 0) roots.push(((root + cell.semitones) % 12 + 12) % 12);
+      }
+      let minCos = 1;
+      for (let i = 0; i < vectors.length; i++) {
+        for (let j = i + 1; j < vectors.length; j++) {
+          minCos = Math.min(minCos, cosine12(vectors[i], vectors[j]));
+        }
+      }
+      let spread = 0;
+      for (let i = 0; i < roots.length; i++) {
+        for (let j = i + 1; j < roots.length; j++) {
+          const d = Math.abs(roots[i] - roots[j]) % 12;
+          spread = Math.max(spread, Math.min(d, 12 - d) / 6);
+        }
+      }
+      out.push({ minCos, rootSpread: spread });
+    }
+    this.lastHarmonyBars = out.slice(-64);
+  }
+
+  harmonySummary(floor = 0.65): HarmonyQuality {
+    return harmonicQuality(this.lastHarmonyBars, floor);
   }
 
   /** Learned song-ness score (0..1) for the assembled four-stem quartet. */
@@ -1680,6 +1722,7 @@ export class BarComposer {
       });
     }
 
+    this.measureHarmony(barSelectedCells, blockBars);
     this.lastSongCriticAdjustment = 0;
     if (this.songCritic && barSelectedCells.drums?.[0] && barSelectedCells.bass?.[0]
       && barSelectedCells.other?.[0] && barSelectedCells.vocals?.[0]) {

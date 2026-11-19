@@ -489,6 +489,11 @@ export class KitPlayer {
     this.remix?.release(stem);
   }
 
+  /** Engine-side quality dimensions for the current set. */
+  qualitySnapshot(): unknown {
+    return this.remix?.qualitySnapshot?.() ?? null;
+  }
+
   /** Scheduler tick for late drag commits and pin release. */
   tick(now: number): void {
     this.remix?.tick(now);

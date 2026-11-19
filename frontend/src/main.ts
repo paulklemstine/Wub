@@ -20,6 +20,7 @@ import { ClientGrooveboxConductor } from "./client_ml_sequencer";
 import { TamagotchiAvatar } from "./tamagotchi";
 import { SingingHeadPanel } from "./singing_head";
 import { TransitionProbe } from "./transition_probe";
+import { buildQualitySummary } from "./quality_metrics";
 import { RaveLightshowPanel, type LightshowPresetId } from "./lightshow";
 import {
   Fm1MidiInput,
@@ -392,6 +393,16 @@ class WubApp {
         (window as any).__wubReticles = () => this.nebula?.reticles ?? null;
         (window as any).__wubTransitionSummary = () => this.transitionProbe.summary();
         (window as any).__wubGlueState = () => this.engine.glueState();
+        (window as any).__wubQualitySummary = () => {
+          const remix = this.clientConductor?.qualitySnapshot?.() as Parameters<
+            typeof buildQualitySummary
+          >[0];
+          const probe = this.transitionProbe.summary();
+          const glue = this.engine.glueState();
+          const gains: Partial<Record<string, number>> = {};
+          for (const stem of STEMS) gains[stem] = glue?.gains?.[stem] ?? 1;
+          return buildQualitySummary(remix, probe, gains);
+        };
         (window as any).__wubMovementSummary = () => ({
           blocks: this.movementBlocks,
           trackChanges: this.movementTrackChanges,
