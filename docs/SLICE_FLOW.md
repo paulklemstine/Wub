@@ -556,3 +556,26 @@ experiment using critic scores as *soft targets* collapsed bank AUC to 0.53 and
 was reverted — the critic is a gate/teacher, not a good direct regression
 target for these heads. The audio-derived gain remains concentrated in
 `song_critic.json` (AUC 0.705) at the final gate.
+
+## Policy-gradient / preference fine-tuning
+
+`scripts/fine_tune_policy.py` fine-tunes the shipped bank-transition policy with
+the audio-derived critic as reward, starting from the supervised policy as the
+reference. Two objectives are implemented: **DPO preference loss** and an
+**expected-reward policy gradient**. For each real next phrase, a same-section
+cross-song phrase is the rejected action; pairs where the critic agrees with
+the chronology get full weight.
+
+Measured on 2,198 held-out track-disjoint pairs:
+
+| policy | preference accuracy | real-vs-cross AUC |
+|---|---|---|
+| supervised reference | 0.991 | 0.9838 |
+| DPO (β=0.6) | 0.973 | 0.9802 |
+| **policy gradient** | **1.000** | **0.9898** |
+
+DPO slightly degraded both metrics and was not shipped; the policy-gradient
+policy is the shipped `bank_transition.json`. The artifact keeps the exact
+same browser format and mined top-K table, so no inference code changed — only
+the weights now optimize for critic-preferred combinations as well as real
+chronology.
