@@ -1151,11 +1151,13 @@ class WubApp {
 
       const lsGain = document.getElementById("ls-intensity-slider") as HTMLInputElement | null;
       lsGain?.addEventListener("input", () => {
-        this.lightshow?.setState({ intensity: Number(lsGain.value) || 1.25 });
+        const v = Number(lsGain.value);
+        this.lightshow?.setState({ intensity: Number.isFinite(v) ? v : 0 });
       });
       const lsSpd = document.getElementById("ls-speed-slider") as HTMLInputElement | null;
       lsSpd?.addEventListener("input", () => {
-        this.lightshow?.setState({ speed: Number(lsSpd.value) || 1.05 });
+        const v = Number(lsSpd.value);
+        this.lightshow?.setState({ speed: Number.isFinite(v) ? v : 0.2 });
       });
     }
 

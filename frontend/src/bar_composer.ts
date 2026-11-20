@@ -820,15 +820,23 @@ export class BarComposer {
         // line: real songs change vocal patterns at ~73% of 4-bar boundaries.
         s += fallbackIsSparse ? -0.4 : 0.05;
       }
-      // AI prior: prefer phrases that belong to a mined real multi-bar
-      // performance (chorus/verse).  Selection only — the known-good repair
-      // and hook paths below still decide the actual bars.
+      // Vocal song: prefer full 8/16-bar mined performances (verses/choruses)
+      // over 4-bar chops. Selection only — the known-good repair and hook
+      // paths below still decide the actual bars. Long units get up to +0.30
+      // so a full verse/chorus beats a hot 4-bar chop.
       const unit = this.vocalPhraseModel?.tracks?.[e.kit.track_id]
         ?.find((candidate) => candidate.ids.includes(e.phrase.id));
       if (unit) {
         s += 0.06 + unit.score * 0.10;
         if (unit.repeat && (ctxIsChorus(ctx) || ctx.kitSection === "DROP")) s += 0.04;
         s += this.vocalSectionBonus(unit, ctx);
+        const role = ctx.role || ctx.kitSection;
+        const bars = (unit as unknown as { bars?: number }).bars ?? 4;
+        if (bars >= 8 && (role === "CHORUS_1" || role === "CHORUS_2" || ctx.kitSection === "DROP")) {
+          s += bars >= 16 ? 0.30 : 0.22;
+        } else if (bars >= 8 && (role === "VERSE_1" || role === "VERSE_2" || ctx.kitSection === "GROOVE_A")) {
+          s += bars >= 16 ? 0.28 : 0.20;
+        }
       }
       if (ctx.vocalFreshness && ctx.vocalFreshnessWeight) {
         s += ctx.vocalFreshnessWeight * (ctx.vocalFreshness(e.phrase.id) - 0.5);

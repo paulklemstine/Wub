@@ -30,8 +30,8 @@ export interface LightshowState {
   fgPreset: string;
   dualLayer: boolean;
   cortexAuto: boolean;
-  intensity: number; // 0.3 .. 2.2
-  speed: number;     // 0.2 .. 2.5
+  intensity: number; // 0 .. 2.2 (0 = gain at zero on boot)
+  speed: number;     // 0.2 .. 2.5 (0.2 = slider hard left)
   palette: number;   // 0 .. 3
   fxBloom: boolean;
   fxTrails: boolean;
@@ -310,10 +310,10 @@ export class RaveLightshowPanel {
     fgPreset: "cosmic-serpent",
     // Two full shader scenes per frame doubled fill-rate for a layer most
     // sessions never notice. Opt in with the 2-LAYER button when wanted.
-    dualLayer: false,
+    dualLayer: true,
     cortexAuto: true,
-    intensity: 1.25,
-    speed: 1.05,
+    intensity: 0,
+    speed: 0.2,
     palette: 0,
     fxBloom: true,
     fxTrails: true,

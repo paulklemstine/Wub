@@ -45,12 +45,12 @@ def test_movement_budget_only_widens_at_learned_section_changes():
     script = r"""
 const assert=require('node:assert/strict');
 const {movementBudgetAt}=require(process.argv[1]);
-assert.deepEqual(movementBudgetAt(16,4),{minChanges:0,maxChanges:1,maxHoldBars:16});
-assert.deepEqual(movementBudgetAt(16,8),{minChanges:1,maxChanges:2,maxHoldBars:16});
-assert.deepEqual(movementBudgetAt(16,8,true),{minChanges:1,maxChanges:2,maxHoldBars:16});
+assert.deepEqual(movementBudgetAt(16,4),{minChanges:0,maxChanges:1,maxHoldBars:32});
+assert.deepEqual(movementBudgetAt(16,8),{minChanges:1,maxChanges:1,maxHoldBars:32});
+assert.deepEqual(movementBudgetAt(16,8,true),{minChanges:1,maxChanges:2,maxHoldBars:32});
 const wide=movementBudgetAt(16,8,true,3);
-assert.deepEqual(wide,{minChanges:1,maxChanges:3,maxHoldBars:16});
-assert.equal(movementBudgetAt(16,8,false,3).maxChanges,2,'no widening inside a section');
+assert.deepEqual(wide,{minChanges:1,maxChanges:3,maxHoldBars:32});
+assert.equal(movementBudgetAt(16,8,false,3).maxChanges,1,'no widening inside a section');
 assert.equal(movementBudgetAt(16,4,true,3).maxChanges,3);
 assert.deepEqual(movementBudgetAt(96,8,true,3),{minChanges:0,maxChanges:0,maxHoldBars:8});
 assert.equal(movementBudgetAt(16,8,true,99).maxChanges,4,'cap is bounded');

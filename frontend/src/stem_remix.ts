@@ -68,6 +68,16 @@ import {
 } from "./progression_inference";
 import { SectionNavigator, baseOf, expandBaseSection, type SectionModel } from "./section_navigator";
 import {
+  isCompatible as songIsCompatible,
+  repetitionBonus as songRepetitionBonus,
+  RETURN_RATE_8 as SONG_RETURN_RATE,
+} from "./song_foundation";
+import {
+  vocalShouldRest as vocalSongShouldRest,
+  vocalLengthBonus as vocalSongLengthBonus,
+  VOCAL_HOLD_BARS as VOCAL_SONG_HOLD_BARS,
+} from "./vocal_song";
+import {
   targetAt, movementBudgetAt, harmonyPenalty, vocalChangeAllowed, scoreTransition,
   pickSignatures, signatureBonus, timbreBonus, selectTransitionTechnique,
   FLOW_SIGNATURES_ENABLED, FLOW_SIGNATURES_PER_STEM,
@@ -487,12 +497,19 @@ function hashRoll(input: string): number {
 
 /** Candidates presented to the joint ranker per stem (one per track). */
 const JOINT_CANDIDATES_PER_STEM = 8;
-/** Reserve slots for never-played material inside the shortlist. */
-const JOINT_RESERVE = 2;
-/** Per-stem phrases excluded after they play, so a winner cannot repeat at once. */
-const STEM_HISTORY_AVOID = 16;
-/** Policy-score window for near-best exploration in selectJoint. */
-const EXPLORE_WINDOW = 0.06;
+/** Reserve slots for never-played material inside the shortlist.
+ *  Song-first: 1 slot (was 2). Two forced-novelty slots guaranteed churn;
+ *  one still traverses the bank across sets without breaking 8-bar loops. */
+const JOINT_RESERVE = 1;
+/** Per-stem phrases excluded after they play, so a winner cannot repeat at once.
+ *  Song-first: 4 blocks (16 bars). The old 16-block (64-bar) avoid made any
+ *  8/16/32-bar motif return ineligible by construction. 4 still blocks instant
+ *  loops while allowing real returns: drums 51% at 8 bars, bass/other ~15%. */
+const STEM_HISTORY_AVOID = 4;
+/** Policy-score window for near-best exploration in selectJoint.
+ *  Song-first: 0.03 (was 0.06). Wide windows pick random near-best moves
+ *  every block; narrow windows hold the foundation unless a move is strong. */
+const EXPLORE_WINDOW = 0.03;
 /** How many near-best joint candidates exploration may choose among. */
 const EXPLORE_TOP_K = 5;
 /** Pair combinations evaluated per stem pair (top of each sorted list). */
@@ -3978,10 +3995,25 @@ export class StemRemixPlayer {
       const signatureBonus = this.signatureBonusFor(stem, entry, targetEnergy);
       const isSig = this.isSignature(stem, entry.phrase.id);
       const perceptionPlays = isSig ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
-      const novelty = (perceptionPlays === 0 ? 0.35 : Math.max(-0.30, -0.12 * perceptionPlays))
-        + hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.20;
+      // Song-first repetition: per-stem novelty scaled by corpus novelty rates
+      // (drums 41% fresh, vocals 90% fresh) instead of flat 0.35 for all stems.
+      // Return bonus rewards 8/16/32-bar motif returns (drums 51% at 8 bars);
+      // far smaller hash tie-break so near matches win while fresh.
+      const hist = this.stemHistory[stem] ?? [];
+      const lastIdx = hist.lastIndexOf(entry.phrase.id);
+      const ageBars = lastIdx >= 0 ? (hist.length - 1 - lastIdx) * 4 : null;
+      const songRep = songRepetitionBonus(stem, perceptionPlays, ageBars);
+      const novelty = songRep
+        + hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.08;
       const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
         + entry.keyCost * KEY_COST_WEIGHT;
+      // Hard song compatibility: extreme stretches, far key shifts, tritones
+      // and harmonic mush are rejected outright in real songs. Apply a strong
+      // penalty here (shortlist stage) so they rarely reach the joint ranker.
+      const compat = songIsCompatible(
+        stem, entry.rate, entry.keyShift, null, null, true,
+      );
+      const compatPenalty = compat.ok ? 0 : 0.50;
       const earBonus = EAR_W_JOINT * (entry.earQ - 0.5);
       const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
       const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
@@ -4012,7 +4044,7 @@ export class StemRemixPlayer {
         full: legal,
         judge,
         score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
-          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown,
+          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown - compatPenalty,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -4109,21 +4141,29 @@ export class StemRemixPlayer {
     );
     const budget = handoff ? { ...rawBudget, maxChanges: 4 } : rawBudget;
     const sourceCap = handoff ? Math.max(2, Math.min(4, this.transitionCohort?.handoff?.max_per_source ?? 4)) : 2;
+    // Vocal song: hold vocals 8 bars minimum (half as many changes as old
+    // 4-bar hold). The vocal_cadence sidecar still says 4 bars (mined from
+    // 84% 4-bar runs); song arrangement overrides to 8 so full 8/16-bar
+    // verses/choruses can play instead of 4-bar chops.
+    const vocalHoldBars = Math.max(
+      VOCAL_SONG_HOLD_BARS,
+      this.vocalCadence?.policy.min_hold_bars ?? VOCAL_SONG_HOLD_BARS,
+    );
     const allowVocals = vocalChangeAllowed(
       startBar, this.lastVocalChangeBar, sectionChanged,
-      this.vocalCadence?.policy.min_hold_bars,
+      vocalHoldBars,
     );
     // A drum track can stay for a long time while bass/pads carry the mix.
-    // After 24 bars, prefer a drum-inclusive candidate when it is nearly as
-    // strong as the best policy move; this breaks "same groove" plateaus.
-    const drumStale = startBar - this.lastDrumChangeBar >= 24;
-    // 4-bar blocks are the busiest part of the arc; each stem holds for at
-    // least two blocks between track changes unless the arc changes section
-    // or the max-hold budget forces a move.  The cooldown is per stem, not
-    // global: one stem moving no longer blocks the other three for 8 bars,
-    // which is what flattened the mix into one long hold.  8/16-bar blocks
-    // are already 8+ bars, so they have no cooldown.
-    const cooldownBars = nextBlockBars <= 4 ? 8 : 0;
+    // Song-first: refresh after 32 bars (one foundation), not 24. A 24-bar
+    // refresh broke foundations before they established their 8-bar loops.
+    const drumStale = startBar - this.lastDrumChangeBar >= 32;
+    // Song-first holds: each stem holds at least 12 bars (3 blocks) between
+    // track changes unless the section changes or the 32-bar foundation
+    // expires. 12 bars matches the mined GROOVE_A p50 (12 bars); the old
+    // 8-bar cooldown changed the whole mix every ~8 bars (each stem rotating
+    // every 8 bars = a new combination every 2 bars). 8/16-bar blocks are
+    // already long, so they keep no extra cooldown.
+    const cooldownBars = nextBlockBars <= 4 ? 12 : 0;
     const cooledDown = (stem: StemName): boolean => {
       if (cooldownBars === 0 || forceMove) return true;
       const since = startBar - (this.lastChangeBar[stem] ?? 0);
@@ -4156,9 +4196,17 @@ export class StemRemixPlayer {
       return null;
     }
 
-    const unpinned = STEMS.filter((stem) =>
-      this.pins[stem] === undefined && (stem !== "vocals" || allowVocals) && cooledDown(stem)
-    );
+    const unpinned = STEMS.filter((stem) => {
+      if (this.pins[stem] !== undefined || !cooledDown(stem)) return false;
+      if (stem === "vocals") {
+        if (!allowVocals) return false;
+        // Vocal song: rest half the blocks (INTRO/BREAKDOWN mostly rest,
+        // DROP/CHORUS mostly sings). A rest holds the previous vocal instead
+        // of forcing a new 4-bar chop every block.
+        if (!sectionChanged && vocalSongShouldRest(section, this.blockIndex)) return false;
+      }
+      return true;
+    });
     if (unpinned.length === 0) return null;
     const usedTracks = new Set<string>();
     for (const stem of STEMS) {
@@ -4779,8 +4827,8 @@ export class StemRemixPlayer {
       const styleBonus = entry.kit.style === this.cluster?.style ? 0.22 : 0;
       const trackPenalty = usedTracks.has(entry.kit.track_id) ? PIN_TRACK_PENALTY : 0;
       const plays = this.playCountOf(stem, entry.phrase.id);
-      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.15
-        + (plays === 0 ? 0.3 : Math.max(-0.3, -0.12 * plays));
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.08
+        + songRepetitionBonus(stem, plays, null);
       const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT * 0.5
         + entry.keyCost * KEY_COST_WEIGHT * 0.5;
       const earBonus = EAR_W_FALLBACK * (entry.earQ - 0.5);
@@ -4876,8 +4924,8 @@ export class StemRemixPlayer {
       const plays = this.playCountOf(stem, entry.phrase.id);
       const isSigMorph = this.isSignature(stem, entry.phrase.id);
       const morphPlays = isSigMorph ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
-      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.35
-        + (morphPlays === 0 ? 0.4 : Math.max(-0.4, -0.15 * morphPlays));
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.08
+        + songRepetitionBonus(stem, morphPlays, null);
       const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
         + entry.keyCost * KEY_COST_WEIGHT;
       const earBonus = EAR_W_FALLBACK * (entry.earQ - 0.5);
@@ -5110,7 +5158,9 @@ export class StemRemixPlayer {
 
       const sameKit = current && entry.kit.track_id === current.kit.track_id ? 0.3 : 0;
       const style = entry.kit.style === this.cluster?.style ? 0.25 : 0;
-      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.25;
+      const playsSel = this.playCountOf(stem, entry.phrase.id);
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.08
+        + songRepetitionBonus(stem, playsSel, null);
       const judge = this.judgeScore(stem, current?.phrase.id ?? null, entry.phrase.id);
       const judgeBonus = judge > 0 ? 1.5 + 2.5 * judge : -0.2;
       const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *

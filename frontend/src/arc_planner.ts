@@ -146,18 +146,25 @@ export function movementBudgetAt(
   // boundaries (see transition_cohort.json, mined from data/processed). The
   // learned cap is applied only at a section change and only when the sidecar
   // is loaded; the historical budget stays in force everywhere else.
+  // Song-first: foundations last 32 bars (60s at 128 BPM), matching the mined
+  // GROOVE_A p50 (12 bars) and BREAKDOWN p50 (15 bars). The old 16-bar cap
+  // forced a move every 16 bars even when the groove was working; 32 lets a
+  // foundation establish, loop 8-bar patterns 4x, then earn its handoff.
+  // Inside sections 4-bar blocks hold (max 1); section changes allow up to
+  // the learned cohort cap; 8/16-bar blocks move at most 1 inside (was 2).
   if (sectionChanged && !intro) {
     const cap = Number.isFinite(sectionMaxChanges)
       ? Math.max(2, Math.min(4, Math.floor(sectionMaxChanges)))
       : 2;
-    return { minChanges: bars < 8 ? 0 : 1, maxChanges: cap, maxHoldBars: 16 };
+    return { minChanges: bars < 8 ? 0 : 1, maxChanges: cap, maxHoldBars: 32 };
   }
   // 4-bar blocks: allow at most 1 stem change per block to avoid jumpy,
-  // rapid feel shifts; 8/16-bar blocks can move up to 2 stems.
+  // rapid feel shifts; 8/16-bar blocks move at most 1 inside a section
+  // (section changes use the cohort cap above).
   return {
     minChanges: intro || bars < 8 ? 0 : 1,
-    maxChanges: bars < 8 ? 1 : 2,
-    maxHoldBars: 16,
+    maxChanges: bars < 8 ? 1 : 1,
+    maxHoldBars: 32,
   };
 }
 
@@ -839,11 +846,11 @@ export function selfTest(): string[] {
   check(introBudget.minChanges === 0 && introBudget.maxChanges === 1, "intro 4-bar budget should be gentle");
   const eightBudget = movementBudgetAt(8, 8);
   check(
-    eightBudget.minChanges === 1 && eightBudget.maxChanges === 2 && eightBudget.maxHoldBars === 16,
+    eightBudget.minChanges === 1 && eightBudget.maxChanges === 1 && eightBudget.maxHoldBars === 32,
     "8-bar budget",
   );
   const longBudget = movementBudgetAt(80, 16);
-  check(longBudget.maxChanges === 2 && longBudget.maxHoldBars === 16, "16-bar budget");
+  check(longBudget.maxChanges === 1 && longBudget.maxHoldBars === 32, "16-bar budget");
   const bridgeBudget = movementBudgetAt(96, 4);
   check(bridgeBudget.minChanges === 0 && bridgeBudget.maxChanges === 0, "bridge budget");
 

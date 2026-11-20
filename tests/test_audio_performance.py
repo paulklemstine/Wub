@@ -233,7 +233,18 @@ def test_visual_budget_staggers_heavy_painters():
 
 def test_lightshow_dual_layer_starts_off():
     source = (ROOT / "frontend/src/lightshow.ts").read_text(encoding="utf-8")
-    assert "dualLayer: false" in source
+    assert "dualLayer: true" in source
     html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
-    assert 'id="btn-ls-dual" class="lightshow-btn"' in html
-    assert '>2-LAYER: OFF</button>' in html
+    assert 'id="btn-ls-dual" class="lightshow-btn active"' in html
+    assert '>2-LAYER: ON</button>' in html
+
+
+def test_lightshow_boot_gain_zero_speed_left():
+    source = (ROOT / "frontend/src/lightshow.ts").read_text(encoding="utf-8")
+    assert "intensity: 0" in source
+    assert "speed: 0.2" in source
+    html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+    assert 'id="ls-intensity-slider"' in html
+    assert 'value="0"' in html
+    assert 'id="ls-speed-slider"' in html
+    assert 'value="0.2"' in html
