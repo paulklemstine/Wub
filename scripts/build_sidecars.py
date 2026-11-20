@@ -803,6 +803,7 @@ def main() -> None:
         "bank_transition": (out_dir / "bank_transition.json").exists(),
         "phrase_conductor": (out_dir / "phrase_conductor.json").exists(),
         "phrase_embeddings": (out_dir / "phrase_embeddings.json").exists(),
+        "sequence_conductor": (out_dir / "sequence_conductor.json").exists(),
         "song_critic": (out_dir / "song_critic.json").exists(),
         "beam_search": (out_dir / "beam_search.json").exists(),
     }

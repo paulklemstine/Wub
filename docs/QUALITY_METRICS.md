@@ -111,3 +111,15 @@ A four-repeat search over the shipped learned-embedding policy and the older
 pre-PG policy ended in a statistical tie (mean combined 0.073 vs 0.072), with
 large anchor-dependent variance. No policy change was shipped; the loop itself
 is now the reliable artifact for future training runs.
+
+### History-aware sequence conductor (evaluated, opt-in)
+
+`scripts/train_sequence_conductor.py` trains on 799 real phrase trajectories
+from 413 tracks, using the last six phrases to predict the next phrase
+embedding, stem-change mask, section and energy. Browser inference is shipped
+as `sequence_conductor.json` but disabled by default (`sidecars.json` flag
+`sequence_conductor: false`). Four paired headless runs showed no reliable
+gain: mean combined objective 0.172 with the model vs 0.167 without. This
+confirms that phrase-level history alone does not improve the assembled mix
+beyond the current rankers; the next step must change the objective or use
+real listener preferences, not more history.
