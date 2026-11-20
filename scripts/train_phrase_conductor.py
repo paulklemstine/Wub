@@ -175,11 +175,18 @@ def main():
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--critic", type=Path, default=None,
                     help="song_critic.json weights real pairs by audio-derived song-ness")
+    ap.add_argument("--embeddings", type=Path, default=None,
+                    help="phrase_embeddings.json replaces the taste phrase embedding")
     args = ap.parse_args()
     torch.manual_seed(617)
     np.random.seed(617)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     by_track, info = load_bank(args.kits_dir)
+    if args.embeddings:
+        emb_doc = json.loads(args.embeddings.read_text())
+        for pid, vec in emb_doc.get("phrases", {}).items():
+            if pid in info:
+                info[pid]["embedding"] = np.asarray(vec, dtype=np.float32)
     x, y, tracks, pairs = mine(args.kits_dir, args.processed, info, by_track)
     critic = load_critic(args.critic) if args.critic else None
     bank_phrases = load_bank(args.kits_dir) if critic else {}
@@ -255,6 +262,7 @@ def main():
             "train_examples": int(tr.sum()), "val_examples": int(val.sum()),
             "epochs": args.epochs, "device": str(device),
             "audio_critic_weighted": bool(critic),
+            "embeddings": "learned-contrastive" if args.embeddings else "taste",
             "val_embedding_cosine": round(float(cos.mean()), 4),
             "baseline_cosine": round(float(base.mean()), 4),
             "section_accuracy": round(sec_acc, 4), "section_majority": round(majority, 4),

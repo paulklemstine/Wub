@@ -802,6 +802,7 @@ def main() -> None:
         "conductor": (out_dir / "conductor.json").exists(),
         "bank_transition": (out_dir / "bank_transition.json").exists(),
         "phrase_conductor": (out_dir / "phrase_conductor.json").exists(),
+        "phrase_embeddings": (out_dir / "phrase_embeddings.json").exists(),
         "song_critic": (out_dir / "song_critic.json").exists(),
         "beam_search": (out_dir / "beam_search.json").exists(),
     }

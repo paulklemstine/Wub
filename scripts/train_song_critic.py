@@ -27,7 +27,7 @@ STEMS = ("drums", "bass", "other", "vocals")
 PITCHED = ("bass", "other", "vocals")
 SECTIONS = ("INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN")
 PATTERN_DIM = 48
-INPUT_DIM = 218  # 4*(48+2) + 3 presence + 6 harmony/rhythm + 5 section + 4 context
+INPUT_DIM = 282  # 218 analysis features + 64 learned phrase embedding
 HIDDEN = 64
 FORMAT = "wub-song-critic-v1"
 
@@ -124,7 +124,7 @@ def cosine(a, b):
     return float(np.dot(a, b) / d) if d > 1e-8 else 0.0
 
 
-def features(w, prev_energy=None):
+def features(w, prev_energy=None, embedding=None):
     v: List[float] = []
     for s in STEMS:
         v.extend(w["pattern"][s].tolist())
@@ -145,6 +145,9 @@ def features(w, prev_energy=None):
     v.append(float(np.clip(delta, -1, 1)))
     v.append(min(1.0, w["bpm"] / 200.0))
     v.append(0.0)  # key distance placeholder (packed in embedding at runtime)
+    if embedding is None or len(embedding) == 0:
+        embedding = [0.0] * 64
+    v.extend(float(x) for x in embedding)
     assert len(v) == INPUT_DIM, len(v)
     return np.asarray(v, dtype=np.float32)
 
@@ -162,11 +165,30 @@ def main():
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--max-tracks", type=int, default=0)
     ap.add_argument("--epochs", type=int, default=25)
+    ap.add_argument("--kits-dir", type=Path, default=Path("frontend/public/data/kits"))
+    ap.add_argument("--embeddings", type=Path, default=None,
+                    help="phrase_embeddings.json to append to the 218-d critic features")
     args = ap.parse_args()
     torch.manual_seed(911)
     np.random.seed(911)
     random.seed(911)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    emb_map: Dict[str, List[float]] = {}
+    if args.embeddings:
+        emb_map = json.loads(args.embeddings.read_text()).get("phrases", {})
+    phrase_ids: Dict[str, List[str]] = {}
+    if args.embeddings:
+        manifest = json.loads((args.kits_dir / "kit_manifest.json").read_text())
+        for kit in manifest.get("kits", []):
+            phrase_ids[kit["track_id"]] = [p["id"] for p in sorted(
+                kit.get("phrases", []), key=lambda x: x.get("start_bar", 0))]
+
+    def emb_for(tid: str, idx: int) -> List[float]:
+        if not args.embeddings:
+            return []
+        ids = phrase_ids.get(tid, [])
+        return emb_map.get(ids[idx], []) if idx < len(ids) else []
 
     paths = sorted(args.processed.glob("*.json"))
     if args.max_tracks > 0:
@@ -202,7 +224,7 @@ def main():
         wins = song["windows"]
         for i, w in enumerate(wins):
             prev = wins[i - 1]["energy"] if i > 0 else None
-            xs.append(features(w, prev)); ys.append(1.0); track_of.append(tid)
+            xs.append(features(w, prev, emb_for(tid, i))); ys.append(1.0); track_of.append(tid)
             # Cross-song recombination: replace 1-2 stems with a similar song.
             key = (w["section"], key_root(song["doc"].get("key", "")) // 2)
             donors = [d for d in pool.get(key, []) if d[0] != tid]
@@ -220,7 +242,7 @@ def main():
                     mixed["mask"][stem] = donor["mask"][stem]
                     if stem in PITCHED:
                         mixed["chroma"][stem] = donor["chroma"][stem]
-                xs.append(features(mixed, prev)); ys.append(0.0); track_of.append(tid)
+                xs.append(features(mixed, prev, emb_for(did, di))); ys.append(0.0); track_of.append(tid)
     x = np.stack(xs).astype(np.float32)
     y = np.asarray(ys, dtype=np.float32)
     val = np.asarray([t in val_tracks for t in track_of], dtype=bool)
@@ -268,6 +290,7 @@ def main():
             "positive_examples": int((y > 0.5).sum()), "negative_examples": int((y < 0.5).sum()),
             "val_auc": round(auc, 4), "real_score_p10": round(floor, 4),
             "epochs": args.epochs, "device": str(device),
+            "embeddings": "learned-contrastive" if args.embeddings else "none",
             "use": "bounded final-gate adjustment; never schedules or renders audio",
         },
     }

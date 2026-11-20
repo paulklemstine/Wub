@@ -26,7 +26,8 @@ import websockets
 
 CDP_PORT = 9222
 SERVER_PORT = 4173
-DIST_POLICY = Path("frontend/dist/data/kits/bank_transition.json")
+DEFAULT_ARTIFACT = "data/kits/bank_transition.json"
+DIST_POLICY = Path("frontend/dist") / DEFAULT_ARTIFACT
 URL = f"http://127.0.0.1:{SERVER_PORT}/"
 
 
@@ -126,9 +127,13 @@ async def main():
     ap.add_argument("--seconds", type=int, default=45)
     ap.add_argument("--interval", type=int, default=15)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--artifact", default=DEFAULT_ARTIFACT,
+                    help="artifact path relative to frontend/dist, e.g. data/kits/phrase_conductor.json")
     args = ap.parse_args()
     ensure_services()
     variants = json.loads(args.variants.read_text())
+    global DIST_POLICY
+    DIST_POLICY = Path("frontend/dist") / args.artifact
     pages = requests.get(f"http://127.0.0.1:{CDP_PORT}/json", timeout=5).json()
     page = next(p for p in pages if p.get("type") == "page")
     counter = [1]

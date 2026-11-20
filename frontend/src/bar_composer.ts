@@ -244,6 +244,8 @@ export class BarComposer {
   vocalSectionModel: VocalSectionModel | null = null;
   /** Optional song-ness critic (bounded final-gate adjustment). */
   songCritic: SongCriticArtifact | null = null;
+  /** Learned phrase embeddings appended to the critic's feature vector. */
+  phraseEmbeddings: Record<string, number[]> | null = null;
   /** Last bounded song-ness adjustment, exposed for telemetry. */
   lastSongCriticAdjustment = 0;
   private lastHarmonyBars: HarmonyBar[] = [];
@@ -472,6 +474,21 @@ export class BarComposer {
     v[o++] = 0; // energy delta: unknown at composition time, neutral
     v[o++] = Math.min(1, bpm / 200);
     v[o++] = 0; // key distance placeholder
+    // Learned phrase embedding (mean of the selected phrases) when available.
+    if (model.input_dim === 282) {
+    const emb = new Array<number>(64).fill(0);
+    let embN = 0;
+    for (const stem of ["drums", "bass", "other", "vocals"] as const) {
+      const cell = cells[stem]?.[0];
+      const vec = cell ? this.phraseEmbeddings?.[cell.entry.phrase.id] : undefined;
+      if (vec && vec.length === 64) {
+        for (let i = 0; i < 64; i++) emb[i] += vec[i];
+        embN += 1;
+      }
+    }
+    if (embN > 0) for (let i = 0; i < 64; i++) v.push(emb[i] / embN);
+    else for (let i = 0; i < 64; i++) v.push(0);
+    }
     return inferSongCritic(model, v);
   }
 

@@ -32,5 +32,6 @@
   "bank_transition": true,
   "phrase_conductor": true,
   "song_critic": true,
-  "beam_search": true
+  "beam_search": true,
+  "phrase_embeddings": true
 }

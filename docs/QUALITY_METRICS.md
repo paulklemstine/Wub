@@ -87,3 +87,13 @@ Offline AUC improved 0.9898 → 0.9932. Two repeated headless A/B runs each
 favored the learned-feature policy: mean live objective 0.147 vs 0.006,
 harmony p10 0.39–0.42 vs 0.33–0.39. The artifact was shipped with the exact
 same browser format; only the weights and top-K successor table changed.
+
+### Learned embeddings in the remaining heads
+
+`phrase_conductor` was retrained on the contrastive embeddings: headless A/B
+mean objective 0.225 vs 0.081 for the taste-embedding version, so it was
+shipped. `song_critic` was also retrained with a 282-d input (218 analysis +
+64 phrase embedding), but two headless runs each showed a slight live
+regression (mean objective −0.023 vs +0.049), so its artifact was reverted.
+The browser keeps 282-d support and the `phrase_embeddings` sidecar for future
+experiments, but the shipped critic remains the 218-d audio-derived model.

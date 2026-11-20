@@ -21,8 +21,8 @@ def bundle(name: str, source: str) -> Path:
 def test_song_critic_artifact_is_trained_and_bounded():
     doc = json.loads((KITS / "song_critic.json").read_text())
     assert doc["format"] == "wub-song-critic-v1"
-    assert doc["input_dim"] == 218 and doc["hidden"] == 64
-    assert len(doc["mean"]) == len(doc["std"]) == 218
+    assert doc["input_dim"] in (218, 282) and doc["hidden"] == 64
+    assert len(doc["mean"]) == len(doc["std"]) == doc["input_dim"]
     assert len(doc["layers"]) == 3 and len(doc["layers"][2]["w"]) == 1
     r = doc["report"]
     assert r.get("songs", r.get("tracks", 0)) >= 150

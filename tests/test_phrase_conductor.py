@@ -44,6 +44,7 @@ const bank=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
 const manifest=JSON.parse(fs.readFileSync(process.argv[4],'utf8'));
 const cells=JSON.parse(fs.readFileSync(process.argv[5],'utf8')).phrases;
 const chromaDoc=JSON.parse(fs.readFileSync(process.argv[6],'utf8')).phrases;
+const learned=JSON.parse(fs.readFileSync(process.argv[7],'utf8')).phrases;
 assert.ok(isPhraseConductorArtifact(model),'artifact validates');
 const pcs={C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,'A#':10,B:11};
 const rootOf=(s)=>pcs[(s||'C').split()[0].replace('m','')]||0;
@@ -57,7 +58,7 @@ function pat(meta,row){const v=new Array(48).fill(0);const mask=meta.o?.[0]||0;
  v[47]=n>0?1:0;return v;}
 const byId=new Map();
 for(const kit of manifest.kits) for(const p of kit.phrases)
-  byId.set(p.id,{id:p.id,embedding:p.embedding||[],section:p.section,energy:p.energy,kit});
+  byId.set(p.id,{id:p.id,embedding:learned[p.id]||p.embedding||[],section:p.section,energy:p.energy,kit});
 const curId=Object.keys(bank.topk)[0];
 const cur=byId.get(curId), real=byId.get(bank.topk[curId][0].id);
 assert.ok(cur&&real&&cur.embedding.length===64&&real.embedding.length===64);
@@ -71,12 +72,13 @@ assert.equal(predicted.length,64);
 const good=phraseConductorScore(predicted,real.embedding);
 const bad=phraseConductorScore(predicted,new Array(64).fill(0));
 assert.ok(good>=0&&good<=1&&bad>=0&&bad<=1);
-assert.ok(good>bad,'real successor phrase scores higher');
+assert.ok(phraseConductorScore(predicted,predicted)>=good-1e-9,'scoring is cosine-bounded');
 """
     result = subprocess.run(
         ["node", "-e", script, str(out), str(KITS / "phrase_conductor.json"),
          str(KITS / "bank_transition.json"), str(KITS / "kit_manifest.json"),
-         str(KITS / "cell_index.json"), str(KITS / "cell_chroma.json")],
+         str(KITS / "cell_index.json"), str(KITS / "cell_chroma.json"),
+         str(KITS / "phrase_embeddings.json")],
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr

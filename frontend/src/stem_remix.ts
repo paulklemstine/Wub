@@ -1096,6 +1096,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("bank_transition")) setupLoads.push(this.loadBankTransition(base));
     if (this.sidecarEnabled("phrase_conductor")) setupLoads.push(this.loadPhraseConductor(base));
     if (this.sidecarEnabled("song_critic")) setupLoads.push(this.loadSongCritic(base));
+    if (this.sidecarEnabled("phrase_embeddings")) setupLoads.push(this.loadPhraseEmbeddings(base));
     if (this.sidecarEnabled("beam_search")) setupLoads.push(this.loadBeamSearch(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
     if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
@@ -1685,6 +1686,22 @@ export class StemRemixPlayer {
       }
     } catch {
       // Optional; greedy final gate stays in force.
+    }
+  }
+
+  /** Learned phrase embeddings for the critic's 282-d feature vector. */
+  private async loadPhraseEmbeddings(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/phrase_embeddings.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as {
+        format: string; dim: number; phrases: Record<string, number[]>;
+      };
+      if (doc?.format === "wub-phrase-embeddings-v1" && doc.dim === 64 && doc.phrases) {
+        this.barComposer.phraseEmbeddings = doc.phrases;
+      }
+    } catch {
+      // Optional; the critic falls back to zero embeddings.
     }
   }
 

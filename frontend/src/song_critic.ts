@@ -23,8 +23,9 @@ export interface SongCriticArtifact {
 export function isSongCriticArtifact(v: unknown): v is SongCriticArtifact {
   const d = v as SongCriticArtifact;
   return Boolean(
-    d && d.format === "wub-song-critic-v1" && d.input_dim === 218
-    && d.hidden > 0 && d.mean?.length === 218 && d.std?.length === 218
+    d && d.format === "wub-song-critic-v1"
+    && (d.input_dim === 282 || d.input_dim === 218)
+    && d.hidden > 0 && d.mean?.length === d.input_dim && d.std?.length === d.input_dim
     && d.layers?.length === 3 && d.layers[0].w.length === d.hidden
     && d.layers[1].w.length === 32 && d.layers[2].w.length === 1,
   );
