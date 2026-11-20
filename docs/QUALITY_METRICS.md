@@ -43,3 +43,14 @@ shipping it measured worse than the pre-PG policy: harmony p10 0.28–0.34 vs
 0.30–0.48, and unique tracks collapsed to 1 vs 2→7. The reward over-favored a
 single coherent source. The script remains available as an opt-in experiment;
 the shipped artifact was reverted to the pre-PG policy.
+
+### Multi-objective reward (evaluated, not shipped)
+
+`scripts/fine_tune_multi_objective.py` adds harmony + novelty + arc reward with
+an explicit low-reward "repeat current phrase" action and KL to the reference.
+Conservative settings (harmony 0.85 / novelty 0.08 / arc 0.07, KL 0.08, 3
+epochs) improved held-out preference accuracy 0.9858 → 0.9905, but a 60 s
+headless run measured harmony p10 0.18–0.34 and clash 0.25–1.0, versus
+0.30–0.48 and 0–0.5 for the shipped hand-weighted policy. The offline metric
+does not transfer to the live mix; the script stays opt-in and the shipped
+artifact was reverted.
