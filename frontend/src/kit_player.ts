@@ -468,6 +468,16 @@ export class KitPlayer {
     return this.remix?.setTarget(stem, x, y) ?? null;
   }
 
+  /** Viewer kind request for the next block (Twitch co-DJ). */
+  requestKind(kind: string, fromBar: number, bars = 4, boostEnergy?: number): void {
+    this.remix?.requestKind(kind, fromBar, bars, boostEnergy);
+  }
+
+  /** Current remix session bar (for viewer request windows). */
+  get sessionBarCount(): number {
+    return this.remix?.sessionBarCount ?? 0;
+  }
+
   /** Switch between Song Mode ("song") and Infinite DJ Morph Mode ("morph"). */
   setSongMode(mode: SongMode): void {
     this.pendingSongMode = mode;

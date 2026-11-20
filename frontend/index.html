@@ -1157,6 +1157,30 @@
     .dj-pad.macro { border-color: #475569; color: #ffea00; }
     .dj-pad.macro:hover { border-color: #ffea00; background: #1f2937; }
 
+    /* --- TWITCH CO-DJ STRIP --- */
+    .twitch-strip {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      margin: 8px 0; padding: 8px 10px;
+      border: 1px solid rgba(145, 70, 255, 0.45); border-radius: 10px;
+      background: rgba(20, 8, 40, 0.55); font-size: 0.82rem;
+    }
+    .twitch-title { color: #bf94ff; font-weight: 800; letter-spacing: 0.06em; }
+    .twitch-strip input[type="text"] {
+      background: #0b0616; color: #fff; border: 1px solid #9146ff;
+      border-radius: 6px; padding: 4px 8px; width: 160px; font-size: 0.82rem;
+    }
+    .twitch-strip button {
+      background: #9146ff; color: #fff; border: none; border-radius: 6px;
+      padding: 5px 12px; font-weight: 800; cursor: pointer; font-size: 0.8rem;
+    }
+    .twitch-strip button.active { background: #2ecc71; }
+    .twitch-status { color: #d6bcff; font-family: monospace; }
+    .twitch-log {
+      flex-basis: 100%; display: flex; flex-direction: column; gap: 2px;
+      font-family: monospace; color: #a8e6ff; font-size: 0.78rem;
+      max-height: 84px; overflow-y: auto;
+    }
+
     /* --- TRIPPY RAVE LIGHTSHOW & WUB CREATURE FULL VISUALIZER PANEL --- */
     .lightshow-body {
       display: grid;
@@ -2783,7 +2807,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.363 <span class="mc-build-num">#363</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.364 <span class="mc-build-num">#364</span></span>
       </div>
       <div id="panel-dock" class="panel-dock" role="toolbar" aria-label="Toggle Front Page Panels">
         <button type="button" class="panel-dock-btn active" data-panel="panel-dj-surface">DJ SURFACE</button>
@@ -2846,6 +2870,15 @@
             <label class="genre-label" for="mb-genre-select">GENRE</label>
             <select id="mb-genre-select" multiple size="2" aria-label="MusicBrainz genre: ctrl/cmd+click to multi-select; none = all genres" title="MusicBrainz genres. Select one, several (Ctrl/Cmd+click), or none for all (default)."></select>
           </div>
+        </div>
+
+        <!-- TWITCH CO-DJ: viewers steer with !commands in chat (read-only, no OAuth) -->
+        <div class="twitch-strip" aria-label="Twitch co-DJ controls">
+          <span class="twitch-title">📺 TWITCH CO-DJ</span>
+          <input id="tw-channel" type="text" placeholder="channel name" aria-label="Twitch channel name" autocomplete="off" spellcheck="false" />
+          <button id="tw-connect" type="button" title="Join channel chat read-only (anonymous, no login)">CONNECT</button>
+          <span id="tw-status" class="twitch-status">enter channel + CONNECT — viewers type !help 🎧</span>
+          <div id="tw-log" class="twitch-log" aria-live="polite"></div>
         </div>
 
         <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
@@ -3746,7 +3779,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.363 (Build #363 • rev 2259bd1095)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.364 (Build #364 • rev 3fc433d6cd)</span>
     </div>
   </div>
 

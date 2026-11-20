@@ -5321,6 +5321,28 @@ export class ClientGrooveboxConductor {
     this.kitPlayer?.forceNextKit();
   }
 
+  /**
+   * Viewer section request (Twitch co-DJ). In kit remix mode it colors the
+   * next block's selectors without rewriting the song blueprint; in legacy
+   * modes it moves the arranger section directly.
+   */
+  public requestSectionKind(kind: string): void {
+    const clean = (kind || "").toUpperCase();
+    if (this.kitPlayer?.remixActive) {
+      const boost = clean === "DROP" ? 0.95 : clean === "BUILDUP" ? 0.85
+        : clean === "BREAKDOWN" ? 0.25 : clean === "INTRO" ? 0.30 : undefined;
+      this.kitPlayer.requestKind(clean, this.kitPlayer.sessionBarCount, 4, boost);
+      return;
+    }
+    this.arranger.setSection(clean);
+  }
+
+  /** Current session bar (for viewer request windows). */
+  public get sessionBar(): number {
+    if (this.kitPlayer?.remixActive) return this.kitPlayer.sessionBarCount;
+    return this.arranger.getTotalBars();
+  }
+
   public setKitSetChangeCallback(cb: (info: {
     kit: Kit;
     blocksPlayed: number;

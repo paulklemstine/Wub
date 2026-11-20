@@ -31,6 +31,15 @@ import {
   knobValueToSlot,
   scrollSlot,
 } from "./fm1_midi";
+import {
+  TwitchChat,
+  TWITCH_HELP,
+  allowCommand,
+  createRateState,
+  parseChatCommand,
+  routeCommand,
+  type TwitchStem,
+} from "./twitch_dj";
 import type { Fm1MidiDevice, Fm1StatusTone } from "./fm1_midi";
 
 export interface StemState {
@@ -218,6 +227,9 @@ class WubApp {
   private bearOverlayEnabled = true;
   private tapTimestamps: number[] = [];
   private macroBuildupTimer: ReturnType<typeof setInterval> | null = null;
+  private twitchChat: TwitchChat | null = null;
+  private twitchRate = createRateState();
+  private twitchLog: string[] = [];
 
   private states: Record<StemName, StemState> = {
     drums: { stem: "drums", mute: false, solo: false, volume: 1, chaos: 0.1, synthBlend: 0.0 },
@@ -360,6 +372,7 @@ class WubApp {
     this.bindKitControls();
     this.bindPanelDock();
     this.initLightshowAndDjControls();
+    this.bindTwitchDj();
 
     // Initialize Autonomous In-Browser ML Sequencer
     try {
@@ -712,6 +725,204 @@ class WubApp {
   }
 
   // -- transport -----------------------------------------------------------
+
+  // -- twitch co-dj ------------------------------------------------------
+  // Viewers steer with !commands in Twitch chat. The page joins the channel
+  // anonymously (read-only, no OAuth): the broadcaster enters their channel,
+  // hits CONNECT, and chat votes drive the same handlers as the DJ buttons.
+  private bindTwitchDj(): void {
+    const channelInput = document.getElementById("tw-channel") as HTMLInputElement | null;
+    const connectBtn = document.getElementById("tw-connect") as HTMLButtonElement | null;
+    const statusEl = document.getElementById("tw-status");
+    const logEl = document.getElementById("tw-log");
+    if (!channelInput || !connectBtn) return;
+    try {
+      channelInput.value = localStorage.getItem("wub_tw_channel") ?? "";
+    } catch {
+      // ignore
+    }
+    const setStatus = (text: string): void => {
+      if (statusEl) statusEl.textContent = text;
+    };
+    const pushLog = (text: string): void => {
+      this.twitchLog.push(text);
+      if (this.twitchLog.length > 8) this.twitchLog.splice(0, this.twitchLog.length - 8);
+      if (logEl) {
+        logEl.innerHTML = "";
+        for (const entry of [...this.twitchLog].reverse()) {
+          const div = document.createElement("div");
+          div.textContent = entry;
+          logEl.appendChild(div);
+        }
+      }
+    };
+    const morphStem = (stem: StemName): void => {
+      const pts = this.clientConductor?.getKitNebulaPoints().filter((p) => p.stem === stem) ?? [];
+      if (pts.length > 0 && this.clientConductor) {
+        const pick = pts[Math.floor(Math.random() * pts.length)];
+        this.nebula?.setReticleTarget(stem, pick.x, pick.y, 0.25);
+        this.clientConductor.setReticleSteering(stem, pick.x, pick.y, true);
+      } else {
+        this.clientConductor?.rerollStem(stem);
+      }
+    };
+    const applyBpm = (next: number): void => {
+      const clamped = Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round(next)));
+      if (!Number.isFinite(clamped)) return;
+      this.bpm = clamped;
+      try {
+        localStorage.setItem("wub_bpm", String(clamped));
+      } catch {
+        // ignore
+      }
+      const slider = document.getElementById("bpm-slider");
+      if (slider instanceof HTMLInputElement) slider.value = String(clamped);
+      const label = document.getElementById("bpm-value");
+      if (label !== null) label.textContent = `${clamped} BPM`;
+      this.engine.setTargetBpm(clamped);
+      this.clientConductor?.setBpm(clamped);
+    };
+    this.twitchChat = new TwitchChat();
+    const chat = this.twitchChat;
+    chat.onStatus = (status) => {
+      setStatus(status);
+      connectBtn.textContent = chat.connected ? "DISCONNECT" : "CONNECT";
+      connectBtn.classList.toggle("active", chat.connected);
+    };
+    chat.onMessage = (user, text) => {
+      const cmd = parseChatCommand(user, text);
+      if (!cmd) return;
+      if (!allowCommand(this.twitchRate, user, Date.now())) return;
+      const reply = routeCommand(cmd, {
+        section: (name, by) => {
+          this.clientConductor?.requestSectionKind(name);
+          this.setStatus(`🎧 @${by} requested ${name} for the next block.`);
+        },
+        style: (name, by) => {
+          const select = document.getElementById("mb-genre-select") as HTMLSelectElement | null;
+          let applied = false;
+          if (select) {
+            for (const option of Array.from(select.options)) {
+              if (option.value.toLowerCase() === name || option.text.toLowerCase().includes(name)) {
+                select.value = option.value;
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+                applied = true;
+                break;
+              }
+            }
+          }
+          this.setStatus(applied ? `🎨 @${by} set style ${name}.` : `🎨 @${by} wants ${name} (no matching genre).`);
+        },
+        bpm: (bpm, by) => {
+          applyBpm(bpm);
+          this.setStatus(`🥁 @${by} set ${Math.round(bpm)} BPM.`);
+        },
+        bpmHalf: (by) => {
+          document.getElementById("btn-bpm-half")?.click();
+          this.setStatus(`🐢 @${by} halved the tempo.`);
+        },
+        bpmDouble: (by) => {
+          document.getElementById("btn-bpm-double")?.click();
+          this.setStatus(`🐇 @${by} doubled the tempo.`);
+        },
+        key: (key, by) => {
+          const select = document.getElementById("key-select") as HTMLSelectElement | null;
+          if (select) {
+            const hit = Array.from(select.options).find(
+              (o) => o.value.toLowerCase() === key.toLowerCase(),
+            );
+            if (hit) {
+              select.value = hit.value;
+              this.musicalKey = hit.value;
+            }
+          }
+          this.setStatus(`🎹 @${by} set key ${key}.`);
+        },
+        kill: (stem, on, by) => {
+          if (this.engine.isStemKilled(stem as StemName) !== on) {
+            this.engine.setStemKill(stem as StemName, on);
+          }
+          document.querySelector<HTMLButtonElement>(`[data-dj-kill="${stem}"]`)
+            ?.classList.toggle("active", on);
+          this.setStatus(on ? `🔇 @${by} killed ${stem}.` : `🔊 @${by} revived ${stem}.`);
+        },
+        echo: (stem, by) => {
+          const next = !this.engine.isStemEchoThrow(stem as StemName);
+          this.engine.setStemEchoThrow(stem as StemName, next);
+          document.querySelector<HTMLButtonElement>(`[data-dj-echo="${stem}"]`)
+            ?.classList.toggle("active", next);
+          this.setStatus(`✨ @${by} echo throw on ${stem}.`);
+        },
+        morph: (stem, by) => {
+          morphStem(stem as StemName);
+          this.setStatus(`⚡ @${by} morphed ${stem}.`);
+        },
+        chaos: (stem, value, by) => {
+          const slider = document.getElementById(`${stem}-chaos`);
+          if (slider instanceof HTMLInputElement) {
+            slider.value = String(value);
+            slider.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          this.setStatus(`🎛️ @${by} chaos ${stem} → ${Number(value).toFixed(2)}.`);
+        },
+        nextKit: (by) => {
+          document.getElementById("btn-next-kit")?.click();
+          this.setStatus(`⏭️ @${by} queued NEXT KIT.`);
+        },
+        songMode: (mode, by) => {
+          if (this.clientConductor?.getSongMode() !== mode) {
+            document.getElementById("btn-song-mode")?.click();
+          }
+          this.setStatus(`🎼 @${by} set ${mode.toUpperCase()} mode.`);
+        },
+        steer: (stem, x, y, by) => {
+          if (x === null || y === null) {
+            morphStem(stem as StemName);
+          } else {
+            this.nebula?.setReticleTarget(stem as StemName, x, y, 0.25);
+            this.clientConductor?.setReticleSteering(stem as StemName, x, y, true);
+          }
+          this.setStatus(`🧭 @${by} steered ${stem}.`);
+        },
+        hook: (by) => {
+          morphStem("vocals");
+          this.setStatus(`🎤 @${by} called for the hook.`);
+        },
+        status: () => {
+          const telemetry = this.clientConductor?.getCompositionTelemetry() as
+            | { role?: string }
+            | null
+            | undefined;
+          const section = telemetry?.role ?? "live";
+          const mode = this.clientConductor?.getSongMode() ?? "song";
+          return `${section} • ${Math.round(this.bpm)} BPM • ${mode.toUpperCase()} • type !help`;
+        },
+        help: () => TWITCH_HELP,
+      });
+      if (reply) pushLog(reply);
+    };
+    connectBtn.addEventListener("click", () => {
+      if (chat.connected) {
+        chat.disconnect();
+        setStatus("disconnected");
+        connectBtn.textContent = "CONNECT";
+        connectBtn.classList.remove("active");
+        return;
+      }
+      const channel = channelInput.value.trim();
+      if (!channel) {
+        setStatus("enter your Twitch channel first");
+        return;
+      }
+      try {
+        localStorage.setItem("wub_tw_channel", channel);
+      } catch {
+        // ignore
+      }
+      chat.connect(channel);
+    });
+    setStatus("enter channel + CONNECT — viewers type !help 🎧");
+  }
 
   private bindTransport(): void {
     el<HTMLButtonElement>("btn-play").addEventListener("click", () => {

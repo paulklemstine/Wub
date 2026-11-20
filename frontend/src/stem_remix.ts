@@ -808,6 +808,18 @@ export class StemRemixPlayer {
   private beamSearch: BeamSearchConfig | null = null;
   /** Capped implicit preference log from reticule/pin gestures. */
   private preferenceLog: PreferenceEvent[] = [];
+  /** One-block viewer kind request (Twitch co-DJ): colors selectors only. */
+  private requestedKind: { kind: string; untilBar: number; boostEnergy?: number } | null = null;
+
+  /**
+   * Request a section kind for the next block (viewer co-DJ). The 104-bar
+   * blueprint keeps driving timing/rotation; this only biases what the
+   * selectors pick for blocks starting before `untilBar`.
+   */
+  public requestKind(kind: string, fromBar: number, bars = 4, boostEnergy?: number): void {
+    const clean = (kind || "").toUpperCase().replace(/[^A-Z_]/g, "").slice(0, 16) || "GROOVE_A";
+    this.requestedKind = { kind: clean, untilBar: fromBar + Math.max(4, Math.min(16, bars)), boostEnergy };
+  }
   private qualityHistory: ArrangementEntry[] = [];
   private sessionRootParsed = 0;
   private currentProgression: ProgressionChord[] = [];
@@ -3472,6 +3484,18 @@ export class StemRemixPlayer {
       }
     }
     // Stash for selection helpers (base 5-class stays in `normalized`).
+    // A Twitch/viewer kind request colors one block without rewriting the
+    // 104-bar blueprint: it overrides the kind/energy the selectors see,
+    // then expires at the block boundary.
+    if (this.requestedKind && startBar < this.requestedKind.untilBar) {
+      targetKind = this.requestedKind.kind;
+      displaySection = this.requestedKind.kind;
+      if (this.requestedKind.boostEnergy) {
+        targetEnergy = clamp01(0.5 * targetEnergy + 0.5 * this.requestedKind.boostEnergy);
+      }
+    } else if (this.requestedKind) {
+      this.requestedKind = null;
+    }
     this.targetKind = targetKind;
     let sectionChanged = normalized !== this.lastSection;
     this.lastSection = normalized;
