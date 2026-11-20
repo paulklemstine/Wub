@@ -732,12 +732,16 @@ class WubApp {
   // hits CONNECT, and chat votes drive the same handlers as the DJ buttons.
   private bindTwitchDj(): void {
     const channelInput = document.getElementById("tw-channel") as HTMLInputElement | null;
+    const userInput = document.getElementById("tw-username") as HTMLInputElement | null;
+    const tokenInput = document.getElementById("tw-token") as HTMLInputElement | null;
     const connectBtn = document.getElementById("tw-connect") as HTMLButtonElement | null;
     const statusEl = document.getElementById("tw-status");
     const logEl = document.getElementById("tw-log");
     if (!channelInput || !connectBtn) return;
     try {
       channelInput.value = localStorage.getItem("wub_tw_channel") ?? "";
+      if (userInput) userInput.value = localStorage.getItem("wub_tw_user") ?? "";
+      if (tokenInput) tokenInput.value = localStorage.getItem("wub_tw_token") ?? "";
     } catch {
       // ignore
     }
@@ -900,6 +904,9 @@ class WubApp {
         help: () => TWITCH_HELP,
       });
       if (reply) pushLog(reply);
+      // Mirror the output stream back into Twitch chat when logged in with
+      // a bot token; read-only (anonymous) connections just keep the strip log.
+      if (reply) chat.sendMessage(reply);
     };
     connectBtn.addEventListener("click", () => {
       if (chat.connected) {
@@ -914,12 +921,16 @@ class WubApp {
         setStatus("enter your Twitch channel first");
         return;
       }
+      const username = userInput?.value.trim() ?? "";
+      const token = tokenInput?.value.trim() ?? "";
       try {
         localStorage.setItem("wub_tw_channel", channel);
+        if (userInput) localStorage.setItem("wub_tw_user", username);
+        if (tokenInput) localStorage.setItem("wub_tw_token", token);
       } catch {
         // ignore
       }
-      chat.connect(channel);
+      chat.connect(channel, { username, token });
     });
     setStatus("enter channel + CONNECT — viewers type !help 🎧");
   }

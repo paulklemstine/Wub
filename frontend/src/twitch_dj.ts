@@ -229,10 +229,21 @@ export function createRateState(): TwitchRateState {
   return { lastByUser: new Map(), windowStart: 0, windowCount: 0 };
 }
 
-/** Minimal anonymous Twitch IRC reader (JOIN + PRIVMSG + PING/PONG). */
+/** Login for the chat connection: anonymous (read-only) or a bot/broadcaster. */
+export interface TwitchLogin {
+  /** Bot username (Twitch login name). Omit for anonymous read-only. */
+  username?: string;
+  /** OAuth token (`oauth:…`, needs `chat:read chat:write`). Omit = read-only. */
+  token?: string;
+}
+
+/** Minimal Twitch IRC client: anonymous read, authenticated read+write. */
 export class TwitchChat {
   private socket: WebSocket | null = null;
   private channel = "";
+  private sendQueue: string[] = [];
+  private sendTimer: ReturnType<typeof setTimeout> | null = null;
+  private authed = false;
   onMessage: ((user: string, text: string) => void) | null = null;
   onStatus: ((status: string) => void) | null = null;
 
@@ -244,15 +255,27 @@ export class TwitchChat {
     return this.channel;
   }
 
-  connect(channel: string): void {
+  /** True when logged in with a token, so replies can post to chat. */
+  get canSend(): boolean {
+    return this.authed && this.connected;
+  }
+
+  connect(channel: string, login: TwitchLogin = {}): void {
     const clean = channel.trim().replace(/^#/, "").toLowerCase();
     if (!clean || !/^[a-z0-9_]{1,25}$/.test(clean)) {
       this.onStatus?.("invalid channel (a-z, 0-9, _)");
       return;
     }
+    const username = (login.username || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
+    let token = (login.token || "").trim().replace(/^oauth:/i, "");
+    if ((username && !token) || (!username && token)) {
+      this.onStatus?.("need both bot username + oauth token, or neither (read-only)");
+      return;
+    }
     this.disconnect();
     this.channel = clean;
-    const nick = `justinfan${Math.floor(1000 + Math.random() * 9000)}`;
+    this.authed = Boolean(username && token);
+    const nick = this.authed ? username : `justinfan${Math.floor(1000 + Math.random() * 9000)}`;
     let socket: WebSocket;
     try {
       socket = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
@@ -264,7 +287,7 @@ export class TwitchChat {
     this.onStatus?.(`connecting to #${clean} …`);
     socket.onopen = () => {
       socket.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
-      socket.send(`PASS SCHMOOPIIE`);
+      socket.send(this.authed ? `PASS oauth:${token}` : `PASS SCHMOOPIIE`);
       socket.send(`NICK ${nick}`);
       socket.send(`JOIN #${clean}`);
     };
@@ -276,6 +299,10 @@ export class TwitchChat {
           socket.send("PONG :tmi.twitch.tv");
           continue;
         }
+        if (line.includes("NOTICE") && line.includes("Login authentication failed")) {
+          this.onStatus?.("login failed — check bot username + token");
+          continue;
+        }
         const privmsg = /:([^!]+)![^ ]+ PRIVMSG #[^ ]+ :(.*)$/.exec(line);
         if (privmsg) {
           const user = privmsg[1] ?? "viewer";
@@ -284,7 +311,11 @@ export class TwitchChat {
           continue;
         }
         if (line.includes(`JOIN #${clean}`)) {
-          this.onStatus?.(`live in #${clean} — viewers type !help 🎧`);
+          this.onStatus?.(
+            this.authed
+              ? `live in #${clean} — replies post to chat 🎧`
+              : `live in #${clean} (read-only) — viewers type !help 🎧`,
+          );
         }
       }
     };
@@ -292,9 +323,46 @@ export class TwitchChat {
     socket.onclose = () => {
       if (this.socket === socket) {
         this.socket = null;
+        this.authed = false;
+        this.sendQueue = [];
+        if (this.sendTimer !== null) {
+          clearTimeout(this.sendTimer);
+          this.sendTimer = null;
+        }
         this.onStatus?.("disconnected");
       }
     };
+  }
+
+  /**
+   * Post a reply to chat (authenticated only; silent no-op when read-only).
+   * Replies are truncated to 450 chars and spaced ≥1.5 s (Twitch ~20/30 s).
+   */
+  sendMessage(text: string): boolean {
+    if (!this.canSend || !this.channel) return false;
+    const clean = text.replace(/\r?\n/g, " ").slice(0, 450).trim();
+    if (!clean) return false;
+    this.sendQueue.push(clean);
+    if (this.sendQueue.length > 5) this.sendQueue.splice(0, this.sendQueue.length - 5);
+    this.pumpQueue();
+    return true;
+  }
+
+  private pumpQueue(): void {
+    if (this.sendTimer !== null || this.sendQueue.length === 0) return;
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const next = this.sendQueue.shift();
+    if (next === undefined) return;
+    try {
+      socket.send(`PRIVMSG #${this.channel} :${next}`);
+    } catch {
+      return;
+    }
+    this.sendTimer = setTimeout(() => {
+      this.sendTimer = null;
+      this.pumpQueue();
+    }, 1500);
   }
 
   disconnect(): void {
@@ -305,6 +373,12 @@ export class TwitchChat {
     }
     this.socket = null;
     this.channel = "";
+    this.authed = false;
+    this.sendQueue = [];
+    if (this.sendTimer !== null) {
+      clearTimeout(this.sendTimer);
+      this.sendTimer = null;
+    }
   }
 }
 
@@ -337,4 +411,8 @@ export function selfTestTwitchDj(): void {
   check(allowCommand(rate, "carol", 1002), "third in window allowed");
   check(!allowCommand(rate, "dave", 1003), "fourth in window blocked");
   check(allowCommand(rate, "dave", 20_000), "window resets");
+  const quiet = new TwitchChat();
+  check(!quiet.connected, "starts disconnected");
+  check(!quiet.canSend, "anonymous cannot post");
+  check(!quiet.sendMessage("hello"), "mirror no-ops when read-only");
 }

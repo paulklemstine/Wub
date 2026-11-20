@@ -48,7 +48,7 @@ assert.equal(m.parseChatCommand('bob', 'hello'), null, 'ignores chat');
 
 def test_twitch_panel_elements_exist():
     html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
-    for element_id in ("tw-channel", "tw-connect", "tw-status", "tw-log"):
+    for element_id in ("tw-channel", "tw-username", "tw-token", "tw-connect", "tw-status", "tw-log"):
         assert f'id="{element_id}"' in html, f"missing #{element_id}"
     assert "TWITCH CO-DJ" in html
     assert "twitch_dj" in (ROOT / "frontend/src/main.ts").read_text(encoding="utf-8")

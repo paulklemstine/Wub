@@ -1,10 +1,15 @@
 # 📺 Twitch Co-DJ — viewers steer the sound with `!commands`
 
 The DJ surface has a **TWITCH CO-DJ** strip. The broadcaster enters their
-channel, hits **CONNECT**, and chat takes over: the page joins
-`#channel` **read-only and anonymously** (no OAuth, no login, no secrets).
-Viewers type `!commands`, first valid command wins (10 s per-user cooldown,
-max 3 commands per ~16 s window).
+channel, hits **CONNECT**, and chat takes over. Two modes:
+
+- **Read-only (default):** leave bot username + token empty. The page joins
+  `#channel` **anonymously** (no OAuth, no login, no secrets) and reacts to
+  `!commands`. Replies render in the strip log only.
+- **Mirror to chat:** fill bot username + `oauth:…` token and CONNECT.
+  Every routed reply (`@user → DROP 🪩`, `!help` output, …) is also posted
+  to the channel via `PRIVMSG`, so the whole room sees the output stream.
+  Replies are truncated to 450 chars, spaced ≥1.5 s, last-5 queue.
 
 ## Commands
 
@@ -44,12 +49,20 @@ Reply lines (`@user → DROP 🪩`) appear in the strip log (last 8).
 3. DJ SURFACE → TWITCH CO-DJ → enter channel → CONNECT.
 4. Tell chat: `!help`.
 
+To mirror replies into chat: get a token with `chat:read chat:write`
+(e.g. open `https://twitchapps.com/tmi/` logged in as your bot account —
+a second Twitch account is safest, or your broadcaster account), paste the
+bot username + `oauth:…` token, CONNECT. Token lives only in your browser's
+`localStorage`, never in the repo; revoke it on Twitch settings any time.
+Without a token the strip stays read-only (replies in the log only).
+
 To stop: DISCONNECT. The channel name persists in `localStorage`.
 
 ## Notes
 
-- Read-only: the page never sends chat (anonymous `justinfan` login can't
-  chat). Replies render in the strip log, not in Twitch chat.
+- Read-only by default: the page never sends chat on an anonymous login.
+  With a bot token it posts routed replies (`@user → …`) back to the
+  channel.
 - If a command seems ignored: per-user 10 s cooldown, 3-command window cap,
   or an out-of-range arg (`!bpm 80-175`, `!chaos 0-1`, `!steer x y 0-1`).
 - `!style` rides the MusicBrainz genre multi-select; without a matching

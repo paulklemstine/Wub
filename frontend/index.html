@@ -2807,7 +2807,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.364 <span class="mc-build-num">#364</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.365 <span class="mc-build-num">#365</span></span>
       </div>
       <div id="panel-dock" class="panel-dock" role="toolbar" aria-label="Toggle Front Page Panels">
         <button type="button" class="panel-dock-btn active" data-panel="panel-dj-surface">DJ SURFACE</button>
@@ -2872,11 +2872,13 @@
           </div>
         </div>
 
-        <!-- TWITCH CO-DJ: viewers steer with !commands in chat (read-only, no OAuth) -->
+        <!-- TWITCH CO-DJ: viewers steer with !commands; replies mirror to chat when logged in -->
         <div class="twitch-strip" aria-label="Twitch co-DJ controls">
           <span class="twitch-title">📺 TWITCH CO-DJ</span>
           <input id="tw-channel" type="text" placeholder="channel name" aria-label="Twitch channel name" autocomplete="off" spellcheck="false" />
-          <button id="tw-connect" type="button" title="Join channel chat read-only (anonymous, no login)">CONNECT</button>
+          <input id="tw-username" type="text" placeholder="bot username (optional)" aria-label="Bot username for chat replies" autocomplete="off" spellcheck="false" />
+          <input id="tw-token" type="password" placeholder="oauth token (optional)" aria-label="OAuth token for chat replies" autocomplete="off" spellcheck="false" />
+          <button id="tw-connect" type="button" title="Join channel chat. Empty login = read-only; bot username + oauth token = replies post to chat">CONNECT</button>
           <span id="tw-status" class="twitch-status">enter channel + CONNECT — viewers type !help 🎧</span>
           <div id="tw-log" class="twitch-log" aria-live="polite"></div>
         </div>
@@ -3779,7 +3781,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.364 (Build #364 • rev 3fc433d6cd)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.365 (Build #365 • rev aa400be326)</span>
     </div>
   </div>
 
