@@ -138,6 +138,15 @@ interface BeamSearchConfig {
   lookahead_weight: number;
 }
 
+/** Learned song-policy compatibility weights (trained on real +4-bar successors). */
+interface SongPolicyArtifact {
+  format: string;
+  version: number;
+  features: string[];
+  weights: Partial<Record<string, number>>;
+  bias?: number;
+}
+
 /** Implicit preference event inferred from a reticule/pin gesture. */
 export interface PreferenceEvent {
   kind: "retarget" | "hold" | "release";
@@ -793,6 +802,8 @@ export class StemRemixPlayer {
   private sequenceConductor: SequenceConductorArtifact | null = null;
   /** Learned four-stem song-ness critic. */
   private songCritic: SongCriticArtifact | null = null;
+  /** Learned song-policy compatibility weights (tempo/key/harmony/energy). */
+  private songPolicy: SongPolicyArtifact | null = null;
   /** Optional bounded final-gate beam search config. */
   private beamSearch: BeamSearchConfig | null = null;
   /** Capped implicit preference log from reticule/pin gestures. */
@@ -1120,6 +1131,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("phrase_conductor")) setupLoads.push(this.loadPhraseConductor(base));
     if (this.sidecarEnabled("sequence_conductor")) setupLoads.push(this.loadSequenceConductor(base));
     if (this.sidecarEnabled("song_critic")) setupLoads.push(this.loadSongCritic(base));
+    if (this.sidecarEnabled("song_policy")) setupLoads.push(this.loadSongPolicy(base));
     if (this.sidecarEnabled("phrase_embeddings")) setupLoads.push(this.loadPhraseEmbeddings(base));
     if (this.sidecarEnabled("beam_search")) setupLoads.push(this.loadBeamSearch(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
@@ -1742,6 +1754,39 @@ export class StemRemixPlayer {
     } catch {
       // Optional; final gate stays purely acoustic.
     }
+  }
+
+  /** Learned song-policy compatibility prior (bounded ±0.15, never a filter). */
+  private async loadSongPolicy(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/song_policy.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as SongPolicyArtifact;
+      if (doc?.format === "wub-song-policy-v1" && doc.weights) {
+        this.songPolicy = doc;
+      }
+    } catch {
+      // Optional; hand-tuned tempo/key/harmony weights remain in force.
+    }
+  }
+
+  /** Bounded learned compatibility bonus for a candidate (-0.15..+0.15). */
+  private songPolicyBonus(entry: StemPoolEntry, section: string, targetEnergy: number): number {
+    const policy = this.songPolicy;
+    if (!policy) return 0;
+    const w = policy.weights;
+    // Learned signs: tempo/key negative (penalize stretch), energy/harmony
+    // positive. Section weight trained negative (same-section negatives in
+    // training) so clamp to >=0 — staying in section must not be penalized.
+    const sectionW = Math.max(0, w.sectionMatch ?? 0);
+    const raw = (w.tempoCost ?? 0) * entry.tempoCost
+      + (w.keyCost ?? 0) * entry.keyCost
+      + sectionW * (entry.section.toUpperCase() === section.toUpperCase() ? 1 : 0)
+      + (w.energyMatch ?? 0) * Math.max(0, 1 - Math.abs(entry.energy - targetEnergy))
+      + (w.harmonyFit ?? 0) * 0.1
+      + (w.vocalBonus ?? 0) * 0.1;
+    // Scale raw logits (trained ~±5) down to a bounded prior.
+    return Math.max(-0.15, Math.min(0.15, raw * 0.03));
   }
 
   /** Phrase-space conductor trained on real song phrase chronology. */
@@ -4063,12 +4108,16 @@ export class StemRemixPlayer {
       const seqPrior = sequencePrediction && candidateEmbedding.length
         ? 0.25 * (sequenceScore(sequencePrediction.embedding, candidateEmbedding) - 0.5)
         : 0;
+      // Learned song-policy compatibility (trained on real +4-bar successors,
+      // val AUC 0.99): tempo/key/harmony/energy fit. Bounded ±0.15 so the
+      // joint ranker still decides; it only breaks ties toward song-like fits.
+      const songPrior = this.songPolicyBonus(entry, section, targetEnergy);
       return {
         entry,
         full: legal,
         judge,
         score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
-          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown - compatPenalty,
+          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown - compatPenalty + songPrior,
       };
     });
     const full = scored.filter((item) => item.full);

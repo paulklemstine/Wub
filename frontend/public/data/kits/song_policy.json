@@ -1,0 +1,28 @@
+{
+  "format": "wub-song-policy-v1",
+  "version": 2,
+  "features": [
+    "tempoCost",
+    "keyCost",
+    "sectionMatch",
+    "energyMatch",
+    "harmonyFit",
+    "vocalBonus"
+  ],
+  "weights": {
+    "tempoCost": -38.52562,
+    "keyCost": -9.0214,
+    "sectionMatch": -4.09065,
+    "energyMatch": 1.92947,
+    "harmonyFit": 9.0214,
+    "vocalBonus": 0.48398
+  },
+  "bias": -4.60749,
+  "report": {
+    "pairs": 4806,
+    "val_tracks": 46,
+    "val_auc": 0.9912,
+    "device": "cuda",
+    "use": "bounded compatibility prior; tempo/key/harmony/energy/section"
+  }
+}

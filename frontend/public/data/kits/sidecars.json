@@ -34,5 +34,6 @@
   "song_critic": true,
   "beam_search": true,
   "phrase_embeddings": true,
-  "sequence_conductor": false
+  "sequence_conductor": false,
+  "song_policy": true
 }
