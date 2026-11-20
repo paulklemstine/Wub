@@ -240,6 +240,10 @@ export class BarComposer {
   vocalBarModel: VocalBarModel | null = null;
   /** Optional mined multi-bar unit model; biases phrase selection only. */
   vocalPhraseModel: VocalPhraseModel | null = null;
+  /** Vocal units for one track (full sung verses/choruses), or null. */
+  getVocalUnits(trackId: string): VocalPhraseUnit[] | null {
+    return this.vocalPhraseModel?.tracks?.[trackId] ?? null;
+  }
   /** Optional learned 4/8/16-bar section lengths and backing cohorts. */
   vocalSectionModel: VocalSectionModel | null = null;
   /** Optional song-ness critic (bounded final-gate adjustment). */

@@ -41,6 +41,16 @@ def test_long_units_win_verse_chorus():
     assert prefer_unit(4, "BUILDUP_1") >= prefer_unit(16, "BUILDUP_1")
 
 
+def test_section_holds_play_verse_chorus_before_switching():
+    from wub_core.vocal_song import vocal_hold_for_bar
+    assert vocal_hold_for_bar(10) == 16  # VERSE_1
+    assert vocal_hold_for_bar(40) == 16  # CHORUS_1
+    assert vocal_hold_for_bar(60) == 16  # VERSE_2
+    assert vocal_hold_for_bar(85) == 16  # CHORUS_2
+    assert vocal_hold_for_bar(0) == 8  # INTRO
+    assert vocal_hold_for_bar(50) == 8  # BREAKDOWN
+
+
 def test_backing_follows_vocal_entrances():
     # Drums hold under new vocals; bass/other move with them.
     assert backing_should_change("drums", "CHORUS") < 0.15

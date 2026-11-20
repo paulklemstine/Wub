@@ -75,6 +75,7 @@ import {
 import {
   vocalShouldRest as vocalSongShouldRest,
   vocalLengthBonus as vocalSongLengthBonus,
+  vocalHoldForBar as vocalSongHoldForBar,
   VOCAL_HOLD_BARS as VOCAL_SONG_HOLD_BARS,
 } from "./vocal_song";
 import {
@@ -3089,6 +3090,29 @@ export class StemRemixPlayer {
           && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
         );
         if (fullIntro) score += 6.0;
+        // Vocal song: prefer anchors with full sung verses/choruses (8/16-bar
+        // verse/hook units) so VERSE_1 opens on a real vocal, not airy pads
+        // or instrumentals. +2 for a verse/hook unit head, +1 for long units.
+        try {
+          const tracks = this.barComposer.getVocalUnits?.(kit.track_id) ?? null;
+          if (tracks && tracks.length > 0) {
+            let bestUnit = 0;
+            for (const u of tracks) {
+              const bars = (u as unknown as { bars?: number }).bars ?? 4;
+              const ids = (u as unknown as { ids?: string[] }).ids ?? [];
+              if (ids.length === 0) continue;
+              const head = this.barComposer.getPhraseMeta(ids[0], "vocals");
+              const vr = (head as unknown as { vr?: string } | null)?.vr ?? "";
+              let s = 0;
+              if (vr === "verse" || vr === "hook_1bar" || vr === "hook_2bar") s += 2.0;
+              else if (vr === "chop") s += 1.0;
+              if (bars >= 16) s += 1.0;
+              else if (bars >= 8) s += 0.6;
+              if (s > bestUnit) bestUnit = s;
+            }
+            score += Math.min(3.0, bestUnit);
+          }
+        } catch { /* optional vocal-unit bonus; never blocks anchor */ }
         // Prefer a kit that actually contains the next 4 bars, so the anchor
         // song can advance every 4 bars instead of looping an isolated window.
         const run = this.longestRunPhrases(kit, true);
@@ -4141,12 +4165,13 @@ export class StemRemixPlayer {
     );
     const budget = handoff ? { ...rawBudget, maxChanges: 4 } : rawBudget;
     const sourceCap = handoff ? Math.max(2, Math.min(4, this.transitionCohort?.handoff?.max_per_source ?? 4)) : 2;
-    // Vocal song: hold vocals 8 bars minimum (half as many changes as old
-    // 4-bar hold). The vocal_cadence sidecar still says 4 bars (mined from
-    // 84% 4-bar runs); song arrangement overrides to 8 so full 8/16-bar
-    // verses/choruses can play instead of 4-bar chops.
+    // Vocal song: hold vocals 8 bars minimum, 16 bars in verse/chorus
+    // sections so VERSE_1/CHORUS_1/VERSE_2/CHORUS_2 each play their full
+    // vocal unit before switching to new slices. The vocal_cadence sidecar
+    // still says 4 bars (mined from 84% 4-bar runs); song arrangement
+    // overrides so full 8/16-bar verses/choruses can play.
     const vocalHoldBars = Math.max(
-      VOCAL_SONG_HOLD_BARS,
+      vocalSongHoldForBar(startBar),
       this.vocalCadence?.policy.min_hold_bars ?? VOCAL_SONG_HOLD_BARS,
     );
     const allowVocals = vocalChangeAllowed(

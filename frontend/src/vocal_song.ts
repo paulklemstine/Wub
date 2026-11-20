@@ -8,6 +8,27 @@
 
 export const VOCAL_HOLD_BARS = 8;
 
+/** Full-section holds: verses and choruses hold one vocal unit for the
+ *  whole 16-bar section (VERSE_1 8-24, CHORUS_1 32-48, VERSE_2 56-72,
+ *  CHORUS_2 80-96) before switching to new slices. */
+export const VOCAL_SECTION_HOLD_BARS = 16;
+
+export function vocalHoldForRole(role: string): number {
+  const r = (role || "").toUpperCase();
+  if (r.startsWith("VERSE") || r.startsWith("CHORUS")) return VOCAL_SECTION_HOLD_BARS;
+  return VOCAL_HOLD_BARS;
+}
+
+/** Hold bars for a session bar: 16 in verse/chorus sections (full song
+ *  sections play before switching vocals), 8 elsewhere. */
+export function vocalHoldForBar(startBar: number): number {
+  const b = ((startBar % 104) + 104) % 104;
+  if ((b >= 8 && b < 24) || (b >= 32 && b < 48) || (b >= 56 && b < 72) || (b >= 80 && b < 96)) {
+    return VOCAL_SECTION_HOLD_BARS;
+  }
+  return VOCAL_HOLD_BARS;
+}
+
 export const VOCAL_PRESENCE: Record<string, number> = {
   INTRO: 0.10,
   GROOVE_A: 0.40,

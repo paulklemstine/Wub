@@ -59,6 +59,15 @@ PREFERRED_LENGTHS: Dict[str, List[int]] = {
 }
 
 VOCAL_HOLD_BARS = 8  # half as many changes as old 4-bar hold
+VOCAL_SECTION_HOLD_BARS = 16  # verses/choruses hold full unit before switching
+
+
+def vocal_hold_for_bar(start_bar: int) -> int:
+    """16 bars in verse/chorus song sections, 8 elsewhere."""
+    b = start_bar % 104
+    if (8 <= b < 24) or (32 <= b < 48) or (56 <= b < 72) or (80 <= b < 96):
+        return VOCAL_SECTION_HOLD_BARS
+    return VOCAL_HOLD_BARS
 
 
 @dataclass
