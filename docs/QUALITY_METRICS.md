@@ -54,3 +54,21 @@ headless run measured harmony p10 0.18–0.34 and clash 0.25–1.0, versus
 0.30–0.48 and 0–0.5 for the shipped hand-weighted policy. The offline metric
 does not transfer to the live mix; the script stays opt-in and the shipped
 artifact was reverted.
+
+### In-the-loop policy search
+
+`scripts/headless_quality_search.py` serves candidate `bank_transition.json`
+files to the built app in headless Chrome, plays a set for each, samples
+`window.__wubQualitySummary()`, and ranks candidates by a live objective:
+
+```
+0.45*harmony_p10/0.6 - 0.25*clashRate - 0.25*arcDeviation/0.5
++ 0.25*uniqueTracks/10 - 0.15*dipEvents/5
+```
+
+It restores the original artifact when done, so the checkout is unchanged.
+A five-way blend search over a multi-objective PG variant initially favored a
+50% blend, but two repeated runs per variant showed that result was noise:
+baseline averaged 0.337 vs 0.234 for the blend, with large anchor-dependent
+variance. The shipped policy was therefore left unchanged. The harness remains
+the right tool for evaluating future policies against the real mix.
