@@ -97,3 +97,17 @@ shipped. `song_critic` was also retrained with a 282-d input (218 analysis +
 regression (mean objective −0.023 vs +0.049), so its artifact was reverted.
 The browser keeps 282-d support and the `phrase_embeddings` sidecar for future
 experiments, but the shipped critic remains the 218-d audio-derived model.
+
+### Tighter style-copy feedback loop (Nov 20, 2026)
+
+`scripts/style_copy_metrics.py` compares a generated session's section,
+duration, and stem-change cohort distributions against the analyzed songs and
+the 61k-boundary `transition_cohort.json`. The headless harness now reports
+`style_fidelity` alongside the live quality objective and ranks candidates by
+their combination. Adding cohort divergence made the metric discriminate
+between policies (0.35–0.47 instead of a constant ~0.48).
+
+A four-repeat search over the shipped learned-embedding policy and the older
+pre-PG policy ended in a statistical tie (mean combined 0.073 vs 0.072), with
+large anchor-dependent variance. No policy change was shipped; the loop itself
+is now the reliable artifact for future training runs.

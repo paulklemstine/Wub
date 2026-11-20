@@ -24,6 +24,11 @@ from typing import Any, Dict, List
 import requests
 import websockets
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from style_copy_metrics import corpus_stats, style_fidelity
+
 CDP_PORT = 9222
 SERVER_PORT = 4173
 DEFAULT_ARTIFACT = "data/kits/bank_transition.json"
@@ -86,9 +91,12 @@ async def run_variant(ws, counter, name: str, seconds: int, interval: int):
     if not usable:
         return {"name": name, "error": "no samples"}
     avg_obj = sum(objective(q) for q in usable) / len(usable)
+    movement = await evaluate(
+        ws, "JSON.stringify(window.__wubMovementSummary?.()?.log ?? [])", counter)
     return {
         "name": name,
         "objective": round(avg_obj, 4),
+        "movement": json.loads(movement) if movement else [],
         "harmony_p10": round(sum(q["harmony"]["p10"] for q in usable) / len(usable), 4),
         "clash_rate": round(sum(q["harmony"]["clashRate"] for q in usable) / len(usable), 4),
         "arc_deviation": round(sum(q["arrangement"]["arcDeviation"] for q in usable) / len(usable), 4),
@@ -137,6 +145,10 @@ async def main():
     pages = requests.get(f"http://127.0.0.1:{CDP_PORT}/json", timeout=5).json()
     page = next(p for p in pages if p.get("type") == "page")
     counter = [1]
+    corpus = corpus_stats(
+        Path("data/processed"),
+        cohort_artifact=Path("frontend/public/data/kits/transition_cohort.json"),
+    )
     results = []
     original = DIST_POLICY.read_bytes()
     try:
@@ -144,11 +156,15 @@ async def main():
             for name, path in variants.items():
                 shutil.copyfile(path, DIST_POLICY)
                 result = await run_variant(ws, counter, name, args.seconds, args.interval)
+                fid = style_fidelity(result.pop("movement", []), corpus)
+                result["style_fidelity"] = fid["style_fidelity"]
+                result["combined"] = round(
+                    result.get("objective", -999) + 0.2 * (fid["style_fidelity"] - 0.5), 4)
                 results.append(result)
                 print(json.dumps(result), flush=True)
     finally:
         DIST_POLICY.write_bytes(original)
-    results.sort(key=lambda r: r.get("objective", -999), reverse=True)
+    results.sort(key=lambda r: r.get("combined", r.get("objective", -999)), reverse=True)
     report = {"results": results, "winner": results[0]["name"] if results else None}
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
