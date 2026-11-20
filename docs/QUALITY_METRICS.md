@@ -32,3 +32,14 @@ work on fades and level matching; if `mix`, adjust glue/ducking; if
 
 This is the first step of rebuilding quality systematically: measure before
 changing another weight.
+
+### Harmony-reward policy gradient (evaluated, not shipped)
+
+`scripts/fine_tune_harmony_policy.py` fine-tunes `bank_transition.json` with
+policy gradient where the reward is the browser's per-bar quartet harmony fit
+(1,193 harmony-aligned pairs, 400 tracks, KL 0.02). Offline validation stayed
+at 1.000 preference accuracy and AUC 0.9898, but a headless 60 s run after
+shipping it measured worse than the pre-PG policy: harmony p10 0.28–0.34 vs
+0.30–0.48, and unique tracks collapsed to 1 vs 2→7. The reward over-favored a
+single coherent source. The script remains available as an opt-in experiment;
+the shipped artifact was reverted to the pre-PG policy.
