@@ -72,3 +72,18 @@ A five-way blend search over a multi-objective PG variant initially favored a
 baseline averaged 0.337 vs 0.234 for the blend, with large anchor-dependent
 variance. The shipped policy was therefore left unchanged. The harness remains
 the right tool for evaluating future policies against the real mix.
+
+### Learned phrase features
+
+`scripts/train_phrase_embeddings.py` trains a contrastive 64-d phrase encoder
+from the shipped per-bar descriptors (purity, essentiality, roots, chroma,
+head/tail, section, style, tempo, key, energy). Positive pairs are real
+consecutive phrases from the training songs; negatives are same-section
+phrases from other songs. `scripts/train_bank_transition.py --embeddings`
+retrains the browser ranker on these learned features instead of the older
+taste embedding.
+
+Offline AUC improved 0.9898 → 0.9932. Two repeated headless A/B runs each
+favored the learned-feature policy: mean live objective 0.147 vs 0.006,
+harmony p10 0.39–0.42 vs 0.33–0.39. The artifact was shipped with the exact
+same browser format; only the weights and top-K successor table changed.

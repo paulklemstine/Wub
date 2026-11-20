@@ -106,6 +106,8 @@ def main():
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--critic", type=Path, default=None,
                     help="song_critic.json used to weight examples by audio-derived song-ness")
+    ap.add_argument("--embeddings", type=Path, default=None,
+                    help="phrase_embeddings.json to replace the taste embedding")
     args = ap.parse_args()
     torch.manual_seed(809)
     np.random.seed(809)
@@ -113,6 +115,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     manifest, by_track, info = load_manifest(args.kits_dir)
+    if args.embeddings:
+        emb_doc = json.loads(args.embeddings.read_text())
+        for pid, vec in emb_doc.get("phrases", {}).items():
+            if pid in info:
+                info[pid]["embedding"] = np.asarray(vec, dtype=np.float32)
     pos: List[Tuple[str, str, str, float, str]] = []
     successors: Dict[str, Counter] = defaultdict(Counter)
     for tid, entry in by_track.items():
@@ -224,6 +231,7 @@ def main():
             "train_tracks": len(unique) - len(val_tracks), "val_tracks": len(val_tracks),
             "train_examples": int(tr.sum()), "val_examples": int(val.sum()),
             "val_auc": round(auc, 4), "epochs": args.epochs, "device": str(device),
+            "embeddings": "learned-contrastive" if args.embeddings else "taste",
             "audio_critic_weighted": bool(critic),
             "use": "bounded ranking prior over shipped phrases; no audio changes",
         },

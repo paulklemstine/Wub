@@ -53,7 +53,8 @@ const cur=byId.get(curId);
 const nextId=model.topk[curId][0].id;
 const real=byId.get(nextId);
 assert.ok(cur&&real,'real transition phrases are in the manifest');
-const other={id:'unknown',section:cur.section,embedding:new Array(64).fill(0),
+const otherId=Object.keys(model.topk).find(k=>k!==curId&&k!==nextId);
+const other=byId.get(otherId)||{id:'unknown',section:cur.section,embedding:new Array(64).fill(0),
  energy:cur.energy,bpm:cur.bpm,keyRoot:0};
 const a=inferBank(model,require(process.argv[1]).bankTransitionFeatures(cur,real,'GROOVE_A'));
 const b=bankTransitionScore(model,cur,real,'GROOVE_A');
