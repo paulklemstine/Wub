@@ -187,14 +187,15 @@ interface MotifCalendar {
   policy: { return_bonus: Record<string, number>; novelty_bonus: Record<string, number> };
 }
 
-/** Real-song vocal run lengths and release budget. */
+/** Real-song vocal run lengths, silent gaps, and release budget. */
 interface VocalCadence {
   format: string;
   version: number;
   tracks: number;
   run_lengths_bars: Record<string, number>;
+  gap_lengths_bars?: Record<string, number>;
   change_prob: Record<string, number>;
-  policy: { min_hold_bars: number; section_change_bonus: number };
+  policy: { min_hold_bars: number; section_change_bonus: number; min_gap_bars?: number };
 }
 
 const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
@@ -238,6 +239,14 @@ const MIN_RMS_DB: Record<StemName, number> = {
 const VOCAL_MIN_ACTIVITY_FRAC = 0.20;
 const VOCAL_RELAXED_RMS_DB = -38;
 const VOCAL_RELAXED_ACTIVITY_FRAC = 0.10;
+// Silent breath between sung vocal sections, in bars. Fresh vocal entrances
+// require at least this many bars since the last sung block ended, so whole
+// takes breathe instead of chaining. Mined as `min_gap_bars` in
+// vocal_cadence.json (v3); 8 bars is the fallback when the sidecar is absent.
+const VOCAL_MIN_GAP_BARS = 8;
+// Strong freshness bias for vocal entrances: a never-played vocal wins ties
+// unless a played one fits way better (judge/energy gap > this bonus).
+const VOCAL_FRESH_BONUS = 0.80;
 // Boundary fade profiles: snap drums, but give bass/pads/vocals enough
 // overlap to smooth cross-song hand-offs (reduces jumpy feel shifts).
 const STEM_FADE_IN: Record<StemName, number> = {
@@ -892,6 +901,9 @@ export class StemRemixPlayer {
   private lastChangeBar: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
   private lastVocalChangeBar = -1;
   private lastDrumChangeBar = 0;
+  /** Session bar at which the last sung vocal block ended (exclusive).
+   *  Fresh entrances require VOCAL_MIN_GAP_BARS of silence after this. */
+  private lastVocalEndBar = -1000;
   /** Scheduled blocks, so a mid-block drag can find the block it is inside. */
   private blockGrid: Array<{ startAt: number; endAt: number; startBar: number; bars: number }> = [];
   private bridgeStep = 0;
@@ -1500,6 +1512,42 @@ export class StemRemixPlayer {
   /** Vocal segment membership of one phrase, or null when unknown. */
   private vocalSegmentOf(phraseId: string): { pos: number; lenBars: number } | null {
     return this.vocalSegments?.get(phraseId) ?? null;
+  }
+
+  /** Minimum silent bars between sung vocal blocks (mined, else 8). */
+  private vocalMinGapBars(): number {
+    const mined = this.vocalCadence?.policy.min_gap_bars;
+    if (typeof mined === "number" && Number.isFinite(mined) && mined >= 4 && mined <= 32) {
+      return Math.round(mined);
+    }
+    return VOCAL_MIN_GAP_BARS;
+  }
+
+  /** True when a fresh vocal may start at `startBar` (gap satisfied). */
+  private vocalGapOk(startBar: number): boolean {
+    return startBar - this.lastVocalEndBar >= this.vocalMinGapBars();
+  }
+
+  /**
+   * Hard gate for fresh vocal entrances: the phrase must start cleanly
+   * (activity at step 0), begin a segment (pos 0 when segment data exists),
+   * and fit the upcoming block exactly (segment length == block bars when
+   * known, else a real consecutive run). Mid-segment chops and truncated or
+   * loop-filled units are rejected so whole takes play or vocals rest.
+   */
+  private vocalFreshLegal(entry: StemPoolEntry, phrases: number): boolean {
+    const activity = this.vocalActivity?.get(entry.phrase.id);
+    // Clean entrance: singing must be active at the downbeat. When activity
+    // data is absent, fall back to the pool-level RMS/activity floor.
+    if (activity && !activity.starts) return false;
+    const seg = this.vocalSegmentOf(entry.phrase.id);
+    if (seg !== null) {
+      if (seg.pos !== 0) return false;
+      if (seg.lenBars !== phrases * 4) return false;
+      return true;
+    }
+    // No segment data: require a real consecutive run (no looping to fill).
+    return this.runFor(entry, phrases, false).length >= phrases;
   }
 
   /**
@@ -2432,6 +2480,7 @@ export class StemRemixPlayer {
     this.lastMoveBar = 0;
     this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
     this.lastVocalChangeBar = -1;
+    this.lastVocalEndBar = -1000;
     this.lastDrumChangeBar = 0;
     this.styleRecent = [];
     this.lastSignatureBar = { drums: -1, bass: -1, other: -1, vocals: -1 };
@@ -2530,6 +2579,7 @@ export class StemRemixPlayer {
       this.lastMoveBar = 0;
       this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
       this.lastVocalChangeBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 0 : -1;
+      this.lastVocalEndBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 4 : -1000;
       this.lastDrumChangeBar = 0;
       for (const stem of STEMS) {
         if (!this.anchorPrepared.some((entry) => entry.stem === stem)) {
@@ -2557,6 +2607,7 @@ export class StemRemixPlayer {
       }
       this.previousEntries = { ...this.lastBlockEntries };
       this.lastVocalChangeBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 0 : -1;
+      this.lastVocalEndBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 4 : -1000;
     }
     console.info(
       `[StemRemix] Session ${chosen.id} • ${this.sessionBpm.toFixed(2)} BPM • ${this.sessionKey} • ` +
@@ -2857,6 +2908,7 @@ export class StemRemixPlayer {
     this.lastMoveBar = 0;
     this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
     this.lastVocalChangeBar = -1;
+    this.lastVocalEndBar = -1000;
     this.lastDrumChangeBar = 0;
     this.pendingTechniques = {};
     // Signatures are per-cluster (session key/tempo): reselect against the
@@ -3685,7 +3737,42 @@ export class StemRemixPlayer {
         continue;
       }
       let entry: StemPoolEntry | null = null;
-      if (this.pins[stem]) {
+      // Vocals sing whole takes or rest in silence: never hold-loop the
+      // previous take. Pinned/bridge/opening vocals keep the legacy path;
+      // auto vocals either start a fresh hard-gated unit or mute this block.
+      if (stem === "vocals" && !this.pins[stem] && !bridge && !opening && !rotation) {
+        const gapOk = this.vocalGapOk(startBar);
+        const presenceRest = !sectionChanged && vocalSongShouldRest(normalized, this.blockIndex);
+        if (!gapOk || presenceRest) {
+          // True rest: fade the old take and schedule nothing. The gap clock
+          // keeps accumulating across consecutive mutes; lastVocalEndBar
+          // stays at the end of the last sung block.
+          this.current[stem]?.voice.fadeOut(at, 0.16);
+          this.onStatus?.(
+            !gapOk
+              ? `vocals rest at bar ${startBar} (breath ${startBar - this.lastVocalEndBar}/${this.vocalMinGapBars()} bars)`
+              : `vocals rest at bar ${startBar} (${normalized} sparse)`,
+          );
+          continue;
+        }
+        // Want to sing: prefer the joint pick, else a fresh morph. A held
+        // loop is not an option; with no legal fresh unit the bus rests.
+        const jointPick = joint?.entries[stem] ?? null;
+        if (jointPick && this.vocalFreshLegal(jointPick, phrasesPerStem)) {
+          entry = jointPick;
+        } else {
+          const morph = fallbackMorphs < Math.max(budget.maxChanges, 1)
+            ? this.selectMorph(stem, at, normalized, phrasesPerStem)
+            : null;
+          if (morph) fallbackMorphs++;
+          entry = morph;
+        }
+        if (!entry) {
+          this.current[stem]?.voice.fadeOut(at, 0.16);
+          this.onStatus?.(`vocals rest at bar ${startBar} (no fitting take)`);
+          continue;
+        }
+      } else if (this.pins[stem]) {
         entry = this.selectPinnedEntry(stem, this.pins[stem]!, phrasesPerStem)
           ?? this.holdEntry(stem);
       } else if (bridge) {
@@ -3725,7 +3812,8 @@ export class StemRemixPlayer {
       // the same 4 bars two to four times inside one block.  Prefer a fresh
       // cross-song run with a real consecutive length instead (at most two
       // such conversions per block, so the movement budget stays close).
-      if (phrasesPerStem > 1 && !this.pins[stem] && !joint?.changed.includes(stem)
+      // Vocals never loop-fill: fresh hard-gated units fit exactly or rest.
+      if (stem !== "vocals" && phrasesPerStem > 1 && !this.pins[stem] && !joint?.changed.includes(stem)
         && !opening && !bridge && !rotation) {
         const holdLen = this.runFor(entry, phrasesPerStem, false).length;
         const conversions = trackChanged.length + changed.length;
@@ -3914,6 +4002,11 @@ export class StemRemixPlayer {
       if (autoTrackChanged.includes("vocals")) this.lastVocalChangeBar = startBar;
       if (autoTrackChanged.includes("drums")) this.lastDrumChangeBar = startBar;
     }
+    // A scheduled vocal block ends the breath clock: the next fresh entrance
+    // needs a full silent gap after this block's end bar.
+    if (chosenRuns.vocals && chosenRuns.vocals.length > 0) {
+      this.lastVocalEndBar = startBar + bars;
+    }
     if (opening) {
       this.currentAnchorPhrase = anchorPhrase;
       if (anchorPhrase) {
@@ -4043,6 +4136,10 @@ export class StemRemixPlayer {
       if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) return false;
       if (entry.phrase.is_intro && this.blockIndex > 0) return false;
       if (entry.phrase.is_outro && !outroAllowed) return false;
+      // Hard gate for fresh vocal entrances: clean downbeat, segment start,
+      // exact fit to the upcoming block. Mid-segment chops are never offered
+      // to the joint ranker; vocals rest instead.
+      if (stem === "vocals" && !this.vocalFreshLegal(entry, phrases)) return false;
       return true;
     });
     const scored = candidates.map((entry) => {
@@ -4110,6 +4207,9 @@ export class StemRemixPlayer {
       const earBonus = EAR_W_JOINT * (entry.earQ - 0.5);
       const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
       const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
+      // Fresh vocal entrances win unless a played one fits way better: a
+      // strong never-played bonus on top of the corpus novelty term.
+      const vocalFreshBonus = stem === "vocals" && plays === 0 ? VOCAL_FRESH_BONUS : 0;
       const variety = this.varietyBonusFor(stem, entry.kit.track_id);
       const bank = this.bankTransition
         ? 0.15 * (bankTransitionScore(
@@ -4141,7 +4241,7 @@ export class StemRemixPlayer {
         full: legal,
         judge,
         score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
-          + signatureBonus + timbre + vocalActBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown - compatPenalty + songPrior,
+          + signatureBonus + timbre + vocalActBonus + vocalFreshBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown - compatPenalty + songPrior,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -4298,9 +4398,12 @@ export class StemRemixPlayer {
       if (this.pins[stem] !== undefined || !cooledDown(stem)) return false;
       if (stem === "vocals") {
         if (!allowVocals) return false;
+        // Fresh vocal entrances breathe: enforce the mined silent gap after
+        // the last sung block before any new take may start.
+        if (!this.vocalGapOk(startBar)) return false;
         // Vocal song: rest half the blocks (INTRO/BREAKDOWN mostly rest,
-        // DROP/CHORUS mostly sings). A rest holds the previous vocal instead
-        // of forcing a new 4-bar chop every block.
+        // DROP/CHORUS mostly sings). A rest mutes the vocal bus instead of
+        // holding/looping the previous take.
         if (!sectionChanged && vocalSongShouldRest(section, this.blockIndex)) return false;
       }
       return true;
@@ -4995,6 +5098,9 @@ export class StemRemixPlayer {
       if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) continue;
       if (entry.phrase.is_intro && this.blockIndex > 0) continue;
       if (entry.phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
+      // Hard gate for fresh vocal entrances (same as the joint path): clean
+      // downbeat, segment start, exact fit. Mid-segment chops rest instead.
+      if (stem === "vocals" && !this.vocalFreshLegal(entry, phrases)) continue;
       const runLen = phrases > 1 ? this.runFor(entry, phrases, false).length : phrases;
       const shortRunPenalty = runLen < phrases ? 2.0 : 0;
 
@@ -5035,8 +5141,8 @@ export class StemRemixPlayer {
       const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
       // Vocal segments: entering mid-segment means splicing into a vocal
       // that is already underway (a fragment); starting a long segment
-      // means the whole performance can play.  Same policy as the joint
-      // vocalEdge/vocalSegmentBars terms, as hard-ish heuristics here.
+      // means the whole performance can play. Hard-gated above; here a
+      // small bonus prefers longer whole takes that fit the block exactly.
       let vocalSegmentPenalty = 0;
       let vocalSegmentBonus = 0;
       if (stem === "vocals") {
@@ -5045,6 +5151,8 @@ export class StemRemixPlayer {
           if (seg.pos > 0) vocalSegmentPenalty = 1.0;
           else vocalSegmentBonus = 0.5 * Math.min(seg.lenBars, 12) / 12;
         }
+        // Fresh vocal entrances win unless a played one fits way better.
+        if (plays === 0) vocalSegmentBonus += VOCAL_FRESH_BONUS;
       }
       const score =
         1.0 * sectionScore +

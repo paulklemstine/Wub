@@ -34,12 +34,15 @@ def test_cadence_artifacts_match_real_song_statistics():
 
     vocal = json.loads((KITS / "vocal_cadence.json").read_text())
     assert vocal["format"] == "wub-vocal-cadence-v1"
+    assert vocal["version"] >= 3
     assert vocal["change_prob"]["section"] > vocal["change_prob"]["inside"] > 0.6
     assert vocal["policy"]["min_hold_bars"] == 4
+    assert vocal["policy"]["min_gap_bars"] == 8
+    assert isinstance(vocal.get("gap_lengths_bars"), dict)
     assert 0 < vocal["policy"]["section_change_bonus"] <= 0.15
     assert 0.5 < sum(vocal["run_lengths_bars"].values()) <= 1.0
     src = (ROOT / "scripts/build_motif_calendar.py").read_text()
-    assert "motif_calendar" in src and "vocal_cadence" in src
+    assert "motif_calendar" in src and "vocal_cadence" in src and "min_gap_bars" in src
 
 
 def test_vocal_hold_budget_is_optional_only():

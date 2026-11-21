@@ -69,6 +69,7 @@ def mine(processed: Path, max_tracks: int):
     boundaries = defaultdict(int)
     vocal_change = defaultdict(lambda: [0, 0])
     vocal_runs = Counter()
+    vocal_gaps = Counter()
     tracks = 0
     paths = sorted(processed.glob("*.json"))
     step = max(1, len(paths) // max_tracks) if max_tracks > 0 else 1
@@ -103,6 +104,9 @@ def mine(processed: Path, max_tracks: int):
                 if sim < 0.55:
                     vocal_change[kind][0] += 1
         # Stable vocal runs (consecutive cells whose pattern is close).
+        # Gaps are silent cells (presence < 0.05) between two stable runs:
+        # real breaths between sung sections. Leading/trailing silence is
+        # ignored so intro/outro fade doesn't skew the target.
         run = 0
         for i, cell in enumerate(cells):
             if cell["presence"]["vocals"] < 0.05:
@@ -118,6 +122,37 @@ def mine(processed: Path, max_tracks: int):
                 run = 1
         if run:
             vocal_runs[min(8, max(1, run))] += 1
+        # Reconstruct starts: ends alone lose starts when runs chain without
+        # silence, so re-derive intervals in a second pass for gap measurement.
+        intervals: list[tuple[int, int]] = []
+        cur_start: int | None = None
+        cur_len = 0
+        for i, cell in enumerate(cells):
+            if cell["presence"]["vocals"] < 0.05:
+                if cur_start is not None:
+                    intervals.append((cur_start, i))
+                    cur_start = None
+                    cur_len = 0
+                continue
+            if cur_start is None:
+                cur_start = i
+                cur_len = 1
+            elif jaccard(cells[i - 1]["union"]["vocals"], cell["union"]["vocals"]) >= 0.55:
+                cur_len += 1
+            else:
+                intervals.append((cur_start, i))
+                cur_start = i
+                cur_len = 1
+        if cur_start is not None:
+            intervals.append((cur_start, len(cells)))
+        for (prev_s, prev_e), (next_s, _next_e) in zip(intervals, intervals[1:]):
+            gap_cells = next_s - prev_e
+            if gap_cells <= 0:
+                continue
+            # Only pure-silence intervals count as breaths; a pattern change
+            # with no silence is a direct handoff (gap 0), not a rest.
+            if all(cells[k]["presence"]["vocals"] < 0.05 for k in range(prev_e, next_s)):
+                vocal_gaps[min(8, max(1, gap_cells))] += 1
 
     # `lag` is in 4-bar cells; expose the equivalent number of bars.
     return_rate = {
@@ -127,6 +162,14 @@ def mine(processed: Path, max_tracks: int):
     novelty = {s: round(1 - repeat[s] / max(1, boundaries[s]), 4) for s in STEMS}
     total_runs = sum(vocal_runs.values())
     run_dist = {str(k * 4): round(v / max(1, total_runs), 4) for k, v in sorted(vocal_runs.items())}
+    total_gaps = sum(vocal_gaps.values())
+    gap_dist = {str(k * 4): round(v / max(1, total_gaps), 4) for k, v in sorted(vocal_gaps.items())}
+    # Most common silent breath between sung sections, in bars. Falls back to
+    # 8 bars (two 4-bar cells) when the corpus has no measurable gaps.
+    gap_target_bars = 8
+    if total_gaps > 0:
+        best_cells = max(vocal_gaps.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+        gap_target_bars = int(best_cells * 4)
 
     motif_doc = {
         "format": "wub-motif-calendar-v1", "version": 1,
@@ -142,9 +185,10 @@ def mine(processed: Path, max_tracks: int):
         },
     }
     vocal_doc = {
-        "format": "wub-vocal-cadence-v1", "version": 2,
+        "format": "wub-vocal-cadence-v1", "version": 3,
         "tracks": tracks,
         "run_lengths_bars": run_dist,
+        "gap_lengths_bars": gap_dist,
         "change_prob": {
             kind: round(v[0] / max(1, v[1]), 4) for kind, v in vocal_change.items()
         },
@@ -154,10 +198,15 @@ def mine(processed: Path, max_tracks: int):
             "min_hold_bars": 4,
             "section_change_bonus": round(
                 max(0.08, (vocal_change["section"][0] / max(1, vocal_change["section"][1])) * 0.15), 4),
+            # Silent breath between sung sections, mined from pure-silence
+            # cells between stable runs. The jukebox enforces at least this
+            # many bars of vocal rest before a fresh entrance.
+            "min_gap_bars": gap_target_bars,
         },
         "report": {
             "source": "data/processed/*.json",
             "run_rule": "consecutive 4-bar cells with vocal onset Jaccard >= 0.55",
+            "gap_rule": "pure-silence 4-bar cells (presence < 0.05) between stable runs",
             "use": "vocal release budget only; section changes always release",
         },
     }
