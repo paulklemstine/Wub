@@ -35,5 +35,6 @@
   "beam_search": true,
   "phrase_embeddings": true,
   "sequence_conductor": false,
-  "song_policy": true
+  "song_policy": true,
+  "mix_preference": true
 }

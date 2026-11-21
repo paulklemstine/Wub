@@ -138,13 +138,23 @@ interface BeamSearchConfig {
   lookahead_weight: number;
 }
 
-/** Learned song-policy compatibility weights (trained on real +4-bar successors). */
+/** Learned song-policy compatibility prior (bounded ±0.15, never a filter). */
 interface SongPolicyArtifact {
   format: string;
   version: number;
   features: string[];
   weights: Partial<Record<string, number>>;
   bias?: number;
+}
+
+/** Learned donor prior for synthetic two-song mixes (bounded ±0.15). */
+interface MixPreferenceArtifact {
+  format: string;
+  version: number;
+  features: string[];
+  weights: Partial<Record<string, number>>;
+  bias?: number;
+  report?: { val_auc?: number };
 }
 
 /** Implicit preference event inferred from a reticule/pin gesture. */
@@ -813,6 +823,8 @@ export class StemRemixPlayer {
   private songCritic: SongCriticArtifact | null = null;
   /** Learned song-policy compatibility weights (tempo/key/harmony/energy). */
   private songPolicy: SongPolicyArtifact | null = null;
+  /** Learned donor prior for synthetic two-song mixes (weak-label head). */
+  private mixPreference: MixPreferenceArtifact | null = null;
   /** Optional bounded final-gate beam search config. */
   private beamSearch: BeamSearchConfig | null = null;
   /** Capped implicit preference log from reticule/pin gestures. */
@@ -1156,6 +1168,7 @@ export class StemRemixPlayer {
     if (this.sidecarEnabled("sequence_conductor")) setupLoads.push(this.loadSequenceConductor(base));
     if (this.sidecarEnabled("song_critic")) setupLoads.push(this.loadSongCritic(base));
     if (this.sidecarEnabled("song_policy")) setupLoads.push(this.loadSongPolicy(base));
+    if (this.sidecarEnabled("mix_preference")) setupLoads.push(this.loadMixPreference(base));
     if (this.sidecarEnabled("phrase_embeddings")) setupLoads.push(this.loadPhraseEmbeddings(base));
     if (this.sidecarEnabled("beam_search")) setupLoads.push(this.loadBeamSearch(base));
     if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
@@ -1523,6 +1536,41 @@ export class StemRemixPlayer {
     return VOCAL_MIN_GAP_BARS;
   }
 
+  /**
+   * Learned-similarity donor prior: cosine of the 64-d phrase embeddings.
+   * Same style (not same song) means audio neighbors excluding own track —
+   * the key/tempo ladder hard filters in rebuildPool/jointOptions stay in
+   * force, so this intersects similarity with the ladder instead of
+   * replacing it. Null when embeddings are absent (term stays neutral).
+   */
+  private phraseSimilarity(aId: string, bId: string): number | null {
+    const table = this.barComposer.phraseEmbeddings;
+    if (!table) return null;
+    const a = table[aId];
+    const b = table[bId];
+    if (!a || !b || a.length === 0 || b.length === 0) return null;
+    const n = Math.min(a.length, b.length);
+    let dot = 0;
+    let na = 0;
+    let nb = 0;
+    for (let i = 0; i < n; i++) {
+      const x = a[i] ?? 0;
+      const y = b[i] ?? 0;
+      dot += x * y;
+      na += x * x;
+      nb += y * y;
+    }
+    if (!(na > 0) || !(nb > 0)) return null;
+    return Math.max(-1, Math.min(1, dot / Math.sqrt(na * nb)));
+  }
+
+  /** Bounded similarity bonus for a donor candidate (-0.15..+0.15). */
+  private phraseSimilarityBonus(curId: string, candId: string): number {
+    const sim = this.phraseSimilarity(curId, candId);
+    if (sim === null) return 0;
+    return Math.max(-0.15, Math.min(0.15, 0.20 * (sim - 0.5)));
+  }
+
   /** True when a fresh vocal may start at `startBar` (gap satisfied). */
   private vocalGapOk(startBar: number): boolean {
     return startBar - this.lastVocalEndBar >= this.vocalMinGapBars();
@@ -1847,6 +1895,58 @@ export class StemRemixPlayer {
       + (w.vocalBonus ?? 0) * 0.1;
     // Scale raw logits (trained ~±5) down to a bounded prior.
     return Math.max(-0.15, Math.min(0.15, raw * 0.03));
+  }
+
+  /** Learned donor prior for synthetic two-song mixes (weak-label head). */
+  private async loadMixPreference(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/mix_preference.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as MixPreferenceArtifact;
+      if (doc?.format === "wub-mix-preference-v1" && doc.weights) {
+        this.mixPreference = doc;
+        console.info(
+          `[StemRemix] Mix preference ready (val AUC ${doc.report?.val_auc ?? 0})`,
+        );
+      }
+    } catch {
+      // Optional; similarity + song-policy priors remain in force.
+    }
+  }
+
+  /**
+   * Bounded donor bonus for a cross-track candidate (-0.15..+0.15).
+   * Features mirror train_mix_preference.py exactly: raw phrase-embedding
+   * cosine, kit-BPM tempo cost, kit-key cost, section/energy continuity to
+   * the *current* phrase (not the arc target), and raw bass-root harmony.
+   * Missing sidecar or embeddings: exactly 0, never a filter.
+   */
+  private mixPreferenceBonus(curId: string, entry: StemPoolEntry, current: StemPoolEntry): number {
+    const mp = this.mixPreference;
+    if (!mp) return 0;
+    const w = mp.weights;
+    const sim = this.phraseSimilarity(curId, entry.phrase.id) ?? 0;
+    const tempoCost = Math.min(0.5, Math.abs(entry.kit.bpm - current.kit.bpm)
+      / Math.max(1, current.kit.bpm));
+    const shift = keyShift(current.kit.key, entry.kit.key);
+    const keyCost = shift === null ? 0.5 : Math.abs(shift) / 6;
+    const sectionMatch = entry.section.toUpperCase() === current.section.toUpperCase() ? 1 : 0;
+    const energyMatch = Math.max(0, 1 - Math.abs(entry.energy - current.energy));
+    const rawCur = (current.phrase as unknown as { bass_root?: unknown }).bass_root;
+    const rawCand = (entry.phrase as unknown as { bass_root?: unknown }).bass_root;
+    let harmonyFit = 0.5;
+    if (typeof rawCur === "number" && typeof rawCand === "number") {
+      const interval = Math.abs(rawCand - rawCur) % 12;
+      harmonyFit = 1 - Math.min(interval, 12 - interval) / 6;
+    }
+    const raw = (w.sim ?? 0) * sim
+      + (w.tempoCost ?? 0) * tempoCost
+      + (w.keyCost ?? 0) * keyCost
+      + (w.sectionMatch ?? 0) * sectionMatch
+      + (w.energyMatch ?? 0) * energyMatch
+      + (w.harmonyFit ?? 0) * harmonyFit
+      + (mp.bias ?? 0);
+    return Math.max(-0.15, Math.min(0.15, raw * 0.01));
   }
 
   /** Phrase-space conductor trained on real song phrase chronology. */
@@ -4236,12 +4336,19 @@ export class StemRemixPlayer {
       // val AUC 0.99): tempo/key/harmony/energy fit. Bounded ±0.15 so the
       // joint ranker still decides; it only breaks ties toward song-like fits.
       const songPrior = this.songPolicyBonus(entry, section, targetEnergy);
+      // Learned-similarity donor prior (Stage 1): audio neighbors of the
+      // current phrase win ties. Intersects the key/tempo ladder (hard
+      // filters already applied), never a veto. Neutral without embeddings.
+      const simPrior = this.phraseSimilarityBonus(current.phrase.id, entry.phrase.id);
+      // Weak-label donor prior (Stage 2): the synthetic-mix head ranks good
+      // two-song donors above gated-out ones. Bounded, neutral without sidecar.
+      const mixPrior = this.mixPreferenceBonus(current.phrase.id, entry, current);
       return {
         entry,
         full: legal,
         judge,
         score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
-          + signatureBonus + timbre + vocalActBonus + vocalFreshBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown - compatPenalty + songPrior,
+          + signatureBonus + timbre + vocalActBonus + vocalFreshBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown - compatPenalty + songPrior + simPrior + mixPrior,
       };
     });
     const full = scored.filter((item) => item.full);
@@ -5154,6 +5261,11 @@ export class StemRemixPlayer {
         // Fresh vocal entrances win unless a played one fits way better.
         if (plays === 0) vocalSegmentBonus += VOCAL_FRESH_BONUS;
       }
+      // Learned-similarity donor prior (Stage 1): audio neighbors of the
+      // current phrase win ties, intersected with the key/tempo ladder.
+      const simPrior = this.phraseSimilarityBonus(current.phrase.id, entry.phrase.id);
+      // Weak-label donor prior (Stage 2): good synthetic donors above gated-out.
+      const mixPrior = this.mixPreferenceBonus(current.phrase.id, entry, current);
       const score =
         1.0 * sectionScore +
         0.9 * harmonic +
@@ -5170,6 +5282,8 @@ export class StemRemixPlayer {
         timbre -
         vocalSegmentPenalty +
         vocalSegmentBonus +
+        simPrior +
+        mixPrior +
         (this.varietyPrior ? 2 * this.varietyBonusFor(stem, entry.kit.track_id) : 0);
       if (!best || score > best.score) best = { entry, score };
     }
