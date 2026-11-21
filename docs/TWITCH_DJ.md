@@ -52,11 +52,13 @@ Reply lines (`@user → DROP 🪩`) appear in the strip log (last 8).
 To mirror replies into chat: get a token with `chat:read chat:write`
 (e.g. open `https://twitchapps.com/tmi/` logged in as your bot account —
 a second Twitch account is safest, or your broadcaster account), paste the
-bot username + `oauth:…` token, CONNECT. Token lives only in your browser's
-`localStorage`, never in the repo; revoke it on Twitch settings any time.
+bot username + `oauth:…` token, CONNECT. Tokens live only in your browser's
+user storage (key `wub_integrations_v1`, shared with the MIDI input/bank —
+old `wub_tw_*` keys migrate forward automatically), never in the repo;
+revoke them on Twitch settings any time.
 Without a token the strip stays read-only (replies in the log only).
 
-To stop: DISCONNECT. The channel name persists in `localStorage`.
+To stop: DISCONNECT. The channel name persists in user storage.
 
 ## Notes
 

@@ -40,6 +40,10 @@ import {
   routeCommand,
   type TwitchStem,
 } from "./twitch_dj";
+import {
+  loadIntegrations,
+  saveIntegrations,
+} from "./integration_store";
 import type { Fm1MidiDevice, Fm1StatusTone } from "./fm1_midi";
 
 export interface StemState {
@@ -739,9 +743,10 @@ class WubApp {
     const logEl = document.getElementById("tw-log");
     if (!channelInput || !connectBtn) return;
     try {
-      channelInput.value = localStorage.getItem("wub_tw_channel") ?? "";
-      if (userInput) userInput.value = localStorage.getItem("wub_tw_user") ?? "";
-      if (tokenInput) tokenInput.value = localStorage.getItem("wub_tw_token") ?? "";
+      const saved = loadIntegrations();
+      channelInput.value = saved.twitch.channel;
+      if (userInput) userInput.value = saved.twitch.username;
+      if (tokenInput) tokenInput.value = saved.twitch.token;
     } catch {
       // ignore
     }
@@ -924,9 +929,7 @@ class WubApp {
       const username = userInput?.value.trim() ?? "";
       const token = tokenInput?.value.trim() ?? "";
       try {
-        localStorage.setItem("wub_tw_channel", channel);
-        if (userInput) localStorage.setItem("wub_tw_user", username);
-        if (tokenInput) localStorage.setItem("wub_tw_token", token);
+        saveIntegrations({ twitch: { channel, username, token } });
       } catch {
         // ignore
       }
@@ -2705,11 +2708,16 @@ class WubApp {
     this.fm1StatusEl = document.getElementById("fm1-status");
 
     const bankSelect = document.getElementById("fm1-bank-select");
-    const selectedBank =
-      bankSelect instanceof HTMLSelectElement && isFm1BankId(bankSelect.value)
-        ? bankSelect.value
-        : FM1_DEFAULT_BANK;
-    if (bankSelect instanceof HTMLSelectElement) bankSelect.value = selectedBank;
+    const savedMidi = loadIntegrations().midi;
+    let selectedBank = FM1_DEFAULT_BANK;
+    if (bankSelect instanceof HTMLSelectElement) {
+      if (savedMidi.bank && isFm1BankId(savedMidi.bank)) {
+        bankSelect.value = savedMidi.bank;
+      } else if (isFm1BankId(bankSelect.value)) {
+        bankSelect.value = bankSelect.value;
+      }
+      selectedBank = isFm1BankId(bankSelect.value) ? bankSelect.value : FM1_DEFAULT_BANK;
+    }
 
     this.fm1 = new Fm1MidiInput({
       bank: selectedBank,
@@ -2727,12 +2735,23 @@ class WubApp {
     const inputSelect = document.getElementById("fm1-input-select");
     if (inputSelect instanceof HTMLSelectElement) {
       inputSelect.addEventListener("change", () => {
+        const id = inputSelect.value === "" ? "" : inputSelect.value;
         this.fm1?.selectInput(inputSelect.value === "" ? null : inputSelect.value);
+        try {
+          saveIntegrations({ midi: { inputId: id } });
+        } catch {
+          // ignore
+        }
       });
     }
     if (bankSelect instanceof HTMLSelectElement) {
       bankSelect.addEventListener("change", () => {
         if (isFm1BankId(bankSelect.value)) this.fm1?.setBank(bankSelect.value);
+        try {
+          saveIntegrations({ midi: { bank: bankSelect.value } });
+        } catch {
+          // ignore
+        }
       });
     }
 
@@ -2800,7 +2819,14 @@ class WubApp {
   private renderFm1Devices(devices: Fm1MidiDevice[], selectedId: string | null): void {
     const select = document.getElementById("fm1-input-select");
     if (!(select instanceof HTMLSelectElement)) return;
-    const previous = selectedId ?? select.value;
+    let previous = selectedId ?? select.value;
+    if (!previous) {
+      try {
+        previous = loadIntegrations().midi.inputId;
+      } catch {
+        // ignore
+      }
+    }
     select.replaceChildren();
     const none = document.createElement("option");
     none.value = "";
@@ -2815,6 +2841,10 @@ class WubApp {
     }
     select.value =
       previous !== "" && devices.some((device) => device.id === previous) ? previous : "";
+    if (select.value !== "" && selectedId !== select.value) {
+      // Restored a saved input (or kept the UI pick): make the lib listen too.
+      this.fm1?.selectInput(select.value);
+    }
   }
 
   /** Deterministic per-stem slice order, cached per cluster/playback mode. */
