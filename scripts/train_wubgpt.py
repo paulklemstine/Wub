@@ -173,7 +173,7 @@ def main() -> None:
         ))
         del analyses
         gc.collect()
-    print(f"dataset: {len(dataset)} tatum rows (stride={stride})")
+    print(f"dataset: {len(dataset)} tatum rows (stride={stride})", flush=True)
 
     # Pass 2.5: cross-song transition rows (optional).
     if args.transition_pairs and args.transition_pairs > 0:
@@ -209,9 +209,10 @@ def main() -> None:
         ff=args.d_model * 4,
     )
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"model: {n_params / 1e6:.1f}M params, vocabs={model.vocabs}")
+    print(f"model: {n_params / 1e6:.1f}M params, vocabs={model.vocabs}", flush=True)
 
     weights = "auto" if args.weights == "auto" else None
+    n_rows = len(dataset)
     losses = mt.train_model(
         model,
         dataset,
@@ -223,11 +224,14 @@ def main() -> None:
         weights=weights,
         T=args.T,
     )
+    del dataset  # free ~1GB of row dicts; tensors already inside train_model
+    gc.collect()
     for i, loss in enumerate(losses):
-        print(f"epoch {i + 1}/{args.epochs} loss={loss:.4f}")
+        print(f"epoch {i + 1}/{args.epochs} loss={loss:.4f}", flush=True)
     print(
         f"loss curve: first={losses[0]:.4f} last={losses[-1]:.4f} "
-        f"min={min(losses):.4f} epochs={len(losses)}"
+        f"min={min(losses):.4f} epochs={len(losses)}",
+        flush=True,
     )
 
     config = model.get_config()
@@ -236,7 +240,7 @@ def main() -> None:
             "k": args.k,
             "lr": args.lr,
             "seed": args.seed,
-            "n_rows": len(dataset),
+            "n_rows": n_rows,
             "n_tracks": len(files),
             "n_styles": args.n_styles,
             "style_map": args.style_map,
