@@ -79,6 +79,16 @@ def find_active_tatums(tr: TrackAnalysis, stem: str, bar_phase: Optional[int] = 
 
 _WUBGPT_CACHE: Dict[str, Any] = {}
 
+# Checkpoint search order: conditioned model first (style/energy/bar8/bound),
+# then the legacy full-corpus model, then the top-level fallback. The conditioned
+# checkpoint is produced by scripts/train_wubgpt.py with conditioning ON
+# (default) as data/wubgpt/wubgpt_cond.pt; older deployments only have wubgpt.pt.
+WUBGPT_CANDIDATES = [
+    Path("data/wubgpt/wubgpt_cond.pt"),
+    Path("data/wubgpt/wubgpt.pt"),
+    Path("data/wubgpt.pt"),
+]
+
 
 def get_cached_wubgpt() -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
     if "model" in _WUBGPT_CACHE:
@@ -87,11 +97,7 @@ def get_cached_wubgpt() -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
         return None, None
 
     _WUBGPT_CACHE["checked"] = True
-    candidates = [
-        Path("data/wubgpt/wubgpt.pt"),
-        Path("data/wubgpt.pt"),
-    ]
-    for p in candidates:
+    for p in WUBGPT_CANDIDATES:
         if p.exists():
             try:
                 from wub_core.model_transformer import load_checkpoint
