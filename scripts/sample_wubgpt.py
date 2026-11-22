@@ -30,8 +30,24 @@ from wub_core.model_transformer import (
 )
 
 
+def _parse_energy_arc(text: str) -> Optional[List[int]]:
+    text = (text or "").strip()
+    if not text:
+        return None
+    vals = []
+    for tok in text.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            vals.append(max(0, min(7, int(float(tok)))))
+        except ValueError:
+            raise SystemExit(f"Bad --energy-arc value: {tok!r} (want 0..7 csv)")
+    return vals or None
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Wub Phase 2B WubGPT sampler and mashup renderer")
+    ap = argparse.ArgumentParser(description="Phase 2B WubGPT sampler and mashup renderer")
     ap.add_argument("--checkpoint", default="data/wubgpt/wubgpt.pt",
                     help="path to trained WubGPT checkpoint")
     ap.add_argument("--processed", default="data/processed",
@@ -62,6 +78,14 @@ def main() -> None:
                     help="random seed")
     ap.add_argument("--out", default="data/mashup_wubgpt.wav",
                     help="output audio WAV path")
+    ap.add_argument("--style-id", type=int, default=0,
+                    help="conditioning style id (0 = unknown; cond models only)")
+    ap.add_argument("--energy", type=int, default=5,
+                    help="fallback energy bucket 0..7 (cond models only)")
+    ap.add_argument("--energy-arc", default="",
+                    help="csv energy buckets per step, e.g. '3,3,4,5,6,7,6,5' (cond models only)")
+    ap.add_argument("--start-bar8", type=int, default=-1,
+                    help="bar8 of first generated step; -1 = continue seed (cond models only)")
     args = ap.parse_args()
 
     ckpt_path = Path(args.checkpoint)
@@ -76,6 +100,8 @@ def main() -> None:
     model, vqs, config = load_checkpoint(ckpt_path)
     model.to(torch.device(device))
     model.eval()
+    use_cond = bool(getattr(model, "cond_vocabs", None))
+    print(f"conditioning: {'ON' if use_cond else 'OFF (legacy checkpoint)'}")
 
     store = CorpusStore(
         processed_dir=Path(args.processed),
@@ -113,6 +139,22 @@ def main() -> None:
             sil_row[st] = vqs[st].silence_id if st in vqs else 0
         seed_steps = [dict(sil_row, r=i % 16) for i in range(16)]
 
+    if use_cond:
+        for r in seed_steps:
+            r["style"] = int(args.style_id)
+        try:
+            last_bar8 = int(seed_steps[-1].get("bar8", 0))
+        except (TypeError, ValueError):
+            last_bar8 = 0
+        start_bar8 = int(args.start_bar8) if int(args.start_bar8) >= 0 else last_bar8
+        energy_schedule = _parse_energy_arc(args.energy_arc)
+        print(f"cond: style={args.style_id} energy={args.energy} "
+              f"arc={'yes(%d)' % len(energy_schedule) if energy_schedule else 'no'} "
+              f"start_bar8={start_bar8}")
+    else:
+        start_bar8 = 0
+        energy_schedule = None
+
     print(f"Sampling {args.steps} tatums with temperature={args.temperature}, top_k={args.top_k}, top_p={args.top_p}...")
     sampled_rows = sample(
         model=model,
@@ -123,6 +165,10 @@ def main() -> None:
         top_k=args.top_k,
         top_p=args.top_p,
         seed=args.seed,
+        style_id=int(args.style_id),
+        energy=int(args.energy),
+        energy_schedule=energy_schedule,
+        start_bar8=int(start_bar8),
     )
     print(f"Generated {len(sampled_rows)} token steps.")
 
@@ -139,7 +185,7 @@ def main() -> None:
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Rendering mashup to {out_path} (target_bpm={args.target_bpm}, pitch_lock={args.pitch_lock})...")
+    print(f"Rendering mashup to {out} (target_bpm={args.target_bpm}, pitch_lock={args.pitch_lock})...")
     out = render_mashup(
         seq=seq,
         audio_for=audio_for,
