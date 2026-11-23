@@ -123,8 +123,11 @@ def main() -> None:
         primer = store.get(args.primer_track)
         if not primer:
             print(f"WARN: primer track {args.primer_track} not found in corpus; choosing first track")
-    if primer is None and store.analyses:
-        primer = store.analyses[args.seed % len(store.analyses)]
+    if primer is None:
+        analyses_list = (list(store.analyses.values()) if isinstance(store.analyses, dict)
+                         else list(store.analyses))
+        if analyses_list:
+            primer = analyses_list[args.seed % len(analyses_list)]
 
     if primer:
         seed_rows = build_dataset([primer], vqs, stride=1)

@@ -802,11 +802,14 @@ def sample(
     model.eval()
     use_cond = bool(getattr(model, "cond_vocabs", None))
     keys = list(STREAM_ORDER)
-    gen = torch.Generator().manual_seed(int(seed))
     try:
         dev = next(model.parameters()).device
     except StopIteration:
         dev = torch.device("cpu")
+    if dev.type == "cuda":
+        gen = torch.Generator(device="cuda").manual_seed(int(seed))
+    else:
+        gen = torch.Generator().manual_seed(int(seed))
     last_seed = seed_steps[-1]
     if int(start_bar8) >= 0:
         bar0 = int(start_bar8)
