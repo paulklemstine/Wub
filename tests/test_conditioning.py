@@ -207,3 +207,33 @@ def test_transition_pair_gates_and_rows():
     hists = dataset_token_histogram(rows)
     assert set(hists) == {"r", "drums", "bass", "other", "vocals"}
     assert all(h.sum() == len(rows) for h in hists.values())
+
+
+def test_metas_pairing_matches_analyses_pairing():
+    from wub_core.model_transformer import (
+        select_transition_pairs_from_metas,
+        track_meta,
+    )
+
+    tracks = [
+        _track("aaa", bpm=120.0, key="C major"),
+        _track("bbb", bpm=122.0, key="C major"),
+        _track("ccc", bpm=150.0, key="F# minor"),
+        _track("ddd", bpm=121.0, key="G major"),
+    ]
+    sm = {"aaa": 1, "bbb": 2, "ccc": 3, "ddd": 4}
+    direct = select_transition_pairs(tracks, style_map=sm, n_pairs=8, seed=0)
+    metas = []
+    for tr in tracks:
+        m = track_meta(tr)
+        m["style"] = sm[tr.track_id]
+        metas.append(m)
+    assert all(set(m) >= {"id", "bpm", "key", "loud", "style"} for m in metas)
+    assert [m["id"] for m in metas] == ["aaa", "bbb", "ccc", "ddd"]
+    assert metas[0]["key"] == "c" and metas[2]["key"] == "f#"
+    via_metas = select_transition_pairs_from_metas(metas, n_pairs=8, seed=0)
+    assert via_metas == direct
+    # streaming invariant: metas are tiny (no segments/tatums attached)
+    import pickle
+
+    assert len(pickle.dumps(metas)) < 10000

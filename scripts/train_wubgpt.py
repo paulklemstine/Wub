@@ -175,17 +175,35 @@ def main() -> None:
         gc.collect()
     print(f"dataset: {len(dataset)} tatum rows (stride={stride})", flush=True)
 
-    # Pass 2.5: cross-song transition rows (optional).
+    # Pass 2.5: cross-song transition rows (streaming: metadata first, then
+    # load ONLY the paired tracks — holding all parsed analyses at once OOMs
+    # small boxes, which is exactly what killed the first cond-training run).
+    trans_rows: list = []
     if args.transition_pairs and args.transition_pairs > 0:
+        metas: list = []
+        for i in range(0, len(files), chunk):
+            for tr in load_analyses(files[i:i + chunk]):
+                m = mt.track_meta(tr)
+                if m is None:
+                    continue
+                if style_map:
+                    try:
+                        m["style"] = int(style_map.get(str(m["id"]), 0))
+                    except (TypeError, ValueError):
+                        pass
+                metas.append(m)
+            gc.collect()
+        print(f"transition metas: {len(metas)} tracks", flush=True)
+        pairs = mt.select_transition_pairs_from_metas(
+            metas, n_pairs=args.transition_pairs, seed=args.seed,
+        )
+        need = {a for p in pairs for a in p}
         by_id: dict = {}
         for i in range(0, len(files), chunk):
             for tr in load_analyses(files[i:i + chunk]):
-                by_id[tr.track_id] = tr
+                if tr.track_id in need:
+                    by_id[tr.track_id] = tr
             gc.collect()
-        pairs = mt.select_transition_pairs(
-            list(by_id.values()), style_map=style_map,
-            n_pairs=args.transition_pairs, seed=args.seed,
-        )
         trans_rows = mt.build_transition_rows(
             by_id, vqs, pairs,
             tail=args.transition_tail, head=args.transition_head,
@@ -194,8 +212,8 @@ def main() -> None:
         )
         dataset.extend(trans_rows)
         print(f"transitions: {len(pairs)} pairs -> {len(trans_rows)} rows "
-              f"(total {len(dataset)})")
-        del by_id
+              f"(total {len(dataset)})", flush=True)
+        del by_id, trans_rows, metas, pairs, need
         gc.collect()
     if len(dataset) < 2:
         raise SystemExit("Need at least 2 tatum rows to train.")

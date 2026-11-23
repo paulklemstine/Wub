@@ -36,6 +36,8 @@ __all__ = [
     "StemVQ",
     "build_dataset",
     "build_transition_rows",
+    "track_meta",
+    "select_transition_pairs_from_metas",
     "dataset_token_histogram",
     "energy_bucket",
     "select_transition_pairs",
@@ -320,6 +322,39 @@ def _parse_key_root(key: Optional[str]) -> str:
     return key.strip().split()[0].lower()
 
 
+def track_meta(tr) -> Optional[Dict[str, object]]:
+    """Tiny per-track record for pairing: id, bpm, key root, mean loudness.
+
+    Lets callers scan a corpus in streaming chunks (parse, extract 4 numbers,
+    discard) instead of holding every parsed track in RAM at once.
+    """
+    tid = getattr(tr, "track_id", "")
+    if not tid:
+        return None
+    try:
+        bpm = float(getattr(tr, "bpm", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        bpm = 0.0
+    if bpm <= 0:
+        return None
+    tot, n = 0.0, 0
+    for sg in getattr(tr, "segments", []) or []:
+        try:
+            v = float(getattr(sg, "loudness_max", float("nan")))
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(v):
+            tot += v
+            n += 1
+    return {
+        "id": str(tid),
+        "bpm": bpm,
+        "key": _parse_key_root(getattr(tr, "key", "")),
+        "loud": (tot / n) if n else -90.0,
+        "style": 0,
+    }
+
+
 def select_transition_pairs(
     analyses,
     style_map: Optional[Dict[str, int]] = None,
@@ -337,37 +372,45 @@ def select_transition_pairs(
     gated (cross-style splices are the point) but pairs are spread across
     style pairs when a style_map is given.
     """
+    metas: List[Dict[str, object]] = []
+    for tr in analyses:
+        m = track_meta(tr)
+        if m is None:
+            continue
+        if style_map:
+            try:
+                m["style"] = int(style_map.get(str(m["id"]), 0))
+            except (TypeError, ValueError):
+                pass
+        metas.append(m)
+    return select_transition_pairs_from_metas(
+        metas,
+        n_pairs=n_pairs,
+        seed=seed,
+        max_tempo_drift=max_tempo_drift,
+        max_energy_gap_db=max_energy_gap_db,
+        require_same_key=require_same_key,
+    )
+
+
+def select_transition_pairs_from_metas(
+    metas: List[Dict[str, object]],
+    n_pairs: int = 64,
+    seed: int = 0,
+    max_tempo_drift: float = 0.06,
+    max_energy_gap_db: float = 6.0,
+    require_same_key: bool = True,
+) -> List[Tuple[str, str]]:
+    """Pair selection over lightweight track_meta() records (streaming-safe).
+
+    Metas need {id, bpm, key, loud} with optional {style}. Same gates and
+    deterministic ordering as select_transition_pairs; use this when the
+    corpus cannot fit parsed in RAM (scan chunks, keep metas, load only
+    the paired tracks afterwards).
+    """
     import random
 
-    infos = []
-    for tr in analyses:
-        tid = getattr(tr, "track_id", "")
-        if not tid:
-            continue
-        try:
-            bpm = float(getattr(tr, "bpm", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            bpm = 0.0
-        if bpm <= 0:
-            continue
-        louds = []
-        for sg in getattr(tr, "segments", []) or []:
-            try:
-                v = float(getattr(sg, "loudness_max", float("nan")))
-            except (TypeError, ValueError):
-                continue
-            if np.isfinite(v):
-                louds.append(v)
-        mean_loud = float(np.mean(louds)) if louds else -90.0
-        infos.append(
-            {
-                "id": tid,
-                "bpm": bpm,
-                "key": _parse_key_root(getattr(tr, "key", "")),
-                "loud": mean_loud,
-                "style": int(style_map.get(tid, 0)) if style_map else 0,
-            }
-        )
+    infos = [dict(m) for m in metas if m.get("id") and (m.get("bpm") or 0) > 0]
     infos.sort(key=lambda d: d["id"])
     rng = random.Random(int(seed))
     cands: List[Tuple[str, str]] = []
@@ -381,9 +424,9 @@ def select_transition_pairs(
                 continue
             cands.append((a["id"], b["id"]) if rng.random() < 0.5 else (b["id"], a["id"]))
     # Spread across style pairs when labels exist.
-    if style_map:
+    if any(int(m.get("style") or 0) != 0 for m in infos):
         by_pair: Dict[Tuple[int, int], List[Tuple[str, str]]] = {}
-        sm = {d["id"]: d["style"] for d in infos}
+        sm = {str(m["id"]): int(m.get("style") or 0) for m in infos}
         for p in cands:
             by_pair.setdefault((sm.get(p[0], 0), sm.get(p[1], 0)), []).append(p)
         ordered: List[Tuple[str, str]] = []
