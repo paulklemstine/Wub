@@ -89,6 +89,8 @@ def main() -> None:
     ap.add_argument("--transition-bound", type=int, default=16)
     ap.add_argument("--weights", default="auto",
                     help="head loss weights: auto (inverse-sqrt freq) or none")
+    ap.add_argument("--checkpoint-every", type=int, default=1,
+                    help="save an epoch checkpoint every N epochs (0 = final only)")
     ap.add_argument("--T", type=int, default=32,
                     help="context window in steps (sliding windows, stride 1)")
     args = ap.parse_args()
@@ -231,29 +233,8 @@ def main() -> None:
 
     weights = "auto" if args.weights == "auto" else None
     n_rows = len(dataset)
-    losses = mt.train_model(
-        model,
-        dataset,
-        epochs=args.epochs,
-        batch_size=args.batch,
-        lr=args.lr,
-        device=args.device,
-        seed=args.seed,
-        weights=weights,
-        T=args.T,
-    )
-    del dataset  # free ~1GB of row dicts; tensors already inside train_model
-    gc.collect()
-    for i, loss in enumerate(losses):
-        print(f"epoch {i + 1}/{args.epochs} loss={loss:.4f}", flush=True)
-    print(
-        f"loss curve: first={losses[0]:.4f} last={losses[-1]:.4f} "
-        f"min={min(losses):.4f} epochs={len(losses)}",
-        flush=True,
-    )
-
-    config = model.get_config()
-    config.update(
+    base_config = model.get_config()
+    base_config.update(
         {
             "k": args.k,
             "lr": args.lr,
@@ -267,6 +248,37 @@ def main() -> None:
             "T": args.T,
         }
     )
+
+    def _epoch_ckpt(ep, _model, _losses):
+        if int(args.checkpoint_every) > 0 and ep % int(args.checkpoint_every) == 0:
+            p = Path(args.model_out)
+            ep_path = p.parent / f"{p.stem}_ep{ep}{p.suffix}"
+            mt.save_checkpoint(ep_path, _model, vqs, dict(base_config, epoch=ep, losses=list(_losses)))
+            print(f"checkpoint: {ep_path} (epoch {ep})", flush=True)
+
+    losses = mt.train_model(
+        model,
+        dataset,
+        epochs=args.epochs,
+        batch_size=args.batch,
+        lr=args.lr,
+        device=args.device,
+        seed=args.seed,
+        weights=weights,
+        T=args.T,
+        checkpoint_cb=_epoch_ckpt,
+    )
+    del dataset  # free ~1GB of row dicts; tensors already inside train_model
+    gc.collect()
+    for i, loss in enumerate(losses):
+        print(f"epoch {i + 1}/{args.epochs} loss={loss:.4f}", flush=True)
+    print(
+        f"loss curve: first={losses[0]:.4f} last={losses[-1]:.4f} "
+        f"min={min(losses):.4f} epochs={len(losses)}",
+        flush=True,
+    )
+
+    config = dict(base_config, losses=list(losses))
     out = mt.save_checkpoint(args.model_out, model, vqs, config)
     print(f"wrote {out} (+ sibling VQ dir {out.parent / (out.stem + '_vq')})")
 

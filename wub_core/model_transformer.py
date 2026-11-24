@@ -692,6 +692,7 @@ def train_model(
     seed: int = 0,
     weights=None,
     T: int = 32,
+    checkpoint_cb=None,
 ) -> List[float]:
     """Next-step training: CE per head summed. Returns per-epoch mean losses.
 
@@ -699,6 +700,12 @@ def train_model(
       {stream: weight-vector}. Cond streams present in dataset rows feed the
       model only when it was built with cond_vocabs; otherwise ignored.
     T: context window in steps (sliding windows, stride 1).
+    checkpoint_cb: optional callable called as cb(epoch_1based, model, losses)
+      after each epoch (e.g. to save per-epoch checkpoints on long runs).
+    Throughput notes (measured 3 s/batch -> target <0.5 s on RTX 4050/WSL):
+      windows are gathered with ONE advanced index per stream on pinned CPU
+      memory and moved with a single non-blocking H2D copy each; the loss
+      stays on-device and is synchronized once per epoch, not per batch.
     """
     if len(dataset) < 2:
         raise ValueError("need at least 2 token rows to train")
@@ -710,12 +717,15 @@ def train_model(
     keys = list(STREAM_ORDER)
     use_cond = bool(getattr(model, "cond_vocabs", None))
     ckeys = [c for c in COND_ORDER if use_cond and c in (dataset[0] if dataset else {})]
+    pin = dev.type == "cuda"
     arr = {
-        kk: torch.tensor([row[kk] for row in dataset], dtype=torch.long)
+        kk: torch.tensor([row[kk] for row in dataset], dtype=torch.long).pin_memory()
+        if pin else torch.tensor([row[kk] for row in dataset], dtype=torch.long)
         for kk in keys
     }
     cond_arr = {
-        ck: torch.tensor([int(row.get(ck, 0)) for row in dataset], dtype=torch.long)
+        ck: (torch.tensor([int(row.get(ck, 0)) for row in dataset], dtype=torch.long).pin_memory()
+             if pin else torch.tensor([int(row.get(ck, 0)) for row in dataset], dtype=torch.long))
         for ck in ckeys
     }
     if weights == "auto":
@@ -724,46 +734,42 @@ def train_model(
         wmap = {kk: torch.as_tensor(weights[kk], dtype=torch.float32) for kk in keys if kk in weights}
     else:
         wmap = {}
+    wmap = {kk: w.to(dev, non_blocking=True) for kk, w in wmap.items()}
     N = len(dataset)
     T = int(min(max(1, T), N - 1))  # context window; T+1-row sliding windows, stride 1
     nwin = N - T
+    steps = torch.arange(T, dtype=torch.long)
     rng = np.random.default_rng(seed)
     losses: List[float] = []
     for _ep in range(int(epochs)):
-        perm = rng.permutation(nwin)
-        tot, nb = 0.0, 0
+        perm = torch.from_numpy(rng.permutation(nwin).astype(np.int64))
+        tot = torch.zeros((), device=dev)
+        nb = 0
         for bi in range(0, nwin, max(1, int(batch_size))):
             idx = perm[bi : bi + int(batch_size)]
-            inp = {
-                kk: torch.stack([arr[kk][int(s) : int(s) + T] for s in idx]).to(dev)
-                for kk in keys
-            }
+            base = idx.unsqueeze(1) + steps.unsqueeze(0)  # (B,T) window starts
+            inp = {kk: arr[kk][base].to(dev, non_blocking=True) for kk in keys}
             if ckeys:
                 for ck in ckeys:
-                    inp[ck] = torch.stack(
-                        [cond_arr[ck][int(s) : int(s) + T] for s in idx]
-                    ).to(dev)
-            tgt = {
-                kk: torch.stack([arr[kk][int(s) + 1 : int(s) + 1 + T] for s in idx]).to(dev)
-                for kk in keys
-            }
-            opt.zero_grad()
+                    inp[ck] = cond_arr[ck][base].to(dev, non_blocking=True)
+            tgt = {kk: arr[kk][base + 1].to(dev, non_blocking=True) for kk in keys}
+            opt.zero_grad(set_to_none=True)
             logits = model(inp)
             loss = 0.0
             for kk in keys:
-                w = wmap.get(kk)
-                if w is not None:
-                    w = w.to(dev)
                 loss = loss + F.cross_entropy(
                     logits[kk].reshape(-1, logits[kk].size(-1)),
                     tgt[kk].reshape(-1),
-                    weight=w,
+                    weight=wmap.get(kk),
                 )
             loss.backward()
             opt.step()
-            tot += float(loss.item())
+            tot = tot + loss.detach()
             nb += 1
-        losses.append(tot / max(nb, 1))
+        epoch_loss = float(tot.item()) / max(nb, 1)
+        losses.append(epoch_loss)
+        if checkpoint_cb is not None:
+            checkpoint_cb(_ep + 1, model, list(losses))
     return losses
 
 
