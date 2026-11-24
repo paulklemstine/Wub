@@ -91,6 +91,9 @@ def main() -> None:
                     help="head loss weights: auto (inverse-sqrt freq) or none")
     ap.add_argument("--checkpoint-every", type=int, default=1,
                     help="save an epoch checkpoint every N epochs (0 = final only)")
+    ap.add_argument("--resume-from", default="",
+                    help="resume from an epoch checkpoint (model+VQs load, "
+                         "training continues for --epochs total)")
     ap.add_argument("--T", type=int, default=32,
                     help="context window in steps (sliding windows, stride 1)")
     args = ap.parse_args()
@@ -136,33 +139,48 @@ def main() -> None:
 
     # Pass 1 (chunked): accumulate per-stem slices for VQ fitting. The full
     # 2.2 GB corpus must never sit in RAM as parsed objects at once.
+    # Skipped entirely on --resume-from (codebooks reload from the checkpoint).
     chunk = max(1, args.chunk_tracks)
     stem_slices: dict = {s: [] for s in STEMS}
-    n_chunks = (len(files) + chunk - 1) // chunk
-    for i in range(0, len(files), chunk):
-        analyses = load_analyses(files[i:i + chunk])
-        pools = mm.build_pools(analyses)
-        for stem in STEMS:
-            if stem in pools:
-                stem_slices[stem].extend(pools[stem].slices)
-        del analyses, pools
-        gc.collect()
-        print(f"pass1 chunk {i // chunk + 1}/{n_chunks}: slices "
-              f"{ {k: len(v) for k, v in stem_slices.items()} }", flush=True)
+    start_ep, model, vqs = 0, None, None
+    if args.resume_from:
+        model, vqs, rconfig = mt.load_checkpoint(args.resume_from)
+        start_ep = int(rconfig.get("epoch", 0))
+        print(f"resumed {args.resume_from}: continuing at epoch {start_ep + 1} "
+              f"(target {args.epochs})", flush=True)
+        if use_cond and not getattr(model, "cond_vocabs", None):
+            print("WARN: checkpoint has no cond; cond streams will be ignored", flush=True)
+    if vqs is None:
+        n_chunks = (len(files) + chunk - 1) // chunk
+        for i in range(0, len(files), chunk):
+            analyses = load_analyses(files[i:i + chunk])
+            pools = mm.build_pools(analyses)
+            for stem in STEMS:
+                if stem in pools:
+                    stem_slices[stem].extend(pools[stem].slices)
+            del analyses, pools
+            gc.collect()
+            print(f"pass1 chunk {i // chunk + 1}/{n_chunks}: slices "
+                  f"{ {k: len(v) for k, v in stem_slices.items()} }", flush=True)
 
-    vq_rng = random.Random(args.seed)
-    vqs: dict = {}
-    for stem in STEMS:
-        slices = stem_slices.pop(stem)
-        if args.vq_sample and args.vq_sample > 0 and len(slices) > args.vq_sample:
-            slices = vq_rng.sample(slices, args.vq_sample)
-        vq = mt.StemVQ(stem, k=args.k)
-        vq.fit(slices)
-        vqs[stem] = vq
-        print(f"vq[{stem}]: {len(slices)} slices -> {vq.n_clusters} clusters (+1 silence)",
-              flush=True)
-    del stem_slices
-    gc.collect()
+        vq_rng = random.Random(args.seed)
+        vqs = {}
+        for stem in STEMS:
+            slices = stem_slices.pop(stem)
+            if args.vq_sample and args.vq_sample > 0 and len(slices) > args.vq_sample:
+                slices = vq_rng.sample(slices, args.vq_sample)
+            vq = mt.StemVQ(stem, k=args.k)
+            vq.fit(slices)
+            vqs[stem] = vq
+            print(f"vq[{stem}]: {len(slices)} slices -> {vq.n_clusters} clusters (+1 silence)",
+                  flush=True)
+        del stem_slices
+        gc.collect()
+    else:
+        print(f"VQ codebooks reused from {args.resume_from}", flush=True)
+
+    if args.resume_from and int(args.epochs) <= int(start_ep):
+        raise SystemExit(f"--resume-from is already at epoch {start_ep} (target {args.epochs}); nothing to do.")
 
     # Pass 2 (chunked): token rows with stride; rows are small plain dicts.
     dataset: list = []
@@ -220,16 +238,20 @@ def main() -> None:
     if len(dataset) < 2:
         raise SystemExit("Need at least 2 tatum rows to train.")
 
-    model = mt.WubGPT.from_vqs(
-        vqs,
-        cond_vocabs=cond_vocabs,
-        d_model=args.d_model,
-        n_layers=args.n_layers,
-        n_heads=args.n_heads,
-        ff=args.d_model * 4,
-    )
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"model: {n_params / 1e6:.1f}M params, vocabs={model.vocabs}", flush=True)
+    if model is None:
+        model = mt.WubGPT.from_vqs(
+            vqs,
+            cond_vocabs=cond_vocabs,
+            d_model=args.d_model,
+            n_layers=args.n_layers,
+            n_heads=args.n_heads,
+            ff=args.d_model * 4,
+        )
+        n_params = sum(p.numel() for p in model.parameters())
+        print(f"model: {n_params / 1e6:.1f}M params, vocabs={model.vocabs}", flush=True)
+    else:
+        n_params = sum(p.numel() for p in model.parameters())
+        print(f"model: resumed {n_params / 1e6:.1f}M params, vocabs={model.vocabs}", flush=True)
 
     weights = "auto" if args.weights == "auto" else None
     n_rows = len(dataset)
@@ -249,17 +271,22 @@ def main() -> None:
         }
     )
 
+    remaining = max(0, int(args.epochs) - int(start_ep))
+    if remaining <= 0:
+        raise SystemExit(f"--resume-from is already at epoch {start_ep} (target {args.epochs}); nothing to do.")
+
     def _epoch_ckpt(ep, _model, _losses):
-        if int(args.checkpoint_every) > 0 and ep % int(args.checkpoint_every) == 0:
+        gep = int(start_ep) + int(ep)
+        if int(args.checkpoint_every) > 0 and gep % int(args.checkpoint_every) == 0:
             p = Path(args.model_out)
-            ep_path = p.parent / f"{p.stem}_ep{ep}{p.suffix}"
-            mt.save_checkpoint(ep_path, _model, vqs, dict(base_config, epoch=ep, losses=list(_losses)))
-            print(f"checkpoint: {ep_path} (epoch {ep})", flush=True)
+            ep_path = p.parent / f"{p.stem}_ep{gep}{p.suffix}"
+            mt.save_checkpoint(ep_path, _model, vqs, dict(base_config, epoch=gep, losses=list(_losses)))
+            print(f"checkpoint: {ep_path} (epoch {gep})", flush=True)
 
     losses = mt.train_model(
         model,
         dataset,
-        epochs=args.epochs,
+        epochs=remaining,
         batch_size=args.batch,
         lr=args.lr,
         device=args.device,
@@ -271,7 +298,7 @@ def main() -> None:
     del dataset  # free ~1GB of row dicts; tensors already inside train_model
     gc.collect()
     for i, loss in enumerate(losses):
-        print(f"epoch {i + 1}/{args.epochs} loss={loss:.4f}", flush=True)
+        print(f"epoch {int(start_ep) + i + 1}/{args.epochs} loss={loss:.4f}", flush=True)
     print(
         f"loss curve: first={losses[0]:.4f} last={losses[-1]:.4f} "
         f"min={min(losses):.4f} epochs={len(losses)}",
