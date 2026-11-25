@@ -1,0 +1,484 @@
+// One-shot Signalsmith Stretch voice for a real 4-bar stem phrase or a run of
+// consecutive phrases.
+//
+// The kit phrase is decoded at the AudioContext rate, so no resampling is
+// introduced.  A run is prepared (pre-roll + concatenated mains) once, then
+// scheduled with independent tempo (`rate`) and pitch (`semitones`).
+// Signalsmith compensates for its own processing latency when `output` is
+// scheduled ahead of time.
+import type { StretchNode } from "signalsmith-stretch";
+import { concatStereoRun, splitChannels } from "./kit_pcm";
+
+type StretchFactory = (
+  ctx: BaseAudioContext,
+  options?: AudioWorkletNodeOptions,
+) => Promise<StretchNode>;
+
+let factoryPromise: Promise<StretchFactory> | null = null;
+
+/**
+ * Load the prebuilt Signalsmith module as a native ESM asset instead of
+ * letting Vite bundle it. The library stringifies its AudioWorkletProcessor
+ * and WASM loader into a Blob; bundler transforms break that source, which
+ * makes the worklet silence the node in production.
+ */
+function loadFactory(): Promise<StretchFactory> {
+  if (factoryPromise === null) {
+    factoryPromise = (async () => {
+      // Resolve relative to this module without `new URL(...)`, which Vite
+      // rewrites as a build-time asset path even inside a dynamic import.
+      const here = import.meta.url;
+      const base = here.slice(0, here.lastIndexOf("/") + 1);
+      const url = `${base}../vendor/signalsmith-stretch.mjs`;
+      const module = await import(/* @vite-ignore */ url);
+      const factory = (module.default ?? module) as unknown;
+      if (typeof factory !== "function") {
+        throw new Error("Signalsmith Stretch vendor module did not export a factory");
+      }
+      return factory as StretchFactory;
+    })();
+  }
+  return factoryPromise;
+}
+
+export interface StretchVoiceOptions {
+  /** Output gain before the stem bus (0..1.5). */
+  gain?: number;
+  /** Stereo pan for this voice (-1..1). */
+  pan?: number;
+  /** Block size in ms; smaller reacts faster, larger is cheaper. */
+  blockMs?: number;
+}
+
+export interface PitchAutomationPoint {
+  /** Offset in seconds from the block downbeat (`at`). */
+  offsetSec: number;
+  /** Semitone shift at this point. */
+  semitones: number;
+}
+
+export interface StretchScheduleOptions {
+  /** Absolute AudioContext time of the first sample. */
+  when: number;
+  /** Input-buffer position in seconds (0 = start of the pre-roll). */
+  inputSec?: number;
+  /** Output/input tempo ratio. 1.0 keeps the source tempo. */
+  rate?: number;
+  /** Pitch shift in semitones. */
+  semitones?: number;
+  /** Preserve vocal formants while shifting. */
+  formantCompensation?: boolean;
+  /** Fade-in length in seconds. */
+  fadeInSec?: number;
+  /** Optional gain override for this phrase. */
+  gain?: number;
+  /**
+   * Previous voice's target gain at a cross-song boundary.  The incoming
+   * voice fades in to this level (equal power with the outgoing voice, so a
+   * quiet/loud phrase hand-off doesn't dip), then settles to `gain` over
+   * `handoffSec` seconds.  Omit for a plain fade to `gain`.
+   */
+  handoffGain?: number;
+  /** Settle time from handoff gain to target gain (default 0.20s). */
+  handoffSec?: number;
+}
+
+export class StretchVoice {
+  public readonly node: StretchNode;
+  private readonly gain: GainNode;
+  private readonly filter: BiquadFilterNode;
+  private readonly panner: StereoPannerNode;
+  private disposed = false;
+  private scheduled = false;
+  private targetGain = 1;
+  private scheduledStartAt = 0;
+  private scheduledFadeIn = 0.003;
+  private scheduledInputSec = 0;
+  private scheduledSemitones = 0;
+  private scheduledFormant = false;
+  private scheduledHandoffGain: number | null = null;
+  private scheduledHandoffSec = 0.20;
+
+  private constructor(
+    node: StretchNode,
+    gain: GainNode,
+    filter: BiquadFilterNode,
+    panner: StereoPannerNode,
+  ) {
+    this.node = node;
+    this.gain = gain;
+    this.filter = filter;
+    this.panner = panner;
+  }
+
+  static async create(
+    ctx: AudioContext,
+    destination: AudioNode,
+    options: StretchVoiceOptions = {},
+  ): Promise<StretchVoice> {
+    const factory = await loadFactory();
+    // Keep the library's default input count. `numberOfInputs: 0` makes
+    // Chrome skip the first process() call in some builds, which permanently
+    // silences the node. Nothing is connected to the input, so buffer
+    // playback still takes the sample-buffer path.
+    const node = await factory(ctx, {
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+    });
+    if (typeof options.blockMs === "number" && options.blockMs > 0) {
+      node.configure({ blockMs: options.blockMs });
+    }
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    // Per-voice low-pass for the EQ-OUT transition technique.  It is
+    // transparent (20 kHz) unless scheduleEqOut() sweeps it down, so the
+    // default equal-gain hand-off is sample-identical to before.  A stem-bus
+    // filter cannot do this: the incoming phrase shares the bus and would be
+    // muffled by its own outgoing sweep.
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 20000;
+    filter.Q.value = 0.7;
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = Math.max(-1, Math.min(1, options.pan ?? 0));
+    node.connect(gain);
+    gain.connect(filter);
+    filter.connect(panner);
+    panner.connect(destination);
+    return new StretchVoice(node, gain, filter, panner);
+  }
+
+  /**
+   * Concatenate the optional pre-bar tail with the main phrase.  The caller
+   * schedules `inputSec = preRollSec` at the bar time so the pre-roll plays
+   * just before the bar and the phrase's downbeat lands exactly on it.
+   */
+  async load(buffer: AudioBuffer, preRoll: AudioBuffer | null): Promise<number> {
+    return this.loadRun([buffer], preRoll);
+  }
+
+  /**
+   * Concatenate a run of consecutive phrases (and the first phrase's pre-roll)
+   * into one voice.  A run is cut from consecutive 4-bar windows of the same
+   * source, so the joins are real bar lines and need no crossfade.  Channel
+   * pairs are concatenated in lockstep, so stereo content from the kit bank
+   * survives end to end (mono assets play as dual-mono).
+   */
+  async loadRun(buffers: readonly AudioBuffer[], preRoll: AudioBuffer | null): Promise<number> {
+    if (buffers.length === 0) throw new Error("StretchVoice.loadRun needs at least one buffer");
+    return this.loadStereoRun(
+      buffers.map((buffer) => splitChannels(buffer)),
+      preRoll ? splitChannels(preRoll) : null,
+      buffers[0]?.sampleRate ?? 48000,
+    );
+  }
+
+  /** Load stereo channel pairs concatenated through kit_pcm.concatStereoRun. */
+  async loadStereoRun(
+    mains: readonly [Float32Array, Float32Array][],
+    pre: readonly [Float32Array, Float32Array] | null,
+    sampleRate: number,
+  ): Promise<number> {
+    if (mains.length === 0) throw new Error("StretchVoice.loadStereoRun needs at least one buffer");
+    const { samples, preDur } = concatStereoRun(mains, pre, sampleRate);
+    await this.node.addBuffers(samples);
+    return preDur;
+  }
+
+  /**
+   * Load a run already concatenated by the kit audio loader.
+   * Transfer fresh run buffers to the worklet to avoid a second multi-MB copy.
+   * Callers retaining PCM can keep the default non-consuming behavior.
+   */
+  async loadSamples(samples: Float32Array | Float32Array[], transferOwnership = false): Promise<void> {
+    const channels = Array.isArray(samples) ? samples : [samples];
+    const transfer = transferOwnership
+      ? [...new Set(channels.map((channel) => channel.buffer))]
+      : undefined;
+    await this.node.addBuffers(channels, transfer);
+  }
+
+  /** Schedule the prepared phrase/run. Must be called after `load`. */
+  schedule(options: StretchScheduleOptions): void {
+    if (this.disposed) return;
+    const ctx = this.gain.context;
+    const when = Math.max(options.when, ctx.currentTime + 0.005);
+    const fadeIn = Math.max(0.002, options.fadeInSec ?? 0.003);
+    const target = Math.max(0, Math.min(3.0, options.gain ?? 1));
+    this.targetGain = target;
+    const gain = this.gain.gain;
+    const handoff = typeof options.handoffGain === "number"
+      && Number.isFinite(options.handoffGain)
+      && options.handoffGain > 0
+      ? Math.min(3.0, options.handoffGain)
+      : null;
+    const startGain = handoff ?? target;
+    const settleSec = Math.max(0.02, options.handoffSec ?? 0.20);
+    try {
+      gain.cancelScheduledValues(when);
+      gain.setValueCurveAtTime(fadeCurve(startGain, true), when, fadeIn);
+      if (handoff !== null && Math.abs(handoff - target) > 1e-4) {
+        // Settle from the hand-off level to this phrase's own gain without a
+        // level step after the equal-power crossfade.
+        gain.setTargetAtTime(target, when + fadeIn, settleSec / 3);
+      }
+    } catch {
+      // Older/edge contexts: fall back to a linear fade.
+      gain.setValueAtTime(0.0001, when);
+      gain.linearRampToValueAtTime(startGain, when + fadeIn);
+      if (handoff !== null && Math.abs(handoff - target) > 1e-4) {
+        gain.linearRampToValueAtTime(target, when + fadeIn + settleSec);
+      }
+    }
+    this.scheduledStartAt = when;
+    this.scheduledFadeIn = fadeIn;
+    this.scheduledInputSec = Math.max(0, options.inputSec ?? 0);
+    this.scheduledSemitones = options.semitones ?? 0;
+    this.scheduledFormant = options.formantCompensation ?? false;
+    this.scheduledHandoffGain = handoff;
+    this.scheduledHandoffSec = settleSec;
+    this.node.schedule({
+      outputTime: when,
+      active: true,
+      input: this.scheduledInputSec,
+      rate: options.rate ?? 1,
+      semitones: this.scheduledSemitones,
+      formantCompensation: this.scheduledFormant,
+    });
+    this.scheduled = true;
+  }
+
+  /**
+   * Schedule bar- or beat-level semitone shifts on a single pooled voice so a
+   * bassline, chord progression, or vocal chop run follows the active chords
+   * without allocating extra WASM stretcher nodes or resetting input position.
+   */
+  schedulePitchAutomation(
+    downbeatAt: number,
+    rate: number,
+    points: readonly PitchAutomationPoint[],
+    formantCompensation: boolean,
+  ): void {
+    if (this.disposed || !this.scheduled || points.length === 0) return;
+    const ctx = this.gain.context;
+    const clampedRate = Math.max(0.25, Math.min(4.0, rate));
+    let lastSemitones = this.scheduledSemitones;
+    for (const pt of points) {
+      if (!Number.isFinite(pt.offsetSec) || !Number.isFinite(pt.semitones)) continue;
+      if (pt.offsetSec <= 0.005) continue;
+      const semitones = Math.max(-12, Math.min(12, pt.semitones));
+      if (Math.abs(semitones - lastSemitones) < 1e-3) continue;
+      lastSemitones = semitones;
+      const outputTime = Math.max(ctx.currentTime + 0.005, downbeatAt + pt.offsetSec);
+      this.node.schedule({
+        outputTime,
+        rate: clampedRate,
+        semitones,
+        formantCompensation,
+      });
+    }
+  }
+
+  /**
+   * Adjust playback rate smoothly on an active voice without seeking or clicking,
+   * optionally re-anchoring its scheduled end fade-out.
+   */
+  updateTempo(changeAt: number, newRate: number, newEndAt?: number, fadeOutSec: number = 0.05): void {
+    if (this.disposed || !this.scheduled) return;
+    const ctx = this.gain.context;
+    const when = Math.max(changeAt, ctx.currentTime + 0.015, this.scheduledStartAt + 0.002);
+    const clampedRate = Math.max(0.25, Math.min(4.0, newRate));
+    // Omitting `input` tells Signalsmith Stretch to preserve the continuous
+    // input sample position seamlessly across the tempo ramp.
+    this.node.schedule({
+      outputTime: when,
+      rate: clampedRate,
+    });
+    if (typeof newEndAt === "number" && Number.isFinite(newEndAt)) {
+      const minCancelAt = Math.max(when, this.scheduledStartAt + this.scheduledFadeIn + 0.005);
+      try {
+        this.gain.gain.cancelScheduledValues(minCancelAt);
+        this.filter.frequency.cancelScheduledValues(minCancelAt);
+      } catch {
+        // Context closing.
+      }
+      this.fadeOut(Math.max(minCancelAt + 0.01, newEndAt), fadeOutSec);
+    }
+  }
+
+  /**
+   * Retime a future pre-scheduled voice whose downbeat has not started yet.
+   * Clears its pending future activation cleanly so both faster and slower
+   * shifts land at the exact new time.
+   */
+  rescheduleWindow(newStartAt: number, newRate: number, newEndAt: number, fadeOutSec: number = 0.05): void {
+    if (this.disposed || !this.scheduled) return;
+    const ctx = this.gain.context;
+    const safeResetAt = Math.max(ctx.currentTime + 0.002, Math.min(this.scheduledStartAt, newStartAt) - 0.001);
+    if (safeResetAt >= this.scheduledStartAt - 0.005) {
+      this.updateTempo(newStartAt, newRate, newEndAt, fadeOutSec);
+      return;
+    }
+    this.node.schedule({
+      outputTime: safeResetAt,
+      active: false,
+      input: 0,
+    });
+    try {
+      this.gain.gain.cancelScheduledValues(safeResetAt);
+      this.gain.gain.setValueAtTime(0.0001, safeResetAt);
+      this.filter.frequency.cancelScheduledValues(safeResetAt);
+      this.filter.frequency.setValueAtTime(20000, safeResetAt);
+    } catch {
+      // Context closing.
+    }
+    const clampedRate = Math.max(0.25, Math.min(4.0, newRate));
+    this.schedule({
+      when: newStartAt,
+      inputSec: this.scheduledInputSec,
+      rate: clampedRate,
+      semitones: this.scheduledSemitones,
+      formantCompensation: this.scheduledFormant,
+      fadeInSec: this.scheduledFadeIn,
+      gain: this.targetGain,
+      handoffGain: this.scheduledHandoffGain ?? undefined,
+      handoffSec: this.scheduledHandoffSec,
+    });
+    this.fadeOut(Math.max(newStartAt + this.scheduledFadeIn + 0.01, newEndAt), fadeOutSec);
+  }
+
+  /** EQ-OUT tail: sweep this (outgoing) voice's low-pass to `floorHz` across
+   *  the boundary crossfade.  Scheduled with sample-accurate ramps at absolute
+   *  audio time; the incoming voice keeps its own transparent filter, and
+   *  reset() restores 20 kHz for reuse.  No-ops on a disposed/late voice. */
+  scheduleEqOut(at: number, sweepSec: number, floorHz: number = 300): void {
+    if (this.disposed) return;
+    const ctx = this.gain.context;
+    const startAt = Math.max(at, ctx.currentTime + 0.005);
+    const duration = Math.max(0.02, Math.min(0.5, sweepSec));
+    const floor = Math.max(40, Math.min(8000, Number.isFinite(floorHz) ? floorHz : 300));
+    const freq = this.filter.frequency;
+    try {
+      // Start from the transparent 20 kHz so a reused voice with a stale sweep
+      // cannot clip at the boundary; exponential ramps need a positive start.
+      freq.cancelScheduledValues(startAt);
+      freq.setValueAtTime(20000, startAt);
+      freq.exponentialRampToValueAtTime(floor, startAt + duration);
+    } catch {
+      // Best-effort automation; the gain hand-off stays click-free without it.
+      try {
+        freq.setValueAtTime(floor, startAt + duration);
+      } catch {
+        // Context closing.
+      }
+    }
+  }
+
+  /** Ramp this voice out and stop it. */
+  fadeOut(at: number, durationSec: number = 0.08): void {
+    if (this.disposed) return;
+    const ctx = this.gain.context;
+    const stopAt = Math.max(at, ctx.currentTime + 0.005);
+    const duration = Math.max(0.005, durationSec);
+    const gain = this.gain.gain;
+    try {
+      // Cancel the queued end fade at/after the new crossfade point, then
+      // use an equal-power curve so old + new do not sum to a level dip.
+      gain.cancelScheduledValues(stopAt);
+      gain.setValueCurveAtTime(fadeCurve(this.targetGain, false), stopAt, duration);
+    } catch {
+      try {
+        gain.setValueAtTime(this.targetGain, stopAt);
+        gain.linearRampToValueAtTime(0.0001, stopAt + duration);
+      } catch {
+        // Parameter automation can fail if the context is closing.
+      }
+    }
+    try {
+      // The library's stop(when) drops its time argument in 1.3.2 (it reads
+      // `output` while the scheduler reads `outputTime`), which stops the
+      // voice immediately. Schedule the deactivate segment directly.
+      // The pooled voice is reused after this phrase; do not dispose it.
+      // The buffer simply runs out and the next reset() clears it.
+    } catch {
+      // Already stopped.
+    }
+  }
+
+  /** Clear the input buffer and silence the voice so the node can be reused. */
+  async reset(): Promise<void> {
+    if (this.disposed) return;
+    const ctx = this.gain.context;
+    this.scheduled = false;
+    this.targetGain = 0;
+    this.scheduledStartAt = 0;
+    const gain = this.gain.gain;
+    try {
+      gain.cancelScheduledValues(0);
+      gain.setValueAtTime(0.0001, ctx.currentTime);
+    } catch {
+      // Context may be closing.
+    }
+    // Restore the transparent EQ so a swept outgoing voice never muffles its
+    // next reuse (the per-voice analogue of the stem-bus filter default).
+    try {
+      this.filter.frequency.cancelScheduledValues(0);
+      this.filter.frequency.setValueAtTime(20000, ctx.currentTime);
+    } catch {
+      // Context may be closing.
+    }
+    try {
+      await this.node.dropBuffers();
+    } catch {
+      // A failed reset must not stop the transport; the next load will append.
+    }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    try {
+      this.node.stop();
+    } catch {
+      // Already stopped.
+    }
+    try {
+      this.node.disconnect();
+      this.gain.disconnect();
+      this.filter.disconnect();
+      this.panner.disconnect();
+    } catch {
+      // Already disconnected.
+    }
+  }
+
+  get isScheduled(): boolean {
+    return this.scheduled;
+  }
+
+  /** Post-gain/panner output, for chaining into a stem bus or analyser. */
+  get output(): AudioNode {
+    return this.panner;
+  }
+
+  /** Current gain parameter value (debug). */
+  get gainValue(): number {
+    return this.gain.gain.value;
+  }
+
+  /** Target gain of the current schedule (for equal-gain hand-offs). */
+  get outputGainTarget(): number {
+    return this.targetGain;
+  }
+}
+
+function fadeCurve(target: number, rising: boolean, points: number = 32): Float32Array {
+  const curve = new Float32Array(Math.max(2, points));
+  const last = curve.length - 1;
+  for (let i = 0; i < curve.length; i++) {
+    const t = last > 0 ? i / last : 0;
+    const shape = rising ? Math.sin(0.5 * Math.PI * t) : Math.cos(0.5 * Math.PI * t);
+    curve[i] = Math.max(0.0001, target * shape);
+  }
+  return curve;
+}

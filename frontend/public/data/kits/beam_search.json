@@ -1,0 +1,11 @@
+{
+  "format": "wub-beam-search-v1",
+  "version": 1,
+  "depth": 3,
+  "width": 4,
+  "lookahead_weight": 0.25,
+  "report": {
+    "source": "final-gate search policy",
+    "use": "rank a shortlist of whole-quartet next cuts with the song critic and a one-block viability estimate; no audio changes"
+  }
+}

@@ -78,21 +78,27 @@ def test_tamagotchi_live_vocal_waveform_mouth():
     assert ".rave-mouth" in html_content
 
 
-def test_tamagotchi_round_orb_creature():
-    """Verify that the wub creature has a round orb outline instead of ears."""
+def test_tamagotchi_kawaii_heart_creature():
+    """Verify that the wub creature head is an audio-reactive kawaii heart (no round orb, no ears)."""
     tg_path = Path("frontend/src/tamagotchi.ts")
     assert tg_path.exists(), "frontend/src/tamagotchi.ts must exist"
     content = tg_path.read_text(encoding="utf-8")
 
-    # Round Orb stages and outline
+    # Heart-shaped stage progression and contour builder
     assert "RAVE ORB" in content
     assert "DISCO ORB" in content
     assert "CYBER ORB" in content
     assert "ASTRAL ORB" in content
-    assert "CREATURE ROUND ORB OUTLINE" in content
+    assert "KAWAII HEART LOOP" in content
+    assert "buildGummiHeartPoints" in content
+    assert "GUMMI_HEART_LOOP_POINTS" in content
+    # Live lub-dub heartbeat thump driven by the four-stem mix
+    assert "beatThump" in content
+    assert "heartBeatPhase" in content
     assert "rave-orb" in content
 
-    # Cat ears replaced
+    # Bear ears are gone for good
+    assert "INNER EAR CUSHIONS" not in content
     assert "leftEarPeak" not in content
     assert "rightEarPeak" not in content
     assert "foreheadDip" not in content
@@ -152,3 +158,112 @@ def test_client_ml_sequencer_song_and_slice_continuity():
     assert "isLongLoop" in ae_content
 
 
+def test_bear_2d_mouth_and_no_3d_camera():
+    """The 2D singing mouth remains; the interactive 3D camera stage is gone."""
+    assert not Path("frontend/src/bear_3d_view.ts").exists()
+
+    tg = Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
+    assert "Bear3DView" not in tg
+    assert "3D CAM" not in tg
+    assert "getLiveMouthState" in Path("frontend/src/singing_head.ts").read_text(encoding="utf-8")
+    assert "liveMouth" in tg
+    assert "uvulaY" in tg
+    assert "tongueCenterY" in tg
+    assert "lipGrad" in tg
+
+    html = Path("frontend/index.html").read_text(encoding="utf-8")
+    for dom_id in ("tamagotchi-3d-host", "btn-tamagotchi-3d", "btn-tamagotchi-cam"):
+        assert dom_id not in html
+
+
+def test_super_rave_box_panels_dj_fx_and_lightshow():
+    """Verify toggleable minimized secondary drawers, combined DJ Surface + Full Visualizer layout,
+    floating circle Wub Bear head controls inside panel-lightshow, and dual-FBO 3D sphere/sky textures."""
+    html = Path("frontend/index.html").read_text(encoding="utf-8")
+    # Separate top panel-bear removed; DJ Control Surface + combined Full Visualizer visible at load
+    assert 'id="panel-bear"' not in html
+    assert 'data-panel="panel-bear"' not in html
+    for hero_id in ("panel-dj-surface", "panel-lightshow"):
+        assert f'id="{hero_id}"' in html
+        assert f'data-panel="{hero_id}"' in html
+
+    # All secondary drawers start minimized at load and are toggleable
+    for drawer_id in (
+        "groovebox-panel",
+        "trippy-sequencer-rack",
+        "structure-panel",
+        "trip-panel",
+        "decks",
+        "stages",
+        "singing-head-panel",
+    ):
+        assert f'data-panel="{drawer_id}"' in html
+        assert "panel-minimized" in html.split(f'id="{drawer_id}"')[1].split(">")[0]
+
+    # Transport moved into DJ Control Surface + DJ FX & combined Full Visualizer controls present
+    dj_section = html.split('id="panel-dj-surface"')[1].split('id="panel-lightshow"')[0]
+    for dom_id in (
+        "btn-play",
+        "btn-stop",
+        "nebula-canvas",
+        "dj-filter-slider",
+        "dj-echo-slider",
+        "dj-reverb-slider",
+        "dj-acid-slider",
+        "dj-crush-slider",
+        "btn-dj-tapestop",
+        "btn-macro-buildup",
+        "btn-macro-drop",
+        "btn-macro-break",
+        "btn-macro-reset",
+    ):
+        assert dom_id in dj_section
+
+    ls_section = html.split('id="panel-lightshow"')[1].split('id="groovebox-panel"')[0]
+    for dom_id in (
+        "btn-bear-mouth-style",
+        "bear-dance-slider",
+        "bear-mouth-slider",
+        "lightshow-canvas",
+        "lightshow-bear-overlay",
+        "btn-ls-bear",
+        "btn-lightshow-fullscreen",
+        "btn-ls-cortex",
+    ):
+        assert dom_id in ls_section
+
+    tg_src = Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
+    assert "drawOverlayInto" in tg_src
+    assert "drawPaw" not in tg_src
+
+    ls_src = Path("frontend/src/lightshow.ts").read_text(encoding="utf-8")
+    for preset in ("acid-warp", "breathing-mandala", "space-tubes", "dmt-hyperspace", "ego-death"):
+        assert preset in ls_src
+    assert "superacid_presets.json" in ls_src
+
+    import json
+    bundle = json.loads(Path("frontend/public/data/superacid_presets.json").read_text(encoding="utf-8"))
+    assert bundle["count"] >= 260
+    assert len(bundle["presets"]) >= 260
+    for dom_id in ("ls-preset-select", "ls-preset-search", "btn-ls-prev", "btn-ls-rand", "btn-ls-next", "btn-ls-dual"):
+        assert dom_id in html
+
+    fx_src = Path("frontend/src/dj_fx_processor.ts").read_text(encoding="utf-8")
+    assert "WubDjFxProcessor" in fx_src
+    assert "attachDjFxWorklet" in fx_src
+
+
+
+
+
+
+def test_single_floating_eyes_and_mouth_creature():
+    """One vocal-tracking eye+mouth face, no head, bow, halo or border."""
+    source = Path("frontend/src/tamagotchi.ts").read_text(encoding="utf-8")
+    assert "private renderFloatingFace(" in source
+    assert "this.renderFourHeads(" not in source
+    assert "driftX" in source and "driftY" in source
+    assert "vocalsLevel" in source
+    html = Path("frontend/index.html").read_text(encoding="utf-8")
+    for dom_id in ("btn-bear-halo", "btn-bear-bikini", "btn-tamagotchi-3d"):
+        assert dom_id not in html

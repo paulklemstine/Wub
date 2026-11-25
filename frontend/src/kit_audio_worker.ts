@@ -1,0 +1,195 @@
+/** Kit audio decode + concat worker: the preload thread for the kit engine.
+ *
+ * Why this exists: every 8/16-bar prefetch used to do multi-MB synchronous
+ * PCM work on the main thread (mixToMono + concat + structured clones for
+ * four stems at once, plus the synchronous joint select beside it).  On a
+ * loaded machine that burst starves the audio render thread into
+ * all-stem digital-zero dropouts (the silence watchdog kept firing during
+ * 8/16-bar prefetches in v0.2.235).  Decoding and concatenating here keeps
+ * that cost off the main thread; fresh run PCM transfers into the worklet.
+ * Browsers without worker-side decodeAudioData use a native decode bridge.
+ *
+ * The worker owns a 24-entry LRU of decoded stereo PCM (same key space as the
+ * main-thread fallback cache: phraseId:stem).  Cache misses are fetched and
+ * decoded at the engine's sample rate (in-worker where supported, otherwise
+ * via window's native asynchronous decoder), so the
+ * concatenated run is a single transferable postMessage back to the main
+ * thread (no copy on return).
+ *
+ * Protocol (main thread):
+ *   -> { type: "init", sampleRate }                              (once)
+ *   -> { type: "load", id, items: [{ key, url, preUrl }] }      (one run)
+ *   <- { type: "run", id, samples, preDur, mainDurations, sampleRate }
+ *   <- { type: "error", id, message }
+ *   <- { type: "decode", decodeId, bytes }                    (native bridge)
+ *   -> { type: "decoded", decodeId, samples | message }
+ * Any item failure fails the whole run (mirrors the main-thread loader's
+ * "a missing phrase fails the run" semantics).
+ */
+import { assembleSlicedStereoRun, concatStereoRun, splitChannels, type SliceSpec } from "./kit_pcm";
+
+interface PoolItem {
+  key: string;
+  url: string;
+  preUrl: string | null;
+}
+
+interface CacheEntry {
+  stereo: [Float32Array, Float32Array];
+  pre: [Float32Array, Float32Array] | null;
+}
+
+const CACHE_LIMIT = 24;
+const cache = new Map<string, CacheEntry>();
+const loading = new Map<string, Promise<CacheEntry>>();
+let decodeContext: OfflineAudioContext | null = null;
+let sampleRate = 44100;
+let nextDecodeId = 1;
+const decodes = new Map<number, {
+  resolve: (samples: [Float32Array, Float32Array]) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+
+interface Host {
+  postMessage: (message: unknown, transfer?: Transferable[]) => void;
+}
+
+function host(): Host {
+  return self as unknown as Host;
+}
+
+function cacheGet(key: string): CacheEntry | undefined {
+  const entry = cache.get(key);
+  if (entry) {
+    cache.delete(key);
+    cache.set(key, entry);
+  }
+  return entry;
+}
+
+function cacheSet(key: string, entry: CacheEntry): void {
+  cache.set(key, entry);
+  if (cache.size > CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+}
+
+async function decodeStereo(url: string): Promise<[Float32Array, Float32Array]> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error(`stem ${res.status} ${url}`);
+  const bytes = await res.arrayBuffer();
+  // Most browsers expose decodeAudioData only on the window. Keep fetching,
+  // caching and PCM assembly here; request just the native async decode there.
+  if (typeof OfflineAudioContext === "undefined") {
+    return new Promise((resolve, reject) => {
+      const decodeId = nextDecodeId++;
+      const timer = setTimeout(() => {
+        decodes.delete(decodeId);
+        reject(new Error("audio decode bridge timed out"));
+      }, 4000);
+      decodes.set(decodeId, { resolve, reject, timer });
+      host().postMessage({ type: "decode", decodeId, bytes }, [bytes]);
+    });
+  }
+  // Length is ignored by decodeAudioData; it decodes to this context's rate.
+  const ctx = decodeContext ??= new OfflineAudioContext(2, 1, sampleRate);
+  const audio = await ctx.decodeAudioData(bytes);
+  // Preserve the source's stereo image; mono assets stay dual-mono.
+  return splitChannels(audio);
+}
+
+function loadItem(item: PoolItem): Promise<CacheEntry> {
+  const pending = loading.get(item.key);
+  if (pending) return pending;
+  const load = loadItemUncached(item).finally(() => loading.delete(item.key));
+  loading.set(item.key, load);
+  return load;
+}
+
+async function loadItemUncached(item: PoolItem): Promise<CacheEntry> {
+  const cached = cacheGet(item.key);
+  if (cached) return cached;
+  const stereo = await decodeStereo(item.url);
+  let pre: [Float32Array, Float32Array] | null = null;
+  if (item.preUrl) {
+    try {
+      pre = await decodeStereo(item.preUrl);
+    } catch {
+      // A missing tail must not block the phrase (same rule as the main path).
+      pre = null;
+    }
+  }
+  cacheSet(item.key, { stereo, pre });
+  return { stereo, pre };
+}
+
+async function handleLoad(
+  id: number,
+  items: PoolItem[],
+  slices?: SliceSpec[],
+  crossfadeMs?: number,
+): Promise<void> {
+  // Decode this run's phrases concurrently (fetch + decode are async), then
+  // concatenate or assemble sub-phrase slices; only the first phrase's pre-roll starts the run.
+  const loaded = await Promise.all(items.map((item) => loadItem(item)));
+  const { samples, preDur, mainDurations } = slices && slices.length > 0
+    ? assembleSlicedStereoRun(
+        loaded.map((entry) => entry.stereo),
+        loaded[0]?.pre ?? null,
+        slices,
+        sampleRate,
+        crossfadeMs ?? 28,
+      )
+    : concatStereoRun(
+        loaded.map((entry) => entry.stereo),
+        loaded[0]?.pre ?? null,
+        sampleRate,
+      );
+  host().postMessage(
+    { type: "run", id, samples, preDur, mainDurations, sampleRate },
+    [samples[0].buffer, samples[1].buffer],
+  );
+}
+
+(self as unknown as {
+  onmessage: ((ev: MessageEvent) => void) | null;
+}).onmessage = (ev: MessageEvent): void => {
+  const msg = ev.data as
+    | { type?: string; sampleRate?: number; id?: number; items?: PoolItem[]; slices?: SliceSpec[]; crossfadeMs?: number;
+        decodeId?: number; samples?: [Float32Array, Float32Array]; message?: string }
+    | null
+    | undefined;
+  if (!msg || typeof msg.type !== "string") return;
+  if (msg.type === "decoded" && typeof msg.decodeId === "number") {
+    const pending = decodes.get(msg.decodeId);
+    if (!pending) return;
+    decodes.delete(msg.decodeId);
+    clearTimeout(pending.timer);
+    if (msg.samples?.length === 2) pending.resolve(msg.samples);
+    else pending.reject(new Error(msg.message ?? "audio decode failed"));
+    return;
+  }
+  if (msg.type === "init") {
+    if (typeof msg.sampleRate === "number" && msg.sampleRate > 0) {
+      sampleRate = msg.sampleRate;
+    }
+    return;
+  }
+  if (msg.type === "warm" && Array.isArray(msg.items)) {
+    // No PCM assembly or return transfer for speculative cache warming.
+    void Promise.all(msg.items.map(loadItem)).catch(() => { /* best effort */ });
+    return;
+  }
+  if (msg.type === "load" && typeof msg.id === "number" && Array.isArray(msg.items)) {
+    const id = msg.id;
+    void handleLoad(id, msg.items, msg.slices, msg.crossfadeMs).catch((err: unknown) => {
+      host().postMessage({
+        type: "error",
+        id,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+};

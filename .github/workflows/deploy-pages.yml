@@ -35,7 +35,16 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
+        env:
+          # Kit bank (708 MB / 20,670 files) cannot fit the Pages 10-min
+          # sync window; it is served straight from the git repo at the
+          # pinned commit SHA instead (CORS `*`, range requests verified).
+          # Pages ships only the app shell.
+          VITE_KIT_BASE: "https://raw.githubusercontent.com/paulklemstine/Wub/${{ github.sha }}/frontend/public/data/kits"
         run: npm run build
+
+      - name: Strip kit bank from Pages artifact
+        run: rm -rf frontend/dist/data/kits
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3

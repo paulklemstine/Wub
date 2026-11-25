@@ -29,6 +29,12 @@ from wub_core.pattern_audio_trainer import PatternAudioFeedbackEngine
 
 
 def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--max-tracks", type=int, default=0, help="Max tracks to load (0 = all tracks)")
+    ap.add_argument("--max-bank-tracks", type=int, default=0, help="Max 4-stem tracks for pattern bank (0 = all 4-stem tracks)")
+    ap.add_argument("--max-cohesion-tracks", type=int, default=0, help="Max tracks for cohesion training (0 = all)")
+    args = ap.parse_args()
     print("=== Training Multi-Stem Acoustic Feature Feedback Loop ===", flush=True)
     t0 = time.time()
 
@@ -37,19 +43,20 @@ def main() -> None:
 
     print(f"Loading corpus from {proc_dir}...", flush=True)
     store = CorpusStore(proc_dir, stems_base=stems_dir)
-    store.refresh(max_tracks=160)
+    store.refresh(max_tracks=args.max_tracks if args.max_tracks > 0 else None)
 
     multi_tracks = [t for t in store.tracks if len(t.stems_available) == 4]
     print(f"Found {len(multi_tracks)} full 4-stem tracks in training corpus.", flush=True)
 
     print("Extracting multi-stem phrases and patterns into memory bank...", flush=True)
     bank = PatternBank()
-    n_pats = bank.load_from_tracks(multi_tracks[:60])
+    bank_tracks = multi_tracks if args.max_bank_tracks <= 0 else multi_tracks[:args.max_bank_tracks]
+    n_pats = bank.load_from_tracks(bank_tracks)
     print(f"Loaded {n_pats} patterns and {len(bank.phrases)} phrases across authentic tracks.", flush=True)
 
     print("Running multi-stem inter-stem acoustic cohesion training...", flush=True)
     fb_engine = PatternAudioFeedbackEngine()
-    cohesion_res = fb_engine.train_inter_stem_cohesion(corpus_store=store, bank=bank, max_tracks=40)
+    cohesion_res = fb_engine.train_inter_stem_cohesion(corpus_store=store, bank=bank, max_tracks=args.max_cohesion_tracks if args.max_cohesion_tracks > 0 else None)
     print(f"✓ Cohesion Training: {cohesion_res['authentic_bars_evaluated']} authentic multi-stem bars evaluated | "
           f"{cohesion_res['pattern_combos_evaluated']} phrase combos evaluated | "
           f"Mean cohesion: {cohesion_res['mean_multistem_cohesion']}", flush=True)

@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Wub — Klemstine Group KG-505 Groovebox</title>
+  <title>Wub KG-505</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312151c'/%3E%3Ccircle cx='5' cy='8' r='2' fill='%2306b6d4'/%3E%3Ccircle cx='11' cy='8' r='2' fill='%23a855f7'/%3E%3C/svg%3E" />
   <style>
     :root {
       color-scheme: dark;
@@ -161,6 +162,32 @@
       display: flex;
       gap: 10px;
       align-items: center;
+      flex-wrap: wrap;
+    }
+    /* Genre (style) multi-select next to the transport.  Compact dropdown;
+     * Ctrl/Cmd+click multi-selects, empties to "all styles". */
+    .genre-label {
+      font-family: monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      color: var(--neon-cyan, #22d3ee);
+      opacity: 0.9;
+    }
+    #transport #mb-genre-select {
+      background: #0c1016;
+      border: 1px solid var(--mc-bezel, #2b3245);
+      border-bottom-width: 3px;
+      border-radius: 6px;
+      color: #e2e8f0;
+      padding: 6px 8px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      max-width: 210px;
+      min-width: 130px;
+    }
+    #transport #mb-genre-select:focus {
+      outline: 2px solid var(--neon-cyan, #22d3ee);
+      outline-offset: 1px;
     }
     #btn-play {
       background: linear-gradient(180deg, #165338 0%, #0d3322 100%);
@@ -229,6 +256,23 @@
       box-shadow: 0 0 8px #ef4444;
     }
 
+    #btn-song-mode {
+      background: linear-gradient(180deg, #1b3446 0%, #101f2d 100%);
+      border-color: #38bdf8;
+      border-bottom: 3px solid #08121b;
+      border-top: 1px solid #7dd3fc;
+      color: #bae6fd;
+    }
+    #btn-song-mode:hover {
+      background: linear-gradient(180deg, #224258 0%, #152a3d 100%);
+    }
+    #btn-song-mode.active {
+      background: linear-gradient(180deg, #0284c7 0%, #0369a1 100%) !important;
+      color: #ffffff !important;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.75), inset 0 1px 2px #e0f2fe !important;
+      text-shadow: 0 0 8px #bae6fd;
+    }
+
     /* --- BACKEND CONFIG & ENGINE MODE BAR --- */
     .mc-mode-toggle {
       background: linear-gradient(135deg, rgba(0, 243, 255, 0.25), rgba(188, 19, 254, 0.25));
@@ -273,10 +317,10 @@
     /* --- MC-505 RETRO BACKLIT LCD MATRIX DISPLAY --- */
     #master {
       display: flex;
-      gap: 20px;
+      gap: 14px;
       align-items: center;
-      margin: 14px 0;
-      padding: 10px 16px;
+      margin: 0;
+      padding: 6px 12px;
       background: var(--mc-lcd-bg);
       border: 2px inset #083325;
       border-radius: 8px;
@@ -285,27 +329,28 @@
     }
     #master label {
       display: flex;
-      gap: 10px;
+      gap: 8px;
       align-items: center;
       font-family: monospace;
       font-weight: 700;
-      font-size: 0.88rem;
+      font-size: 0.82rem;
       color: var(--mc-lcd-text);
       text-transform: uppercase;
       letter-spacing: 0.08em;
       text-shadow: 0 0 6px rgba(0, 255, 170, 0.7);
+      white-space: nowrap;
     }
     #bpm-slider {
-      flex: 1;
-      min-width: 130px;
+      width: 120px;
+      min-width: 90px;
       accent-color: var(--neon-green);
     }
     #bpm-value {
-      font-size: 1.1rem;
+      font-size: 0.95rem;
       font-weight: 900;
       color: #00ffaa;
       text-shadow: 0 0 8px rgba(0, 255, 170, 0.9);
-      min-width: 80px;
+      min-width: 68px;
       letter-spacing: 0.05em;
     }
     #key-select {
@@ -313,10 +358,10 @@
       color: #00ffaa;
       border: 1px solid #145942;
       border-radius: 4px;
-      padding: 4px 8px;
+      padding: 3px 6px;
       font-family: monospace;
       font-weight: 700;
-      font-size: 0.9rem;
+      font-size: 0.82rem;
       cursor: pointer;
       box-shadow: inset 0 1px 3px rgba(0,0,0,0.8), 0 0 6px rgba(0, 255, 170, 0.3);
     }
@@ -785,6 +830,477 @@
       border: 1px solid #1f2533;
     }
 
+    /* --- HERO STAGE: DJ Control Surface + Unified Full Visualizer Output --- */
+    #hero-stages {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      margin-top: 12px;
+      align-items: stretch;
+    }
+    #hero-stages .tamagotchi-card {
+      width: 100%;
+    }
+    #hero-stages canvas.stage {
+      width: 100%;
+      height: auto;
+      background: #06070a;
+      display: block;
+    }
+
+    /* --- PANEL TOGGLE DOCK & MINIMIZED DRAWERS --- */
+    .panel-minimized {
+      display: none !important;
+    }
+    .panel-dock {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      align-items: center;
+    }
+    .panel-dock-btn {
+      background: rgba(15, 21, 35, 0.92);
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #94a3b8;
+      font-family: monospace;
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 4px 8px;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: all 0.14s ease;
+    }
+    .panel-dock-btn:hover {
+      border-color: var(--neon-cyan);
+      color: #ffffff;
+    }
+    .panel-dock-btn.active {
+      background: linear-gradient(180deg, rgba(0, 229, 255, 0.25) 0%, rgba(155, 0, 255, 0.25) 100%);
+      border-color: var(--neon-cyan);
+      color: #e0f7ff;
+      box-shadow: 0 0 8px rgba(0, 229, 255, 0.32);
+    }
+    .panel-min-btn {
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid #334155;
+      border-radius: 3px;
+      color: #94a3b8;
+      font-family: monospace;
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 1px 6px;
+      cursor: pointer;
+    }
+    .panel-min-btn:hover {
+      border-color: var(--neon-cyan);
+      color: #ffffff;
+    }
+
+    /* --- BEAR 2.0 VISUAL CONTROL STRIP --- */
+    .bear-visual-strip {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #1e293b;
+    }
+    .bear-visual-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .bear-visual-sliders {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      font-family: monospace;
+      font-size: 0.66rem;
+      color: #94a3b8;
+    }
+    .bear-visual-sliders label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .bear-visual-sliders input[type="range"] {
+      flex: 1;
+      min-width: 0;
+      accent-color: var(--neon-pink);
+    }
+
+    /* --- DJ CONTROL SURFACE (HEART OF KG-505) --- */
+    .dj-surface-body {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      flex: 1;
+    }
+    .dj-transport-strip {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      background: #0a0f18;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .dj-transport-strip #transport {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+    }
+    .dj-stem-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .dj-stem-cell {
+      background: #0b101a;
+      border: 1px solid #242d3d;
+      border-radius: 6px;
+      padding: 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .dj-stem-title {
+      font-family: monospace;
+      font-size: 0.68rem;
+      font-weight: 800;
+      text-align: center;
+      letter-spacing: 0.06em;
+    }
+    .dj-stem-btns {
+      display: flex;
+      gap: 3px;
+    }
+    .dj-mini-btn {
+      flex: 1;
+      background: #161d2b;
+      border: 1px solid #334155;
+      border-radius: 3px;
+      color: #cbd5e1;
+      font-family: monospace;
+      font-size: 0.60rem;
+      font-weight: 800;
+      padding: 3px 2px;
+      cursor: pointer;
+    }
+    .dj-mini-btn:hover { border-color: #38bdf8; color: #fff; }
+    .dj-mini-btn.kill.active {
+      background: #dc2626;
+      border-color: #ff6b6b;
+      color: #fff;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+    }
+    .dj-mini-btn.echo.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+      box-shadow: 0 0 8px rgba(56, 189, 248, 0.65);
+    }
+    .fm1-strip {
+      background: #080c14;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-family: monospace;
+    }
+    .fm1-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 8px;
+    }
+    .fm1-title {
+      font-size: 0.66rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      color: #7dd3fc;
+    }
+    .fm1-btn {
+      background: #161d2b;
+      border: 1px solid #334155;
+      border-radius: 3px;
+      color: #cbd5e1;
+      font-family: monospace;
+      font-size: 0.60rem;
+      font-weight: 800;
+      padding: 3px 6px;
+      cursor: pointer;
+    }
+    .fm1-btn:hover { border-color: #38bdf8; color: #fff; }
+    .fm1-field {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.58rem;
+      color: #94a3b8;
+    }
+    .fm1-field select {
+      background: #0f172a;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 0.58rem;
+      padding: 1px 3px;
+      max-width: 150px;
+    }
+    .fm1-status {
+      flex: 1 1 220px;
+      min-width: 180px;
+      font-size: 0.58rem;
+      line-height: 1.3;
+      color: #94a3b8;
+    }
+    .fm1-status[data-tone="info"] { color: #7dd3fc; }
+    .fm1-status[data-tone="ok"] { color: #4ade80; }
+    .fm1-status[data-tone="warn"] { color: #fbbf24; }
+    .fm1-knobs {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .fm1-knob {
+      background: #0b101a;
+      border: 1px solid #242d3d;
+      border-radius: 5px;
+      padding: 4px 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .fm1-knob-name {
+      font-size: 0.60rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+    }
+    .fm1-knob-val {
+      font-size: 0.58rem;
+      color: #94a3b8;
+      text-align: center;
+    }
+    .fm1-knob input[type="range"] {
+      width: 100%;
+      accent-color: #38bdf8;
+    }
+    @media (max-width: 720px) {
+      .fm1-knobs { grid-template-columns: repeat(2, 1fr); }
+    }
+    .dj-fx-rack {
+      background: #090d16;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .dj-fx-knobs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px 8px;
+      font-family: monospace;
+      font-size: 0.66rem;
+      color: #cbd5e1;
+    }
+    .dj-fx-knobs label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .dj-fx-knob-head {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 700;
+    }
+    .dj-fx-knob-head span:last-child { color: var(--neon-cyan); }
+    .dj-fx-knobs input[type="range"] {
+      width: 100%;
+      accent-color: var(--neon-cyan);
+    }
+    .dj-pad-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .dj-pad {
+      flex: 1 1 auto;
+      background: linear-gradient(180deg, #1d2536 0%, #101521 100%);
+      border: 1px solid #334155;
+      border-radius: 5px;
+      color: #e2e8f0;
+      font-family: monospace;
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 6px 6px;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.1s ease;
+    }
+    .dj-pad:hover { border-color: var(--neon-pink); color: #fff; }
+    .dj-pad.active {
+      background: linear-gradient(180deg, #ff0088 0%, #9b00ff 100%);
+      border-color: #ffea00;
+      color: #fff;
+      box-shadow: 0 0 12px rgba(255, 0, 150, 0.75);
+    }
+    .dj-pad.macro { border-color: #475569; color: #ffea00; }
+    .dj-pad.macro:hover { border-color: #ffea00; background: #1f2937; }
+
+    /* --- TWITCH CO-DJ STRIP --- */
+    .twitch-strip {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      margin: 8px 0; padding: 8px 10px;
+      border: 1px solid rgba(145, 70, 255, 0.45); border-radius: 10px;
+      background: rgba(20, 8, 40, 0.55); font-size: 0.82rem;
+    }
+    .twitch-title { color: #bf94ff; font-weight: 800; letter-spacing: 0.06em; }
+    .twitch-strip input[type="text"] {
+      background: #0b0616; color: #fff; border: 1px solid #9146ff;
+      border-radius: 6px; padding: 4px 8px; width: 160px; font-size: 0.82rem;
+    }
+    .twitch-strip button {
+      background: #9146ff; color: #fff; border: none; border-radius: 6px;
+      padding: 5px 12px; font-weight: 800; cursor: pointer; font-size: 0.8rem;
+    }
+    .twitch-strip button.active { background: #2ecc71; }
+    .twitch-status { color: #d6bcff; font-family: monospace; }
+    .twitch-log {
+      flex-basis: 100%; display: flex; flex-direction: column; gap: 2px;
+      font-family: monospace; color: #a8e6ff; font-size: 0.78rem;
+      max-height: 84px; overflow-y: auto;
+    }
+
+    /* --- TRIPPY RAVE LIGHTSHOW & WUB CREATURE FULL VISUALIZER PANEL --- */
+    .lightshow-body {
+      display: grid;
+      grid-template-columns: 1fr 142px;
+      gap: 8px;
+      padding: 8px;
+      flex: 1;
+      min-height: 460px;
+    }
+    @media (max-width: 640px) {
+      .lightshow-body {
+        grid-template-columns: 1fr;
+      }
+    }
+    .lightshow-stage-wrap {
+      position: relative;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #04010a;
+      border: 1px solid #2e1065;
+      min-height: 420px;
+    }
+    .lightshow-bear-strip {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 10px 10px;
+      background: #0b0f1a;
+      border-top: 1px solid #1e293b;
+    }
+    #lightshow-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    #lightshow-bear-overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 2;
+      display: none;
+      filter: drop-shadow(0 0 18px rgba(0, 255, 255, 0.55)) drop-shadow(0 0 30px rgba(255, 0, 200, 0.45));
+    }
+    .lightshow-side {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-family: monospace;
+      font-size: 0.64rem;
+      color: #cbd5e1;
+      overflow-y: auto;
+    }
+    .lightshow-preset-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 3px;
+    }
+    .lightshow-nav-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 3px;
+    }
+    .lightshow-search,
+    .lightshow-select {
+      width: 100%;
+      box-sizing: border-box;
+      background: #0a0f1c;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #e2e8f0;
+      font-family: monospace;
+      font-size: 0.62rem;
+      padding: 3px 4px;
+    }
+    .lightshow-fx-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3px;
+    }
+    .lightshow-btn {
+      background: #131826;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #94a3b8;
+      font-family: monospace;
+      font-size: 0.61rem;
+      font-weight: 800;
+      padding: 4px 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .lightshow-btn:hover { border-color: var(--neon-cyan); color: #fff; }
+    .lightshow-btn.active {
+      background: linear-gradient(180deg, rgba(255, 0, 200, 0.38) 0%, rgba(0, 229, 255, 0.25) 100%);
+      border-color: #ff77e9;
+      color: #fff;
+      box-shadow: 0 0 8px rgba(255, 0, 200, 0.45);
+    }
+    .lightshow-sliders label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: 4px;
+    }
+    .lightshow-sliders input[type="range"] {
+      width: 100%;
+      accent-color: #ff00e6;
+    }
+    #panel-lightshow:fullscreen {
+      background: #000;
+      border: none;
+      width: 100vw;
+      height: 100vh;
+    }
+    #panel-lightshow:fullscreen .lightshow-body {
+      height: calc(100vh - 42px);
+      grid-template-columns: 1fr 150px;
+    }
     /* --- STUDIO RACK VISUALIZERS --- */
     #stages {
       display: grid;
@@ -832,6 +1348,143 @@
     #master-canvas { aspect-ratio: 24 / 7; }
     .master-card { grid-column: 1 / -1; }
 
+    /* --- NEURAL SINGING HEAD PANEL (BOTTOM STAGE) --- */
+    #singing-head-panel {
+      margin-top: 16px;
+      border: 2px solid var(--mc-bezel);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 12px 28px rgba(0, 0, 0, 0.85), 0 0 24px rgba(0, 229, 255, 0.12);
+    }
+    .singing-head-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 6px 12px;
+      background: rgba(9, 13, 22, 0.96);
+      border-bottom: 1px solid rgba(100, 116, 139, 0.25);
+      font-family: monospace;
+      font-size: 0.72rem;
+    }
+    .sh-btn-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .sh-btn {
+      background: rgba(18, 25, 38, 0.92);
+      border: 1px solid rgba(100, 116, 139, 0.42);
+      color: #cbd5e1;
+      border-radius: 4px;
+      padding: 3px 9px;
+      font-family: monospace;
+      font-size: 0.71rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .sh-btn:hover {
+      border-color: var(--neon-cyan);
+      color: #f8fafc;
+    }
+    .sh-btn.active {
+      background: rgba(0, 229, 255, 0.18);
+      border-color: var(--neon-cyan);
+      color: var(--neon-cyan);
+      box-shadow: 0 0 10px rgba(0, 229, 255, 0.22);
+    }
+    .sh-btn.amber.active {
+      background: rgba(246, 168, 35, 0.18);
+      border-color: var(--neon-amber);
+      color: var(--neon-amber);
+      box-shadow: 0 0 10px rgba(246, 168, 35, 0.22);
+    }
+    .singing-head-stage {
+      position: relative;
+      width: 100%;
+      background: #05070c;
+    }
+    #singing-head-canvas {
+      aspect-ratio: 960 / 380;
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #05070c;
+    }
+    #singing-head-3d-host {
+      position: absolute;
+      top: 3.1579%;
+      bottom: 3.1579%;
+      left: 27.7083%;
+      width: 44.5833%;
+      display: none;
+      overflow: hidden;
+      background: #0b0e14;
+      border: 1px solid rgba(0, 229, 255, 0.28);
+      border-radius: 8px;
+      z-index: 4;
+    }
+    .tract3d-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      outline: none;
+      cursor: grab;
+    }
+    .tract3d-canvas:active {
+      cursor: grabbing;
+    }
+    .tract3d-labels {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    .tract3d-label {
+      position: absolute;
+      top: 0;
+      left: 0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(11, 14, 20, 0.8);
+      border: 1px solid rgba(42, 212, 189, 0.35);
+      color: #e7ebf3;
+      font-family: system-ui, sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .tract3d-hint {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 6px;
+      text-align: center;
+      pointer-events: none;
+      font-family: system-ui, sans-serif;
+      font-size: 11px;
+      color: rgba(231, 235, 243, 0.65);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+    }
+    .singing-head-meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 14px;
+      background: rgba(9, 13, 22, 0.92);
+      border-top: 1px solid rgba(100, 116, 139, 0.25);
+      font-family: monospace;
+      font-size: 0.72rem;
+      color: #94a3b8;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    #singing-head-model-badge {
+      color: var(--neon-amber);
+      font-weight: 700;
+    }
+
     /* --- TAMAGOTCHI PET AVATAR PANEL --- */
     .tamagotchi-card {
       display: flex;
@@ -868,8 +1521,9 @@
     .tamagotchi-canvas {
       display: block;
       width: 100%;
-      max-width: 280px;
-      height: 200px;
+      max-width: 100%;
+      height: auto;
+      aspect-ratio: 7 / 5;
       z-index: 1;
       filter: drop-shadow(0 0 12px rgba(255, 0, 200, calc(0.35 + 0.65 * var(--audio-lvl, 0))));
       transition: transform 0.08s ease, filter 0.08s ease;
@@ -892,7 +1546,7 @@
       letter-spacing: 0.6px;
       text-align: center;
       pointer-events: none;
-      z-index: 2;
+      z-index: 4;
       min-height: 1.2em;
     }
     .tamagotchi-screen::before {
@@ -1059,11 +1713,12 @@
     }
     .tamagotchi-actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 6px;
       justify-content: space-between;
     }
     .tamagotchi-btn {
-      flex: 1;
+      flex: 1 1 auto;
       background: linear-gradient(180deg, #1e2636 0%, #131822 100%);
       border: 1px solid #334155;
       border-radius: 4px;
@@ -1085,7 +1740,12 @@
       transform: translateY(1px);
       box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
     }
-
+    .tamagotchi-btn.active {
+      background: linear-gradient(180deg, #00c8ff 0%, #9b00ff 100%);
+      border-color: #ff77e9;
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(0, 255, 255, 0.55);
+    }
     /* Status Bar */
     #status-line {
       margin-top: 14px;
@@ -2147,57 +2807,298 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.145 <span class="mc-build-num">#145</span></span>
-        <span class="mc-tagline">A Klemstine Group Production • Groovebox • D-Beam • Realtime Sequencer</span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.368 <span class="mc-build-num">#368</span></span>
       </div>
-      <div id="transport">
-        <button id="btn-play" type="button">Play</button>
-        <button id="btn-stop" type="button">Stop</button>
-      </div>
-      <div class="ml-standalone-badge" title="100% Client-Side In-Browser ML Inference Engine (Zero Server Dependency)">
-        🧠 100% STANDALONE IN-BROWSER ML
+      <div id="panel-dock" class="panel-dock" role="toolbar" aria-label="Toggle Front Page Panels">
+        <button type="button" class="panel-dock-btn active" data-panel="panel-dj-surface">DJ SURFACE</button>
+        <button type="button" class="panel-dock-btn active" data-panel="panel-lightshow">FULL VISUALIZER</button>
+        <button type="button" class="panel-dock-btn" data-panel="groovebox-panel">SEQUENCER</button>
+        <button type="button" class="panel-dock-btn" data-panel="trippy-sequencer-rack">MODULAR RACK</button>
+        <button type="button" class="panel-dock-btn" data-panel="structure-panel">ARRANGEMENT</button>
+        <button type="button" class="panel-dock-btn" data-panel="trip-panel">BG TRIP</button>
+        <button type="button" class="panel-dock-btn" data-panel="decks">STEM DECKS</button>
+        <button type="button" class="panel-dock-btn" data-panel="stages">WAVEFORMS</button>
+        <button type="button" class="panel-dock-btn" data-panel="singing-head-panel">VOCAL HEAD</button>
       </div>
     </header>
 
-    <!-- BACKLIT MC-505 LCD MATRIX SCREEN -->
-    <section id="master" aria-label="Master controls">
-      <label>TEMPO
-        <input id="bpm-slider" type="range" min="80" max="175" step="1" value="96" />
-        <span id="bpm-value">96 BPM</span>
-      </label>
-      <label>KEY
-        <select id="key-select">
-          <option value="C" selected>C MAJOR</option>
-          <option value="G">G MAJOR</option>
-          <option value="D">D MAJOR</option>
-          <option value="A">A MAJOR</option>
-          <option value="E">E MAJOR</option>
-          <option value="B">B MAJOR</option>
-          <option value="F#">F# MAJOR</option>
-          <option value="F">F MAJOR</option>
-          <option value="Bb">Bb MAJOR</option>
-          <option value="Eb">Eb MAJOR</option>
-          <option value="Am">A MINOR</option>
-          <option value="Em">E MINOR</option>
-          <option value="Dm">D MINOR</option>
-        </select>
-      </label>
-    </section>
+  <!-- HERO STAGE: 1) DJ Control Surface + 4-Voice Nebula, 2) Full Rave Visualizer & Wub Bear Controls -->
+  <section id="hero-stages" aria-label="DJ Control Surface and Full Rave Visualizer">
+
+    <!-- HERO 2: DJ CONTROL SURFACE (TRANSPORT + 4-VOICE NEBULA RETICLES + GROOVEBOX FX) -->
+    <div id="panel-dj-surface" class="stage-card">
+      <div class="stage-header">
+        <span style="color: var(--neon-cyan);">DJ CONTROL SURFACE</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span>4-STEM NEBULA + FX</span>
+          <button type="button" class="panel-min-btn" data-panel-min="panel-dj-surface" title="Minimize panel">–</button>
+        </div>
+      </div>
+      <div class="dj-surface-body">
+        <div class="dj-transport-strip">
+          <div id="transport">
+            <button id="btn-play" type="button">Play</button>
+            <button id="btn-stop" type="button">Stop</button>
+            <button id="btn-save-listening" type="button" title="Save this listening session for transition review">Save session</button>
+            <button id="btn-song-mode" class="active" type="button" title="Toggle structured Song Mode vs Infinite DJ Morph">MODE: SONG</button>
+            <button id="btn-tap-tempo" type="button" title="Tap tempo to set BPM">TAP</button>
+            <button id="btn-bpm-half" type="button" title="Half BPM (0.5x)">×½</button>
+            <button id="btn-bpm-double" type="button" title="Double BPM (2x)">×2</button>
+            <div id="master" aria-label="Master controls">
+              <label>TEMPO
+                <input id="bpm-slider" type="range" min="80" max="175" step="1" value="96" />
+                <span id="bpm-value">96 BPM</span>
+              </label>
+              <label>KEY
+                <select id="key-select">
+                  <option value="C" selected>C MAJOR</option>
+                  <option value="G">G MAJOR</option>
+                  <option value="D">D MAJOR</option>
+                  <option value="A">A MAJOR</option>
+                  <option value="E">E MAJOR</option>
+                  <option value="B">B MAJOR</option>
+                  <option value="F#">F# MAJOR</option>
+                  <option value="F">F MAJOR</option>
+                  <option value="Bb">Bb MAJOR</option>
+                  <option value="Eb">Eb MAJOR</option>
+                  <option value="Am">A MINOR</option>
+                  <option value="Em">E MINOR</option>
+                  <option value="Dm">D MINOR</option>
+                </select>
+              </label>
+            </div>
+            <label class="genre-label" for="mb-genre-select">GENRE</label>
+            <select id="mb-genre-select" multiple size="2" aria-label="MusicBrainz genre: ctrl/cmd+click to multi-select; none = all genres" title="MusicBrainz genres. Select one, several (Ctrl/Cmd+click), or none for all (default)."></select>
+          </div>
+        </div>
+
+        <!-- TWITCH CO-DJ: viewers steer with !commands; replies mirror to chat when logged in -->
+        <div class="twitch-strip" aria-label="Twitch co-DJ controls">
+          <span class="twitch-title">📺 TWITCH CO-DJ</span>
+          <input id="tw-channel" type="text" placeholder="channel name" aria-label="Twitch channel name" autocomplete="off" spellcheck="false" />
+          <input id="tw-username" type="text" placeholder="bot username (optional)" aria-label="Bot username for chat replies" autocomplete="off" spellcheck="false" />
+          <input id="tw-token" type="password" placeholder="oauth token (optional)" aria-label="OAuth token for chat replies" autocomplete="off" spellcheck="false" />
+          <button id="tw-connect" type="button" title="Join channel chat. Empty login = read-only; bot username + oauth token = replies post to chat">CONNECT</button>
+          <span id="tw-status" class="twitch-status">enter channel + CONNECT — viewers type !help 🎧</span>
+          <div id="tw-log" class="twitch-log" aria-live="polite"></div>
+        </div>
+
+        <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
+
+        <!-- M-VAVE FM-1 (CTL-1 firmware) hardware knob → phrase control -->
+        <div id="fm1-strip" class="fm1-strip" aria-label="FM-1 MIDI knob phrase control">
+          <div class="fm1-head">
+            <span class="fm1-title">FM-1 KNOB → PHRASE</span>
+            <button type="button" id="fm1-connect" class="fm1-btn" title="Request Web MIDI access (Chrome/Edge, https)">CONNECT MIDI</button>
+            <label class="fm1-field">INPUT
+              <select id="fm1-input-select" aria-label="MIDI input device">
+                <option value="">— no MIDI inputs —</option>
+              </select>
+            </label>
+            <label class="fm1-field">BANK
+              <select id="fm1-bank-select" aria-label="CTL-1 knob bank">
+                <option value="A">A · 74/71/1/7</option>
+                <option value="B">B · 73/72/75/76</option>
+                <option value="C" selected>C · 16/17/18/19</option>
+                <option value="D">D · 20/21/22/23</option>
+              </select>
+            </label>
+            <span id="fm1-status" class="fm1-status" data-tone="info" title="Stock FM-1 knobs do not send CC. Flash the CTL-1 firmware (github.com/charlesvestal/fm1-ctl) for knob control.">Stock FM-1 knobs send nothing — flash CTL-1, connect USB, then press CONNECT MIDI.</span>
+          </div>
+          <div class="fm1-knobs">
+            <label class="fm1-knob">
+              <span class="fm1-knob-name" style="color:#ff5470;">K1 · DRUMS</span>
+              <input id="fm1-knob-drums" type="range" min="0" max="127" step="1" value="0" aria-label="Knob 1 virtual value (drums slices)" />
+              <span class="fm1-knob-val" id="fm1-val-drums">0 · —</span>
+            </label>
+            <label class="fm1-knob">
+              <span class="fm1-knob-name" style="color:#ffb020;">K2 · BASS</span>
+              <input id="fm1-knob-bass" type="range" min="0" max="127" step="1" value="0" aria-label="Knob 2 virtual value (bass slices)" />
+              <span class="fm1-knob-val" id="fm1-val-bass">0 · —</span>
+            </label>
+            <label class="fm1-knob">
+              <span class="fm1-knob-name" style="color:#c084fc;">K3 · VOCALS</span>
+              <input id="fm1-knob-vocals" type="range" min="0" max="127" step="1" value="0" aria-label="Knob 3 virtual value (vocals slices)" />
+              <span class="fm1-knob-val" id="fm1-val-vocals">0 · —</span>
+            </label>
+            <label class="fm1-knob">
+              <span class="fm1-knob-name" style="color:#38bdf8;">K4 · OTHER</span>
+              <input id="fm1-knob-other" type="range" min="0" max="127" step="1" value="0" aria-label="Knob 4 virtual value (other slices)" />
+              <span class="fm1-knob-val" id="fm1-val-other">0 · —</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 4-Stem DJ Performance Strip: Kill / Echo / Morph -->
+        <div class="dj-stem-strip" aria-label="4-Stem DJ Controls">
+          <div class="dj-stem-cell" style="border-color: rgba(255, 60, 172, 0.4);">
+            <div class="dj-stem-title" style="color: #ff3cac;">DRUMS</div>
+            <div class="dj-stem-btns">
+              <button type="button" class="dj-mini-btn kill" data-dj-kill="drums">KILL</button>
+              <button type="button" class="dj-mini-btn echo" data-dj-echo="drums">ECHO</button>
+              <button type="button" class="dj-mini-btn" data-dj-morph="drums">MORPH</button>
+            </div>
+          </div>
+          <div class="dj-stem-cell" style="border-color: rgba(0, 229, 255, 0.4);">
+            <div class="dj-stem-title" style="color: #00e5ff;">BASS</div>
+            <div class="dj-stem-btns">
+              <button type="button" class="dj-mini-btn kill" data-dj-kill="bass">KILL</button>
+              <button type="button" class="dj-mini-btn echo" data-dj-echo="bass">ECHO</button>
+              <button type="button" class="dj-mini-btn" data-dj-morph="bass">MORPH</button>
+            </div>
+          </div>
+          <div class="dj-stem-cell" style="border-color: rgba(255, 196, 0, 0.4);">
+            <div class="dj-stem-title" style="color: #ffc400;">VOCALS</div>
+            <div class="dj-stem-btns">
+              <button type="button" class="dj-mini-btn kill" data-dj-kill="vocals">KILL</button>
+              <button type="button" class="dj-mini-btn echo" data-dj-echo="vocals">ECHO</button>
+              <button type="button" class="dj-mini-btn" data-dj-morph="vocals">MORPH</button>
+            </div>
+          </div>
+          <div class="dj-stem-cell" style="border-color: rgba(0, 255, 170, 0.4);">
+            <div class="dj-stem-title" style="color: #00ffaa;">OTHER</div>
+            <div class="dj-stem-btns">
+              <button type="button" class="dj-mini-btn kill" data-dj-kill="other">KILL</button>
+              <button type="button" class="dj-mini-btn echo" data-dj-echo="other">ECHO</button>
+              <button type="button" class="dj-mini-btn" data-dj-morph="other">MORPH</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Groovebox DJ Audio FX Rack -->
+        <div class="dj-fx-rack" aria-label="Groovebox Performance FX">
+          <div class="dj-fx-knobs">
+            <label>
+              <div class="dj-fx-knob-head"><span>FILTER LPF/HPF</span><span id="dj-filter-val">CENTER</span></div>
+              <input id="dj-filter-slider" type="range" min="-1" max="1" step="0.02" value="0" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>RESONANCE Q</span><span id="dj-filter-q-val">2.2</span></div>
+              <input id="dj-filter-q-slider" type="range" min="0.7" max="12" step="0.1" value="2.2" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>DUB ECHO</span><span id="dj-echo-val">0%</span></div>
+              <input id="dj-echo-slider" type="range" min="0" max="1" step="0.02" value="0" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>REVERB WASH</span><span id="dj-reverb-val">0%</span></div>
+              <input id="dj-reverb-slider" type="range" min="0" max="1" step="0.02" value="0" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>ACID 303</span><span id="dj-acid-val">0%</span></div>
+              <input id="dj-acid-slider" type="range" min="0" max="1" step="0.02" value="0" />
+            </label>
+            <label>
+              <div class="dj-fx-knob-head"><span>BIT CRUSH</span><span id="dj-crush-val">0%</span></div>
+              <input id="dj-crush-slider" type="range" min="0" max="1" step="0.02" value="0" />
+            </label>
+          </div>
+          <div class="dj-pad-grid">
+            <button type="button" class="dj-pad" data-dj-roll="1" title="Hold for 1/4 beat stutter roll (Q)">ROLL 1/4</button>
+            <button type="button" class="dj-pad" data-dj-roll="0.5" title="Hold for 1/8 beat stutter roll (W)">ROLL 1/8</button>
+            <button type="button" class="dj-pad" data-dj-roll="0.25" title="Hold for 1/16 beat stutter roll (E)">ROLL 1/16</button>
+            <button type="button" class="dj-pad" id="btn-dj-tapestop" title="Hold for Vinyl Tape-Stop Brake (T)">TAPE STOP</button>
+            <button type="button" class="dj-pad macro" id="btn-macro-buildup" title="Engage auto buildup tension">BUILDUP</button>
+            <button type="button" class="dj-pad macro" id="btn-macro-drop" title="Drop impact snap + strobe flash">DROP!</button>
+            <button type="button" class="dj-pad macro" id="btn-macro-break" title="Drums kill + lush dub reverb breakdown">BREAK</button>
+            <button type="button" class="dj-pad macro" id="btn-macro-reset" title="Reset all DJ performance FX">RESET FX</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HERO 2: FULL VISUALIZER (SuperAcid Lightshow + Floating Wub Bear Head 2D/3D) -->
+    <div id="panel-lightshow" class="stage-card lightshow-card">
+      <div class="stage-header">
+        <span style="color: #ffe600;">FULL VISUALIZER • RAVE LIGHTSHOW &amp; WUB BEAR</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span id="tamagotchi-stage-badge" style="color: #ff77e9; font-weight: 800;">LVL 1 • GUMMI CUB</span>
+          <button id="btn-lightshow-fullscreen" class="panel-min-btn" type="button" title="Toggle Fullscreen Visualizer (F)">FULLSCREEN ⛶</button>
+          <button type="button" class="panel-min-btn" data-panel-min="panel-lightshow" title="Minimize panel">–</button>
+        </div>
+      </div>
+      <div class="lightshow-body">
+        <div class="lightshow-stage-wrap">
+          <canvas id="lightshow-canvas" width="960" height="540" aria-label="SuperAcid & SpaceTubes Rave Lightshow Output"></canvas>
+          <canvas id="lightshow-bear-overlay" width="960" height="540" aria-hidden="true"></canvas>
+          <canvas id="tamagotchi-canvas" class="tamagotchi-canvas" width="320" height="320" data-offscreen="true" style="display: none;" aria-label="Wub Floating Head Audio Reactive Buffer"></canvas>
+          <div id="tamagotchi-lyric-bar" class="tamagotchi-lyric-bar"></div>
+          <pre id="tamagotchi-ascii" class="tamagotchi-ascii" style="display: none;" aria-label="Tamagotchi ASCII Face"></pre>
+        </div>
+        <div class="lightshow-side" aria-label="Lightshow VJ Controls">
+          <button id="btn-ls-bear" class="lightshow-btn active" type="button" title="Overlay floating Wub Bear circle head onto Lightshow visuals (O)">BEAR OVERLAY: ON</button>
+          <button id="btn-ls-cortex" class="lightshow-btn active" type="button" title="Auto-rotate presets on song sections">CORTEX VJ: ON</button>
+          <button id="btn-ls-dual" class="lightshow-btn active" type="button" title="Composite FG overlay preset atop BG shader">2-LAYER: ON</button>
+          <div class="lightshow-nav-row">
+            <button id="btn-ls-prev" class="lightshow-btn" type="button" title="Previous SuperAcid scene">◀</button>
+            <button id="btn-ls-rand" class="lightshow-btn" type="button" title="Random SuperAcid scene">🎲</button>
+            <button id="btn-ls-next" class="lightshow-btn" type="button" title="Next SuperAcid scene">▶</button>
+          </div>
+          <input id="ls-preset-search" class="lightshow-search" type="search" placeholder="Search 268 FX..." aria-label="Filter SuperAcid scenes" />
+          <select id="ls-preset-select" class="lightshow-select" aria-label="All 268 SuperAcid Visual Scenes"></select>
+          <div class="lightshow-preset-grid" id="ls-preset-btns">
+            <button type="button" class="lightshow-btn active" data-ls-preset="acid-warp">ACID WARP</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="breathing-mandala">DMT MANDALA</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="space-tubes">SPACETUBES</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="dmt-hyperspace">DMT HYPERSPACE</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="ego-death">EGO DEATH</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="cosmic-serpent">COSMIC SERPENT</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="apollonian-gasket">APOLLONIAN</button>
+            <button type="button" class="lightshow-btn" data-ls-preset="acid-smiley">ACID SMILEY</button>
+          </div>
+          <div class="lightshow-fx-grid">
+            <button type="button" class="lightshow-btn active" id="btn-ls-bloom">BLOOM</button>
+            <button type="button" class="lightshow-btn active" id="btn-ls-trails">TRAILS</button>
+            <button type="button" class="lightshow-btn active" id="btn-ls-chroma">CHROMA</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-glitch">GLITCH</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-kaleido">KALEID</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-strobe">STROBE</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-palette">PALETTE</button>
+            <button type="button" class="lightshow-btn" id="btn-ls-blackout">BLACKOUT</button>
+          </div>
+          <div class="lightshow-sliders">
+            <label>GAIN <input id="ls-intensity-slider" type="range" min="0" max="2.2" step="0.05" value="0" /></label>
+            <label>SPEED <input id="ls-speed-slider" type="range" min="0.2" max="2.5" step="0.05" value="0.2" /></label>
+          </div>
+        </div>
+      </div>
+      <div class="lightshow-bear-strip" aria-label="Combined Wub Creature & 3D Sphere Controls">
+        <div class="tamagotchi-stat-row">
+          <span>VIBE: <b id="tamagotchi-vibe">85%</b></span>
+          <span>MOOD: <b id="tamagotchi-mood">CHILL</b></span>
+          <span>XP: <b id="tamagotchi-xp">0</b></span>
+        </div>
+        <div class="tamagotchi-actions">
+          <button id="btn-tamagotchi-pet" class="tamagotchi-btn" type="button" title="Praise & Pet Wub Bear">PET ♥</button>
+          <button id="btn-tamagotchi-feed" class="tamagotchi-btn" type="button" title="Feed Juicy Audio Slice Snack">SNACK 🍕</button>
+          <button id="btn-tamagotchi-hype" class="tamagotchi-btn" type="button" title="Hype up the bounce energy">HYPE ⚡</button>
+        </div>
+        <div class="bear-visual-strip" aria-label="Wub Creature Visual Controls">
+          <div class="bear-visual-toggles">
+            <button id="btn-bear-mouth-style" class="tamagotchi-btn" type="button">MOUTH: REAL</button>
+          </div>
+          <div class="bear-visual-sliders">
+            <label>DANCE <input id="bear-dance-slider" type="range" min="0.3" max="2.0" step="0.05" value="1.0" /><span id="bear-dance-val">100%</span></label>
+            <label>MOUTH <input id="bear-mouth-slider" type="range" min="0.6" max="1.8" step="0.05" value="1.0" /><span id="bear-mouth-val">100%</span></label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 
     <!-- MC-505 MULTI-PATTERN SEQUENCER PANEL -->
-    <section id="groovebox-panel" aria-label="Groovebox Sequencer">
+    <section id="groovebox-panel" class="panel-minimized" aria-label="Groovebox Sequencer">
       <div class="gb-header-row">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-          <span class="gb-title">REALTIME MULTI-PATTERN SEQUENCER</span>
+          <span class="gb-title">SEQUENCER</span>
           <span id="gb-section-badge">GROOVE A</span>
           <span id="gb-fill-badge" style="display: none;">FILL</span>
         </div>
         <div style="display: flex; align-items: center; gap: 10px; font-size: 0.82rem; font-family: monospace; font-weight: 700; flex-wrap: wrap;">
           <div class="gb-cycle-selector">
             <span class="gb-cycle-label">ENGINE:</span>
-            <button class="gb-cycle-btn active" id="btn-mode-jukebox" data-playback="jukebox" type="button" title="Jukebox Groove: Authentic Studio Loops + Groovy Slices & Vocal Chops">JUKEBOX</button>
-            <button class="gb-cycle-btn" id="btn-mode-slices" data-playback="slices" type="button" title="Live Slices: 16th-Step Micro-Slice Re-sequencer">SLICES</button>
-            <button class="gb-cycle-btn" id="btn-mode-phrases" data-playback="phrase_blocks" type="button" title="Master Phrases: Continuous 4-Bar Studio Blocks">PHRASES</button>
+            <button class="gb-cycle-btn active" id="btn-mode-kit" data-playback="kit" type="button" title="Real 4-Bar Stem Phrases">KIT</button>
+            <button class="gb-cycle-btn" id="btn-next-kit" type="button" title="Queue next kit on the next 4-bar boundary">NEXT KIT</button>
           </div>
           <div class="gb-cycle-selector">
             <span class="gb-cycle-label">CYCLE:</span>
@@ -2260,13 +3161,12 @@
     </section>
 
     <!-- NEON TRIPPY MODULAR SEQUENCER RACK -->
-    <section id="trippy-sequencer-rack" class="trippy-rack-chassis" aria-label="Neon Modular Sequencer Rack">
+    <section id="trippy-sequencer-rack" class="trippy-rack-chassis panel-minimized" aria-label="Neon Modular Sequencer Rack">
       <!-- Top Rack Rails & Branding -->
       <div class="rack-ears">
         <span class="rack-bolt">✛</span>
         <div class="rack-brand">
           <span class="rack-brand-glow">KG-505 MODULAR</span>
-          <span class="rack-brand-sub">NEON HARMONIC SEQUENCER RACK • 19" 4U</span>
         </div>
         <span class="rack-bolt">✛</span>
       </div>
@@ -2276,7 +3176,7 @@
         <div class="scale-module-header">
           <div class="scale-title-group">
             <span class="scale-indicator-led"></span>
-            <span class="module-title">HARMONIC SCALE MATRIX &amp; CHORD ENGINE</span>
+            <span class="module-title">HARMONIC SCALE MATRIX</span>
           </div>
           <div class="scale-camelot-badge" id="rack-camelot-badge">8B</div>
         </div>
@@ -2287,9 +3187,6 @@
             <div class="scale-name-line">
               <span class="scale-name" id="rack-scale-name">C MAJOR</span>
               <span class="scale-mode-tag" id="rack-scale-mode">IONIAN (MAJOR)</span>
-            </div>
-            <div class="scale-formula-line" id="rack-scale-formula">
-              FORMULA: 1 - 2 - 3 - 4 - 5 - 6 - 7
             </div>
           </div>
 
@@ -2581,24 +3478,14 @@
           </div>
         </div>
       </div>
-
-      <!-- Bottom Rack Rail -->
-      <div class="rack-ears bottom">
-        <span class="rack-bolt">✛</span>
-        <div class="rack-status-bar">
-          <span class="rack-status-dot"></span>
-          <span>SAMPLE-ACCURATE WEBAUDIO SYNC • REALTIME ACOUSTIC ML SCORING</span>
-        </div>
-        <span class="rack-bolt">✛</span>
-      </div>
     </section>
 
     <!-- SONG ARRANGEMENT & PATTERN MATRIX PANEL -->
-    <section id="structure-panel" aria-label="Song Structure and Patterns">
+    <section id="structure-panel" class="panel-minimized" aria-label="Song Structure and Patterns">
       <div class="struct-header">
         <div class="struct-title">
           <span class="struct-icon"></span>
-          SONG ARRANGEMENT &amp; PATTERN MATRIX
+          ARRANGEMENT
         </div>
         <div class="struct-stats">
           <span>KEY: <b id="struct-camelot" style="color: var(--neon-cyan);">8B (C major)</b></span>
@@ -2714,15 +3601,14 @@
     </section>
 
     <!-- PSYCHEDELIC LIGHT SHOW CONTROLLER -->
-    <section id="trip-panel" aria-label="Psychedelic Light Show Controller">
+    <section id="trip-panel" class="panel-minimized" aria-label="Psychedelic Light Show Controller">
       <div class="trip-header">
         <div class="trip-title">
           <span class="trip-led"></span>
-          <span>DMT / LSD / MESCALINE LIGHT SHOW</span>
-          <span class="trip-sub">Self-Reactive • WebGL • Color-Cycling • 60 FPS</span>
+          <span>LIGHT SHOW</span>
         </div>
         <div class="trip-master-toggle">
-          <button id="trip-toggle-btn" class="active" type="button" aria-pressed="true">LIGHT SHOW: ON</button>
+          <button id="trip-toggle-btn" type="button" aria-pressed="false">LIGHT SHOW: OFF</button>
         </div>
       </div>
       <div class="trip-controls-grid">
@@ -2762,9 +3648,9 @@
     </section>
 
     <!-- 4-STEM HARDWARE MIXER DECKS -->
-    <section id="decks" aria-label="Stem decks">
+    <section id="decks" class="panel-minimized" aria-label="Stem decks">
       <div class="deck" id="deck-drums">
-        <h2>Part 1: Drums</h2>
+        <h2>Drums</h2>
         <div class="row toggles">
           <button id="drums-mute" type="button" aria-pressed="false">Mute</button>
           <button id="drums-solo" type="button" aria-pressed="false">Solo</button>
@@ -2773,7 +3659,7 @@
         <div class="row"><label>Chaos <input id="drums-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="drums-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="drums-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="drums-synth-val">0.00</span></div>
         <div class="deck-feedback-row">
-          <span class="feedback-label">Train Feedback:</span>
+          <span class="feedback-label">Rating</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <button class="thumb-btn thumb-up" data-stem="drums" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
             <span class="feedback-score" id="deck-score-drums">0</span>
@@ -2782,7 +3668,7 @@
         </div>
       </div>
       <div class="deck" id="deck-bass">
-        <h2>Part 2: Bass</h2>
+        <h2>Bass</h2>
         <div class="row toggles">
           <button id="bass-mute" type="button" aria-pressed="false">Mute</button>
           <button id="bass-solo" type="button" aria-pressed="false">Solo</button>
@@ -2791,7 +3677,7 @@
         <div class="row"><label>Chaos <input id="bass-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="bass-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="bass-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="bass-synth-val">0.00</span></div>
         <div class="deck-feedback-row">
-          <span class="feedback-label">Train Feedback:</span>
+          <span class="feedback-label">Rating</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <button class="thumb-btn thumb-up" data-stem="bass" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
             <span class="feedback-score" id="deck-score-bass">0</span>
@@ -2800,7 +3686,7 @@
         </div>
       </div>
       <div class="deck" id="deck-vocals">
-        <h2>Part 3: Vocals</h2>
+        <h2>Vocals</h2>
         <div class="row toggles">
           <button id="vocals-mute" type="button" aria-pressed="false">Mute</button>
           <button id="vocals-solo" type="button" aria-pressed="false">Solo</button>
@@ -2809,7 +3695,7 @@
         <div class="row"><label>Chaos <input id="vocals-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="vocals-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="vocals-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="vocals-synth-val">0.00</span></div>
         <div class="deck-feedback-row">
-          <span class="feedback-label">Train Feedback:</span>
+          <span class="feedback-label">Rating</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <button class="thumb-btn thumb-up" data-stem="vocals" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
             <span class="feedback-score" id="deck-score-vocals">0</span>
@@ -2818,7 +3704,7 @@
         </div>
       </div>
       <div class="deck" id="deck-other">
-        <h2>Part 4: Other</h2>
+        <h2>Other</h2>
         <div class="row toggles">
           <button id="other-mute" type="button" aria-pressed="false">Mute</button>
           <button id="other-solo" type="button" aria-pressed="false">Solo</button>
@@ -2827,7 +3713,7 @@
         <div class="row"><label>Chaos <input id="other-chaos" type="range" min="0" max="1" step="0.01" value="0.5" /></label><span class="val" id="other-chaos-val">0.50</span></div>
         <div class="row"><label>Synth <input id="other-synth" type="range" min="0" max="1" step="0.01" value="0" /></label><span class="val" id="other-synth-val">0.00</span></div>
         <div class="deck-feedback-row">
-          <span class="feedback-label">Train Feedback:</span>
+          <span class="feedback-label">Rating</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <button class="thumb-btn thumb-up" data-stem="other" type="button" title="Thumbs Up — Keep & train on this groove">👍</button>
             <span class="feedback-score" id="deck-score-other">0</span>
@@ -2838,60 +3724,64 @@
     </section>
 
     <!-- STUDIO RACK VISUALIZERS -->
-    <section id="stages" aria-label="Visualizers">
+    <section id="stages" class="panel-minimized" aria-label="Visualizers">
       <div class="stage-card">
         <div class="stage-header">
-          <span>4-Stem Real-Time Waveform Analysis</span>
-          <span>Oscilloscope • FFT • RMS</span>
+          <span>STEM WAVEFORMS</span>
         </div>
         <canvas id="rings-canvas" class="stage" width="720" height="450"></canvas>
       </div>
-      <div class="stage-card">
-        <div class="stage-header">
-          <span>2D Timbre Nebula &amp; Gravity Reticles</span>
-          <span>D-Beam Vector Crosshairs</span>
-        </div>
-        <canvas id="nebula-canvas" class="stage" width="720" height="450"></canvas>
-      </div>
-      <!-- Panel 3: Neural ASCII Tamagotchi Avatar ("WubGotchi") -->
-      <div class="stage-card tamagotchi-card">
-        <div class="stage-header">
-          <span style="color: #ff77e9;">Wub • Kawaii Gummi Bear Pet</span>
-          <span id="tamagotchi-stage-badge">LVL 1 • GUMMI CUB</span>
-        </div>
-        <div class="tamagotchi-container">
-          <div class="tamagotchi-screen">
-            <div class="tamagotchi-scanlines"></div>
-            <canvas id="tamagotchi-canvas" class="tamagotchi-canvas" width="280" height="200" aria-label="Wub Kawaii Gummi Bear Audio Reactive Body Loop"></canvas>
-            <div id="tamagotchi-lyric-bar" class="tamagotchi-lyric-bar"></div>
-            <pre id="tamagotchi-ascii" class="tamagotchi-ascii" style="display: none;" aria-label="Tamagotchi ASCII Face"></pre>
-          </div>
-          <div class="tamagotchi-dashboard">
-            <div class="tamagotchi-stat-row">
-              <span>VIBE: <b id="tamagotchi-vibe">85%</b></span>
-              <span>MOOD: <b id="tamagotchi-mood">CHILL</b></span>
-              <span>XP: <b id="tamagotchi-xp">0</b></span>
-            </div>
-            <div class="tamagotchi-actions">
-              <button id="btn-tamagotchi-pet" class="tamagotchi-btn" type="button" title="Praise & Pet Wub Gummi Bear">PET ♥</button>
-              <button id="btn-tamagotchi-feed" class="tamagotchi-btn" type="button" title="Feed Juicy Audio Slice Snack">SNACK 🍕</button>
-              <button id="btn-tamagotchi-hype" class="tamagotchi-btn" type="button" title="Hype up the dance bounce energy">HYPE ⚡</button>
-            </div>
-          </div>
-        </div>
-      </div>
       <div class="stage-card master-card">
         <div class="stage-header">
-          <span style="color: var(--neon-green);">Master Summed Audio Analysis</span>
-          <span>Summed Waveform • 64-Band Spectrum • Peak VU</span>
+          <span style="color: var(--neon-green);">MASTER OUTPUT</span>
         </div>
         <canvas id="master-canvas" class="stage" width="720" height="240"></canvas>
       </div>
     </section>
 
+    <!-- NEURAL SINGING HEAD (BOTTOM STAGE) -->
+    <section id="singing-head-panel" class="stage-card panel-minimized" aria-label="Singing Head Vocal Articulator">
+      <div class="stage-header">
+        <span style="color: var(--neon-cyan);">VOCAL ARTICULATOR</span>
+        <span id="singing-head-status">STANDBY</span>
+      </div>
+      <div class="singing-head-toolbar" role="toolbar" aria-label="Singing Head View Controls">
+        <div class="sh-btn-group" role="group" aria-label="Vocal Instrument Audio Source">
+          <button type="button" id="sh-audio-track" class="sh-btn active" title="Use the song's audio track slice as the vocal instrument audio">🎵 TRACK AUDIO</button>
+          <button type="button" id="sh-audio-synth" class="sh-btn amber" title="Play the CHIMERA vocal synthesizer output driven by the Singing Head parameters">🗣️ HEAD SYNTH</button>
+        </div>
+        <div class="sh-btn-group" role="group" aria-label="Singing Head Analysis Input">
+          <button type="button" id="sh-input-vocals" class="sh-btn active" title="Drive the Singing Head strictly from the isolated vocal track">🎤 VOCAL STEM</button>
+          <button type="button" id="sh-input-mix" class="sh-btn amber" title="Drive the Singing Head from the full 4-stem track mix (feedback-free)">🎛️ FULL MIX</button>
+        </div>
+        <div class="sh-btn-group">
+          <button type="button" id="sh-mode-side" class="sh-btn active" title="Mid-sagittal Side View Head">SIDE VIEW</button>
+          <button type="button" id="sh-mode-3d" class="sh-btn amber" title="Toggle Interactive 3D Vocal Tract View">3D VIEW</button>
+        </div>
+        <div class="sh-btn-group">
+          <button type="button" data-sh-field="pressure" class="sh-btn active">PRESSURE</button>
+          <button type="button" data-sh-field="velocity" class="sh-btn">VELOCITY</button>
+          <button type="button" data-sh-field="air" class="sh-btn">AIR</button>
+          <button type="button" id="sh-toggle-labels" class="sh-btn active" title="Toggle Anatomical Labels">Aa</button>
+        </div>
+        <div id="sh-3d-controls" class="sh-btn-group" style="display: none;">
+          <button type="button" data-sh-preset="side" class="sh-btn">SIDE</button>
+          <button type="button" data-sh-preset="front" class="sh-btn">FRONT</button>
+          <button type="button" data-sh-preset="top" class="sh-btn">TOP</button>
+          <button type="button" data-sh-preset="three" class="sh-btn active">¾</button>
+          <button type="button" id="sh-toggle-cut" class="sh-btn amber active">CUTAWAY</button>
+          <button type="button" id="sh-toggle-tissues" class="sh-btn amber active">TISSUES</button>
+        </div>
+      </div>
+      <div class="singing-head-stage">
+        <canvas id="singing-head-canvas" class="stage" width="960" height="380" aria-label="Reverse-Trained Mid-Sagittal Singing Head"></canvas>
+        <div id="singing-head-3d-host" aria-label="Interactive 3D Vocal Tract View"></div>
+      </div>
+    </section>
+
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.145 (Build #145 • rev f123aa9fd7)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.368 (Build #368 • rev 110b86f237)</span>
     </div>
   </div>
 

@@ -3,7 +3,12 @@
 // Signal path per stem:
 //   slice SourceNode -> per-slice GainNode (equal-power fades)
 //     -> bus GainNode (volume/mute/solo) -> BiquadFilterNode -> AnalyserNode
-//     -> master DynamicsCompressorNode -> destination.
+//     -> glue GainNode -> master DynamicsCompressorNode -> destination.
+//
+// Shared glue reverb:
+//   stem AnalyserNode -> reverb send GainNode -> ConvolverNode
+//     -> high-pass BiquadFilterNode (~300 Hz) -> return GainNode (-20 dB)
+//     -> master.
 //
 // Scheduling model: callers pass an absolute AudioContext timestamp (`when`)
 // and this engine calls `source.start(when)` directly, which is already
@@ -12,6 +17,7 @@
 // finished sources so disconnected nodes can be GC'd. If a future backend
 // needs deferred dispatch, this is the poll point for it.
 import type { StemName } from "./types";
+import { attachDjFxWorklet, DEFAULT_DJ_FX_STATE, type DjFxState } from "./dj_fx_processor";
 
 export const STEMS: readonly StemName[] = ["drums", "bass", "vocals", "other"];
 export const ENGINE_SAMPLE_RATE = 44100;
@@ -20,6 +26,50 @@ export const SCHEDULE_AHEAD_TIME_S = 0.15;
 export const DEFAULT_FADE_MS = 6;
 export const MAX_VOLUME = 1.5;
 
+// Glue bus / shared reverb tuning. Deliberately conservative: the glue stage is
+// a mix layer, never a replacement for setStemMixLevel's input gain.
+const GLUE_ANALYSER_FFT = 2048;
+const GLUE_MIN = 0.5;
+const GLUE_MAX = 1.0;
+const GLUE_RAMP_SEC = 0.05;
+const VOCAL_RMS_FLOOR = 0.01;
+const VOCAL_RMS_FULL = 0.06;
+const VOCAL_DUCK_DB = 1.5;
+const KICK_DUCK_DB = 2.5;
+const VOCAL_ATTACK_SEC = 0.02;
+const VOCAL_RELEASE_SEC = 0.25;
+const KICK_ATTACK_SEC = 0.008;
+const KICK_RELEASE_SEC = 0.12;
+const KICK_TRANSIENT_HOLD_SEC = 0.06;
+const KICK_SHORT_WINDOW = 512;
+const REVERB_SECONDS = 0.55;
+const REVERB_PRE_DELAY_SEC = 0.012;
+const REVERB_RETURN_DB = -20;
+const REVERB_HIGHPASS_HZ = 300;
+// DJ transition technique (B): vocal reverb tail while the outgoing vocal
+// fades.  Boosted send briefly, then back to the user's send.  Conservative
+// on purpose: the tail must read as a hand-off, never as a hall.
+const TRANSITION_REVERB_TAIL = 0.22;
+const TRANSITION_REVERB_TAIL_SEC = 0.35;
+
+const DEFAULT_REVERB_SENDS: Record<StemName, number> = {
+  drums: 0,
+  bass: 0,
+  other: 0.08,
+  vocals: 0.10,
+};
+
+export interface GlueState {
+  enabled: boolean;
+  gains: Record<StemName, number>;
+  base: Record<StemName, number>;
+  duck: Record<StemName, number>;
+  vocalRms: number;
+  vocalPresence: number;
+  drumShortRms: number;
+  drumTransient: boolean;
+}
+
 export interface SliceScheduleOptions {
   /** Playback rate multiplier (time-stretch factor from the server). */
   rate?: number;
@@ -27,13 +77,18 @@ export interface SliceScheduleOptions {
   detuneCents?: number;
   /** Equal-power fade length in ms (default 3). */
   fadeMs?: number;
+  /** Optional shorter source fade-in for block seams (ms). */
+  fadeInMs?: number;
+  /** Optional shorter source fade-out for block seams (ms). */
+  fadeOutMs?: number;
   /** Optional playback duration clamp in seconds (fades out at end of duration). */
   duration?: number;
   /** Gain / velocity scaling (0.0..1.5). */
   gain?: number;
   /** Dedicated voice track key (e.g. "drums:kick", "drums:snare", "drums:hat_closed", "drums:hat_open", "bass"). */
   voiceKey?: string;
-  /** Voice keys to choke (fade out over crossfadeSec). E.g. ["drums:hat_open"] choked by hat_closed. */
+  /** Microtiming nudge in ms (+ = late/laid-back). Bounded ±15ms by scheduler. */
+  whenOffsetMs?: number;  /** Voice keys to choke (fade out over crossfadeSec). E.g. ["drums:hat_open"] choked by hat_closed. */
   chokeKeys?: string[];
 }
 
@@ -56,11 +111,77 @@ interface StemBus {
   input: GainNode;
   filter: BiquadFilterNode;
   analyser: AnalyserNode;
+  glue: GainNode;
+  reverbSend: GainNode;
+  echoSend: GainNode;
 }
 
 function clampVolume(v: number): number {
   if (!Number.isFinite(v)) return 1;
   return Math.min(MAX_VOLUME, Math.max(0, v));
+}
+
+function clamp01(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  return Math.min(1, Math.max(0, v));
+}
+
+function dbToGain(db: number): number {
+  return Math.pow(10, db / 20);
+}
+
+function clampGlue(v: number): number {
+  if (!Number.isFinite(v)) return GLUE_MAX;
+  return Math.min(GLUE_MAX, Math.max(GLUE_MIN, v));
+}
+
+function rmsOf(data: Float32Array, start = 0, end = data.length): number {
+  const from = Math.max(0, Math.min(data.length, start));
+  const to = Math.max(from, Math.min(data.length, end));
+  if (to <= from) return 0;
+  let sum = 0;
+  for (let i = from; i < to; i++) {
+    const v = data[i];
+    sum += v * v;
+  }
+  return Math.sqrt(sum / (to - from));
+}
+
+function peakOf(data: Float32Array, start = 0, end = data.length): number {
+  const from = Math.max(0, Math.min(data.length, start));
+  const to = Math.max(from, Math.min(data.length, end));
+  let peak = 0;
+  for (let i = from; i < to; i++) {
+    const a = Math.abs(data[i]);
+    if (a > peak) peak = a;
+  }
+  return peak;
+}
+
+/**
+ * Short stereo plate impulse, generated in JS so the kit bank never needs an
+ * extra asset. Independent L/R noise and a gentle one-pole low-pass keep the
+ * tail dark; ConvolverNode's built-in normalisation handles absolute level.
+ */
+function createReverbImpulse(ctx: AudioContext): AudioBuffer {
+  const length = Math.max(1, Math.floor(ctx.sampleRate * REVERB_SECONDS));
+  const preDelay = Math.min(length - 1, Math.floor(ctx.sampleRate * REVERB_PRE_DELAY_SEC));
+  const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+  for (let ch = 0; ch < impulse.numberOfChannels; ch++) {
+    const data = impulse.getChannelData(ch);
+    let smooth = 0;
+    for (let i = 0; i < length; i++) {
+      if (i < preDelay) {
+        data[i] = 0;
+        continue;
+      }
+      const tail = (i - preDelay) / Math.max(1, length - preDelay);
+      smooth += ((Math.random() * 2 - 1) - smooth) * 0.35;
+      const fadeOut = Math.min(1, (1 - tail) * 20);
+      data[i] = smooth * Math.exp(-5.5 * tail) * fadeOut;
+    }
+  }
+  return impulse;
 }
 
 function resolveAudioContextCtor(): typeof AudioContext | null {
@@ -83,7 +204,14 @@ export class AudioEngine {
   private ctx_: AudioContext | null = null;
   private master_: DynamicsCompressorNode | null = null;
   private masterAnalyser_: AnalyserNode | null = null;
+  private probeAnalyser_: AnalyserNode | null = null;
   private buses_: Record<StemName, StemBus> | null = null;
+  private vocalTrackAnalyser_: AnalyserNode | null = null;
+  private vocalTrackGain_: GainNode | null = null;
+  private vocalSynthGain_: GainNode | null = null;
+  private mixTrackSum_: GainNode | null = null;
+  private mixTrackAnalyser_: AnalyserNode | null = null;
+  private vocalSynthMode_ = false;
   private timer_: ReturnType<typeof setInterval> | null = null;
   private liveSources_: Map<AudioBufferSourceNode, number> = new Map();
   private activeVoices_: Partial<Record<string, { source: AudioBufferSourceNode; gain: GainNode; endAt: number }>> = {};
@@ -95,9 +223,42 @@ export class AudioEngine {
   private autoVolumes_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
   private mutes_: Record<StemName, boolean> = { drums: false, bass: false, vocals: false, other: false };
   private solos_: Record<StemName, boolean> = { drums: false, bass: false, vocals: false, other: false };
+  private kills_: Record<StemName, boolean> = { drums: false, bass: false, vocals: false, other: false };
+  private echoThrows_: Record<StemName, boolean> = { drums: false, bass: false, vocals: false, other: false };
+
+  // DJ Performance FX rack state + AudioNodes
+  private djFxState_: DjFxState = { ...DEFAULT_DJ_FX_STATE };
+  private djFilterNode_: BiquadFilterNode | null = null;
+  private echoDelayNode_: DelayNode | null = null;
+  private echoFeedbackGain_: GainNode | null = null;
+  private echoWetGain_: GainNode | null = null;
+  private reverbReturnNode_: GainNode | null = null;
+  private bassAcidPeak_: BiquadFilterNode | null = null;
+  private bassAcidWet_: GainNode | null = null;
+  private djWorkletNode_: AudioWorkletNode | null = null;
+
+  // Glue bus state. glueBase_ is the manual target set by setStemGlue();
+  // glueDuck_ is the automatic sidechain factor applied by updateGlue().
+  private glueEnabled_ = true;
+  private glueBase_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
+  private glueDuck_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
+  private glueTargets_: Record<StemName, number> = { drums: 1, bass: 1, vocals: 1, other: 1 };
+  private reverbSends_: Record<StemName, number> = { ...DEFAULT_REVERB_SENDS };
+  private readonly vocalTimeData_ = new Float32Array(GLUE_ANALYSER_FFT);
+  private readonly drumTimeData_ = new Float32Array(GLUE_ANALYSER_FFT);
+  private vocalRms_ = 0;
+  private vocalPresence_ = 0;
+  private drumShortRms_ = 0;
+  private drumTransient_ = false;
+  private drumTransientUntil_ = 0;
 
   get ready(): boolean {
     return this.ctx_ !== null && this.buses_ !== null;
+  }
+
+  /** AudioContext state for diagnostics ("running" | "suspended" | ...). */
+  contextState(): string {
+    return this.ctx_ === null ? "no-context" : this.ctx_.state;
   }
 
   get targetBpm(): number {
@@ -117,12 +278,123 @@ export class AudioEngine {
     master.attack.value = 0.003;
     master.release.value = 0.2;
 
+    // Gain staging: four stems summing at unity hit +4 dBFS on drum
+    // transients (measured peak 1.68 in the built app). Trim before the
+    // compressor, then a limiter and a soft clipper so the destination never
+    // sees more than ~0.98. Clipping was audible on every hit.
+    const masterTrim = ctx.createGain();
+    masterTrim.gain.value = 0.62;
+
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.08;
+
+    // Transparent below 0.8, tanh-limited above; asymptote 1.0 so a hot
+    // transient can never square off at the DAC.
+    const shaper = ctx.createWaveShaper();
+    const curve = new Float32Array(4096);
+    const knee = 0.8;
+    for (let i = 0; i < curve.length; i++) {
+      const x = (i / (curve.length - 1)) * 2 - 1;
+      const a = Math.abs(x);
+      const y = a <= knee ? a : knee + (1 - knee) * Math.tanh((a - knee) / (1 - knee));
+      curve[i] = Math.sign(x) * Math.min(1, y);
+    }
+    shaper.curve = curve;
+    shaper.oversample = "4x";
+
     const masterAnalyser = ctx.createAnalyser();
     masterAnalyser.fftSize = 2048;
     masterAnalyser.smoothingTimeConstant = 0.8;
 
-    master.connect(masterAnalyser);
+    // Hidden seam probe tap: a long time-domain window so a 10-20 fps main
+    // thread still contains the block boundary. It is not connected onward.
+    const probeAnalyser = ctx.createAnalyser();
+    probeAnalyser.fftSize = 16384;
+    probeAnalyser.smoothingTimeConstant = 0;
+
+    master.connect(masterTrim);
+    masterTrim.connect(limiter);
+    limiter.connect(shaper);
+    shaper.connect(masterAnalyser);
+    shaper.connect(probeAnalyser);
     masterAnalyser.connect(ctx.destination);
+
+    // Master Pioneer-style DJ Sweep Filter (between master and masterTrim)
+    const djFilter = ctx.createBiquadFilter();
+    djFilter.type = "allpass";
+    djFilter.frequency.value = 1000;
+    djFilter.Q.value = this.djFxState_.filterQ;
+    master.disconnect(masterTrim);
+    master.connect(djFilter);
+    djFilter.connect(masterTrim);
+    this.djFilterNode_ = djFilter;
+
+    // Tempo-synced Dub Echo Throw delay loop
+    const echoDelay = ctx.createDelay(2.0);
+    echoDelay.delayTime.value = Math.min(1.5, (60 / this.targetBpm_) * 0.75);
+    const echoTone = ctx.createBiquadFilter();
+    echoTone.type = "lowpass";
+    echoTone.frequency.value = 2600;
+    echoTone.Q.value = 0.707;
+    const echoFb = ctx.createGain();
+    echoFb.gain.value = 0.48;
+    const echoWet = ctx.createGain();
+    echoWet.gain.value = 0;
+    echoDelay.connect(echoTone);
+    echoTone.connect(echoFb);
+    echoFb.connect(echoDelay);
+    echoTone.connect(echoWet);
+    echoWet.connect(djFilter);
+    this.echoDelayNode_ = echoDelay;
+    this.echoFeedbackGain_ = echoFb;
+    this.echoWetGain_ = echoWet;
+
+    // Async AudioWorklet DJ Stutter/TapeStop/Crush splice between masterTrim -> limiter
+    void attachDjFxWorklet(ctx).then((workletNode) => {
+      if (!workletNode || this.ctx_ !== ctx) return;
+      try {
+        masterTrim.connect(workletNode);
+        workletNode.connect(limiter);
+        masterTrim.disconnect(limiter);
+        this.djWorkletNode_ = workletNode;
+        this.applyDjFxParams();
+      } catch {
+        // Keep direct bypass on failure
+      }
+    });
+
+    // One shared, short reverb for the whole kit. The impulse is generated in
+    // JS (no asset) and the return is high-passed + trimmed so it reads as
+    // glue, not as a wash.
+    const convolver = ctx.createConvolver();
+    convolver.normalize = true;
+    convolver.buffer = createReverbImpulse(ctx);
+
+    const reverbHighpass = ctx.createBiquadFilter();
+    reverbHighpass.type = "highpass";
+    reverbHighpass.frequency.value = REVERB_HIGHPASS_HZ;
+    reverbHighpass.Q.value = 0.707;
+
+    const reverbReturn = ctx.createGain();
+    reverbReturn.gain.value = dbToGain(REVERB_RETURN_DB);
+    this.reverbReturnNode_ = reverbReturn;
+
+    convolver.connect(reverbHighpass);
+    reverbHighpass.connect(reverbReturn);
+    reverbReturn.connect(master);
+
+    const mixTrackSum = ctx.createGain();
+    mixTrackSum.gain.value = 0.62;
+    const mixTrackAnalyser = ctx.createAnalyser();
+    mixTrackAnalyser.fftSize = GLUE_ANALYSER_FFT;
+    mixTrackAnalyser.smoothingTimeConstant = 0.8;
+    mixTrackSum.connect(mixTrackAnalyser);
+    this.mixTrackSum_ = mixTrackSum;
+    this.mixTrackAnalyser_ = mixTrackAnalyser;
 
     const buses = {} as Record<StemName, StemBus>;
     for (const stem of STEMS) {
@@ -133,19 +405,77 @@ export class AudioEngine {
       filter.frequency.value = spec.frequency;
       filter.Q.value = spec.q;
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
+      analyser.fftSize = GLUE_ANALYSER_FFT;
       analyser.smoothingTimeConstant = 0.8;
+      const glue = ctx.createGain();
+      glue.gain.value = this.glueEnabled_ ? this.glueBase_[stem] : GLUE_MAX;
+      this.glueDuck_[stem] = 1;
+      this.glueTargets_[stem] = glue.gain.value;
+      const reverbSend = ctx.createGain();
+      reverbSend.gain.value = this.reverbSends_[stem];
+      const echoSend = ctx.createGain();
+      echoSend.gain.value = 0;
       input.connect(filter);
-      filter.connect(analyser);
-      analyser.connect(master);
-      buses[stem] = { input, filter, analyser };
+      if (stem === "vocals") {
+        const trackAnalyser = ctx.createAnalyser();
+        trackAnalyser.fftSize = GLUE_ANALYSER_FFT;
+        trackAnalyser.smoothingTimeConstant = 0.8;
+        const trackGain = ctx.createGain();
+        trackGain.gain.value = this.vocalSynthMode_ ? 0.0 : 1.0;
+        const synthGain = ctx.createGain();
+        synthGain.gain.value = this.vocalSynthMode_ ? 1.0 : 0.0;
+        filter.connect(trackAnalyser);
+        filter.connect(mixTrackSum);
+        filter.connect(trackGain);
+        trackGain.connect(analyser);
+        synthGain.connect(analyser);
+        this.vocalTrackAnalyser_ = trackAnalyser;
+        this.vocalTrackGain_ = trackGain;
+        this.vocalSynthGain_ = synthGain;
+      } else if (stem === "bass") {
+        // Optional resonant Acid 303 overdrive tap on bass
+        const acidPeak = ctx.createBiquadFilter();
+        acidPeak.type = "peaking";
+        acidPeak.frequency.value = 880;
+        acidPeak.Q.value = 4.2;
+        acidPeak.gain.value = 0;
+        const acidShaper = ctx.createWaveShaper();
+        const aCurve = new Float32Array(2048);
+        for (let k = 0; k < aCurve.length; k++) {
+          const x = (k / (aCurve.length - 1)) * 2 - 1;
+          aCurve[k] = Math.tanh(x * 3.8 + 0.35 * x * x);
+        }
+        acidShaper.curve = aCurve;
+        const acidWet = ctx.createGain();
+        acidWet.gain.value = 0;
+        filter.connect(acidPeak);
+        acidPeak.connect(analyser);
+        acidPeak.connect(acidShaper);
+        acidShaper.connect(acidWet);
+        acidWet.connect(analyser);
+        this.bassAcidPeak_ = acidPeak;
+        this.bassAcidWet_ = acidWet;
+        glue.connect(mixTrackSum);
+      } else {
+        filter.connect(analyser);
+        glue.connect(mixTrackSum);
+      }
+      analyser.connect(glue);
+      glue.connect(master);
+      analyser.connect(reverbSend);
+      reverbSend.connect(convolver);
+      analyser.connect(echoSend);
+      echoSend.connect(echoDelay);
+      buses[stem] = { input, filter, analyser, glue, reverbSend, echoSend };
     }
 
     this.ctx_ = ctx;
     this.master_ = master;
     this.masterAnalyser_ = masterAnalyser;
+    this.probeAnalyser_ = probeAnalyser;
     this.buses_ = buses;
     this.applyGains();
+    this.applyDjFxParams();
     this.startWatchdog();
     return ctx;
   }
@@ -175,9 +505,9 @@ export class AudioEngine {
     const anySolo = STEMS.some((s) => this.solos_[s]);
     for (const stem of STEMS) {
       const bus = this.buses_[stem];
-      const audible = !this.mutes_[stem] && (!anySolo || this.solos_[stem]);
+      const audible = !this.mutes_[stem] && !this.kills_[stem] && (!anySolo || this.solos_[stem]);
       const eff = audible ? (this.volumes_[stem] * this.autoVolumes_[stem]) : 0;
-      bus.input.gain.setTargetAtTime(eff, t, 0.02);
+      bus.input.gain.setTargetAtTime(eff, t, 0.014);
     }
   }
 
@@ -190,7 +520,7 @@ export class AudioEngine {
     if (this.ctx_ === null || this.buses_ === null) return;
     const bus = this.buses_[stem];
     const anySolo = STEMS.some((s) => this.solos_[s]);
-    const audible = !this.mutes_[stem] && (!anySolo || this.solos_[stem]);
+    const audible = !this.mutes_[stem] && !this.kills_[stem] && (!anySolo || this.solos_[stem]);
     const targetGain = audible ? (this.volumes_[stem] * this.autoVolumes_[stem]) : 0;
     const t = this.ctx_.currentTime;
     try {
@@ -202,6 +532,198 @@ export class AudioEngine {
 
   getStemMixLevel(stem: StemName): number {
     return this.autoVolumes_[stem];
+  }
+
+  // ---- glue bus ---------------------------------------------------------
+
+  /**
+   * Manual glue-base gain for one stem. updateGlue() may duck below this base
+   * while enabled, but the stem input gain (setStemMixLevel) is never touched.
+   */
+  setStemGlue(stem: StemName, gain: number, rampSec: number = GLUE_RAMP_SEC): void {
+    this.glueBase_[stem] = clampGlue(gain);
+    const ctx = this.ctx_;
+    if (!this.glueEnabled_ || ctx === null || this.buses_ === null) return;
+    const target = clampGlue(this.glueBase_[stem] * this.glueDuck_[stem]);
+    this.scheduleGlue(stem, target, ctx.currentTime, rampSec);
+  }
+
+  setGlueEnabled(enabled: boolean): void {
+    this.glueEnabled_ = enabled;
+    const ctx = this.ctx_;
+    const buses = this.buses_;
+    if (ctx === null || buses === null) return;
+    const t = ctx.currentTime;
+    for (const stem of STEMS) {
+      if (!enabled) this.glueDuck_[stem] = 1;
+      const target = enabled
+        ? clampGlue(this.glueBase_[stem] * this.glueDuck_[stem])
+        : GLUE_MAX;
+      this.scheduleGlue(stem, target, t, GLUE_RAMP_SEC);
+    }
+    if (!enabled) {
+      this.vocalPresence_ = 0;
+      this.drumTransient_ = false;
+      this.drumTransientUntil_ = 0;
+    }
+  }
+
+  /**
+   * Per-frame automatic glue. Reads the vocal analyser for presence and the
+   * drum analyser for transients, then ducks only the glue gains:
+   *   vocals -> other/bass  (up to 1.5 dB, 20 ms attack / 250 ms release)
+   *   drums  -> bass        (up to 2.5 dB, 8 ms attack / 120 ms release)
+   * Never touches input.gain, so section mixing remains authoritative.
+   */
+  updateGlue(now: number): void {
+    const ctx = this.ctx_;
+    const buses = this.buses_;
+    if (ctx === null || buses === null || !this.glueEnabled_) return;
+
+    const t = Number.isFinite(now) ? Math.max(now, ctx.currentTime) : ctx.currentTime;
+
+    buses.vocals.analyser.getFloatTimeDomainData(this.vocalTimeData_);
+    const vocalRms = rmsOf(this.vocalTimeData_);
+    this.vocalRms_ = vocalRms;
+    const vocalPresence = clamp01(
+      (vocalRms - VOCAL_RMS_FLOOR) / (VOCAL_RMS_FULL - VOCAL_RMS_FLOOR),
+    );
+    this.vocalPresence_ = vocalPresence;
+
+    buses.drums.analyser.getFloatTimeDomainData(this.drumTimeData_);
+    const drumFullRms = rmsOf(this.drumTimeData_);
+    const shortStart = this.drumTimeData_.length - KICK_SHORT_WINDOW;
+    const drumShortRms = rmsOf(this.drumTimeData_, shortStart);
+    const drumShortPeak = peakOf(this.drumTimeData_, shortStart);
+    this.drumShortRms_ = drumShortRms;
+    const transientDetected =
+      drumShortRms > 0.012 &&
+      (drumShortRms > drumFullRms * 1.6 || drumShortPeak > Math.max(0.35, drumFullRms * 4));
+    if (transientDetected) {
+      this.drumTransientUntil_ = Math.max(
+        this.drumTransientUntil_,
+        t + KICK_TRANSIENT_HOLD_SEC,
+      );
+    }
+    const drumTransient = t < this.drumTransientUntil_;
+    this.drumTransient_ = drumTransient;
+
+    const vocalDuckDb = VOCAL_DUCK_DB * vocalPresence;
+    const bassDuckDb = vocalDuckDb + (drumTransient ? KICK_DUCK_DB : 0);
+    this.glueDuck_.other = dbToGain(-vocalDuckDb);
+    this.glueDuck_.bass = dbToGain(-bassDuckDb);
+
+    const otherTarget = clampGlue(this.glueBase_.other * this.glueDuck_.other);
+    const bassTarget = clampGlue(this.glueBase_.bass * this.glueDuck_.bass);
+
+    const otherTau =
+      otherTarget < this.glueTargets_.other ? VOCAL_ATTACK_SEC : VOCAL_RELEASE_SEC;
+    const kickRecent = t < this.drumTransientUntil_ + KICK_RELEASE_SEC;
+    const bassTau =
+      bassTarget < this.glueTargets_.bass
+        ? drumTransient
+          ? KICK_ATTACK_SEC
+          : VOCAL_ATTACK_SEC
+        : kickRecent
+          ? KICK_RELEASE_SEC
+          : VOCAL_RELEASE_SEC;
+    this.scheduleGlue("other", otherTarget, t, otherTau);
+    this.scheduleGlue("bass", bassTarget, t, bassTau);
+  }
+
+  private scheduleGlue(stem: StemName, target: number, t: number, tau: number): void {
+    const buses = this.buses_;
+    if (buses === null) return;
+    // setTargetAtTime already approaches asymptotically; avoid re-scheduling
+    // an unchanged target every animation frame.
+    if (Math.abs(target - this.glueTargets_[stem]) < 1e-4) return;
+    try {
+      buses[stem].glue.gain.setTargetAtTime(target, t, Math.max(0.005, tau));
+    } catch {
+      // Automation is best-effort; never let glue stop the transport.
+    }
+    this.glueTargets_[stem] = target;
+  }
+
+  glueState(): GlueState {
+    const gains = {} as Record<StemName, number>;
+    const base = {} as Record<StemName, number>;
+    const duck = {} as Record<StemName, number>;
+    const buses = this.buses_;
+    for (const stem of STEMS) {
+      base[stem] = this.glueBase_[stem];
+      duck[stem] = this.glueDuck_[stem];
+      gains[stem] = buses !== null
+        ? buses[stem].glue.gain.value
+        : this.glueEnabled_
+          ? this.glueBase_[stem]
+          : GLUE_MAX;
+    }
+    return {
+      enabled: this.glueEnabled_,
+      gains,
+      base,
+      duck,
+      vocalRms: this.vocalRms_,
+      vocalPresence: this.vocalPresence_,
+      drumShortRms: this.drumShortRms_,
+      drumTransient: this.drumTransient_,
+    };
+  }
+
+  // ---- shared reverb ----------------------------------------------------
+
+  /** Set one stem's send into the shared short reverb. Defaults: other 0.08,
+   * vocals 0.10, drums/bass 0. */
+  setReverbSend(stem: StemName, amount: number, rampSec: number = GLUE_RAMP_SEC): void {
+    const clamped = clamp01(amount);
+    this.reverbSends_[stem] = clamped;
+    const ctx = this.ctx_;
+    const buses = this.buses_;
+    if (ctx === null || buses === null) return;
+    try {
+      buses[stem].reverbSend.gain.setTargetAtTime(
+        clamped,
+        ctx.currentTime,
+        Math.max(0.005, rampSec),
+      );
+    } catch {
+      // Safe fallback
+    }
+  }
+
+  getReverbSend(stem: StemName): number {
+    return this.reverbSends_[stem];
+  }
+
+  /** Vocal reverb tail at a block boundary: bump the send for ~0.35 s so the
+   *  outgoing vocal dissolves while the incoming one attacks.  Scheduled with
+   *  sample-accurate ramps at absolute audio time `at` (no setTimeout, no
+   *  DOM); the stored user send never changes.  No-op before the ctx exists. */
+  scheduleReverbTail(
+    stem: StemName,
+    at: number,
+    tailAmount: number = TRANSITION_REVERB_TAIL,
+    tailSec: number = TRANSITION_REVERB_TAIL_SEC,
+  ): void {
+    const ctx = this.ctx_;
+    const buses = this.buses_;
+    if (ctx === null || buses === null) return;
+    const startAt = Math.max(at, ctx.currentTime + 0.005);
+    const endAt = startAt + Math.max(0.05, Math.min(3, tailSec));
+    const baseline = clamp01(this.reverbSends_[stem]);
+    const tail = Math.max(baseline, clamp01(tailAmount));
+    if (tail - baseline < 0.02) return;
+    try {
+      const param = buses[stem].reverbSend.gain;
+      param.cancelScheduledValues(startAt);
+      param.setValueAtTime(baseline, startAt);
+      param.linearRampToValueAtTime(tail, startAt + 0.03);
+      param.setValueAtTime(tail, Math.max(startAt + 0.03, endAt - 0.10));
+      param.linearRampToValueAtTime(baseline, endAt);
+    } catch {
+      // Automation is best-effort; the gain hand-off stands alone.
+    }
   }
 
   /** Create (lazily) and resume the context. Must be called from a gesture. */
@@ -220,6 +742,156 @@ export class AudioEngine {
   setTargetBpm(bpm: number): void {
     if (!Number.isFinite(bpm)) return;
     this.targetBpm_ = Math.min(220, Math.max(40, bpm));
+    const ctx = this.ctx_;
+    if (ctx && this.echoDelayNode_) {
+      const dottedEighth = Math.min(1.5, (60 / this.targetBpm_) * 0.75);
+      this.echoDelayNode_.delayTime.setTargetAtTime(dottedEighth, ctx.currentTime, 0.05);
+    }
+    if (ctx && this.djWorkletNode_) {
+      const p = this.djWorkletNode_.parameters.get("bpm");
+      if (p) p.setTargetAtTime(this.targetBpm_, ctx.currentTime, 0.02);
+    }
+  }
+
+  // ---- DJ Groovebox Performance FX Controls ----------------------------
+
+  public getDjFxState(): DjFxState {
+    return { ...this.djFxState_ };
+  }
+
+  public setDjFilter(sweep: number, q?: number): void {
+    this.djFxState_.filterSweep = Math.max(-1, Math.min(1, Number.isFinite(sweep) ? sweep : 0));
+    if (q !== undefined && Number.isFinite(q)) {
+      this.djFxState_.filterQ = Math.max(0.7, Math.min(12, q));
+    }
+    this.applyDjFxParams();
+  }
+
+  public setDjDubEcho(mix: number): void {
+    this.djFxState_.dubEcho = clamp01(mix);
+    this.applyDjFxParams();
+  }
+
+  public setDjReverbWash(amount: number): void {
+    this.djFxState_.reverbWash = clamp01(amount);
+    this.applyDjFxParams();
+  }
+
+  public setDjAcid(drive: number): void {
+    this.djFxState_.acidDrive = clamp01(drive);
+    this.applyDjFxParams();
+  }
+
+  public setDjCrush(amount: number): void {
+    this.djFxState_.crush = clamp01(amount);
+    this.applyDjFxParams();
+  }
+
+  public setDjRoll(beats: number): void {
+    this.djFxState_.rollBeats = Math.max(0, Math.min(2, Number.isFinite(beats) ? beats : 0));
+    this.applyDjFxParams();
+  }
+
+  public setDjTapeStop(active: boolean): void {
+    this.djFxState_.tapeStop = active;
+    this.applyDjFxParams();
+  }
+
+  public setStemKill(stem: StemName, killed: boolean): void {
+    this.kills_[stem] = killed;
+    this.applyGains();
+  }
+
+  public isStemKilled(stem: StemName): boolean {
+    return this.kills_[stem];
+  }
+
+  public setStemEchoThrow(stem: StemName, active: boolean): void {
+    this.echoThrows_[stem] = active;
+    this.applyDjFxParams();
+  }
+
+  public isStemEchoThrow(stem: StemName): boolean {
+    return this.echoThrows_[stem];
+  }
+
+  public resetDjFx(): void {
+    this.djFxState_ = { ...DEFAULT_DJ_FX_STATE };
+    for (const s of STEMS) {
+      this.kills_[s] = false;
+      this.echoThrows_[s] = false;
+    }
+    this.applyGains();
+    this.applyDjFxParams();
+  }
+
+  private applyDjFxParams(): void {
+    const ctx = this.ctx_;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const s = this.djFxState_;
+
+    // Bidirectional DJ sweep filter: -1 -> 95 Hz LPF, 0 -> bypass, +1 -> 8500 Hz HPF
+    if (this.djFilterNode_) {
+      if (Math.abs(s.filterSweep) < 0.03) {
+        this.djFilterNode_.type = "allpass";
+        this.djFilterNode_.frequency.setTargetAtTime(1000, t, 0.015);
+        this.djFilterNode_.Q.setTargetAtTime(0.7, t, 0.015);
+      } else if (s.filterSweep < 0) {
+        const k = clamp01(-s.filterSweep);
+        const freq = 18000 * Math.pow(95 / 18000, k);
+        this.djFilterNode_.type = "lowpass";
+        this.djFilterNode_.frequency.setTargetAtTime(freq, t, 0.015);
+        this.djFilterNode_.Q.setTargetAtTime(s.filterQ, t, 0.015);
+      } else {
+        const k = clamp01(s.filterSweep);
+        const freq = 40 * Math.pow(8500 / 40, k);
+        this.djFilterNode_.type = "highpass";
+        this.djFilterNode_.frequency.setTargetAtTime(freq, t, 0.015);
+        this.djFilterNode_.Q.setTargetAtTime(s.filterQ, t, 0.015);
+      }
+    }
+
+    // Dub echo delay wet & per-stem throws
+    if (this.echoWetGain_ && this.echoFeedbackGain_ && this.buses_) {
+      const anyThrow = STEMS.some((st) => this.echoThrows_[st]);
+      const effEcho = Math.max(s.dubEcho, anyThrow ? 0.72 : 0);
+      this.echoWetGain_.gain.setTargetAtTime(effEcho * 0.75, t, 0.02);
+      this.echoFeedbackGain_.gain.setTargetAtTime(0.32 + effEcho * 0.34, t, 0.03);
+      for (const st of STEMS) {
+        const throwOn = this.echoThrows_[st];
+        const stemSend = throwOn ? 0.9 : (st === "vocals" || st === "other" ? s.dubEcho * 0.65 : s.dubEcho * 0.28);
+        this.buses_[st].echoSend.gain.setTargetAtTime(stemSend, t, 0.02);
+      }
+    }
+
+    // Shared reverb wash boost cleanly scaling return gain from baseline
+    if (this.reverbReturnNode_ && this.buses_) {
+      const baseReturn = dbToGain(REVERB_RETURN_DB);
+      const washReturn = baseReturn * (1.0 + s.reverbWash * 4.8);
+      this.reverbReturnNode_.gain.setTargetAtTime(washReturn, t, 0.03);
+      for (const st of STEMS) {
+        const base = this.reverbSends_[st];
+        const boosted = Math.min(0.85, base + s.reverbWash * (st === "bass" ? 0.05 : 0.42));
+        this.buses_[st].reverbSend.gain.setTargetAtTime(boosted, t, 0.03);
+      }
+    }
+
+    // Bass Acid 303 overdrive + resonant bite
+    if (this.bassAcidPeak_ && this.bassAcidWet_) {
+      this.bassAcidPeak_.gain.setTargetAtTime(s.acidDrive * 10.5, t, 0.02);
+      this.bassAcidPeak_.frequency.setTargetAtTime(620 + s.acidDrive * 950, t, 0.02);
+      this.bassAcidWet_.gain.setTargetAtTime(s.acidDrive * 0.65, t, 0.02);
+    }
+
+    // Worklet FX parameters
+    if (this.djWorkletNode_) {
+      const params = this.djWorkletNode_.parameters;
+      params.get("bpm")?.setTargetAtTime(this.targetBpm_, t, 0.01);
+      params.get("rollBeats")?.setValueAtTime(s.rollBeats, t);
+      params.get("tapeStop")?.setValueAtTime(s.tapeStop ? 1 : 0, t);
+      params.get("crush")?.setTargetAtTime(s.crush, t, 0.02);
+    }
   }
 
   setVolume(stem: StemName, v: number): void {
@@ -254,6 +926,71 @@ export class AudioEngine {
     const buses = this.buses_;
     if (buses === null) throw new Error("AudioEngine buses not initialised");
     return buses[stem].analyser;
+  }
+
+  /**
+   * Dedicated analyser tapped directly off the vocal track stem filter before
+   * the Track / Head Synth switch so the Singing Head always hears the song's
+   * vocal stem even when playing the synthesized voice.
+   */
+  getVocalTrackAnalyser(): AnalyserNode {
+    this.ensureCtx();
+    if (this.vocalTrackAnalyser_ === null) {
+      throw new Error("AudioEngine vocal track analyser not initialised");
+    }
+    return this.vocalTrackAnalyser_;
+  }
+
+  /**
+   * Dedicated analyser tapping all 4 original track stems (drums + bass +
+   * other + isolated vocal track) before HEAD SYNTH injection so FULL MIX mode
+   * drives the Singing Head cleanly without feedback.
+   */
+  getMixTrackAnalyser(): AnalyserNode {
+    this.ensureCtx();
+    if (this.mixTrackAnalyser_ === null) {
+      throw new Error("AudioEngine mix track analyser not initialised");
+    }
+    return this.mixTrackAnalyser_;
+  }
+
+  /** True when the selected Singing Head analysis source is effectively muted. */
+  isSingingInputMuted(mode: "vocals" | "mix"): boolean {
+    const anySolo = STEMS.some((s) => this.solos_[s]);
+    if (mode === "vocals") {
+      return this.mutes_.vocals || (anySolo && !this.solos_.vocals);
+    }
+    return STEMS.every((s) => this.mutes_[s] || (anySolo && !this.solos_[s]));
+  }
+
+  /**
+   * AudioContext and destination GainNode for the Singing Head's real-time
+   * vocal tract synthesizer.
+   */
+  getVocalSynthTarget(): { ctx: AudioContext; destination: GainNode } {
+    const ctx = this.ensureCtx();
+    if (this.vocalSynthGain_ === null) {
+      throw new Error("AudioEngine vocal synth gain not initialised");
+    }
+    return { ctx, destination: this.vocalSynthGain_ };
+  }
+
+  /**
+   * Switch between playing the song's original vocal track slice (`false`)
+   * and playing the Singing Head's synthesized vocal tract output (`true`).
+   */
+  setVocalSynthMode(enabled: boolean): void {
+    this.vocalSynthMode_ = enabled;
+    if (this.ctx_ === null || this.vocalTrackGain_ === null || this.vocalSynthGain_ === null) {
+      return;
+    }
+    const t = this.ctx_.currentTime;
+    this.vocalTrackGain_.gain.setTargetAtTime(enabled ? 0.0 : 1.0, t, 0.018);
+    this.vocalSynthGain_.gain.setTargetAtTime(enabled ? 1.0 : 0.0, t, 0.018);
+  }
+
+  isVocalSynthMode(): boolean {
+    return this.vocalSynthMode_;
   }
 
   getStemInput(stem: StemName): AudioNode {
@@ -309,9 +1046,22 @@ export class AudioEngine {
     return this.masterAnalyser_;
   }
 
+  /** Long-window analyser for the hidden transition probe. */
+  getProbeAnalyser(): AnalyserNode {
+    this.ensureCtx();
+    if (this.probeAnalyser_ === null) throw new Error("AudioEngine probe analyser not initialised");
+    return this.probeAnalyser_;
+  }
+
   /** Current audio-clock time, or 0 when the context does not exist yet. */
   now(): number {
     return this.ctx_ !== null ? this.ctx_.currentTime : 0;
+  }
+
+  /** End time of the currently tracked voice, if one is still active. */
+  getVoiceEndAt(voiceKey: string): number | null {
+    const voice = this.activeVoices_[voiceKey];
+    return voice ? voice.endAt : null;
   }
 
   /** Decode fetched audio bytes (WAV legacy or Ogg Opus) into an AudioBuffer.
@@ -322,6 +1072,20 @@ export class AudioEngine {
     // decodeAudioData detaches its input; decode a copy instead.
     const copy = bytes.slice(0);
     return await ctx.decodeAudioData(copy);
+  }
+
+  /** Stable stereo position for a voice (mono slices need explicit width). */
+  private static panFor(stem: StemName, key: string): number {
+    if (stem === "bass") return 0;
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+    const side = (h & 1) === 0 ? -1 : 1;
+    if (stem === "drums") {
+      if (/kick|snare/i.test(key)) return 0;
+      return side * 0.18;
+    }
+    if (stem === "vocals") return side * 0.22;
+    return side * 0.38;
   }
 
   /**
@@ -346,8 +1110,16 @@ export class AudioEngine {
         : 0;
     const requestedFadeMs =
       typeof opts.fadeMs === "number" && Number.isFinite(opts.fadeMs) ? Math.max(0, opts.fadeMs) : DEFAULT_FADE_MS;
+    const requestedFadeInMs =
+      typeof opts.fadeInMs === "number" && Number.isFinite(opts.fadeInMs)
+        ? Math.max(0, opts.fadeInMs)
+        : requestedFadeMs;
+    const requestedFadeOutMs =
+      typeof opts.fadeOutMs === "number" && Number.isFinite(opts.fadeOutMs)
+        ? Math.max(0, opts.fadeOutMs)
+        : requestedFadeMs;
 
-    const startAt = Math.max(when, ctx.currentTime + 0.005);
+    const startAt = Math.max(when + (typeof opts.whenOffsetMs === "number" && Number.isFinite(opts.whenOffsetMs) ? Math.max(-15, Math.min(15, opts.whenOffsetMs)) / 1000 : 0), ctx.currentTime + 0.005);
     const naturalDurSec = buffer.duration / rate;
     const durSec =
       typeof opts.duration === "number" && Number.isFinite(opts.duration) && opts.duration > 0 && opts.duration < naturalDurSec
@@ -392,17 +1164,26 @@ export class AudioEngine {
     const vGain = typeof opts.gain === "number" && Number.isFinite(opts.gain) ? Math.max(0, Math.min(1.5, opts.gain)) : 1.0;
     const sliceGain = ctx.createGain();
     sliceGain.gain.value = 0.0;
+    // Every shipped slice is mono, so the old chain produced a perfectly
+    // correlated (dead centre) mix -- measured L/R correlation 1.000. Place
+    // each voice in the field instead of hard-panning the file: kick/snare
+    // and bass stay centred, hats/pads/vocals get a stable offset keyed by
+    // the slice id so a given voice never jumps around.
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = AudioEngine.panFor(stem, vKey);
     source.connect(sliceGain);
-    sliceGain.connect(buses[stem].input);
+    sliceGain.connect(panner);
+    panner.connect(buses[stem].input);
 
     const endAt = startAt + durSec;
     if (requestedFadeMs > 0 && durSec > 0.01) {
-      // De-clicking micro fade-in prevents DC offset pop on slice attack
-      const fadeInSec = Math.max(0.002, Math.min(requestedFadeMs / 1000, durSec / 4));
-      // Musical fade-out guarantees click-free release decay
+      // De-clicking micro fade-in prevents DC offset pop on slice attack.
+      // A separate shorter seam fade keeps block joins from notching.
+      const fadeInSec = Math.max(0.002, Math.min(requestedFadeInMs / 1000, durSec / 4));
+      // Musical fade-out guarantees click-free release decay.
       const fadeOutSec = stem === "drums"
-        ? Math.max(0.005, Math.min(0.020, durSec / 3))
-        : Math.max(0.015, Math.min(0.045, durSec / 3));
+        ? Math.max(0.005, Math.min(requestedFadeOutMs / 1000, 0.020, durSec / 3))
+        : Math.max(0.015, Math.min(requestedFadeOutMs / 1000, 0.045, durSec / 3));
 
       sliceGain.gain.setValueAtTime(0.0001, startAt);
       sliceGain.gain.linearRampToValueAtTime(vGain, startAt + fadeInSec);
@@ -422,6 +1203,7 @@ export class AudioEngine {
       try {
         source.disconnect();
         sliceGain.disconnect();
+        panner.disconnect();
       } catch {
         // Already disconnected; safe to ignore.
       }
@@ -608,7 +1390,14 @@ export class AudioEngine {
     this.ctx_ = null;
     this.master_ = null;
     this.masterAnalyser_ = null;
+    this.probeAnalyser_ = null;
     this.buses_ = null;
+    this.vocalTrackAnalyser_ = null;
+    this.vocalTrackGain_ = null;
+    this.vocalSynthGain_ = null;
+    this.drumTransient_ = false;
+    this.drumTransientUntil_ = 0;
+    this.vocalPresence_ = 0;
     if (ctx !== null) {
       void ctx.close().catch(() => undefined);
     }

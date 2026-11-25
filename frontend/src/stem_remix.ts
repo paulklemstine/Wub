@@ -1,0 +1,6367 @@
+// Per-stem remix engine: four independent 4-bar phrase streams sharing one
+// bar grid.  Every stem owns a current phrase, a lazy audio cache, a pinned
+// style region, and its own Signalsmith Stretch voice.  The engine keeps the
+// session key/tempo fixed within a set, transposes any phrase key to the
+// session key (up to a tritone), time-stretches any phrase tempo to the
+// session grid, and rotates to the next BPM-ladder cluster every 104 bars.
+// The candidate pool is the whole shipped bank (all 2,565 phrases) filtered
+// only by the stretch/transpose hard limits below; near-tempo/near-key
+// phrases are strongly preferred by scoring, far ones surface as the near
+// pool is played out, so a long session traverses the full bank.
+import { ENGINE_SAMPLE_RATE, type AudioEngine } from "./audio_engine";
+import {
+  assembleSlicedStereoRun,
+  concatStereoRun,
+  isContiguousFullPhrase,
+  mixToMono,
+  type SliceSpec,
+} from "./kit_pcm";
+import type { StemName } from "./types";
+import type { Kit, KitCluster, KitManifest, KitPhrase, TasteScoresManifest } from "./kit_player";
+import type { NebulaPoint } from "./visualizer";
+import { StretchVoice, type PitchAutomationPoint } from "./stretch_voice";
+import {
+  BarComposer,
+  type VocalActivityInfo, type VocalBarModel, type VocalPhraseModel,
+  type CellChromaDoc, type HarmonyContinuity, type PatternBarModel,
+  type VocalSectionModel, vocalSectionCategory,
+} from "./bar_composer";
+import {
+  bankTransitionScore, isBankTransitionArtifact,
+  type BankPhrase, type BankTransitionArtifact,
+} from "./bank_transition";
+import {
+  inferPhraseConductor, isPhraseConductorArtifact, phraseConductorScore, phraseConductorState,
+  type PhraseConductorArtifact,
+} from "./phrase_conductor";
+import {
+  inferSequence, isSequenceConductorArtifact, sequenceScore, sequenceState,
+  type SequenceConductorArtifact,
+} from "./sequence_conductor";
+import { isSongCriticArtifact, type SongCriticArtifact } from "./song_critic";
+import {
+  arrangementQuality, churnQuality,
+  type ArrangementEntry, type HarmonyQuality, type ArrangementQuality, type ChurnQuality,
+} from "./quality_metrics";
+import { SliceFlow, describeFlowTask } from "./slice_flow";
+import { CellCompatScorer } from "./cell_compat";
+import { SongArchitect, type SongMode } from "./song_architect";
+import { parseKey as parseTheoryKey, type ProgressionChord } from "./theory_engine";
+import {
+  ARC_SECTIONS, arcPredictNext, isArcModelArtifact,
+  type ArcModelArtifact, type ArcPrediction,
+} from "./arc_inference";
+import { JointRanker } from "./joint_ranker";
+import { sampleSongArc, songArcTargetAt, type SampledArcSegment, type SongArcArtifact } from "./learned_arc";
+import {
+  CONDUCTOR_STEMS, conductorState, conductorStateV2, inferConductor, isConductorArtifact,
+  type ConductorArtifact, type ConductorDecision,
+} from "./conductor";
+import { MixCompatModel, type MixCompatPhrase } from "./mix_compat";
+import {
+  rhythmMixScore,
+  type RhythmEntry, type RhythmMeshModel,
+} from "./rhythm_inference";
+import {
+  progressionScoreByPhraseId,
+  type ProgressionContextArtifact, type ProgressionModelArtifact,
+} from "./progression_inference";
+import { SectionNavigator, baseOf, expandBaseSection, type SectionModel } from "./section_navigator";
+import {
+  isCompatible as songIsCompatible,
+  repetitionBonus as songRepetitionBonus,
+  RETURN_RATE_8 as SONG_RETURN_RATE,
+} from "./song_foundation";
+import {
+  vocalShouldRest as vocalSongShouldRest,
+  vocalLengthBonus as vocalSongLengthBonus,
+  vocalHoldForBar as vocalSongHoldForBar,
+  VOCAL_HOLD_BARS as VOCAL_SONG_HOLD_BARS,
+} from "./vocal_song";
+import {
+  targetAt, movementBudgetAt, harmonyPenalty, vocalChangeAllowed, scoreTransition,
+  pickSignatures, signatureBonus, timbreBonus, selectTransitionTechnique,
+  FLOW_SIGNATURES_ENABLED, FLOW_SIGNATURES_PER_STEM,
+  FLOW_SIGNATURE_REPETITION_DISCOUNT, FLOW_TIMBRE_WINDOW_BARS,
+  type TransitionTechnique,
+} from "./arc_planner";
+
+// Flow policy (audio-side): transition technique is only ever scheduled when
+// FLOW_TRANSITIONS_ENABLED is on (arc_planner gate) — the pure selector
+// already returns the plain hand-off otherwise.  These constants size the
+// *scheduled* automation; all gating lives in arc_planner.selectTransitionTechnique.
+const TRANSITION_VOCAL_REVERB_TAIL = 0.22;
+const TRANSITION_VOCAL_REVERB_TAIL_SEC = 0.5;
+
+/** Learned stem-cohort priors mined from real 4-bar song boundaries. */
+export interface TransitionCohort {
+  format: string;
+  version: number;
+  tracks: number;
+  boundaries: number;
+  p_3plus: { inside: number; section: number };
+  cohorts: Array<{ kind: string; stems: string[]; p: number; count: number }>;
+  stem_change: Record<string, Record<string, number>>;
+  policy: {
+    max_changes_inside: number;
+    max_changes_section: number;
+    min_changes_section: number;
+    pitch_cohort: string[];
+  };
+  handoff?: {
+    enabled: boolean;
+    probability: number;
+    max_per_source: number;
+    max_stems: number;
+    note?: string;
+  };
+}
+
+/** Optional variety policy (bounded biases against track/vocal repetition). */
+interface VarietyPrior {
+  format: string;
+  version: number;
+  track_history_bars: number;
+  track_reuse_penalty: number;
+  vocal_freshness_weight: number;
+  joint_reserve: number;
+  source_novelty_weight: number;
+  max_recall_per_set: number;
+}
+
+/** Optional bounded final-gate beam search config. */
+interface BeamSearchConfig {
+  format: string;
+  version: number;
+  depth: number;
+  width: number;
+  lookahead_weight: number;
+}
+
+/** Learned song-policy compatibility prior (bounded ±0.15, never a filter). */
+interface SongPolicyArtifact {
+  format: string;
+  version: number;
+  features: string[];
+  weights: Partial<Record<string, number>>;
+  bias?: number;
+}
+
+/** Learned donor prior for synthetic two-song mixes (bounded ±0.15). */
+interface MixPreferenceArtifact {
+  format: string;
+  version: number;
+  features: string[];
+  weights: Partial<Record<string, number>>;
+  bias?: number;
+  report?: { val_auc?: number };
+}
+
+/** Implicit preference event inferred from a reticule/pin gesture. */
+export interface PreferenceEvent {
+  kind: "retarget" | "hold" | "release";
+  at: number;
+  bar: number;
+  stem: StemName;
+  from: string | null;
+  to: string | null;
+  fromTrack: string | null;
+  toTrack: string | null;
+  section: string | null;
+  style: string | null;
+  x: number;
+  y: number;
+  dropX: number;
+  dropY: number;
+  snapped?: boolean;
+  untilBar?: number;
+}
+
+/** Policy config for the unified short-horizon ranking bias. */
+interface HorizonPlannerConfig {
+  format: string;
+  version: number;
+  horizon_blocks: number;
+  weights: { bar: number; phrase: number; sequence: number };
+  max_score: number;
+  arc_tolerance: number;
+}
+
+/** Real-song motif return / freshness rates, keyed by stem and bars. */
+interface MotifCalendar {
+  format: string;
+  version: number;
+  tracks: number;
+  return_rate: Record<string, Record<string, number>>;
+  novelty_rate: Record<string, number>;
+  policy: { return_bonus: Record<string, number>; novelty_bonus: Record<string, number> };
+}
+
+/** Real-song vocal run lengths, silent gaps, and release budget. */
+interface VocalCadence {
+  format: string;
+  version: number;
+  tracks: number;
+  run_lengths_bars: Record<string, number>;
+  gap_lengths_bars?: Record<string, number>;
+  change_prob: Record<string, number>;
+  policy: { min_hold_bars: number; section_change_bonus: number; min_gap_bars?: number };
+}
+
+const STEMS: readonly StemName[] = ["drums", "bass", "other", "vocals"];
+const PITCHED: readonly StemName[] = ["bass", "other", "vocals"];
+// Any pitch class is reachable within a tritone, so every phrase key can be
+// transposed to the session key.  Drums are unpitched (no shift).
+const MAX_SHIFT: Record<StemName, number> = { drums: 0, bass: 6, other: 6, vocals: 6 };
+// 48 bars of 4-bar blocks, 32 bars of 8-bar blocks, one 16-bar block, then an
+// 8-bar drumless bridge: 104 bars / 19 blocks, then rotate the cluster.
+const ARC_8_BAR_START = 48;
+const ARC_16_BAR_START = 80;
+const BRIDGE_START_BAR = 96;
+const SET_BARS = 104;
+const BLOCKS_PER_SET = 19;
+const PIN_BARS = 32;
+// A pin is a soft style region, not one frozen loop.  Candidate run starts
+// inside this radius are preferred; the score then varies phrases within it.
+const PIN_RADIUS = 0.2;
+const PIN_SIGMA = 0.15;
+const PIN_TRACK_PENALTY = 0.75;
+const RECENT_BLOCKS = 6;
+// Hard stretch limits: the phase vocoder smears transients and dulls highs
+// as |rate - 1| grows; past ~±6% the "stretched" quality is clearly audible
+// (listening report: rate 0.92 blocks read as filtered). [0.94, 1.06] keeps
+// every run inside the transparent band; the 104-bar BPM ladder still brings
+// every tempo group in near-tempo across sets, so full-bank traversal does
+// not depend on extreme stretches.
+const RATE_MIN = 0.94;
+const RATE_MAX = 1.06;
+const USER_RATE_MIN = 0.55;
+const USER_RATE_MAX = 1.75;
+const MIN_USER_POOL_PER_STEM = 24;
+const TEMPO_COST_WEIGHT = 2.0;
+const KEY_COST_WEIGHT = 0.12;
+const CACHE_LIMIT = 24;
+// Phrases whose stem is effectively absent are not useful as independent
+// streams; keep a floor per stem so a "bass" or "vocals" phrase actually plays.
+const MIN_RMS_DB: Record<StemName, number> = {
+  drums: -28, bass: -28, other: -34, vocals: -34,
+};
+const VOCAL_MIN_ACTIVITY_FRAC = 0.20;
+const VOCAL_RELAXED_RMS_DB = -38;
+const VOCAL_RELAXED_ACTIVITY_FRAC = 0.10;
+// Silent breath between sung vocal sections, in bars. Fresh vocal entrances
+// require at least this many bars since the last sung block ended, so whole
+// takes breathe instead of chaining. Mined as `min_gap_bars` in
+// vocal_cadence.json (v3); 8 bars is the fallback when the sidecar is absent.
+const VOCAL_MIN_GAP_BARS = 8;
+// Strong freshness bias for vocal entrances: a never-played vocal wins ties
+// unless a played one fits way better (judge/energy gap > this bonus).
+const VOCAL_FRESH_BONUS = 0.80;
+// Boundary fade profiles: snap drums, but give bass/pads/vocals enough
+// overlap to smooth cross-song hand-offs (reduces jumpy feel shifts).
+const STEM_FADE_IN: Record<StemName, number> = {
+  drums: 0.006, bass: 0.035, other: 0.09, vocals: 0.12,
+};
+const STEM_FADE_OUT: Record<StemName, number> = {
+  drums: 0.012, bass: 0.05, other: 0.12, vocals: 0.16,
+};
+
+export interface StemPin {
+  x: number;
+  y: number;
+  /** Session bar at which the 32-bar pin releases. */
+  untilBar: number;
+}
+
+export interface StemRemixState {
+  stem: StemName;
+  phraseId: string | null;
+  trackId: string | null;
+  section: string;
+  energy: number;
+  x: number;
+  y: number;
+  pin: StemPin | null;
+  buffering: boolean;
+}
+
+export interface StemBlockResult {
+  at: number;
+  section: string;
+  changed: StemName[];
+  blocksPlayed: number;
+  bridge: boolean;
+  rotation: boolean;
+  /** Bars in this block: 4, 8 or 16. */
+  blockBars: number;
+  /** Duration of this block in seconds. */
+  blockDurationSec: number;
+  /** One 4-bar slot for the session BPM display (960 / slotSec). */
+  slotSec: number;
+  /** Planned arc energy for this block, 0..1. */
+  targetEnergy: number;
+  phrases: Partial<Record<StemName, KitPhrase>>;
+  kits: Partial<Record<StemName, Kit>>;
+  /** Source track per stem for hidden transition telemetry. */
+  stemTracks: Partial<Record<StemName, string>>;
+  clusterId: string;
+}
+
+interface StemPoolEntry {
+  kit: Kit;
+  phrase: KitPhrase;
+  stem: StemName;
+  keyShift: number;
+  rate: number;
+  /** |rate - 1|: tempo distance from the session grid, for tiered scoring. */
+  tempoCost: number;
+  /** |keyShift|: transpose distance from the session key, for tiered scoring. */
+  keyCost: number;
+  x: number;
+  y: number;
+  energy: number;
+  section: string;
+  chroma: number[] | null;
+  bassRoot: number | null;
+  rmsDb: number;
+  gain: number;
+  /** Ears quality 0..1 (0.5 neutral when no ears sidecar is shipped). */
+  earQ: number;
+}
+
+interface LoadedStemAudio {
+  main: AudioBuffer;
+  pre: AudioBuffer | null;
+  preDur: number;
+}
+
+/** A decoded run of consecutive 4-bar phrases for one stem, as mono PCM.
+ *  Produced off-main-thread by the kit audio worker (or by the main-thread
+ *  fallback when the worker is unavailable); the voice only ever sees this. */
+interface LoadedStemRun {
+  /** Pre-roll + concatenated mains, per channel, ready for StretchVoice.addBuffers. */
+  samples: [Float32Array, Float32Array];
+  /** Seconds of pre-roll at the head of `samples`. */
+  preDur: number;
+  /** Decoded seconds per main phrase (input timeline). */
+  mainDurations: number[];
+  sampleRate: number;
+}
+
+/** One phrase x stem the kit audio worker must decode for a run. */
+interface WorkerRunItem {
+  key: string;
+  /** Absolute URL of the phrase audio (the worker resolves its own base). */
+  url: string;
+  /** Absolute URL of the pre-roll sidecar, when present. */
+  preUrl: string | null;
+}
+
+/** A watchdog-resume schedule: re-enter a run at the block clock's position. */
+interface ResumeHint {
+  /** The run's original downbeat (audio time). */
+  startedAt: number;
+  /** The run's original end (audio time). */
+  runEndAt: number;
+}
+
+interface CurrentStem {
+  entry: StemPoolEntry;
+  voice: StretchVoice;
+  startedAt: number;
+  blockIndex: number;
+  /** Consecutive phrases scheduled as one voice. */
+  run: StemPoolEntry[];
+  /** Output time of each phrase's downbeat, relative to `startedAt`. */
+  offsets: number[];
+  runEndAt: number;
+  preDur?: number;
+  mainDurations?: number[];
+  slices?: SliceSpec[];
+  baseSemitones?: number;
+  pitchPoints?: PitchAutomationPoint[];
+}
+
+/** A voice that has been scheduled but whose downbeat may still be ahead. */
+interface ScheduledRun {
+  stem: StemName;
+  run: StemPoolEntry[];
+  voice: StretchVoice;
+  startedAt: number;
+  offsets: number[];
+  runEndAt: number;
+  blockIndex: number;
+  manual: boolean;
+  preDur?: number;
+  mainDurations?: number[];
+  crossfadeSec?: number;
+  slices?: SliceSpec[];
+  baseSemitones?: number;
+  pitchPoints?: PitchAutomationPoint[];
+}
+
+/** The partial manual run that covers a drag until the next block boundary. */
+interface ManualPin {
+  entry: StemPoolEntry;
+  run: StemPoolEntry[];
+  voice: StretchVoice;
+  startedAt: number;
+  runEndAt: number;
+  untilBar: number;
+}
+
+interface PendingCommit {
+  entry: StemPoolEntry;
+  at: number;
+  partialBar: number;
+  requestedAt: number;
+}
+
+interface ClusterTaste {
+  phraseOrder: string[];
+  transition: number[][];
+}
+
+function parseKey(name: string): { root: number; minor: boolean } | null {
+  const match = /^([A-Ga-g])([#b♯♭]?)\s*(major|minor|maj|min)$/.exec(name.trim());
+  if (!match) return null;
+  const accidental = match[2] === "♯" ? "#" : match[2] === "♭" ? "B" : match[2].toUpperCase();
+  const root = PITCH_CLASS[`${match[1].toUpperCase()}${accidental}`];
+  if (root === undefined) return null;
+  return { root, minor: match[3].toLowerCase().startsWith("min") };
+}
+
+const PITCH_CLASS: Record<string, number> = {
+  C: 0, "C#": 1, DB: 1, D: 2, "D#": 3, EB: 3, E: 4, F: 5,
+  "F#": 6, GB: 6, G: 7, "G#": 8, AB: 8, A: 9, "A#": 10, BB: 10, B: 11,
+};
+const CAMELOT_MAJOR = [8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6, 1];
+const CAMELOT_MINOR = [5, 12, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10];
+
+function camelot(key: string): { number: number; letter: "A" | "B" } | null {
+  const parsed = parseKey(key);
+  if (!parsed) return null;
+  const table = parsed.minor ? CAMELOT_MINOR : CAMELOT_MAJOR;
+  return { number: table[parsed.root], letter: parsed.minor ? "A" : "B" };
+}
+
+/**
+ * Semitone shift from `phraseKey` to `sessionKey`, in -6..+6.  Any key is
+ * reachable (major/minor included); relative major/minor and exact matches
+ * naturally give 0.  Mode mismatches are allowed — the harmony scoring
+ * (root intervals + chroma overlap) deprioritises clashes instead of
+ * excluding the phrase outright, so the whole bank stays eligible.
+ */
+export function keyShift(sessionKey: string, phraseKey: string): number | null {
+  const a = parseKey(sessionKey);
+  const b = parseKey(phraseKey);
+  if (!a || !b) return null;
+  // Align via relative major so relative major/minor (e.g. C major <-> A minor)
+  // yield 0 shift, and transpose phraseKey *to* sessionKey (session - phrase).
+  const aEff = a.minor ? (a.root + 3) % 12 : a.root;
+  const bEff = b.minor ? (b.root + 3) % 12 : b.root;
+  let shift = ((aEff - bEff + 12) % 12);
+  if (shift > 6) shift -= 12;
+  return shift;
+}
+
+function rotateChroma(chroma: readonly number[] | undefined, shift: number): number[] | null {
+  if (!Array.isArray(chroma) || chroma.length !== 12) return null;
+  const out = new Array<number>(12).fill(0);
+  for (let i = 0; i < 12; i++) out[(i + shift + 12) % 12] = chroma[i] ?? 0;
+  return out;
+}
+
+function cosine(a: readonly number[], b: readonly number[]): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < 12; i++) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    dot += av * bv;
+    na += av * av;
+    nb += bv * bv;
+  }
+  return na > 0 && nb > 0 ? dot / Math.sqrt(na * nb) : 0;
+}
+
+function rootPenalty(root: number | null, reference: number | null): number {
+  if (root === null || reference === null) return 0;
+  const interval = Math.abs(root - reference) % 12;
+  if (interval === 0) return 0;
+  if (interval === 5 || interval === 7) return 0.05;
+  if (interval === 3 || interval === 4 || interval === 2) return 0.15;
+  if (interval === 1 || interval === 11) return 0.35;
+  if (interval === 6) return 0.8;
+  return 0.25;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+/** Let the renderer breathe between the heavy synchronous tails of stem
+ *  loads (mixToMono + concat + worklet buffer clone, 100-300 ms for 8/16-bar
+ *  runs).  Four stems scheduled back-to-back in one macrotask measured
+ *  600-1100 ms of main-thread blocking, enough to starve the audio render
+ *  thread into a 639 ms mid-block dropout. */
+function yieldToMain(): Promise<void> {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (scheduler?.yield) return scheduler.yield();
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function hashRoll(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  let t = (hash + 0x6d2b79f5) >>> 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/** Candidates presented to the joint ranker per stem (one per track). */
+const JOINT_CANDIDATES_PER_STEM = 8;
+/** Reserve slots for never-played material inside the shortlist.
+ *  Song-first: 1 slot (was 2). Two forced-novelty slots guaranteed churn;
+ *  one still traverses the bank across sets without breaking 8-bar loops. */
+const JOINT_RESERVE = 1;
+/** Per-stem phrases excluded after they play, so a winner cannot repeat at once.
+ *  Song-first: 4 blocks (16 bars). The old 16-block (64-bar) avoid made any
+ *  8/16/32-bar motif return ineligible by construction. 4 still blocks instant
+ *  loops while allowing real returns: drums 51% at 8 bars, bass/other ~15%. */
+const STEM_HISTORY_AVOID = 4;
+/** Policy-score window for near-best exploration in selectJoint.
+ *  Song-first: 0.03 (was 0.06). Wide windows pick random near-best moves
+ *  every block; narrow windows hold the foundation unless a move is strong. */
+const EXPLORE_WINDOW = 0.03;
+/** How many near-best joint candidates exploration may choose among. */
+const EXPLORE_TOP_K = 5;
+/** Pair combinations evaluated per stem pair (top of each sorted list). */
+const PAIR_TOP_N = 4;
+/** Ears soft-prior weight in jointOptions (good phrases win ties only). */
+const EAR_W_JOINT = 0.20;
+/** Ears soft-prior weight in heuristic fallbacks (morph/pin). */
+const EAR_W_FALLBACK = 0.30;
+
+/**
+ * Kit audio decode+concat on a dedicated thread.  Main-thread PCM work (the
+ * fetch->decode->mixToMono->concat chain) during 8/16-bar prefetches starved
+ * the audio render thread into all-stem dropouts on a loaded box; the worker
+ * carries it instead, returning transferable PCM the voice can addBuffers
+ * directly.  If the worker is unavailable or hangs, the main-thread fallback
+ * loader keeps the session running.
+ */
+class KitAudioWorkerLoader {
+  /** False once construction, the worker error handler, or a timeout fails —
+   *  or after repeated error responses. Missing worker-side decoding uses
+   *  the native decode bridge and does not disable the worker. */
+  ok = false;
+  private worker: Worker | null = null;
+  private nextId = 1;
+  private pending = new Map<number, {
+    resolve: (run: LoadedStemRun | null) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private consecutiveErrors = 0;
+  private lastErrorMessage = "";
+  private decode: ((bytes: ArrayBuffer) => Promise<AudioBuffer>) | null = null;
+
+  start(sampleRate: number, decode: (bytes: ArrayBuffer) => Promise<AudioBuffer>): void {
+    if (this.ok && this.worker) return;
+    // A previous worker disabled by repeated errors is terminated here so a
+    // fresh session starts with a clean worker (not one orphan).
+    if (this.worker) {
+      try {
+        this.worker.terminate();
+      } catch {
+        // Already terminated.
+      }
+      this.worker = null;
+    }
+    this.consecutiveErrors = 0;
+    this.decode = decode;
+    try {
+      const worker = new Worker(new URL("./kit_audio_worker.ts", import.meta.url), { type: "module" });
+      worker.onmessage = (ev: MessageEvent) => this.onMessage(ev);
+      worker.onerror = () => {
+        console.warn("[StemRemix] kit audio worker error; main-thread decode from here");
+        this.dispose();
+      };
+      worker.postMessage({ type: "init", sampleRate });
+      this.worker = worker;
+      this.ok = true;
+      console.info("[StemRemix] kit audio worker ready (native decode bridge available)");
+    } catch (err) {
+      this.ok = false;
+      this.worker = null;
+      console.warn("[StemRemix] kit audio worker unavailable; main-thread decode", err);
+    }
+  }
+
+  dispose(): void {
+    try {
+      this.worker?.terminate();
+    } catch {
+      // Already terminated.
+    }
+    this.worker = null;
+    this.ok = false;
+    this.failAll();
+  }
+
+  private onMessage(ev: MessageEvent): void {
+    const msg = ev.data as {
+      type?: string;
+      id?: number;
+      decodeId?: number;
+      bytes?: ArrayBuffer;
+      samples?: Float32Array[];
+      preDur?: number;
+      mainDurations?: number[];
+      sampleRate?: number;
+    } | null | undefined;
+    if (!msg) return;
+    if (msg.type === "decode" && typeof msg.decodeId === "number" && msg.bytes instanceof ArrayBuffer) {
+      const worker = this.worker;
+      const decode = this.decode;
+      if (worker && decode) {
+        const decodeId = msg.decodeId;
+        void decode(msg.bytes).then(async (audio) => {
+          await yieldToMain();
+          if (this.worker !== worker || !this.ok) return;
+          // Own these copies so transfer never detaches AudioBuffer storage.
+          const left = audio.getChannelData(0).slice();
+          const right = audio.getChannelData(audio.numberOfChannels > 1 ? 1 : 0).slice();
+          worker.postMessage({ type: "decoded", decodeId, samples: [left, right] }, [left.buffer, right.buffer]);
+        }).catch((error: unknown) => {
+          if (this.worker !== worker || !this.ok) return;
+          worker.postMessage({ type: "decoded", decodeId, message: error instanceof Error ? error.message : String(error) });
+        });
+      }
+      return;
+    }
+    if (typeof msg.id !== "number") return;
+    const pending = this.pending.get(msg.id);
+    if (!pending) return;
+    this.pending.delete(msg.id);
+    clearTimeout(pending.timer);
+    const channels = Array.isArray(msg.samples) ? msg.samples.filter((s) => ArrayBuffer.isView(s)) : [];
+    if (msg.type === "run" && channels.length > 0 && Number.isFinite(msg.preDur)) {
+      this.consecutiveErrors = 0;
+      pending.resolve({
+        samples: channels as [Float32Array, Float32Array],
+        preDur: msg.preDur ?? 0,
+        mainDurations: Array.isArray(msg.mainDurations) ? msg.mainDurations : [],
+        sampleRate: typeof msg.sampleRate === "number" ? msg.sampleRate : ENGINE_SAMPLE_RATE,
+      });
+    } else {
+      // A real per-file failure (or error message): fail the run so the
+      // main-thread loader can try; log the cause so decode bugs surface.
+      const message = (msg as { message?: unknown }).message;
+      if (typeof message === "string" && message.length > 0) {
+        if (message !== this.lastErrorMessage) {
+          console.warn(`[StemRemix] kit audio worker error: ${message}`);
+        }
+        this.lastErrorMessage = message;
+        // Repeated error responses mean the worker can never decode in this
+        // browser — disable it so loads go straight to the main thread.
+        this.consecutiveErrors++;
+        if (this.consecutiveErrors >= 2 && this.ok) {
+          this.ok = false;
+          console.warn("[StemRemix] kit audio worker disabled (repeated errors); main-thread decode");
+        }
+      } else {
+        this.consecutiveErrors++;
+        if (this.consecutiveErrors >= 2 && this.ok) {
+          this.ok = false;
+          console.warn("[StemRemix] kit audio worker disabled (repeated errors); main-thread decode");
+        }
+      }
+      pending.resolve(null);
+      if (!this.ok) this.dispose();
+    }
+  }
+
+  private failAll(): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+    }
+    this.pending.clear();
+  }
+
+  /** Warm decoded phrases without concatenating or transferring PCM. */
+  warm(items: WorkerRunItem[]): boolean {
+    if (!this.ok || !this.worker) return false;
+    try {
+      this.worker.postMessage({ type: "warm", items });
+      return true;
+    } catch {
+      this.dispose();
+      return false;
+    }
+  }
+
+  load(items: WorkerRunItem[], slices?: SliceSpec[], crossfadeMs?: number): Promise<LoadedStemRun | null> {
+    if (!this.ok || !this.worker) return Promise.resolve(null);
+    return new Promise<LoadedStemRun | null>((resolve) => {
+      const id = this.nextId++;
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          console.warn("[StemRemix] kit audio worker load timed out; main-thread decode from here");
+          this.dispose();
+          resolve(null);
+        }
+      }, 5000);
+      this.pending.set(id, { resolve, timer });
+      try {
+        this.worker!.postMessage({
+          type: "load",
+          id,
+          items,
+          ...(slices && slices.length > 0 ? { slices, crossfadeMs } : {}),
+        });
+      } catch {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        this.ok = false;
+        resolve(null);
+      }
+    });
+  }
+}
+
+export class StemRemixPlayer {
+  private readonly engine: AudioEngine;
+  private manifest: KitManifest | null = null;
+  private baseUrl = "";
+  private tasteScores: TasteScoresManifest | null = null;
+  private clusters: KitCluster[] = [];
+  /** Learned arc model artifacts (wub-arc-model-v1); null until loaded. */
+  private arcArtifact: ArcModelArtifact | null = null;
+  /** phraseId -> raw 48-d window features for arc context (null until loaded). */
+  private arcFeatures: Map<string, number[]> | null = null;
+  /** Last <=6 played block phrase ids (drums entry), most recent last. */
+  private arcHistory: string[] = [];
+  private arcLoggedUnavailable = false;
+  /** Learned section vocabulary + transitions for infinite navigation. */
+  private sectionNavigator = new SectionNavigator();
+  private sectionModel: SectionModel | null = null;
+  /** Expanded target kind for the current block (selection hint). */
+  private targetKind = "GROOVE";
+  /** Optional sidecar availability index (avoids 404 fetch noise). */
+  private sidecarsIndex: Record<string, boolean> | null = null;
+  private kitById = new Map<string, Kit>();
+  private entryById = new Map<string, StemPoolEntry>();
+
+  private cluster: KitCluster | null = null;
+  private anchorKit: Kit | null = null;
+  private currentAnchorPhrase: KitPhrase | null = null;
+  private readonly anchorOpeningBlocks = 2;
+  private readonly morphOrder: readonly StemName[] = ["drums", "bass", "other", "vocals"];
+  private morphIndex = 0;
+  private sessionKey = "C minor";
+  private sessionBpm = 128;
+  private blockSec = 960 / 128;
+  private barSec = this.blockSec / 4;
+  /** Duration/bars of the block currently being scheduled or played. */
+  private currentBlockSec = this.blockSec;
+  private currentBlockBars = 4;
+  /** Session bar at the start of the block currently on the grid. */
+  private blockStartBar = 0;
+  /** Session bar at which the next block begins (0..104). */
+  private sessionBar = 0;
+
+  private pools: Record<StemName, StemPoolEntry[]> = {
+    drums: [], bass: [], other: [], vocals: [],
+  };
+  private current: Partial<Record<StemName, CurrentStem>> = {};
+  private voicePool: Partial<Record<StemName, StretchVoice[]>> = {};
+  /** Decode+concat thread; loads fall back to the main thread without it. */
+  private readonly audioWorker = new KitAudioWorkerLoader();
+  private voiceIndex: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
+  private jointRanker: JointRanker | null = null;
+  /** Per-bar mix-compat critic (rhythm-prioritized); null when unavailable. */
+  private mixCompat: MixCompatModel | null = null;
+  /** Hierarchical music-theory bar composer, song architect & neural cell compatibility scorer. */
+  private readonly barComposer = new BarComposer();
+  private readonly songArchitect = new SongArchitect();
+  private readonly cellCompat = new CellCompatScorer();
+  private readonly sliceFlow = new SliceFlow();
+  /** Optional learned cohort policy for section boundaries; null = old behavior. */
+  private transitionCohort: TransitionCohort | null = null;
+  /** Optional corpus-mined song arc; null = fixed 104-bar blueprint. */
+  private songArcModel: SongArcArtifact | null = null;
+  private sampledArc: SampledArcSegment[] | null = null;
+  private sampledArcKey = "";
+  private motifCalendar: MotifCalendar | null = null;
+  private vocalCadence: VocalCadence | null = null;
+  /** Optional corpus-measured seam gain correction; null = equal-gain handoff. */
+  private levelCorrection: Partial<Record<StemName, number>> | null = null;
+  /** Optional unified short-horizon planner config. */
+  private horizonConfig: HorizonPlannerConfig | null = null;
+  /** Optional variety policy from the variety_prior.json sidecar. */
+  private varietyPrior: VarietyPrior | null = null;
+  /** Optional learned vocal-section length/backing model. */
+  private vocalSectionModel: VocalSectionModel | null = null;
+  /** Offline-trained conductor and its current block decision. */
+  private conductorModel: ConductorArtifact | null = null;
+  private conductorDecision: ConductorDecision | null = null;
+  private conductorSectionHistory: string[] = [];
+  private conductorEnergyHistory: number[] = [];
+  /** Learned real-song phrase-transition prior in bank space. */
+  private bankTransition: BankTransitionArtifact | null = null;
+  /** Phrase-space conductor (predicts the next phrase embedding). */
+  private phraseConductor: PhraseConductorArtifact | null = null;
+  private sequenceConductor: SequenceConductorArtifact | null = null;
+  /** Learned four-stem song-ness critic. */
+  private songCritic: SongCriticArtifact | null = null;
+  /** Learned song-policy compatibility weights (tempo/key/harmony/energy). */
+  private songPolicy: SongPolicyArtifact | null = null;
+  /** Learned donor prior for synthetic two-song mixes (weak-label head). */
+  private mixPreference: MixPreferenceArtifact | null = null;
+  /** Optional bounded final-gate beam search config. */
+  private beamSearch: BeamSearchConfig | null = null;
+  /** Capped implicit preference log from reticule/pin gestures. */
+  private preferenceLog: PreferenceEvent[] = [];
+  /** One-block viewer kind request (Twitch co-DJ): colors selectors only. */
+  private requestedKind: { kind: string; untilBar: number; boostEnergy?: number } | null = null;
+
+  /**
+   * Request a section kind for the next block (viewer co-DJ). The 104-bar
+   * blueprint keeps driving timing/rotation; this only biases what the
+   * selectors pick for blocks starting before `untilBar`.
+   */
+  public requestKind(kind: string, fromBar: number, bars = 4, boostEnergy?: number): void {
+    const clean = (kind || "").toUpperCase().replace(/[^A-Z_]/g, "").slice(0, 16) || "GROOVE_A";
+    this.requestedKind = { kind: clean, untilBar: fromBar + Math.max(4, Math.min(16, bars)), boostEnergy };
+  }
+  private qualityHistory: ArrangementEntry[] = [];
+  private sessionRootParsed = 0;
+  private currentProgression: ProgressionChord[] = [];
+  private composedStats: {
+    mode: SongMode;
+    role: string;
+    blocksComposed: number;
+    lastMeanTheoryScore: number;
+    lastCrossTrackCells: number;
+    chords: string;
+  } = {
+    mode: "song",
+    role: "INTRO",
+    blocksComposed: 0,
+    lastMeanTheoryScore: 0,
+    lastCrossTrackCells: 0,
+    chords: "",
+  };
+  private lastBlockEntries: Partial<Record<StemName, StemPoolEntry>> = {};
+  private previousEntries: Partial<Record<StemName, StemPoolEntry>> = {};
+  /** Run starts of the last scheduled block, for hold/repeat. */
+  private lastBlockRuns: Partial<Record<StemName, StemPoolEntry[]>> = {};
+  /** Voices scheduled ahead of their downbeat, promoted by tick(). */
+  private scheduledRuns: Partial<Record<StemName, ScheduledRun[]>> = {};
+  /** Stems with a partial manual commit awaiting the next block boundary. */
+  private manualPins: Partial<Record<StemName, ManualPin>> = {};
+  /** Stems whose pin audio is still being fetched; do not double-schedule. */
+  private pinning = new Set<StemName>();
+  private pinGeneration: Partial<Record<StemName, number>> = {};
+  private pending: Partial<Record<StemName, PendingCommit>> = {};
+  private pins: Partial<Record<StemName, StemPin>> = {};
+  private blocksSinceChange: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
+  private recent: string[] = [];
+  /** Per-stem phrase history (last 32) so each stem's memory is independent. */
+  private stemHistory: Record<StemName, string[]> = { drums: [], bass: [], other: [], vocals: [] };
+  /** How many times each phrase+stem has been scheduled this session. */
+  private playCount = new Map<string, number>();
+  /** BPM-ladder walk direction for cluster rotation (+1 up, -1 down). */
+  private ladderDirection = 1;
+  private anchorRecent: string[] = [];
+  private playedOnce = new Set<string>();
+  private failedKits = new Set<string>();
+  private cache = new Map<string, LoadedStemAudio>();
+  private stemNext = new Map<string, number>();
+  /** Ears quality keyed `${phraseId}:${stem}` (fallback: phrase q). */
+  private earQuality = new Map<string, number>();
+  /** Taste quality keyed phraseId, from kits[].phrase_order/quality rows. */
+  private phraseQuality = new Map<string, number>();
+  /** Signature return phrases per stem (1-2 ids), reselected per cluster. */
+  private signatureIds: Record<StemName, Set<string>> = {
+    drums: new Set(), bass: new Set(), other: new Set(), vocals: new Set(),
+  };
+  /** Session bar of each stem's last signature return (-1 = never). */
+  private lastSignatureBar: Record<StemName, number> = {
+    drums: -1, bass: -1, other: -1, vocals: -1,
+  };
+  /** Recent kit styles per stem for the timbre-diversity budget.
+   *  Entries outside FLOW_TIMBRE_WINDOW_BARS are pruned at selection time. */
+  private styleRecent: Array<{ stem: StemName; style: string; bar: number }> = [];
+  /** Technique chosen for the block currently being prepared (stem -> plan),
+   *  handed from beginBlock to finishBlock -> scheduleRun. */
+  private pendingTechniques: Partial<Record<StemName, TransitionTechnique>> = {};
+
+  private sessionStartAt = 0;
+  private nextBlockAt = 0;
+  private blockIndex = 0;
+  /** Session bar of the last real stem-track change, vocal and drum change. */
+  private lastMoveBar = 0;
+  /** Session bar of the last track change per stem (8-bar cooldown is per stem). */
+  private lastChangeBar: Record<StemName, number> = { drums: 0, bass: 0, other: 0, vocals: 0 };
+  private lastVocalChangeBar = -1;
+  private lastDrumChangeBar = 0;
+  /** Session bar at which the last sung vocal block ended (exclusive).
+   *  Fresh entrances require VOCAL_MIN_GAP_BARS of silence after this. */
+  private lastVocalEndBar = -1000;
+  /** Scheduled blocks, so a mid-block drag can find the block it is inside. */
+  private blockGrid: Array<{ startAt: number; endAt: number; startBar: number; bars: number }> = [];
+  private bridgeStep = 0;
+  private nextCluster: KitCluster | null = null;
+  private lastSection = "";
+  private sessionGen = 0;
+  private sessionPrepped = false;
+  private started = false;
+  private preparing = false;
+  private preparingBlock: { startAt: number; bars: number } | null = null;
+  private userBpmOverride: number | null = null;
+  private lastTempoChangeAt = 0;
+  private anchorPrepared: Array<{ stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun }> = [];
+  private lastResult: StemBlockResult | null = null;
+
+  public onBlock?: (result: StemBlockResult) => void;
+  public onStatus?: (message: string) => void;
+
+  constructor(engine: AudioEngine) {
+    this.engine = engine;
+    if (typeof window !== "undefined") {
+      const debug = window as unknown as { __wubSliceFlowTrace?: () => ReturnType<SliceFlow["trace"]>; __wubSliceFlowExport?: () => void };
+      debug.__wubSliceFlowTrace = () => this.sliceFlow.trace(this.engine.now());
+      debug.__wubSliceFlowExport = () => {
+        const blob = new Blob([JSON.stringify(this.sliceFlow.trace(this.engine.now()), null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a"); link.href = url; link.download = "wub-slice-trace.json"; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+      (window as unknown as {
+        __wubPreferenceLog?: () => readonly PreferenceEvent[];
+        __wubPreferenceExport?: () => void;
+      }).__wubPreferenceLog = () => this.preferenceLog;
+      (window as unknown as { __wubPreferenceExport?: () => void }).__wubPreferenceExport = () => {
+        const body = JSON.stringify({
+          version: 1, source: "wub-reticle-preferences", events: this.preferenceLog,
+        }, null, 2);
+        const blob = new Blob([body], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a"); link.href = url; link.download = "wub-preferences.json"; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+    }
+  }
+
+  /** Append a capped implicit preference event. */
+  recordPreference(event: PreferenceEvent): void {
+    this.preferenceLog.push(event);
+    if (this.preferenceLog.length > 400) this.preferenceLog.splice(0, this.preferenceLog.length - 400);
+  }
+
+  /** Exported for offline preference fine-tuning. */
+  getPreferenceLog(): readonly PreferenceEvent[] {
+    return this.preferenceLog;
+  }
+
+  /** Three engine-side quality dimensions; seams/mix are added by main.ts. */
+  qualitySnapshot(): {
+    harmony: HarmonyQuality;
+    arrangement: ArrangementQuality;
+    churn: ChurnQuality;
+  } {
+    const floor = this.barComposer.harmonyContinuity?.policy?.min_bar_pair_cos ?? 0.65;
+    const targets = Array.from({ length: 104 }, (_, i) =>
+      this.sampledArcTarget(i)?.energy ?? targetAt(i).energy);
+    const histories: Record<string, string[]> = {};
+    for (const stem of STEMS) histories[stem] = [...(this.stemHistory[stem] ?? [])];
+    const trackIds = Object.entries(histories).flatMap(([stem, ids]) =>
+      ids.map((id) => this.entryById.get(`${id}:${stem}`)?.kit.track_id ?? ""));
+    return {
+      harmony: this.barComposer.harmonySummary(floor),
+      arrangement: arrangementQuality(this.qualityHistory, targets),
+      churn: churnQuality(histories, trackIds),
+    };
+  }
+
+  get ready(): boolean {
+    return this.cluster !== null;
+  }
+
+  get currentCluster(): KitCluster | null {
+    return this.cluster;
+  }
+
+  get bpm(): number {
+    return this.sessionBpm;
+  }
+
+  get key(): string {
+    return this.sessionKey;
+  }
+
+  get blockDurationSec(): number {
+    return this.currentBlockSec;
+  }
+
+  get blockBars(): number {
+    return this.currentBlockBars;
+  }
+
+  get sessionBarCount(): number {
+    return this.blockStartBar;
+  }
+
+  get blocksInSet(): number {
+    return this.blockIndex;
+  }
+
+  get blocksLeft(): number {
+    return Math.max(0, BLOCKS_PER_SET - this.blockIndex);
+  }
+
+  get nextBlockTime(): number {
+    return this.nextBlockAt;
+  }
+
+  /** Attach taste scores after the manifest has loaded. */
+  setTasteScores(scores: TasteScoresManifest | null): void {
+    this.tasteScores = scores;
+    this.stemNext.clear();
+    this.earQuality.clear();
+    this.phraseQuality.clear();
+    if (scores?.kits) {
+      for (const kitScores of Object.values(scores.kits)) {
+        const order = Array.isArray(kitScores?.phrase_order) ? kitScores.phrase_order : [];
+        const quality = Array.isArray(kitScores?.quality) ? kitScores.quality : [];
+        for (let i = 0; i < Math.min(order.length, quality.length); i++) {
+          const phraseId = order[i];
+          const q = Number(quality[i]);
+          if (typeof phraseId === "string" && phraseId !== "" && Number.isFinite(q)) {
+            this.phraseQuality.set(phraseId, Math.max(0, Math.min(1, q)));
+          }
+        }
+      }
+      if (this.phraseQuality.size > 0) {
+        console.info(`[StemRemix] Taste quality loaded: ${this.phraseQuality.size} phrases`);
+        this.reselectSignatures();
+      }
+    }
+    if (scores?.ears) {
+      for (const [phraseId, entry] of Object.entries(scores.ears)) {
+        if (entry === null || typeof entry !== "object") continue;
+        const q = Number(entry.q);
+        if (Number.isFinite(q)) {
+          this.earQuality.set(`${phraseId}:*`, Math.max(0, Math.min(1, q)));
+          for (const stem of STEMS) {
+            const perStemQ = Number(entry.perStem?.[stem]?.q);
+            if (Number.isFinite(perStemQ)) {
+              this.earQuality.set(`${phraseId}:${stem}`, Math.max(0, Math.min(1, perStemQ)));
+            }
+          }
+        }
+      }
+      if (this.earQuality.size > 0) {
+        console.info(`[StemRemix] Ears quality loaded: ${this.earQuality.size} entries`);
+      }
+    }
+    if (!scores?.stem_next) return;
+    for (const [phraseId, byStem] of Object.entries(scores.stem_next)) {
+      for (const [stem, list] of Object.entries(byStem)) {
+        for (const item of list ?? []) {
+          this.stemNext.set(`${phraseId}:${stem}:${item.id}`, item.score);
+        }
+      }
+    }
+    if (this.stemNext.size > 0) {
+      console.info(`[StemRemix] Per-stem judge scores loaded: ${this.stemNext.size} next entries`);
+    }
+  }
+
+  /** Load the cluster bank + optional taste scores. */
+  async load(basePath: string, taste?: TasteScoresManifest | null): Promise<void> {
+    const base = basePath.replace(/\/+$/, "");
+    const response = await fetch(`${base}/kit_manifest.json`);
+    if (!response.ok) {
+      throw new Error(`Kit manifest request failed (${response.status})`);
+    }
+    const manifest = (await response.json()) as KitManifest;
+    if (!Array.isArray(manifest.kits) || manifest.kits.length === 0) {
+      throw new Error("Kit manifest has no kits");
+    }
+    this.manifest = manifest;
+    this.baseUrl = base;
+    this.tasteScores = taste ?? null;
+    this.clusters = Array.isArray(manifest.clusters) ? manifest.clusters : [];
+    if (this.clusters.length === 0) {
+      throw new Error("Kit manifest has no clusters; per-stem mode needs a cluster bank");
+    }
+    this.kitById.clear();
+    for (const kit of manifest.kits) this.kitById.set(kit.track_id, kit);
+    try {
+      const ranker = new JointRanker();
+      const ok = await ranker.load(base);
+      this.jointRanker = ok ? ranker : null;
+    } catch {
+      this.jointRanker = null;
+    }
+    try {
+      const mc = new MixCompatModel();
+      const ok = await mc.load(base);
+      this.mixCompat = ok ? mc : null;
+      if (ok) console.info("[StemRemix] Mix-compat model loaded (per-bar, rhythm-prioritized)");
+    } catch {
+      this.mixCompat = null;
+    }
+    // Optional sidecars: load availability index first to avoid 404 noise.
+    await this.loadSidecarsIndex(base);
+    // Learned arc/section artifacts: missing/invalid leaves fallbacks.
+    if (this.sidecarEnabled("arc_model") || this.sidecarEnabled("arc_context_features")) {
+      void this.loadArcArtifacts(base);
+    }
+    if (this.sidecarEnabled("section_model")) {
+      void this.loadSectionModel(base);
+    }
+    // Learned phrase-syntax successors (gated bonus, never a filter).
+    if (this.sidecarEnabled("syntax_successors")) {
+      void this.loadSyntaxSuccessors(base);
+    }
+    // Rhythm-mesh, chord-progression, vocal-edge sidecars (optional).
+    if (this.sidecarEnabled("rhythm_scores") || this.sidecarEnabled("rhythm_mesh_model") || this.sidecarEnabled("rhythm_flux")) {
+      void this.loadRhythmArtifacts(base);
+    }
+    if (this.sidecarEnabled("progression_model") || this.sidecarEnabled("progression_context")) {
+      void this.loadProgressionArtifacts(base);
+    }
+    const setupLoads: Promise<unknown>[] = [];
+    if (this.sidecarEnabled("vocal_mix")) {
+      setupLoads.push(this.loadVocalMix(base));
+    }
+    if (!this.sidecarsIndex || this.sidecarEnabled("cell_index")) {
+      setupLoads.push(this.barComposer.load(`${base}/cell_index.json`));
+    }
+    if (!this.sidecarsIndex || this.sidecarEnabled("cell_compat")) {
+      setupLoads.push(this.cellCompat.load(`${base}/cell_compat.json`));
+    }
+    if (this.sidecarEnabled("slice_flow")) setupLoads.push(this.sliceFlow.load(base));
+    if (this.sidecarEnabled("vocal_bar_model")) setupLoads.push(this.loadVocalBarModel(base));
+    if (this.sidecarEnabled("vocal_phrases")) setupLoads.push(this.loadVocalPhrases(base));
+    if (this.sidecarEnabled("transition_cohort")) setupLoads.push(this.loadTransitionCohort(base));
+    if (this.sidecarEnabled("song_arc_model")) setupLoads.push(this.loadSongArc(base));
+    if (this.sidecarEnabled("motif_calendar")) setupLoads.push(this.loadMotifCalendar(base));
+    if (this.sidecarEnabled("vocal_cadence")) setupLoads.push(this.loadVocalCadence(base));
+    if (this.sidecarEnabled("level_seam")) setupLoads.push(this.loadLevelSeam(base));
+    if (this.sidecarEnabled("horizon_planner")) setupLoads.push(this.loadHorizonPlanner(base));
+    if (this.sidecarEnabled("variety_prior")) setupLoads.push(this.loadVarietyPrior(base));
+    if (this.sidecarEnabled("vocal_section_model")) setupLoads.push(this.loadVocalSectionModel(base));
+    if (this.sidecarEnabled("conductor")) setupLoads.push(this.loadConductor(base));
+    if (this.sidecarEnabled("bank_transition")) setupLoads.push(this.loadBankTransition(base));
+    if (this.sidecarEnabled("phrase_conductor")) setupLoads.push(this.loadPhraseConductor(base));
+    if (this.sidecarEnabled("sequence_conductor")) setupLoads.push(this.loadSequenceConductor(base));
+    if (this.sidecarEnabled("song_critic")) setupLoads.push(this.loadSongCritic(base));
+    if (this.sidecarEnabled("song_policy")) setupLoads.push(this.loadSongPolicy(base));
+    if (this.sidecarEnabled("mix_preference")) setupLoads.push(this.loadMixPreference(base));
+    if (this.sidecarEnabled("phrase_embeddings")) setupLoads.push(this.loadPhraseEmbeddings(base));
+    if (this.sidecarEnabled("beam_search")) setupLoads.push(this.loadBeamSearch(base));
+    if (this.sidecarEnabled("cell_chroma")) setupLoads.push(this.loadCellChroma(base));
+    if (this.sidecarEnabled("pattern_bar_model")) setupLoads.push(this.loadPatternBarModel(base));
+    if (this.sidecarEnabled("harmony_continuity")) setupLoads.push(this.loadHarmonyContinuity(base));
+    if (setupLoads.length > 0) {
+      await Promise.all(setupLoads);
+    }
+  }
+
+  /** Load optional sidecar availability index (silent on absence). */
+  private async loadSidecarsIndex(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/sidecars.json`);
+      if (!res.ok) return;
+      const data = (await res.json()) as Record<string, unknown>;
+      if (data && typeof data === "object") this.sidecarsIndex = data as Record<string, boolean>;
+    } catch {
+      /* no index: fall back to trying sidecars */
+    }
+  }
+
+  /** True if a sidecar is enabled (or index unknown). */
+  private sidecarEnabled(name: string): boolean {
+    if (!this.sidecarsIndex) return true;
+    const v = this.sidecarsIndex[name];
+    return v !== false;
+  }
+
+  /** True when a sidecar fetch is simply absent (404/410) — silent skip. */
+  private static isMissingArtifact(err: unknown): boolean {
+    return err instanceof Error && /\b(404|410)\b/.test(err.message);
+  }
+
+  /** Load the learned arc model + context sidecar (log once, never throw). */
+  private async loadArcArtifacts(base: string): Promise<void> {
+    if (this.sidecarsIndex && (!this.sidecarEnabled("arc_model") || !this.sidecarEnabled("arc_context_features"))) {
+      return;
+    }
+    try {
+      const [modelRes, sideRes] = await Promise.all([
+        fetch(`${base}/arc_model.json`),
+        fetch(`${base}/arc_context_features.json`),
+      ]);
+      if (!modelRes.ok || !sideRes.ok) {
+        throw new Error(`arc artifact ${modelRes.status}/${sideRes.status}`);
+      }
+      const model = (await modelRes.json()) as unknown;
+      const side = (await sideRes.json()) as {
+        feature_dim?: unknown;
+        byPhraseId?: unknown;
+        version?: unknown;
+      };
+      if (!isArcModelArtifact(model) || model.config.feature_dim !== 48) {
+        throw new Error("invalid arc model artifact");
+      }
+      const featStd = model.feat_std;
+      if (!Array.isArray(featStd) || featStd.length !== 48
+        || featStd.some((v) => !Number.isFinite(v) || v <= 0)) {
+        throw new Error("invalid arc model feat_std");
+      }
+      const by = side.byPhraseId;
+      if (!by || typeof by !== "object") throw new Error("invalid arc sidecar");
+      const map = new Map<string, number[]>();
+      for (const [phraseId, row] of Object.entries(by as Record<string, unknown>)) {
+        if (Array.isArray(row) && row.length === 48
+          && row.every((v) => Number.isFinite(Number(v)))) {
+          map.set(phraseId, row.map(Number));
+        }
+      }
+      if (map.size === 0) throw new Error("empty arc sidecar");
+      this.arcArtifact = model;
+      this.arcFeatures = map;
+      console.info(`[StemRemix] Arc model loaded (${map.size} context features)`);
+    } catch (err) {
+      if (!this.arcLoggedUnavailable) {
+        this.arcLoggedUnavailable = true;
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] arc model unavailable; planned wave only", err);
+        }
+      }
+    }
+  }
+
+  /** Learned phrase-syntax successor table (gated bonus source).
+   *  Null when the table is absent or invalid — the syntax term then scores
+   *  exactly neutral at 0.5 so playback never depends on the table. */
+  private syntaxSuccessors: Map<string, Map<string, number>> | null = null;
+  private syntaxLoggedUnavailable = false;
+
+  /** Load the learned section/transition model (optional, never throw). */
+  private async loadSectionModel(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/section_model.json`);
+      if (!res.ok) {
+        if (res.status === 404 || res.status === 410) return; // optional
+        throw new Error(`section model ${res.status}`);
+      }
+      const model = (await res.json()) as SectionModel;
+      if (this.sectionNavigator.load(model)) {
+        this.sectionModel = model;
+      }
+    } catch (err) {
+      if (StemRemixPlayer.isMissingArtifact(err)) {
+        console.debug("[StemRemix] optional sidecar absent; term neutral");
+      } else {
+        console.warn("[StemRemix] section model unavailable; planned arc only", err);
+      }
+    }
+  }
+
+  /**
+   * Load the learned phrase-syntax successor table
+   * (`syntax_successors.json`, `{ anchor phraseId: { same_section_top,
+   * overall_top } }` with per-successor scores from the intra-track syntax
+   * model).  Logs once and stays null on any failure.
+   */
+  private async loadSyntaxSuccessors(base: string): Promise<void> {
+    if (this.sidecarsIndex && !this.sidecarEnabled("syntax_successors")) return;
+    try {
+      const res = await fetch(`${base}/syntax_successors.json`);
+      if (!res.ok) throw new Error(`syntax successors ${res.status}`);
+      const doc = (await res.json()) as {
+        successors?: Record<string, {
+          same_section_top?: Array<{ to?: unknown; score?: unknown }>;
+          overall_top?: Array<{ to?: unknown; score?: unknown }>;
+        }>;
+      };
+      const table = doc.successors;
+      if (!table || typeof table !== "object") throw new Error("invalid syntax successors");
+      const map = new Map<string, Map<string, number>>();
+      for (const [fromId, entry] of Object.entries(table)) {
+        const inner = new Map<string, number>();
+        for (const list of [entry?.same_section_top, entry?.overall_top]) {
+          if (!Array.isArray(list)) continue;
+          for (const item of list) {
+            const to = typeof item?.to === "string" ? item.to : "";
+            const score = Number(item?.score);
+            if (!to || !Number.isFinite(score)) continue;
+            const prev = inner.get(to);
+            if (prev === undefined || score > prev) inner.set(to, score);
+          }
+        }
+        if (inner.size > 0) map.set(fromId, inner);
+      }
+      if (map.size === 0) throw new Error("empty syntax successors");
+      this.syntaxSuccessors = map;
+      console.info(`[StemRemix] Syntax successors loaded: ${map.size} anchors`);
+    } catch (err) {
+      if (!this.syntaxLoggedUnavailable) {
+        this.syntaxLoggedUnavailable = true;
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] syntax successors unavailable; syntax bonus neutral", err);
+        }
+      }
+    }
+  }
+
+  /** Rhythm-mesh pair model (wub-rhythm-mesh-model-v1); null until loaded. */
+  private rhythmModel: RhythmMeshModel | null = null;
+  /** phraseId -> 4-stem onset grids/fluxes for the mix-fitness bonus. */
+  private rhythmEntries: Map<string, Record<StemName, RhythmEntry>> | null = null;
+  private rhythmLoggedUnavailable = false;
+
+  /**
+   * Load the rhythm-mesh artifacts (`rhythm_scores.json` 64-step onset
+   * grids, `rhythm_mesh_model.json` logistic pair models, and
+   * `rhythm_flux.f32` step fluxes in phrase order).  Builds the per-phrase
+   * entry map the candidate mix-fit bonus reads; logs once and stays null on
+   * any failure (the term is then exactly neutral).
+   */
+  private async loadRhythmArtifacts(base: string): Promise<void> {
+    if (this.sidecarsIndex && (!this.sidecarEnabled("rhythm_scores") || !this.sidecarEnabled("rhythm_mesh_model") || !this.sidecarEnabled("rhythm_flux"))) {
+      return;
+    }
+    try {
+      const [scoresRes, modelRes, fluxRes] = await Promise.all([
+        fetch(`${base}/rhythm_scores.json`),
+        fetch(`${base}/rhythm_mesh_model.json`),
+        fetch(`${base}/rhythm_flux.f32`),
+      ]);
+      if (!scoresRes.ok || !modelRes.ok || !fluxRes.ok) {
+        throw new Error(`rhythm artifact ${scoresRes.status}/${modelRes.status}/${fluxRes.status}`);
+      }
+      const scores = (await scoresRes.json()) as {
+        format?: unknown;
+        phrases?: Array<Record<string, unknown>>;
+      };
+      const model = (await modelRes.json()) as RhythmMeshModel;
+      if (scores.format !== "wub-rhythm-scores-v1" || !Array.isArray(scores.phrases)) {
+        throw new Error("invalid rhythm scores");
+      }
+      if (!model || typeof model !== "object" || !model.pairs
+        || typeof model.pairs !== "object" || Object.keys(model.pairs).length === 0) {
+        throw new Error("invalid rhythm mesh model");
+      }
+      const fluxBuf = await fluxRes.arrayBuffer();
+      const flux = new Float32Array(fluxBuf);
+      if (flux.length !== scores.phrases.length * 4 * 64) {
+        throw new Error("rhythm flux length mismatch");
+      }
+      const map = new Map<string, Record<StemName, RhythmEntry>>();
+      for (let i = 0; i < scores.phrases.length; i++) {
+        const phrase = scores.phrases[i];
+        const id = typeof phrase?.id === "string" ? phrase.id : "";
+        if (!id) continue;
+        const entry = {} as Record<StemName, RhythmEntry>;
+        let malformed = false;
+        for (let s = 0; s < 4; s++) {
+          const stem = STEMS[s];
+          const gridStr = typeof phrase[stem] === "string" ? (phrase[stem] as string) : "";
+          if (gridStr.length !== 64) { malformed = true; break; }
+          const grid = new Uint8Array(64);
+          for (let k = 0; k < 64; k++) grid[k] = gridStr.charCodeAt(k) === 49 ? 1 : 0;
+          entry[stem] = {
+            id,
+            grid,
+            flux: flux.slice((i * 4 + s) * 64, (i * 4 + s) * 64 + 64),
+          };
+        }
+        if (!malformed && Object.keys(entry).length === 4) map.set(id, entry);
+      }
+      if (map.size === 0) throw new Error("empty rhythm entries");
+      this.rhythmModel = model;
+      this.rhythmEntries = map;
+      console.info(`[StemRemix] Rhythm mesh loaded (${map.size} phrases)`);
+    } catch (err) {
+      if (!this.rhythmLoggedUnavailable) {
+        this.rhythmLoggedUnavailable = true;
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] rhythm mesh unavailable; rhythm bonus neutral", err);
+        }
+      }
+    }
+  }
+
+  /** Learned chord-progression model + context; null until loaded. */
+  private progressionModel: ProgressionModelArtifact | null = null;
+  private progressionContext: ProgressionContextArtifact | null = null;
+  private progressionLoggedUnavailable = false;
+
+  /**
+   * Load the chord-progression artifacts (`progression_model.json` MLP +
+   * Markov tables, `progression_context.json` per-phrase rel_chord/chroma).
+   * Logs once and stays null on any failure (the term is then exactly
+   * neutral).
+   */
+  private async loadProgressionArtifacts(base: string): Promise<void> {
+    if (this.sidecarsIndex && (!this.sidecarEnabled("progression_model") || !this.sidecarEnabled("progression_context"))) {
+      return;
+    }
+    try {
+      const [modelRes, ctxRes] = await Promise.all([
+        fetch(`${base}/progression_model.json`),
+        fetch(`${base}/progression_context.json`),
+      ]);
+      if (!modelRes.ok || !ctxRes.ok) {
+        throw new Error(`progression artifact ${modelRes.status}/${ctxRes.status}`);
+      }
+      const model = (await modelRes.json()) as ProgressionModelArtifact;
+      const ctx = (await ctxRes.json()) as ProgressionContextArtifact;
+      if (!model || model.format !== "wub-progression-v1" || !model.mlp || !model.markov) {
+        throw new Error("invalid progression model");
+      }
+      if (!ctx || ctx.format !== "wub-progression-context-v1" || !ctx.byPhraseId
+        || typeof ctx.byPhraseId !== "object") {
+        throw new Error("invalid progression context");
+      }
+      if (Object.keys(ctx.byPhraseId).length === 0) throw new Error("empty progression context");
+      this.progressionModel = model;
+      this.progressionContext = ctx;
+      console.info(`[StemRemix] Chord progression loaded (${Object.keys(ctx.byPhraseId).length} phrases)`);
+    } catch (err) {
+      if (!this.progressionLoggedUnavailable) {
+        this.progressionLoggedUnavailable = true;
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] chord progression unavailable; progression bonus neutral", err);
+        }
+      }
+    }
+  }
+
+  /** phraseId -> per-phrase vocal edge strengths; null until loaded. */
+  private vocalEdgeStrength: Map<string, number[]> | null = null;
+  /** phraseId -> { starts, ends }: vocal activity at step 0 / step 63 of
+   *  the phrase's 64-step grid (from vocal_activity16). */
+  private vocalActivity: Map<string, { starts: boolean; ends: boolean }> | null = null;
+  /** phraseId -> full 4-bar / 64-step vocal singing density from vocal_activity16. */
+  private vocalPresence: Map<string, VocalActivityInfo> | null = null;
+  /** phraseId -> vocal segment membership { pos, lenBars } where pos is the
+   *  0-based phrase index inside its (same-track, boundary-chained) segment
+   *  and lenBars its total length in bars. */
+  private vocalSegments: Map<string, { pos: number; lenBars: number }> | null = null;
+  private vocalLoggedUnavailable = false;
+
+  /** Soft bonus/penalty for vocal singing density; neutral (0) when absent. */
+  private vocalPresenceBonus(phraseId: string): number {
+    const info = this.vocalPresence?.get(phraseId);
+    if (!info) return 0;
+    const fracScore = clamp01((info.frac - 0.15) / 0.55) * 0.55;
+    const barBonus = info.activeBars >= 3 ? 0.22 : (info.activeBars === 2 ? 0.08 : -0.35);
+    return fracScore + barBonus;
+  }
+
+  /**
+   * Chain vocal segments from the per-phrase activity grids: consecutive
+   * same-track phrases link when the first ends with activity and the next
+   * starts with activity — one continuous performance.  Records each
+   * phrase's position and total segment length so policy can prefer
+   * entering at a segment start and play the whole segment.
+   */
+  private buildVocalSegments(activity: Map<string, { starts: boolean; ends: boolean }>): void {
+    const manifest = this.manifest;
+    if (!manifest) return;
+    const segments = new Map<string, { pos: number; lenBars: number }>();
+    for (const kit of manifest.kits) {
+      const ordered = [...kit.phrases].sort(
+        (a, b) => (Number(a.start_bar) || 0) - (Number(b.start_bar) || 0),
+      );
+      let i = 0;
+      while (i < ordered.length) {
+        // Start of a segment: a phrase with activity that is not a
+        // continuation of the previous phrase.
+        const start = activity.get(ordered[i].id);
+        if (!start || (!start.starts && !start.ends)) { i++; continue; }
+        let j = i;
+        while (j + 1 < ordered.length) {
+          const cur = activity.get(ordered[j].id);
+          const next = activity.get(ordered[j + 1].id);
+          if (!cur || !next || !cur.ends || !next.starts) break;
+          const curBar = Number(ordered[j].start_bar) || 0;
+          const nextBar = Number(ordered[j + 1].start_bar) || 0;
+          if (nextBar !== curBar + 4) break;
+          j++;
+        }
+        const lenBars = (j - i + 1) * 4;
+        for (let k = i; k <= j; k++) {
+          segments.set(ordered[k].id, { pos: k - i, lenBars });
+        }
+        i = j + 1;
+      }
+    }
+    if (segments.size > 0) this.vocalSegments = segments;
+  }
+
+  /** Vocal segment membership of one phrase, or null when unknown. */
+  private vocalSegmentOf(phraseId: string): { pos: number; lenBars: number } | null {
+    return this.vocalSegments?.get(phraseId) ?? null;
+  }
+
+  /** Minimum silent bars between sung vocal blocks (mined, else 8). */
+  private vocalMinGapBars(): number {
+    const mined = this.vocalCadence?.policy.min_gap_bars;
+    if (typeof mined === "number" && Number.isFinite(mined) && mined >= 4 && mined <= 32) {
+      return Math.round(mined);
+    }
+    return VOCAL_MIN_GAP_BARS;
+  }
+
+  /**
+   * Learned-similarity donor prior: cosine of the 64-d phrase embeddings.
+   * Same style (not same song) means audio neighbors excluding own track —
+   * the key/tempo ladder hard filters in rebuildPool/jointOptions stay in
+   * force, so this intersects similarity with the ladder instead of
+   * replacing it. Null when embeddings are absent (term stays neutral).
+   */
+  private phraseSimilarity(aId: string, bId: string): number | null {
+    const table = this.barComposer.phraseEmbeddings;
+    if (!table) return null;
+    const a = table[aId];
+    const b = table[bId];
+    if (!a || !b || a.length === 0 || b.length === 0) return null;
+    const n = Math.min(a.length, b.length);
+    let dot = 0;
+    let na = 0;
+    let nb = 0;
+    for (let i = 0; i < n; i++) {
+      const x = a[i] ?? 0;
+      const y = b[i] ?? 0;
+      dot += x * y;
+      na += x * x;
+      nb += y * y;
+    }
+    if (!(na > 0) || !(nb > 0)) return null;
+    return Math.max(-1, Math.min(1, dot / Math.sqrt(na * nb)));
+  }
+
+  /** Bounded similarity bonus for a donor candidate (-0.15..+0.15). */
+  private phraseSimilarityBonus(curId: string, candId: string): number {
+    const sim = this.phraseSimilarity(curId, candId);
+    if (sim === null) return 0;
+    return Math.max(-0.15, Math.min(0.15, 0.20 * (sim - 0.5)));
+  }
+
+  /** True when a fresh vocal may start at `startBar` (gap satisfied). */
+  private vocalGapOk(startBar: number): boolean {
+    return startBar - this.lastVocalEndBar >= this.vocalMinGapBars();
+  }
+
+  /**
+   * Hard gate for fresh vocal entrances: the phrase must start cleanly
+   * (activity at step 0), begin a segment (pos 0 when segment data exists),
+   * and fit the upcoming block exactly (segment length == block bars when
+   * known, else a real consecutive run). Mid-segment chops and truncated or
+   * loop-filled units are rejected so whole takes play or vocals rest.
+   */
+  private vocalFreshLegal(entry: StemPoolEntry, phrases: number): boolean {
+    const activity = this.vocalActivity?.get(entry.phrase.id);
+    // Clean entrance: singing must be active at the downbeat. When activity
+    // data is absent, fall back to the pool-level RMS/activity floor.
+    if (activity && !activity.starts) return false;
+    const seg = this.vocalSegmentOf(entry.phrase.id);
+    if (seg !== null) {
+      if (seg.pos !== 0) return false;
+      if (seg.lenBars !== phrases * 4) return false;
+      return true;
+    }
+    // No segment data: require a real consecutive run (no looping to fill).
+    return this.runFor(entry, phrases, false).length >= phrases;
+  }
+
+  /**
+   * Load `vocal_mix.json` (per-phrase mix in/out zones + vocal edge
+   * strengths + 64-step activity grids).  Keeps the activity endpoints
+   * (active at step 0 / step 63) alongside the edge strengths so vocal
+   * segments can be chained, and builds those segments immediately.
+   * Logs once and stays null on any failure (the terms are then exactly
+   * neutral).
+   */
+  private async loadVocalMix(base: string): Promise<void> {
+    if (this.sidecarsIndex && !this.sidecarEnabled("vocal_mix")) return;
+    try {
+      const res = await fetch(`${base}/vocal_mix.json`);
+      if (!res.ok) throw new Error(`vocal mix ${res.status}`);
+      const doc = (await res.json()) as Record<string, {
+        vocal_edge_strength?: unknown;
+        vocal_activity16?: unknown;
+      }>;
+      if (!doc || typeof doc !== "object") throw new Error("invalid vocal mix");
+      const map = new Map<string, number[]>();
+      const activity = new Map<string, { starts: boolean; ends: boolean }>();
+      const presence = new Map<string, VocalActivityInfo>();
+      for (const [phraseId, entry] of Object.entries(doc)) {
+        const edges = entry?.vocal_edge_strength;
+        if (Array.isArray(edges) && edges.length > 0
+          && edges.every((v) => Number.isFinite(Number(v)))) {
+          map.set(phraseId, edges.map(Number));
+        }
+        const act = entry?.vocal_activity16;
+        if (typeof act === "string" && act.length === 64) {
+          activity.set(phraseId, { starts: act[0] === "1", ends: act[63] === "1" });
+          const counts = [0, 0, 0, 0];
+          let totalOnes = 0;
+          for (let i = 0; i < 64; i++) {
+            if (act[i] === "1") {
+              counts[i >> 4]++;
+              totalOnes++;
+            }
+          }
+          const barFracs: [number, number, number, number] = [
+            counts[0] / 16,
+            counts[1] / 16,
+            counts[2] / 16,
+            counts[3] / 16,
+          ];
+          const activeBars = counts.filter((c) => c >= 2).length;
+          presence.set(phraseId, {
+            frac: totalOnes / 64,
+            barFracs,
+            activeBars,
+          });
+        }
+      }
+      if (map.size === 0 && presence.size === 0) throw new Error("empty vocal mix");
+      this.vocalEdgeStrength = map;
+      this.vocalActivity = activity;
+      this.vocalPresence = presence;
+      this.barComposer.setVocalActivity(presence);
+      this.buildVocalSegments(activity);
+      const longCount = [...(this.vocalSegments?.values() ?? [])]
+        .filter((s) => s.lenBars > 4).length;
+      console.info(
+        `[StemRemix] Vocal edges loaded (${map.size} phrases, ${presence.size} activity grids, ` +
+        `${longCount} phrases inside >4-bar vocal segments)`,
+      );
+    } catch (err) {
+      if (!this.vocalLoggedUnavailable) {
+        this.vocalLoggedUnavailable = true;
+        if (StemRemixPlayer.isMissingArtifact(err)) {
+          console.debug("[StemRemix] optional sidecar absent; term neutral");
+        } else {
+          console.warn("[StemRemix] vocal mix unavailable; vocal-edge bonus neutral", err);
+        }
+      }
+    }
+  }
+
+  /**
+   * Learned next-vocal-bar head.  It ranks the phrase's existing active bars;
+   * the known-good repair cadence and hook loop stay in charge.
+   */
+  private async loadVocalBarModel(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_bar_model.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalBarModel;
+      if (doc?.format === "wub-vocal-bar-v1" && doc.input_dim === 120
+        && doc.next?.w1?.length) {
+        this.barComposer.vocalBarModel = doc;
+      }
+    } catch {
+      // Optional model; the known-good vocal path remains in force.
+    }
+  }
+
+  /** Learned multi-bar unit ranker for vocal phrase selection. */
+  private async loadVocalPhrases(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_phrases.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalPhraseModel;
+      if (doc?.format === "wub-vocal-phrases-v1"
+        && doc.tracks && typeof doc.tracks === "object") {
+        this.barComposer.vocalPhraseModel = doc;
+        const units = Object.values(doc.tracks).reduce((sum, list) => sum + list.length, 0);
+        console.info(`[StemRemix] Vocal phrase ranker loaded (${units} units / ${Object.keys(doc.tracks).length} tracks)`);
+      }
+    } catch {
+      // Optional ranker; selection falls back to the known-good heuristics.
+    }
+  }
+
+  /** Learned section-boundary stem cohorts (real-song boundary statistics). */
+  private async loadTransitionCohort(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/transition_cohort.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as TransitionCohort;
+      const policy = doc?.policy;
+      if (doc?.format === "wub-transition-cohort-v1" && doc.tracks >= 100
+        && Array.isArray(doc.cohorts) && policy
+        && Number.isFinite(policy.max_changes_section)
+        && Number.isFinite(policy.max_changes_inside)) {
+        this.transitionCohort = doc;
+        console.info(
+          `[StemRemix] Transition cohort loaded (${doc.tracks} songs, ` +
+          `${doc.boundaries} boundaries, section cap ${policy.max_changes_section})`,
+        );
+      }
+    } catch {
+      // Optional prior; the historical 1-2 stem budget remains in force.
+    }
+  }
+
+  /** Corpus-mined section transition/duration/energy model. */
+  private async loadSongArc(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/song_arc_model.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as SongArcArtifact;
+      if (doc?.format === "wub-song-arc-v1" && doc.tracks >= 100
+        && doc.transition && doc.lengths && doc.section_energy) {
+        this.songArcModel = doc;
+        console.info(`[StemRemix] Song arc loaded (${doc.tracks} songs)`);
+      }
+    } catch {
+      // Optional; the fixed 104-bar blueprint stays in force.
+    }
+  }
+
+  /** Per-stem 20 ms seam level correction measured from the shipped audio. */
+  private async loadLevelSeam(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/level_seam.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as {
+        format: string; correction?: Partial<Record<StemName, number>>;
+      };
+      const c = doc?.correction;
+      if (doc?.format === "wub-level-seam-v1" && c) {
+        const clean: Partial<Record<StemName, number>> = {};
+        for (const stem of STEMS) {
+          const value = c[stem];
+          if (Number.isFinite(value) && value! > 0.8 && value! < 1.2) clean[stem] = value;
+        }
+        this.levelCorrection = clean;
+      }
+    } catch {
+      // Optional; equal-gain handoff stays in force.
+    }
+  }
+
+  /** Apply the learned seam correction only to the hand-off start gain. */
+  private seamGain(stem: StemName, gain: number): number {
+    const correction = this.levelCorrection?.[stem] ?? 1;
+    return Math.max(0.2, Math.min(3, gain * correction));
+  }
+
+  /** Optional variety policy; neutral when absent. */
+  private async loadVarietyPrior(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/variety_prior.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VarietyPrior;
+      if (doc?.format === "wub-variety-prior-v1" && doc.track_reuse_penalty >= 0) {
+        this.varietyPrior = doc;
+        this.songArchitect.setVarietyConfig(doc);
+      }
+    } catch {
+      // Optional; historical selection remains in force.
+    }
+  }
+
+  /** How often this stem's recent history used a given source track. */
+  private trackUseCount(stem: StemName, trackId: string): number {
+    const cfg = this.varietyPrior;
+    const history = this.stemHistory[stem] ?? [];
+    const window = cfg ? Math.max(8, Math.round(cfg.track_history_bars / 4)) : 16;
+    let used = 0;
+    for (const id of history.slice(-window)) {
+      if (this.entryById.get(`${id}:${stem}`)?.kit.track_id === trackId) used += 1;
+    }
+    return used;
+  }
+
+  /** Session freshness of a vocal phrase (1 = never played, 0 = just played). */
+  private vocalFreshnessOf(phraseId: string): number {
+    const plays = this.playCountOf("vocals", phraseId);
+    const history = this.stemHistory.vocals ?? [];
+    const idx = history.lastIndexOf(phraseId);
+    const age = idx < 0 ? 99 : history.length - 1 - idx;
+    return clamp01(0.6 / (1 + plays * 0.5) + 0.4 * Math.min(1, age / 12));
+  }
+
+  /** Bounded variety bonus for a candidate source track. */
+  private varietyBonusFor(stem: StemName, trackId: string): number {
+    const cfg = this.varietyPrior;
+    if (!cfg) return 0;
+    const used = this.trackUseCount(stem, trackId);
+    return cfg.track_reuse_penalty * (1 / (1 + used) - 0.5);
+  }
+
+  /** Bounded final-gate beam search config. */
+  private async loadBeamSearch(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/beam_search.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as BeamSearchConfig;
+      if (doc?.format === "wub-beam-search-v1" && doc.depth >= 2 && doc.width >= 2) {
+        this.beamSearch = doc;
+      }
+    } catch {
+      // Optional; greedy final gate stays in force.
+    }
+  }
+
+  /** Learned phrase embeddings for the critic's 282-d feature vector. */
+  private async loadPhraseEmbeddings(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/phrase_embeddings.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as {
+        format: string; dim: number; phrases: Record<string, number[]>;
+      };
+      if (doc?.format === "wub-phrase-embeddings-v1" && doc.dim === 64 && doc.phrases) {
+        this.barComposer.phraseEmbeddings = doc.phrases;
+      }
+    } catch {
+      // Optional; the critic falls back to zero embeddings.
+    }
+  }
+
+  /** Learned four-stem song-ness critic (bounded final-gate adjustment). */
+  private async loadSongCritic(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/song_critic.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as SongCriticArtifact;
+      if (isSongCriticArtifact(doc)) {
+        this.songCritic = doc;
+        this.barComposer.songCritic = doc;
+      }
+    } catch {
+      // Optional; final gate stays purely acoustic.
+    }
+  }
+
+  /** Learned song-policy compatibility prior (bounded ±0.15, never a filter). */
+  private async loadSongPolicy(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/song_policy.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as SongPolicyArtifact;
+      if (doc?.format === "wub-song-policy-v1" && doc.weights) {
+        this.songPolicy = doc;
+      }
+    } catch {
+      // Optional; hand-tuned tempo/key/harmony weights remain in force.
+    }
+  }
+
+  /** Bounded learned compatibility bonus for a candidate (-0.15..+0.15). */
+  private songPolicyBonus(entry: StemPoolEntry, section: string, targetEnergy: number): number {
+    const policy = this.songPolicy;
+    if (!policy) return 0;
+    const w = policy.weights;
+    // Learned signs: tempo/key negative (penalize stretch), energy/harmony
+    // positive. Section weight trained negative (same-section negatives in
+    // training) so clamp to >=0 — staying in section must not be penalized.
+    const sectionW = Math.max(0, w.sectionMatch ?? 0);
+    const raw = (w.tempoCost ?? 0) * entry.tempoCost
+      + (w.keyCost ?? 0) * entry.keyCost
+      + sectionW * (entry.section.toUpperCase() === section.toUpperCase() ? 1 : 0)
+      + (w.energyMatch ?? 0) * Math.max(0, 1 - Math.abs(entry.energy - targetEnergy))
+      + (w.harmonyFit ?? 0) * 0.1
+      + (w.vocalBonus ?? 0) * 0.1;
+    // Scale raw logits (trained ~±5) down to a bounded prior.
+    return Math.max(-0.15, Math.min(0.15, raw * 0.03));
+  }
+
+  /** Learned donor prior for synthetic two-song mixes (weak-label head). */
+  private async loadMixPreference(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/mix_preference.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as MixPreferenceArtifact;
+      if (doc?.format === "wub-mix-preference-v1" && doc.weights) {
+        this.mixPreference = doc;
+        console.info(
+          `[StemRemix] Mix preference ready (val AUC ${doc.report?.val_auc ?? 0})`,
+        );
+      }
+    } catch {
+      // Optional; similarity + song-policy priors remain in force.
+    }
+  }
+
+  /**
+   * Bounded donor bonus for a cross-track candidate (-0.15..+0.15).
+   * Features mirror train_mix_preference.py exactly: raw phrase-embedding
+   * cosine, kit-BPM tempo cost, kit-key cost, section/energy continuity to
+   * the *current* phrase (not the arc target), and raw bass-root harmony.
+   * Missing sidecar or embeddings: exactly 0, never a filter.
+   */
+  private mixPreferenceBonus(curId: string, entry: StemPoolEntry, current: StemPoolEntry): number {
+    const mp = this.mixPreference;
+    if (!mp) return 0;
+    const w = mp.weights;
+    const sim = this.phraseSimilarity(curId, entry.phrase.id) ?? 0;
+    const tempoCost = Math.min(0.5, Math.abs(entry.kit.bpm - current.kit.bpm)
+      / Math.max(1, current.kit.bpm));
+    const shift = keyShift(current.kit.key, entry.kit.key);
+    const keyCost = shift === null ? 0.5 : Math.abs(shift) / 6;
+    const sectionMatch = entry.section.toUpperCase() === current.section.toUpperCase() ? 1 : 0;
+    const energyMatch = Math.max(0, 1 - Math.abs(entry.energy - current.energy));
+    const rawCur = (current.phrase as unknown as { bass_root?: unknown }).bass_root;
+    const rawCand = (entry.phrase as unknown as { bass_root?: unknown }).bass_root;
+    let harmonyFit = 0.5;
+    if (typeof rawCur === "number" && typeof rawCand === "number") {
+      const interval = Math.abs(rawCand - rawCur) % 12;
+      harmonyFit = 1 - Math.min(interval, 12 - interval) / 6;
+    }
+    const raw = (w.sim ?? 0) * sim
+      + (w.tempoCost ?? 0) * tempoCost
+      + (w.keyCost ?? 0) * keyCost
+      + (w.sectionMatch ?? 0) * sectionMatch
+      + (w.energyMatch ?? 0) * energyMatch
+      + (w.harmonyFit ?? 0) * harmonyFit
+      + (mp.bias ?? 0);
+    return Math.max(-0.15, Math.min(0.15, raw * 0.01));
+  }
+
+  /** Phrase-space conductor trained on real song phrase chronology. */
+  private async loadPhraseConductor(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/phrase_conductor.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as PhraseConductorArtifact;
+      if (isPhraseConductorArtifact(doc)) {
+        this.phraseConductor = doc;
+        console.info(
+          `[StemRemix] Phrase conductor ready ` +
+          `(${doc.report?.pairs ?? 0} phrase pairs, cosine ${doc.report?.val_embedding_cosine ?? 0})`,
+        );
+      }
+    } catch {
+      // Optional; bank transition + joint ranker remain in force.
+    }
+  }
+
+  /** History-aware phrase-sequence conductor. */
+  private async loadSequenceConductor(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/sequence_conductor.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as SequenceConductorArtifact;
+      if (isSequenceConductorArtifact(doc)) {
+        this.sequenceConductor = doc;
+        console.info(`[StemRemix] Sequence conductor ready (${doc.report?.sequences ?? 0} trajectories)`);
+      }
+    } catch {
+      // Optional; phrase conductor and joint ranker remain in force.
+    }
+  }
+
+  /** 218-d step feature for the sequence conductor. */
+  private sequenceStep(stem: StemName, phraseId: string, section: string): number[] {
+    const v: number[] = [];
+    const emb = this.barComposer.phraseEmbeddings?.[phraseId] ?? [];
+    for (let i = 0; i < 64; i++) v.push(emb[i] ?? 0);
+    const entry = this.entryById.get(`${phraseId}:${stem}`);
+    const shift = entry?.keyShift ?? 0;
+    for (const s of ["bass", "other", "vocals"] as const) {
+      const vec = this.barComposer.cellPatternVec(phraseId, s, 0, shift, section);
+      for (let i = 0; i < 48; i++) v.push(vec[i] ?? 0);
+    }
+    const secs = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
+    for (const s of secs) v.push(s === section ? 1 : 0);
+    v.push(entry?.energy ?? 0.5);
+    return v;
+  }
+
+  /** Learned real-chronology phrase-transition prior. */
+  private async loadBankTransition(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/bank_transition.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as BankTransitionArtifact;
+      if (isBankTransitionArtifact(doc)) {
+        this.bankTransition = doc;
+        console.info(
+          `[StemRemix] Bank transition prior ready ` +
+          `(${doc.report?.real_transitions ?? 0} real pairs, val AUC ${doc.report?.val_auc ?? 0})`,
+        );
+      }
+    } catch {
+      // Optional; joint ranker remains authoritative.
+    }
+  }
+
+  /** BankPhrase view of a pool entry for the transition prior. */
+  private bankPhraseOf(entry: StemPoolEntry): BankPhrase {
+    const phrase = entry.phrase as unknown as { id: string; embedding?: number[]; section?: string };
+    return {
+      id: phrase.id,
+      section: phrase.section,
+      embedding: phrase.embedding,
+      energy: entry.energy,
+      bpm: entry.kit.bpm,
+      keyRoot: parseTheoryKey(entry.kit.key).root,
+    };
+  }
+
+  /** Offline-trained end-to-end conductor (section, energy, changes, patterns). */
+  private async loadConductor(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/conductor.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as ConductorArtifact;
+      if (isConductorArtifact(doc)) {
+        this.conductorModel = doc;
+        console.info(
+          `[StemRemix] Conductor ready (authority ${doc.authority.toFixed(2)}, ` +
+          `${doc.report?.change_auc ? Object.keys(doc.report.change_auc).length : 0} stems)`,
+        );
+      }
+    } catch {
+      // Optional; hand-written rules stay in force.
+    }
+  }
+
+  /** Ask the conductor for this block's section/energy/change/pattern decision. */
+  private runConductor(startBar: number, section: string, energy: number): ConductorDecision | null {
+    const model = this.conductorModel;
+    if (!model) return null;
+    const current = CONDUCTOR_STEMS.map((stem) => {
+      const entry = this.lastBlockEntries[stem] ?? this.current[stem]?.entry;
+      return entry ? this.barComposer.cellPatternVec(entry.phrase.id, stem, 3, entry.keyShift, section)
+        : new Array<number>(48).fill(0);
+    });
+    const phase = (((startBar % 104) + 104) % 104) / 104;
+    const energyDb = -20 + energy * 40;
+    let state: number[];
+    if (model.version >= 2) {
+      const history: number[][][] = [];
+      for (let age = 5; age >= 0; age--) {
+        const cells = CONDUCTOR_STEMS.map((stem) => {
+          const ids = this.stemHistory[stem] ?? [];
+          const id = ids[ids.length - 1 - age];
+          const entry = id ? this.entryById.get(`${id}:${stem}`) : undefined;
+          return entry
+            ? this.barComposer.cellPatternVec(entry.phrase.id, stem, 3, entry.keyShift, section)
+            : new Array<number>(48).fill(0);
+        });
+        history.push(cells);
+      }
+      const sections = this.conductorSectionHistory.slice(-6);
+      const energies = this.conductorEnergyHistory.slice(-6);
+      const lastEnergy = energies.length ? energies[energies.length - 1] : energyDb;
+      state = conductorStateV2(history, sections, energies, section, energyDb,
+        energyDb - lastEnergy, phase);
+    } else {
+      const older = CONDUCTOR_STEMS.map((stem) => {
+        const prev = this.previousEntries[stem] ?? this.current[stem]?.entry;
+        return prev
+          ? this.barComposer.cellPatternVec(prev.phrase.id, stem, 3, prev.keyShift, section)
+          : new Array<number>(48).fill(0);
+      });
+      const delta = (this.composedStats.lastMeanTheoryScore ?? 0.5) - 0.5;
+      state = conductorState(older, current, section, energy, delta, phase);
+    }
+    try {
+      const decision = inferConductor(model, state);
+      this.conductorDecision = decision;
+      const patterns: Partial<Record<StemName, number[]>> = {};
+      CONDUCTOR_STEMS.forEach((stem, i) => { patterns[stem] = decision.patterns[i] ?? []; });
+      this.barComposer.conductorNextPatterns = patterns;
+      return decision;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Bounded score term from the conductor's per-stem change head. */
+  private conductorChangeBonus(subset: readonly StemName[]): number {
+    const conductor = this.conductorDecision;
+    if (!conductor || conductor.authority <= 0) return 0;
+    let bonus = 0;
+    for (const stem of subset) {
+      const idx = CONDUCTOR_STEMS.indexOf(stem as (typeof CONDUCTOR_STEMS)[number]);
+      if (idx >= 0) bonus += conductor.change[idx] - 0.5;
+    }
+    return conductor.authority * 0.30 * bonus / Math.max(1, subset.length);
+  }
+
+  /** Learned 4/8/16-bar vocal sections and their backing cohorts. */
+  private async loadVocalSectionModel(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_section_model.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalSectionModel;
+      if (doc?.format === "wub-vocal-section-v1" && doc.tracks >= 100
+        && doc.lengths && doc.backing_change) {
+        this.vocalSectionModel = doc;
+        this.barComposer.vocalSectionModel = doc;
+      }
+    } catch {
+      // Optional; static vocal-role heuristics remain in force.
+    }
+  }
+
+  /** Bias drums/bass/other to change with a new sung section, as in songs. */
+  private vocalBackingBonus(section: string, changed: readonly StemName[]): number {
+    const model = this.vocalSectionModel;
+    if (!model || !changed.includes("vocals")) return 0;
+    const cat = vocalSectionCategory(this.targetKind || section, section);
+    let bonus = 0;
+    for (const stem of ["drums", "bass", "other"] as const) {
+      if (!changed.includes(stem)) continue;
+      const p = model.backing_change[cat]?.[stem] ?? 0.4;
+      bonus += 0.12 * (p - 0.35);
+    }
+    return Math.max(-0.12, Math.min(0.18, bonus));
+  }
+
+  /** Unified short-horizon planner config (rank bias only). */
+  private async loadHorizonPlanner(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/horizon_planner.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as HorizonPlannerConfig;
+      if (doc?.format === "wub-horizon-planner-v1" && doc.weights
+        && Number.isFinite(doc.max_score) && doc.max_score > 0) {
+        this.horizonConfig = doc;
+        this.barComposer.horizonBarSelect = true;
+      }
+    } catch {
+      // Optional; greedy per-block selection stays in force.
+    }
+  }
+
+  /**
+   * One bounded score over three horizons: the next bar inside the phrase,
+   * the next phrase/donor value, and the 2-3 block sequence fit to the arc.
+   * It is added to the existing policy score; nothing is scheduled by it.
+   */
+  private horizonScoreFor(
+    subset: readonly StemName[],
+    picks: readonly StemPoolEntry[],
+    startBar: number,
+    candidateEnergy: number,
+    kitSection: string,
+  ): number {
+    const cfg = this.horizonConfig;
+    if (!cfg || subset.length === 0) return 0;
+    let bar = 0;
+    let phrase = 0;
+    for (let i = 0; i < subset.length; i++) {
+      const entry = picks[i];
+      if (!entry) continue;
+      // -0.2..0.2 -> 0..1, neutral at 0.5.
+      bar += 0.5 + this.barComposer.patternFitForNext(subset[i], entry.phrase.id, kitSection) / 0.4;
+      // Quality alone makes the explorer replay the same "best" phrase. Blend
+      // in how long ago this stem last used it (unseen = fully fresh).
+      const history = this.stemHistory[subset[i]] ?? [];
+      const idx = history.lastIndexOf(entry.phrase.id);
+      const age = idx < 0 ? 99 : history.length - 1 - idx;
+      const freshness = idx < 0 ? 1 : clamp01(age / 8);
+      phrase += 0.6 * entry.earQ + 0.4 * freshness;
+    }
+    bar /= subset.length;
+    phrase /= subset.length;
+    const futureBar = startBar + Math.max(1, cfg.horizon_blocks) * 4;
+    const future = this.sampledArcTarget(futureBar);
+    const futureEnergy = future ? future.energy : targetAt(futureBar).energy;
+    const tolerance = Math.max(0.04, cfg.arc_tolerance);
+    const arcFit = clamp01(1 - Math.abs(candidateEnergy - futureEnergy) / tolerance);
+    const cohort = this.transitionCohort?.p_3plus?.section ?? 0.5;
+    const sequence = 0.6 * arcFit + 0.4 * clamp01(cohort);
+    const combined = cfg.weights.bar * (bar - 0.5)
+      + cfg.weights.phrase * (phrase - 0.5)
+      + cfg.weights.sequence * (sequence - 0.5);
+    return Math.max(-cfg.max_score, Math.min(cfg.max_score, combined * 2));
+  }
+
+  /** Motif return / freshness priors from real songs. */
+  private async loadMotifCalendar(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/motif_calendar.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as MotifCalendar;
+      if (doc?.format === "wub-motif-calendar-v1" && doc.tracks >= 100
+        && doc.return_rate && doc.policy?.return_bonus) {
+        this.motifCalendar = doc;
+      }
+    } catch {
+      // Optional; repetition/novelty scoring falls back to the fixed terms.
+    }
+  }
+
+  /** Learned vocal run lengths and section release bonus. */
+  private async loadVocalCadence(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/vocal_cadence.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as VocalCadence;
+      if (doc?.format === "wub-vocal-cadence-v1" && doc.tracks >= 100
+        && doc.policy && Number.isFinite(doc.policy.min_hold_bars)) {
+        this.vocalCadence = doc;
+      }
+    } catch {
+      // Optional; the historical 16-bar vocal hold remains in force.
+    }
+  }
+
+  /** Motif return and freshness bonus for a candidate stem cohort. */
+  private motifPriorFor(subset: readonly StemName[], picks: readonly StemPoolEntry[]): number {
+    const model = this.motifCalendar;
+    if (!model) return 0;
+    let total = 0;
+    for (let i = 0; i < subset.length; i++) {
+      const stem = subset[i];
+      const id = picks[i]?.phrase.id;
+      if (!id) continue;
+      const history = this.stemHistory[stem] ?? [];
+      const idx = history.lastIndexOf(id);
+      const ageBars = idx < 0 ? 0 : (history.length - 1 - idx) * 4;
+      const rate = model.return_rate[stem]?.[String(ageBars)] ?? 0;
+      total += idx >= 0
+        ? (model.policy.return_bonus[stem] ?? 0) * (0.5 + rate)
+        : (model.policy.novelty_bonus[stem] ?? 0);
+    }
+    return Math.min(0.32, total / Math.max(1, subset.length));
+  }
+
+  /** Deterministic per-set sampled arc point at a session bar. */
+  private sampledArcTarget(startBar: number): SampledArcSegment | null {
+    const model = this.songArcModel;
+    if (!model) return null;
+    const key = `${this.cluster?.id ?? ""}:${Math.round(this.sessionBpm)}`;
+    if (key !== this.sampledArcKey || !this.sampledArc) {
+      this.sampledArcKey = key;
+      this.sampledArc = sampleSongArc(model, Math.floor(hashRoll(`songarc:${key}`) * 4294967296));
+    }
+    return songArcTargetAt(this.sampledArc, startBar);
+  }
+
+  /** Rare, deterministic-random full-source takeover at a section change. */
+  private handoffAllowed(startBar: number): boolean {
+    const h = this.transitionCohort?.handoff;
+    if (!h?.enabled || !(h.probability > 0)) return false;
+    return hashRoll(`handoff:${this.sampledArcKey}:${startBar}`) < h.probability;
+  }
+
+  /** Learned probability of a changed-stem cohort at a section boundary. */
+  private cohortPriorFor(changed: readonly StemName[]): number {
+    const doc = this.transitionCohort;
+    if (!doc || changed.length === 0) return 0.5;
+    const wanted = [...changed].sort().join("+");
+    const row = doc.cohorts.find((c) => c.kind === "section" && c.stems.slice().sort().join("+") === wanted);
+    return row ? row.p : 0.5;
+  }
+
+  /** Per-bar chroma for the shipped phrases (real audio, not a proxy). */
+  private async loadCellChroma(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/cell_chroma.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as CellChromaDoc;
+      if (doc?.format === "cell_chroma_v1" && doc.phrases) {
+        this.barComposer.loadCellChroma(doc);
+        console.info(`[StemRemix] Per-bar chroma loaded (${Object.keys(doc.phrases).length} phrases)`);
+      }
+    } catch {
+      // Optional; per-bar harmony check stays neutral.
+    }
+  }
+
+  /** Learned next-bar pattern heads for drums/bass/other. */
+  private async loadPatternBarModel(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/pattern_bar_model.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as PatternBarModel;
+      if (doc?.format === "wub-pattern-bars-v1" && doc.input_dim === 55
+        && doc.output_dim === 48 && doc.hidden === 64 && doc.stems) {
+        this.barComposer.patternBarModel = doc;
+        console.info("[StemRemix] Next-bar pattern model loaded (drums/bass/other)");
+      }
+    } catch {
+      // Optional; static cell scoring remains in force.
+    }
+  }
+
+  /** Learned real-song chroma floors for the assembled quartet. */
+  private async loadHarmonyContinuity(base: string): Promise<void> {
+    try {
+      const res = await fetch(`${base}/harmony_continuity.json`);
+      if (!res.ok) return;
+      const doc = (await res.json()) as HarmonyContinuity;
+      if (doc?.format === "wub-harmony-continuity-v1" && doc.policy
+        && Number.isFinite(doc.policy.min_bar_pair_cos)
+        && Number.isFinite(doc.policy.min_boundary_cos)) {
+        this.barComposer.harmonyContinuity = doc;
+      }
+    } catch {
+      // Optional; no harmony penalty when absent.
+    }
+  }
+
+  /**
+   * Rhythm-mesh mean pair fit (0..1) of a candidate 4-stem mix, or
+   * undefined when the artifacts/entries are missing (exactly neutral).
+   */
+  private rhythmFitFor(candidate: Partial<Record<StemName, StemPoolEntry>>): number | undefined {
+    const model = this.rhythmModel;
+    const entries = this.rhythmEntries;
+    if (!model || !entries) return undefined;
+    const stems = {} as Record<StemName, RhythmEntry>;
+    for (const stem of STEMS) {
+      const phraseEntries = entries.get(candidate[stem]?.phrase.id ?? "");
+      if (!phraseEntries) return undefined;
+      stems[stem] = phraseEntries[stem];
+    }
+    const fit = rhythmMixScore(model, stems);
+    return Number.isFinite(fit.mean) ? clamp01(fit.mean) : undefined;
+  }
+
+  /**
+   * Chord-progression fit (0..1) of the candidate next chord after the
+   * recent harmonic context, or undefined when unavailable.  Anchored on
+   * the drums phrase (the envelope the arc history already tracks).
+   * Scored as pointwise mutual information (MLP logprob minus the
+   * chord's unigram logprob): the corpus is tonic-heavy (77% of real
+   * next chords are tonic), so raw logprob saturates for every
+   * tonic-rooted candidate (AUC ≈ 0.55, half of donors climaxed at 1).
+   * PMI isolates how much the *context* explains this chord: measured
+   * AUC 0.71 for real continuations vs random donors, with continuations
+   * clustering above 0 and random picks straddling 0.
+   */
+  private progressionFor(candidate: Partial<Record<StemName, StemPoolEntry>>): number | undefined {
+    const model = this.progressionModel;
+    const ctx = this.progressionContext;
+    if (!model || !ctx) return undefined;
+    const prevId = this.arcHistory[this.arcHistory.length - 1] ?? "";
+    const prev2Id = this.arcHistory.length >= 2 ? this.arcHistory[this.arcHistory.length - 2] : null;
+    const nextId = candidate.drums?.phrase.id ?? "";
+    if (!prevId || !nextId) return undefined;
+    const { score, source } = progressionScoreByPhraseId(model, ctx, prevId, prev2Id, nextId);
+    if (source === null || !Number.isFinite(score)) return undefined;
+    if (source === "mlp") {
+      const next = ctx.byPhraseId[nextId];
+      const unigram = model.markov.unigram_log[next?.rel_chord ?? 0];
+      if (Number.isFinite(unigram)) {
+        return clamp01(0.5 + (score - (unigram as number)) * 0.25);
+      }
+    }
+    return clamp01(0.5 + (score + Math.log(12)) * 0.22);
+  }
+
+  /**
+   * Vocal-edge cleanliness (0..1) of a vocal swap: mean of the outgoing
+   * end-edge and incoming start-edge strengths, or undefined when the
+   * sidecar is absent.  When segment data is available the edges follow
+   * real phrase segments — an outgoing phrase that is mid-segment has no
+   * clean end, and an incoming phrase that is mid-segment has no clean
+   * start — so swaps only land on true segment boundaries.
+   */
+  private vocalEdgeFor(
+    current: Partial<Record<StemName, StemPoolEntry>>,
+    candidate: Partial<Record<StemName, StemPoolEntry>>,
+  ): number | undefined {
+    const edges = this.vocalEdgeStrength;
+    if (!edges) return undefined;
+    const outId = current.vocals?.phrase.id ?? "";
+    const inId = candidate.vocals?.phrase.id ?? "";
+    const outEdges = edges.get(outId);
+    const inEdges = edges.get(inId);
+    if (!outEdges || !inEdges || outEdges.length === 0 || inEdges.length === 0) return undefined;
+    const outSeg = this.vocalSegmentOf(outId);
+    const inSeg = this.vocalSegmentOf(inId);
+    // Segment end = last phrase of its segment; segment start = position 0.
+    const outEnd = outSeg !== null
+      ? (outSeg.pos === outSeg.lenBars / 4 - 1 ? (outEdges[outEdges.length - 1] ?? 0.5) : 0)
+      : (outEdges[outEdges.length - 1] ?? 0.5);
+    const inStart = inSeg !== null
+      ? (inSeg.pos === 0 ? (inEdges[0] ?? 0.5) : 0)
+      : (inEdges[0] ?? 0.5);
+    return clamp01((outEnd + inStart) / 2);
+  }
+
+  /**
+   * Length in bars of the incoming vocal segment when a vocal swap begins
+   * a segment (whole performances score more); undefined (neutral) for
+   * mid-segment entries or unavailable data.
+   */
+  private vocalSegmentBarsFor(
+    candidate: Partial<Record<StemName, StemPoolEntry>>,
+  ): number | undefined {
+    const seg = this.vocalSegmentOf(candidate.vocals?.phrase.id ?? "");
+    if (!seg || seg.pos !== 0) return undefined;
+    return seg.lenBars;
+  }
+
+  /** Cosine between two 90-d stem chunks, skipping the keyShift/rate stamp
+   *  slots (50/51) the ranker itself writes per entry. */
+  private static stemCosine(a: Float32Array, b: Float32Array, offset: number): number {
+    let dot = 0, na = 0, nb = 0;
+    for (let d = 0; d < 90; d++) {
+      if (d === 50 || d === 51) continue;
+      const x = a[offset + d];
+      const y = b[offset + d];
+      dot += x * y;
+      na += x * x;
+      nb += y * y;
+    }
+    return na > 1e-9 && nb > 1e-9 ? dot / Math.sqrt(na * nb) : 0;
+  }
+
+  /**
+   * Learned next-block arc prediction from the last <=6 heard windows.
+   * Null when the artifact (or usable context) is missing — the caller keeps
+   * the planned wave.  Energy is the primary channel; the section is adopted
+   * upstream only at confident phase boundaries.
+   */
+  private arcPredict(): ArcPrediction | null {
+    const model = this.arcArtifact;
+    const features = this.arcFeatures;
+    if (!model || !features || this.arcHistory.length === 0) return null;
+    const rows: number[][] = [];
+    for (const phraseId of this.arcHistory) {
+      const row = features.get(phraseId);
+      if (row && row.length === 48) rows.push(row);
+    }
+    if (rows.length === 0) return null;
+    const lastEnergy = clamp01(rows[rows.length - 1][32] ?? 0.5);
+    return arcPredictNext(model, rows, lastEnergy);
+  }
+
+  /** Session genre filter: restrict candidate phrases to these styles
+   *  (null = full bank).  The cluster pick for the anchor also follows the
+   *  filter, so a selected genre is audible in the set, not just the anchor. */
+  private styleFilter: Set<string> | null = null;
+  /** MB genre filter (musicbrainz buckets): intersected with the style
+   *  filter at pool build.  Unknown-genre kits never pass an active filter. */
+  private genreFilter: Set<string> | null = null;
+
+  /** Switch between structured "song" mode (themes + chorus recall) and "morph" mode. */
+  setSongMode(mode: SongMode): void {
+    this.songArchitect.setMode(mode);
+    this.composedStats.mode = mode;
+  }
+
+  /** Active composition mode ("song" or "morph"). */
+  getSongMode(): SongMode {
+    return this.songArchitect.getMode();
+  }
+
+  /** Live composition & music-theory telemetry. */
+  getCompositionTelemetry() {
+    return {
+      ...this.composedStats,
+      cellIndexReady: this.barComposer.isReady(),
+      cellCompatReady: this.cellCompat.isReady(),
+    };
+  }
+
+  /** Restrict the bank pools + session clusters to the selected styles.
+   *  Empty selection = all styles (escape hatch, never an empty pool).
+   *  The caller restarts the session after calling this. */
+  setStyleFilter(styles: Set<string> | null): void {
+    const normalized = styles !== null && styles.size > 0 ? new Set(styles) : null;
+    this.styleFilter = normalized;
+  }
+
+  /** Restrict the bank pools to the selected MB genres (empty = all). */
+  setGenreFilter(genres: Set<string> | null): void {
+    const normalized = genres !== null && genres.size > 0 ? new Set(genres) : null;
+    this.genreFilter = normalized;
+  }
+
+  /** Active genre filter (null = full bank). */
+  get activeGenreFilter(): Set<string> | null {
+    return this.genreFilter === null ? null : new Set(this.genreFilter);
+  }
+
+  /** Active genre filter (null = full bank). */
+  get activeStyles(): Set<string> | null {
+    return this.styleFilter === null ? null : new Set(this.styleFilter);
+  }
+
+  /** Pick a cluster at random (optionally a pinned id) and preload the opening phrase.
+   *
+   *  Can be called while the previous set is still playing (genre changes):
+   *  the old session's voices keep ringing during the anchor prep below;
+   *  when prep completes, schedule() hands the boundary to the new anchors
+   *  with the usual equal-gain fades.  Each invocation supersedes any
+   *  earlier in-flight start, so rapid switches cannot interleave state.
+   */
+  async startSession(): Promise<KitCluster> {
+    if (this.manifest === null) throw new Error("StemRemixPlayer.load() first");
+    const gen = ++this.sessionGen;
+    this.sliceFlow.reset();
+    const stale = () => gen !== this.sessionGen;
+    this.sessionPrepped = false;
+    // Graceful hand-off: the old set rings out over its remaining buffers;
+    // the new anchors will fade in via the per-voice hand-off at their
+    // start.  No pool disposal, no silence window.
+    for (const stem of STEMS) {
+      const current = this.current[stem];
+      if (current) current.voice.fadeOut(this.engine.now(), 0.05);
+    }
+    const candidates = this.clusters.filter((c) => {
+      if (this.styleFilter !== null && !this.styleFilter.has(c.style)) return false;
+      return true;
+    });
+    const basePool = candidates.length > 0 ? candidates : this.clusters;
+    // If the user pinned a target BPM before session start, prefer clusters
+    // closest to that tempo so the anchor needs minimal time-stretching.
+    const overrideBpm = this.userBpmOverride;
+    const pool = overrideBpm !== null
+      ? [...basePool].sort((a, b) => Math.abs(a.bpm - overrideBpm) - Math.abs(b.bpm - overrideBpm)).slice(0, Math.min(4, basePool.length))
+      : basePool;
+    // Weight by phrase count so dense clusters are more likely, but keep the
+    // smaller wave/house sessions in rotation.
+    const total = pool.reduce((sum, c) => sum + Math.max(1, c.pool_phrases), 0);
+    let roll = Math.random() * total;
+    let chosen = pool[0];
+    for (const cluster of pool) {
+      roll -= Math.max(1, cluster.pool_phrases);
+      if (roll <= 0) {
+        chosen = cluster;
+        break;
+      }
+    }
+    this.applyCluster(chosen);
+    // Fresh session: reset the cross-set traversal memory (applyCluster
+    // preserves it across rotations so the full bank keeps rotating).
+    this.recent = [];
+    this.stemHistory = { drums: [], bass: [], other: [], vocals: [] };
+    this.playCount.clear();
+    this.playedOnce.clear();
+    this.ladderDirection = 1;
+    this.nextBlockAt = 0;
+    this.blockIndex = 0;
+    this.sessionBar = 0;
+    this.blockStartBar = 0;
+    this.currentBlockBars = 4;
+    this.currentBlockSec = this.blockSec;
+    this.nextCluster = null;
+    this.started = false;
+    this.preparing = false;
+    this.preparingBlock = null;
+    this.lastResult = null;
+    this.anchorPrepared = [];
+    this.lastBlockRuns = {};
+    this.scheduledRuns = {};
+    this.manualPins = {};
+    this.arcHistory = [];
+    this.blockGrid = [];
+    this.lastMoveBar = 0;
+    this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
+    this.lastVocalChangeBar = -1;
+    this.lastVocalEndBar = -1000;
+    this.lastDrumChangeBar = 0;
+    this.styleRecent = [];
+    this.lastSignatureBar = { drums: -1, bass: -1, other: -1, vocals: -1 };
+    this.pendingTechniques = {};
+
+    // Preload one real song: all four stems from the same kit so the first
+    // 4 bars sound like a record before the remix starts. Scheduling waits
+    // for the transport's first schedule() call.
+    // The kit audio worker carries decode+concat off the main thread; the
+    // anchor preload below is its first real load.
+    this.audioWorker.start(ENGINE_SAMPLE_RATE, (bytes) => this.engine.decodeAudio(bytes));
+    const anchor = this.anchorKit ?? this.chooseAnchor();
+    if (anchor) {
+      const allEntries = this.entriesForKit(anchor);
+      const grooveEntries = allEntries.filter((entry) => entry.section === "GROOVE_A");
+      const fullEntry = allEntries.find((entry) => STEMS.every((stem) =>
+        allEntries.some((candidate) => candidate.stem === stem && candidate.phrase.id === entry.phrase.id)
+      ));
+      const fullAnySection = anchor.phrases.find((candidate) =>
+        STEMS.every((stem) => this.entryById.has(`${candidate.id}:${stem}`))
+      );
+      // Prefer a real intro phrase when the anchor has one (planned arc).  If
+      // the kit has no intro, start near the arc's 0.30 intro energy instead of
+      // opening on a drop.
+      const introPhrase = anchor.phrases.find((candidate) =>
+        candidate.is_intro === true
+        && STEMS.every((stem) => this.entryById.has(`${candidate.id}:${stem}`))
+      );
+      const fullPhrases = anchor.phrases.filter((candidate) =>
+        STEMS.every((stem) => this.entryById.has(`${candidate.id}:${stem}`))
+      );
+      const introEnergy = targetAt(0).energy;
+      const phraseEnergy = (candidate: KitPhrase): number => {
+        const value = Number(candidate.energy);
+        return Number.isFinite(value) ? value : 0.5;
+      };
+      const lowEnergyPhrase = [...fullPhrases].sort((a, b) =>
+        Math.abs(phraseEnergy(a) - introEnergy) - Math.abs(phraseEnergy(b) - introEnergy)
+      )[0];
+      const run = this.longestRunPhrases(anchor, true);
+      const phrase: KitPhrase | null = introPhrase
+        ?? lowEnergyPhrase
+        ?? (run.length >= 2
+          ? run[0]
+          : (fullEntry?.phrase ?? fullAnySection ?? grooveEntries[0]?.phrase
+            ?? allEntries[0]?.phrase ?? anchor.phrases[0] ?? null));
+      const entries = phrase ? allEntries.filter((entry) => entry.phrase.id === phrase.id) : [];
+      const byStem = new Map<StemName, StemPoolEntry>();
+      for (const entry of entries) {
+        if (!byStem.has(entry.stem)) byStem.set(entry.stem, entry);
+      }
+      const prepared = await Promise.all(STEMS.map(async (stem) => {
+        let primary = byStem.get(stem) ?? this.anchorEntry(stem, phrase);
+        if (stem === "vocals") {
+          const vp = primary ? this.vocalPresence?.get(primary.phrase.id) : null;
+          const weakVocal = !primary || (vp && (vp.frac < VOCAL_MIN_ACTIVITY_FRAC || vp.activeBars < 2));
+          if (weakVocal) {
+            const sameTrackVocals = this.pools.vocals
+              .filter((e) => e.kit.track_id === anchor.track_id)
+              .sort((a, b) => this.vocalPresenceBonus(b.phrase.id) - this.vocalPresenceBonus(a.phrase.id));
+            if (sameTrackVocals.length > 0) {
+              primary = sameTrackVocals[0];
+            } else {
+              primary = null;
+            }
+          }
+        }
+        if (primary) {
+          const loaded = await this.prepareEntry(stem, primary);
+          if (loaded) return { stem, entry: loaded.entry, audio: loaded.audio };
+        }
+        // Fallback: pick the closest-tempo/key pooled candidate so an odd stem
+        // never leaves the opening block silent.
+        const fallback = [...this.pools[stem]].sort(
+          (a, b) => {
+            const baseA = a.tempoCost * 2 + a.keyCost * 0.1 - (stem === "vocals" ? this.vocalPresenceBonus(a.phrase.id) * 0.5 : 0);
+            const baseB = b.tempoCost * 2 + b.keyCost * 0.1 - (stem === "vocals" ? this.vocalPresenceBonus(b.phrase.id) * 0.5 : 0);
+            return baseA - baseB;
+          }
+        )[0];
+        if (!fallback) return null;
+        const loaded = await this.prepareEntry(stem, fallback);
+        return loaded ? { stem, entry: loaded.entry, audio: loaded.audio } : null;
+      }));
+      // A newer genre switch superseded us while we decoded: do not publish
+      // this anchor.
+      if (stale()) return chosen;
+      this.anchorPrepared = prepared.filter((entry): entry is { stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun } => entry !== null);
+      this.lastBlockEntries = {};
+      this.lastBlockRuns = {};
+      for (const preparedEntry of this.anchorPrepared) {
+        this.lastBlockEntries[preparedEntry.stem] = preparedEntry.entry;
+        this.lastBlockRuns[preparedEntry.stem] = [preparedEntry.entry];
+      }
+      this.previousEntries = { ...this.lastBlockEntries };
+      this.lastMoveBar = 0;
+      this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
+      this.lastVocalChangeBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 0 : -1;
+      this.lastVocalEndBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 4 : -1000;
+      this.lastDrumChangeBar = 0;
+      for (const stem of STEMS) {
+        if (!this.anchorPrepared.some((entry) => entry.stem === stem)) {
+          console.warn(`[StemRemix] anchor missing ${stem}`);
+        }
+      }
+    } else {
+      // No single full-kit anchor: still assemble a clean opening quartet from
+      // the active tempo/key pools so playback always starts.
+      const prepared = await Promise.all(STEMS.map(async (stem) => {
+        const fallback = [...this.pools[stem]].sort(
+          (a, b) => (a.tempoCost * 2 + a.keyCost * 0.1) - (b.tempoCost * 2 + b.keyCost * 0.1)
+        )[0];
+        if (!fallback) return null;
+        const loaded = await this.prepareEntry(stem, fallback);
+        return loaded ? { stem, entry: loaded.entry, audio: loaded.audio } : null;
+      }));
+      if (stale()) return chosen;
+      this.anchorPrepared = prepared.filter((entry): entry is { stem: StemName; entry: StemPoolEntry; audio: LoadedStemRun } => entry !== null);
+      this.lastBlockEntries = {};
+      this.lastBlockRuns = {};
+      for (const preparedEntry of this.anchorPrepared) {
+        this.lastBlockEntries[preparedEntry.stem] = preparedEntry.entry;
+        this.lastBlockRuns[preparedEntry.stem] = [preparedEntry.entry];
+      }
+      this.previousEntries = { ...this.lastBlockEntries };
+      this.lastVocalChangeBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 0 : -1;
+      this.lastVocalEndBar = this.anchorPrepared.some((entry) => entry.stem === "vocals") ? 4 : -1000;
+    }
+    console.info(
+      `[StemRemix] Session ${chosen.id} • ${this.sessionBpm.toFixed(2)} BPM • ${this.sessionKey} • ` +
+      `${this.pools.drums.length} drums / ${this.pools.bass.length} bass / ` +
+      `${this.pools.other.length} other / ${this.pools.vocals.length} vocal phrases`
+    );
+    this.sessionPrepped = true;
+    return chosen;
+  }
+
+  private effectiveEntryRate(entry: StemPoolEntry): number {
+    const duration = Number(entry.phrase.duration_sec);
+    const raw = duration > 0 && this.blockSec > 0 ? duration / this.blockSec : entry.rate;
+    const minRate = this.userBpmOverride !== null ? USER_RATE_MIN : RATE_MIN;
+    const maxRate = this.userBpmOverride !== null ? USER_RATE_MAX : RATE_MAX;
+    return Math.max(minRate, Math.min(maxRate, raw));
+  }
+
+  private syncEntryTempo(entry: StemPoolEntry): void {
+    const rate = this.effectiveEntryRate(entry);
+    entry.rate = rate;
+    entry.tempoCost = Math.abs(rate - 1);
+  }
+
+  private makePoolEntry(
+    kit: Kit,
+    phrase: KitPhrase,
+    stem: StemName,
+    shift: number,
+    rate: number,
+    tempoCost: number,
+    rmsDb: number,
+  ): StemPoolEntry {
+    const xy = phrase.stem_xy?.[stem];
+    const rawRoot = phrase.bass_root ?? null;
+    const bassRoot = rawRoot === null
+      ? null
+      : (((rawRoot + shift) % 12) + 12) % 12;
+    return {
+      kit,
+      phrase,
+      stem,
+      keyShift: shift,
+      rate,
+      tempoCost,
+      keyCost: Math.abs(shift),
+      x: xy?.x ?? phrase.x ?? 0.5,
+      y: xy?.y ?? phrase.y ?? 0.5,
+      energy: Number(phrase.energy) || 0.5,
+      section: String(phrase.section ?? "GROOVE_A").toUpperCase(),
+      chroma: rotateChroma(phrase.chroma, shift),
+      bassRoot,
+      rmsDb,
+      gain: stemGain(stem, rmsDb),
+      earQ: this.earQOf(stem, phrase.id),
+    };
+  }
+
+  private rebuildPool(): void {
+    this.pools = { drums: [], bass: [], other: [], vocals: [] };
+    this.entryById.clear();
+    const rateTiers: Array<[number, number]> = this.userBpmOverride !== null
+      ? [[RATE_MIN, RATE_MAX], [0.85, 1.18], [0.70, 1.40], [USER_RATE_MIN, USER_RATE_MAX]]
+      : [[RATE_MIN, RATE_MAX]];
+    const seen = new Set<string>();
+    for (let tierIdx = 0; tierIdx < rateTiers.length; tierIdx++) {
+      const [minR, maxR] = rateTiers[tierIdx];
+      const needMore = tierIdx === 0
+        ? STEMS
+        : STEMS.filter((stem) => this.pools[stem].length < MIN_USER_POOL_PER_STEM);
+      if (needMore.length === 0) break;
+      const needSet = new Set(needMore);
+      for (const kit of this.kitById.values()) {
+        if (this.failedKits.has(kit.track_id)) continue;
+        if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) continue;
+        if (this.genreFilter !== null && !(kit.genre && this.genreFilter.has(kit.genre))) continue;
+        for (const phrase of kit.phrases) {
+          const duration = Number(phrase.duration_sec);
+          if (!(duration > 0)) continue;
+          const rate = duration / this.blockSec;
+          if (rate < minR || rate > maxR) continue;
+          const tempoCost = Math.abs(rate - 1);
+          for (const stem of STEMS) {
+            if (!needSet.has(stem)) continue;
+            const entryKey = `${phrase.id}:${stem}`;
+            if (seen.has(entryKey)) continue;
+            const asset = phrase.stems?.[stem];
+            if (!asset || !asset.file) continue;
+            let shift = 0;
+            if (stem !== "drums") {
+              const value = keyShift(this.sessionKey, kit.key);
+              if (value === null || Math.abs(value) > MAX_SHIFT[stem]) continue;
+              shift = value;
+            }
+            const rmsDb = Number(asset.rms_db) || -20;
+            if (rmsDb < MIN_RMS_DB[stem]) continue;
+            if (stem === "vocals" && this.vocalPresence) {
+              const vp = this.vocalPresence.get(phrase.id);
+              if (!vp || vp.frac < VOCAL_MIN_ACTIVITY_FRAC || vp.activeBars < 1) continue;
+            }
+            const entry = this.makePoolEntry(kit, phrase, stem, shift, rate, tempoCost, rmsDb);
+            this.pools[stem].push(entry);
+            this.entryById.set(entryKey, entry);
+            seen.add(entryKey);
+          }
+        }
+      }
+    }
+    // Safety net: if a strict style/BPM filter leaves almost no active vocals,
+    // backfill from the relaxed floor so the vocal stream never goes silent.
+    if (this.pools.vocals.length < 8) {
+      const [minR, maxR] = rateTiers[rateTiers.length - 1];
+      for (const kit of this.kitById.values()) {
+        if (this.failedKits.has(kit.track_id)) continue;
+        if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) continue;
+        if (this.genreFilter !== null && !(kit.genre && this.genreFilter.has(kit.genre))) continue;
+        for (const phrase of kit.phrases) {
+          const entryKey = `${phrase.id}:vocals`;
+          if (seen.has(entryKey)) continue;
+          const duration = Number(phrase.duration_sec);
+          if (!(duration > 0)) continue;
+          const rate = duration / this.blockSec;
+          if (rate < minR || rate > maxR) continue;
+          const asset = phrase.stems?.vocals;
+          if (!asset || !asset.file) continue;
+          const shift = keyShift(this.sessionKey, kit.key);
+          if (shift === null || Math.abs(shift) > MAX_SHIFT.vocals) continue;
+          const rmsDb = Number(asset.rms_db) || -20;
+          if (rmsDb < VOCAL_RELAXED_RMS_DB) continue;
+          if (this.vocalPresence) {
+            const vp = this.vocalPresence.get(phrase.id);
+            if (!vp || vp.frac < VOCAL_RELAXED_ACTIVITY_FRAC) continue;
+          }
+          const entry = this.makePoolEntry(kit, phrase, "vocals", shift, rate, Math.abs(rate - 1), rmsDb);
+          this.pools.vocals.push(entry);
+          this.entryById.set(entryKey, entry);
+          seen.add(entryKey);
+        }
+      }
+    }
+  }
+
+  /**
+   * Adjust playback tempo to `bpm` cleanly: retimes playing and pre-scheduled
+   * StretchVoices, shifts the block grid, and rebuilds the candidate pool for
+   * the new tempo. When `lockUser` is true, future cluster rotations preserve it.
+   */
+  setBpm(bpm: number, lockUser: boolean = true): boolean {
+    if (!Number.isFinite(bpm)) return false;
+    const target = Math.max(60, Math.min(200, bpm));
+    if (lockUser) {
+      this.userBpmOverride = target;
+    }
+    if (this.cluster === null) {
+      this.sessionBpm = target;
+      this.blockSec = 960 / target;
+      this.barSec = this.blockSec / 4;
+      this.currentBlockSec = this.currentBlockBars * this.barSec;
+      return true;
+    }
+    const oldBpm = this.sessionBpm > 0 ? this.sessionBpm : target;
+    if (Math.abs(target - oldBpm) < 0.01) {
+      if (lockUser) this.rebuildPool();
+      return lockUser;
+    }
+    this.sessionBpm = target;
+    this.blockSec = 960 / target;
+    this.barSec = this.blockSec / 4;
+    this.currentBlockSec = this.currentBlockBars * this.barSec;
+    this.rebuildPool();
+
+    for (const prepared of this.anchorPrepared) {
+      this.syncEntryTempo(prepared.entry);
+    }
+    for (const stem of STEMS) {
+      const cur = this.current[stem];
+      if (cur) {
+        this.syncEntryTempo(cur.entry);
+        for (const r of cur.run) this.syncEntryTempo(r);
+      }
+      const last = this.lastBlockEntries[stem];
+      if (last) this.syncEntryTempo(last);
+      const prev = this.previousEntries[stem];
+      if (prev) this.syncEntryTempo(prev);
+      for (const r of this.lastBlockRuns[stem] ?? []) this.syncEntryTempo(r);
+      const manual = this.manualPins[stem];
+      if (manual) {
+        this.syncEntryTempo(manual.entry);
+        for (const r of manual.run) this.syncEntryTempo(r);
+      }
+    }
+
+    if (this.started) {
+      const now = this.engine.now();
+      const changeAt = Math.max(now + 0.025, this.lastTempoChangeAt + 0.001);
+      this.lastTempoChangeAt = changeAt;
+      const ratio = oldBpm / target;
+      this.sliceFlow.retime(changeAt, ratio);
+      const retime = (t: number): number => (t <= changeAt ? t : changeAt + (t - changeAt) * ratio);
+
+      for (const block of this.blockGrid) {
+        block.startAt = retime(block.startAt);
+        block.endAt = retime(block.endAt);
+      }
+      if (this.preparingBlock) {
+        this.preparingBlock.startAt = retime(this.preparingBlock.startAt);
+      }
+      if (this.nextBlockAt > 0) {
+        this.nextBlockAt = retime(this.nextBlockAt);
+      }
+
+      for (const stem of STEMS) {
+        const cur = this.current[stem];
+        if (cur) {
+          const newRate = this.effectiveEntryRate(cur.entry);
+          const newEndAt = retime(cur.runEndAt);
+          cur.runEndAt = newEndAt;
+          cur.offsets = cur.offsets.map((off) => {
+            const absT = cur.startedAt + off;
+            return absT <= changeAt ? off : retime(absT) - cur.startedAt;
+          });
+          cur.voice.updateTempo(changeAt, newRate, newEndAt, STEM_FADE_OUT[stem]);
+        }
+
+        const scheduledList = this.scheduledRuns[stem];
+        if (scheduledList && scheduledList.length > 0) {
+          for (const scheduled of scheduledList) {
+            if (cur && scheduled.voice === cur.voice) {
+              scheduled.runEndAt = cur.runEndAt;
+              scheduled.offsets = cur.offsets;
+              continue;
+            }
+            if (scheduled.startedAt > changeAt) {
+              const first = scheduled.run[0];
+              if (!first) continue;
+              this.syncEntryTempo(first);
+              const preDur = scheduled.preDur ?? 0;
+              const newRate = this.effectiveEntryRate(first);
+              const newDownbeat = retime(scheduled.startedAt);
+              const newStartAt = scheduled.manual ? newDownbeat : newDownbeat - preDur / newRate;
+              const newEndAt = retime(scheduled.runEndAt);
+              scheduled.startedAt = newDownbeat;
+              scheduled.runEndAt = newEndAt;
+              if (scheduled.mainDurations) {
+                const updatedOffsets: number[] = [];
+                let off = 0;
+                for (const dur of scheduled.mainDurations) {
+                  updatedOffsets.push(off);
+                  off += dur / newRate;
+                }
+                scheduled.offsets = updatedOffsets;
+              }
+              scheduled.voice.rescheduleWindow(newStartAt, newRate, newEndAt, STEM_FADE_OUT[stem]);
+              if (cur && cur.voice !== scheduled.voice && scheduled.crossfadeSec !== undefined) {
+                cur.voice.fadeOut(newStartAt, scheduled.crossfadeSec);
+              }
+            }
+          }
+        }
+
+        const manual = this.manualPins[stem];
+        if (manual) {
+          manual.runEndAt = retime(manual.runEndAt);
+        }
+      }
+    }
+
+    if (this.lastResult) {
+      this.lastResult.slotSec = this.blockSec;
+      this.lastResult.blockDurationSec = this.currentBlockSec;
+    }
+    return true;
+  }
+
+  private applyCluster(cluster: KitCluster): void {
+    this.cluster = cluster;
+    this.sessionKey = cluster.key;
+    const parsedKey = parseTheoryKey(cluster.key);
+    this.songArchitect.resetForNewSet(cluster.style, parsedKey.root, parsedKey.mode);
+    const targetBpm = this.userBpmOverride ?? cluster.bpm;
+    this.sessionBpm = targetBpm;
+    this.blockSec = 960 / targetBpm;
+    this.barSec = this.blockSec / 4;
+    this.rebuildPool();
+    // Play history is session-scoped, not set-scoped: it survives cluster
+    // rotation so the full bank keeps rotating across sets instead of
+    // resetting to the same near matches every 104 bars.  startSession()
+    // clears it for a fresh session.
+    this.anchorRecent = [];
+    this.lastBlockEntries = {};
+    this.previousEntries = {};
+    this.lastBlockRuns = {};
+    this.scheduledRuns = {};
+    this.manualPins = {};
+    this.anchorKit = this.chooseAnchor();
+    this.currentAnchorPhrase = null;
+    this.morphIndex = 0;
+    this.lastMoveBar = 0;
+    this.lastChangeBar = { drums: 0, bass: 0, other: 0, vocals: 0 };
+    this.lastVocalChangeBar = -1;
+    this.lastVocalEndBar = -1000;
+    this.lastDrumChangeBar = 0;
+    this.pendingTechniques = {};
+    // Signatures are per-cluster (session key/tempo): reselect against the
+    // fresh pool so the new set anchors on phrases that are legal *here*.
+    // Rotation anchors may return immediately; the clocks clear here.
+    this.lastSignatureBar = { drums: -1, bass: -1, other: -1, vocals: -1 };
+    this.reselectSignatures();
+  }
+
+  /** Longest chain of consecutive 4-bar phrases, preferably with all stems. */
+  private longestRunPhrases(kit: Kit, requireFull: boolean = false): KitPhrase[] {
+    const usable = requireFull
+      ? kit.phrases.filter((phrase) =>
+          STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`)))
+      : kit.phrases;
+    const byStart = new Map<number, KitPhrase>();
+    for (const phrase of usable) {
+      if (typeof phrase.start_bar === "number") byStart.set(phrase.start_bar, phrase);
+    }
+    let best: KitPhrase[] = [];
+    for (const phrase of usable) {
+      if (typeof phrase.start_bar !== "number") continue;
+      const run = [phrase];
+      let bar = phrase.start_bar;
+      while (byStart.has(bar + 4)) {
+        bar += 4;
+        run.push(byStart.get(bar)!);
+      }
+      if (run.length > best.length) best = run;
+    }
+    if (best.length === 0 && requireFull) return this.longestRunPhrases(kit, false);
+    return best;
+  }
+
+  /** Bars in the arc block that starts at this session bar. */
+  private blockBarsAt(sessionBar: number): number {
+    if (sessionBar < ARC_8_BAR_START) return 4;
+    if (sessionBar < ARC_16_BAR_START) return 8;
+    if (sessionBar < BRIDGE_START_BAR) return 16;
+    return 4; // 8-bar drumless bridge as two 4-bar blocks
+  }
+
+  private isBridgeBar(sessionBar: number): boolean {
+    return sessionBar >= BRIDGE_START_BAR && sessionBar < SET_BARS;
+  }
+
+  /** The session bar at the end of the arc block containing `bar`. */
+  private blockEndBar(bar: number): number {
+    if (bar < ARC_8_BAR_START) return Math.min(ARC_8_BAR_START, (Math.floor(bar / 4) + 1) * 4);
+    if (bar < ARC_16_BAR_START) {
+      return Math.min(
+        ARC_16_BAR_START,
+        ARC_8_BAR_START + (Math.floor((bar - ARC_8_BAR_START) / 8) + 1) * 8,
+      );
+    }
+    if (bar < BRIDGE_START_BAR) return BRIDGE_START_BAR;
+    if (bar < SET_BARS) {
+      return Math.min(
+        SET_BARS,
+        BRIDGE_START_BAR + (Math.floor((bar - BRIDGE_START_BAR) / 4) + 1) * 4,
+      );
+    }
+    return SET_BARS;
+  }
+
+  /** The scheduled block that contains `now`, if the grid has started. */
+  private blockAt(now: number): { startAt: number; endAt: number; startBar: number; bars: number } | null {
+    let found: { startAt: number; endAt: number; startBar: number; bars: number } | null = null;
+    for (const block of this.blockGrid) {
+      if (block.startAt <= now + 0.01) found = block;
+      else break;
+    }
+    return found;
+  }
+
+  /**
+   * Consecutive phrases from `entry` in its own kit, one per 4 bars.  A short
+   * source run is looped instead of freezing the last phrase, so an 8- or
+   * 16-bar block still has real musical movement.
+   */
+  private runFor(entry: StemPoolEntry, phrases: number, fill: boolean = true): StemPoolEntry[] {
+    const base: StemPoolEntry[] = [entry];
+    const firstDuration = Number(entry.phrase.duration_sec) || 0;
+    let bar = entry.phrase.start_bar;
+    let current = entry;
+    while (base.length < phrases && typeof bar === "number") {
+      const nextPhrase = current.kit.phrases.find((candidate) =>
+        candidate.start_bar === bar + 4
+        && this.entryById.has(`${candidate.id}:${entry.stem}`),
+      );
+      if (!nextPhrase) break;
+      const nextDuration = Number(nextPhrase.duration_sec) || 0;
+      if (firstDuration > 0 && nextDuration > 0
+        && Math.abs(nextDuration - firstDuration) / firstDuration > 0.01) {
+        break; // different tempo; keep the run phase-locked to one 4-bar grid
+      }
+      bar += 4;
+      current = this.entryById.get(`${nextPhrase.id}:${entry.stem}`)!;
+      base.push(current);
+    }
+    if (!fill || base.length >= phrases) return base.slice(0, phrases);
+    const loop = [...base];
+    let index = 0;
+    while (base.length < phrases) {
+      base.push(loop[index % loop.length]);
+      index += 1;
+    }
+    return base.slice(0, phrases);
+  }
+
+  private runAvailable(entry: StemPoolEntry, phrases: number): boolean {
+    return this.runFor(entry, phrases, false).length >= phrases;
+  }
+
+  private runDurationSec(run: readonly StemPoolEntry[]): number {
+    let total = 0;
+    for (const entry of run) total += Number(entry.phrase.duration_sec) || 0;
+    return total;
+  }
+
+  private playCountOf(stem: StemName, phraseId: string): number {
+    return this.playCount.get(`${phraseId}:${stem}`) ?? 0;
+  }
+
+  /** Ears quality in 0..1; 0.5 neutral when the sidecar is absent. */
+  private earQOf(stem: StemName, phraseId: string): number {
+    return this.earQuality.get(`${phraseId}:${stem}`)
+      ?? this.earQuality.get(`${phraseId}:*`)
+      ?? 0.5;
+  }
+
+  private recordPlayed(stem: StemName, entry: StemPoolEntry): void {
+    const key = `${entry.phrase.id}:${stem}`;
+    this.playCount.set(key, (this.playCount.get(key) ?? 0) + 1);
+    const history = this.stemHistory[stem];
+    history.push(entry.phrase.id);
+    if (history.length > 32) history.splice(0, history.length - 32);
+    if (!this.recent.includes(entry.phrase.id)) {
+      this.recent.push(entry.phrase.id);
+    }
+    if (entry.phrase.once) this.playedOnce.add(entry.phrase.id);
+  }
+
+  /** (A) True when this phrase+stem is a selected signature return. */
+  private isSignature(stem: StemName, phraseId: string): boolean {
+    return FLOW_SIGNATURES_ENABLED && this.signatureIds[stem].has(phraseId);
+  }
+
+  /** (A) Session bars since this stem's signature last returned (-1 if never). */
+  private signatureGapBars(stem: StemName): number {
+    const last = this.lastSignatureBar[stem];
+    if (last === undefined || last < 0) return -1;
+    // sessionBar is the bar of the block currently being selected; at run
+    // time blockStartBar lags by the previous block, so the gap must read
+    // the selection horizon, not the playing block.
+    return Math.max(0, this.sessionBar - last);
+  }
+
+  /** (A) Energy-gated bonus for one candidate (0 when pinned/inside the gap). */
+  private signatureBonusFor(stem: StemName, entry: StemPoolEntry, targetEnergy: number): number {
+    return signatureBonus({
+      isSignature: this.isSignature(stem, entry.phrase.id),
+      targetEnergy,
+      gapBars: this.signatureGapBars(stem),
+      pinned: this.pins[stem] !== undefined || this.manualPins[stem] !== undefined,
+    });
+  }
+
+  /** (C) Timbre-budget term for one candidate (soft bonus, never a ban). */
+  private timbreBonusFor(stem: StemName, entry: StemPoolEntry, nowBar: number): number {
+    const cutoff = nowBar - FLOW_TIMBRE_WINDOW_BARS;
+    let count = 0;
+    let blocks = 0;
+    for (const item of this.styleRecent) {
+      if (item.stem !== stem || item.bar <= cutoff) continue;
+      blocks += 1;
+      if (item.style === entry.kit.style) count += 1;
+    }
+    if (blocks <= 0) return 0;
+    return timbreBonus(count, blocks);
+  }
+
+  /** (C) Record one scheduled block for the 32-bar timbre window. */
+  private recordStyle(stem: StemName, style: string, bar: number): void {
+    this.styleRecent.push({ stem, style, bar });
+    // Bound the log: keep ~24 blocks of headroom including stale entries.
+    if (this.styleRecent.length > 128) this.styleRecent.splice(0, this.styleRecent.length - 128);
+  }
+
+  /** Expanded section kind for a pool entry (learned vocabulary hint). */
+  private entryKind(entry: StemPoolEntry): string {
+    return expandBaseSection(
+      String(entry.section || "GROOVE_A"),
+      Number(entry.energy) || 0.5,
+      entry.phrase.is_intro === true,
+      entry.phrase.is_outro === true,
+    );
+  }
+
+  /** (A) Reselect 1-2 signatures per stem from shipped signals only.
+   *  Pool-relative (entries already rate/key-legal), so a cluster rotation
+   *  instantly re-anchors on the new key/tempo.  Missing taste quality falls
+   *  back inside pickSignatures (0.5), so this is safe without the sidecar. */
+  private reselectSignatures(): void {
+    if (!FLOW_SIGNATURES_ENABLED || this.pools.drums.length === 0) return;
+    for (const stem of STEMS) {
+      const candidates = this.pools[stem].map((entry) => ({
+        phraseId: entry.phrase.id,
+        trackId: entry.kit.track_id,
+        quality: this.phraseQuality.get(entry.phrase.id) ?? null,
+        earQ: entry.earQ,
+        energy: entry.energy,
+        section: entry.section,
+        isIntro: entry.phrase.is_intro === true,
+        isOutro: entry.phrase.is_outro === true,
+        once: entry.phrase.once === true,
+      }));
+      const picked = pickSignatures(candidates, FLOW_SIGNATURES_PER_STEM);
+      if (picked.size > 0) {
+        this.signatureIds[stem] = picked;
+        if (picked.size === 1) {
+          console.info(`[StemRemix] signature ${stem}: ${[...picked].join(",")}`);
+        }
+      }
+    }
+    // No clock reset here: applyCluster/startSession clear the clocks for
+    // rotation/fresh anchors, while a late setTasteScores() must not erase a
+    // mid-set rest gap (a premature return would loop the motif).
+  }
+
+  private chooseAnchor(): Kit | null {
+    const cluster = this.cluster;
+    if (!cluster) return null;
+    const scoreKits = (kits: Iterable<Kit>): Kit | null => {
+      let best: { kit: Kit; score: number } | null = null;
+      for (const kit of kits) {
+        if (this.failedKits.has(kit.track_id)) continue;
+        // Count how many stems of this kit actually entered the active tempo/key pool.
+        // Under a user BPM override, a cluster's nominal kits can fall outside the
+        // first populated tempo tier; skip 0-entry ghost kits cleanly.
+        let poolStemCount = 0;
+        for (const stem of STEMS) {
+          if (kit.phrases.some((p) => this.entryById.has(`${p.id}:${stem}`))) {
+            poolStemCount += 1;
+          }
+        }
+        if (poolStemCount === 0) continue;
+
+        const sections = new Set(kit.phrases.map((p) => String(p.section).toUpperCase()));
+        let score = poolStemCount * 3;
+        // The anchor song is transposed to the session key for the opening
+        // blocks; a whole-song |shift| >= 4 is the classic "muddy cold open"
+        // (v0.2.233 opened at shift 5).  Prefer anchors already near the key.
+        const shift = keyShift(this.sessionKey, kit.key);
+        if (shift === null) score -= 6;
+        else if (Math.abs(shift) <= 2) score += 6;
+        else if (Math.abs(shift) <= 3) score += 3;
+        else score -= (Math.abs(shift) - 3) * 1.25;
+        if (sections.has("GROOVE_A")) score += 2;
+        if (sections.has("DROP")) score += 1.5;
+        if (sections.has("BUILDUP")) score += 0.5;
+        const fullPhraseList = kit.phrases.filter((phrase) =>
+          STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
+        );
+        const fullPhrase = fullPhraseList.length > 0;
+        if (fullPhrase) score += 2;
+        // The planned arc opens on a 0.30 INTRO.  A kit whose quietest
+        // full-stem phrase is near that target makes a much better cold open
+        // than a kit that only contains drops.
+        const energyOf = (phrase: KitPhrase): number => {
+          const value = Number(phrase.energy);
+          return Number.isFinite(value) ? value : 0.5;
+        };
+        const lowEnergy = fullPhraseList.length > 0
+          ? Math.min(...fullPhraseList.map(energyOf))
+          : 0.65;
+        if (lowEnergy <= 0.40) score += 2.5;
+        else if (lowEnergy <= 0.55) score += 1.0;
+        const fullGroove = kit.phrases.some((phrase) =>
+          String(phrase.section).toUpperCase() === "GROOVE_A"
+          && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
+        );
+        if (fullGroove) score += 2.5;
+        // The planned arc opens on INTRO; prefer an anchor that actually has a
+        // full-stem intro phrase instead of starting at a peak-energy drop.
+        const fullIntro = kit.phrases.some((phrase) =>
+          phrase.is_intro === true
+          && STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`))
+        );
+        if (fullIntro) score += 6.0;
+        // Vocal song: prefer anchors with full sung verses/choruses (8/16-bar
+        // verse/hook units) so VERSE_1 opens on a real vocal, not airy pads
+        // or instrumentals. +2 for a verse/hook unit head, +1 for long units.
+        try {
+          const tracks = this.barComposer.getVocalUnits?.(kit.track_id) ?? null;
+          if (tracks && tracks.length > 0) {
+            let bestUnit = 0;
+            for (const u of tracks) {
+              const bars = (u as unknown as { bars?: number }).bars ?? 4;
+              const ids = (u as unknown as { ids?: string[] }).ids ?? [];
+              if (ids.length === 0) continue;
+              const head = this.barComposer.getPhraseMeta(ids[0], "vocals");
+              const vr = (head as unknown as { vr?: string } | null)?.vr ?? "";
+              let s = 0;
+              if (vr === "verse" || vr === "hook_1bar" || vr === "hook_2bar") s += 2.0;
+              else if (vr === "chop") s += 1.0;
+              if (bars >= 16) s += 1.0;
+              else if (bars >= 8) s += 0.6;
+              if (s > bestUnit) bestUnit = s;
+            }
+            score += Math.min(3.0, bestUnit);
+          }
+        } catch { /* optional vocal-unit bonus; never blocks anchor */ }
+        // Prefer a kit that actually contains the next 4 bars, so the anchor
+        // song can advance every 4 bars instead of looping an isolated window.
+        const run = this.longestRunPhrases(kit, true);
+        if (run.length > 1) score += Math.min(6, run.length) * 0.9;
+        score += Math.min(1, kit.phrases.length / 6);
+        score += hashRoll(kit.track_id) * 0.3;
+        if (best === null || score > best.score) best = { kit, score };
+      }
+      return best?.kit ?? null;
+    };
+
+    const clusterKits: Kit[] = [];
+    for (const kitId of cluster.kits) {
+      const kit = this.kitById.get(kitId);
+      if (kit) clusterKits.push(kit);
+    }
+    return scoreKits(clusterKits) ?? scoreKits(this.kitById.values());
+  }
+
+  private entriesForKit(kit: Kit, section?: string): StemPoolEntry[] {
+    const entries: StemPoolEntry[] = [];
+    for (const phrase of kit.phrases) {
+      if (section && String(phrase.section).toUpperCase() !== section) continue;
+      for (const stem of STEMS) {
+        const entry = this.entryById.get(`${phrase.id}:${stem}`);
+        if (entry) entries.push(entry);
+      }
+    }
+    return entries;
+  }
+
+  private bestEntryForPhrase(phrase: KitPhrase, stem: StemName): StemPoolEntry | null {
+    return this.entryById.get(`${phrase.id}:${stem}`) ?? null;
+  }
+
+  /** Called by the transport's block clock. Prepares at most one block at a
+   *  time so async voice creation cannot reorder the bar grid. */
+  private lastRecoverySec_ = -60;
+
+  /**
+   * Silence watchdog: the master bus sat at digital zero for seconds while
+   * scheduling kept logging success — the voices themselves went mute
+   * (render-path stall) without the scheduler noticing.  Rebuild the voice
+   * pool and re-enter each playing run at the block clock's current
+   * position, so the block continues instead of restarting — and never
+   * replay the prefetched NEXT block (lastBlockRuns already points at it
+   * during prefetch; replaying it jumped the set ahead and cascaded new
+   * dropouts in v0.2.235).  Cooldown 5 s, one recovery per dropout.
+   */
+  recoverSilence(at: number): void {
+    if (!this.started || this.preparing || this.cluster === null) return;
+    if (at - this.lastRecoverySec_ < 5) return;
+    const tasks: Array<{ stem: StemName; run: StemPoolEntry[]; transition?: TransitionTechnique; slices?: SliceSpec[]; baseSemitones?: number; pitchPoints?: PitchAutomationPoint[] }> = [];
+    const resumes = new Map<StemName, ResumeHint>();
+    for (const stem of STEMS) {
+      const current = this.current[stem];
+      if (current && current.run.length > 0 && current.runEndAt > at + 0.2) {
+        tasks.push({ stem, run: [...current.run], slices: current.slices, baseSemitones: current.baseSemitones, pitchPoints: current.pitchPoints });
+        resumes.set(stem, { startedAt: current.startedAt, runEndAt: current.runEndAt });
+      }
+    }
+    if (tasks.length === 0) return;
+    this.lastRecoverySec_ = at;
+    for (const stem of STEMS) {
+      for (const voice of this.voicePool[stem] ?? []) voice.dispose();
+      this.voicePool[stem] = [];
+      this.voiceIndex[stem] = 0;
+    }
+    this.current = {};
+    console.info(`[StemRemix] silence watchdog: resuming ${tasks.length} runs @ ${at.toFixed(2)}s`);
+    // Guard the rebuild so schedule() cannot start a rival finishBlock while
+    // voices are being recreated (voice-pool races -> stem dropouts).
+    this.preparing = true;
+    void this.finishBlock(tasks, at + 0.15, resumes).finally(() => {
+      this.preparing = false;
+    });
+  }
+
+  /** Called by the transport's block clock. Prepares at most one block at a
+   *  time so async voice creation cannot reorder the bar grid. */
+  schedule(at: number, section: string): StemBlockResult | null {
+    if (this.cluster === null) return null;
+    // The first schedule only fires once a session finished prepping its
+    // anchors; mid-flight restarts (genre flips) reuse the earlier in-flight
+    // prep instead of consuming anchors before they're decoded.
+    if (!this.started && this.sessionPrepped) {
+      this.started = true;
+      // The anchor audio is already decoded (startSession awaits it); the
+      // cushion below only has to cover voice creation + the WASM clone, so
+      // the first notes land ~0.25 s after play instead of ~0.9 s.
+      this.sessionStartAt = Math.max(at, this.engine.now() + 0.3);
+      this.blockStartBar = 0;
+      this.sessionBar = 4;
+      this.currentBlockBars = 4;
+      this.currentBlockSec = 4 * this.barSec;
+      this.nextBlockAt = this.sessionStartAt + this.currentBlockSec;
+      this.blockIndex = 1;
+      this.blockGrid.push({
+        startAt: this.sessionStartAt,
+        endAt: this.nextBlockAt,
+        startBar: 0,
+        bars: 4,
+      });
+      const result = this.anchorResult(this.sessionStartAt, targetAt(0).phase);
+      this.lastResult = result;
+      void this.scheduleAnchor();
+      return result;
+    }
+    // Begin the next block early enough to fetch 1-4 phrases per stem, but
+    // late enough that a reticle drag has already set its pin.  The lead is a
+    // fraction of the upcoming block, capped so the reticle never jumps too
+    // far ahead of the audio.  A longer lead keeps a cache-miss fetch+decode
+    // from finishing after the downbeat, which would otherwise leave a brief
+    // all-stem silence while the already-faded old voices cannot be revived.
+    const upcomingBars = this.sessionBar >= SET_BARS
+      ? 4
+      : this.blockBarsAt(this.sessionBar);
+    const upcomingSec = upcomingBars * this.barSec;
+    const lead = Math.min(8, Math.max(2.0, upcomingSec * 0.6));
+    if (
+      !this.preparing &&
+      this.nextBlockAt > 0 &&
+      this.nextBlockAt < this.engine.now() + lead
+    ) {
+      const when = this.nextBlockAt;
+      const { result, tasks } = this.beginBlock(when, section);
+      this.lastResult = result;
+      // One block of prefetch lead is handled by begin/finish above.
+      // Warm successors only after the boundary-critical loads have finished.
+      // Use the playback cache, without assembling/transferring unused runs.
+      this.preparing = true;
+      this.preparingBlock = { startAt: when, bars: result.blockBars };
+      void this.finishBlock(tasks, when).then(() => {
+        void this.prefetchAhead(tasks);
+      }).finally(() => {
+        this.preparing = false;
+        this.preparingBlock = null;
+      });
+      return result;
+    }
+    return null;
+  }
+
+  /**
+   * One-block-ahead cache warming: pull the same-track successor phrases of
+   * the upcoming block's runs into the audio cache so the block after that
+   * decodes from cache hit.  Never throws; errors are ignored.
+   */
+  private async prefetchAhead(tasks: ReadonlyArray<{ run: readonly StemPoolEntry[] }>): Promise<void> {
+    const seen = new Set<string>();
+    for (const task of tasks) {
+      let entry = task.run[task.run.length - 1];
+      // Two successor hops ahead: where a held stem will naturally continue.
+      for (let i = 0; entry && i < 2; i++) {
+        const next = this.nextRunEntry(entry, entry.stem);
+        if (!next) break;
+        const key = `${next.phrase.id}:${next.stem}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          const item = this.workerItem(next);
+          if (!item || !this.audioWorker.warm([item])) {
+            await this.loadAudio(next).catch(() => {
+              // Warming only; a failed warm leaves the normal load path.
+            });
+          }
+        }
+        entry = next;
+      }
+    }
+  }
+
+  private anchorResult(at: number, section: string): StemBlockResult {
+    const phrases: Partial<Record<StemName, KitPhrase>> = {};
+    const kits: Partial<Record<StemName, Kit>> = {};
+    const stemTracks: Partial<Record<StemName, string>> = {};
+    for (const prepared of this.anchorPrepared) {
+      phrases[prepared.stem] = prepared.entry.phrase;
+      kits[prepared.stem] = prepared.entry.kit;
+      stemTracks[prepared.stem] = prepared.entry.kit.track_id;
+    }
+    const normalized = String(section || "GROOVE_A").toUpperCase();
+    this.lastSection = normalized;
+    this.currentAnchorPhrase = this.anchorPrepared.find((prepared) => prepared.stem === "drums")?.entry.phrase
+      ?? this.anchorPrepared[0]?.entry.phrase
+      ?? null;
+    return {
+      at,
+      section: normalized,
+      changed: [...STEMS],
+      blocksPlayed: 0,
+      bridge: false,
+      rotation: false,
+      blockBars: 4,
+      blockDurationSec: this.currentBlockSec,
+      slotSec: this.blockSec,
+      targetEnergy: targetAt(0).energy,
+      phrases,
+      kits,
+      stemTracks,
+      clusterId: this.cluster?.id ?? "",
+    };
+  }
+
+  private async scheduleAnchor(): Promise<void> {
+    const at = this.sessionStartAt;
+    await Promise.all(this.anchorPrepared.map(async (prepared) => {
+      console.info(`[StemRemix] anchor ${prepared.stem} ${prepared.entry.phrase.id}`);
+      await this.scheduleRun(prepared.stem, [prepared.entry], prepared.audio, at, 4, false);
+    }));
+  }
+
+  private beginBlock(at: number, section: string): {
+    result: StemBlockResult;
+    tasks: Array<{
+      stem: StemName;
+      run: StemPoolEntry[];
+      transition?: TransitionTechnique;
+      slices?: SliceSpec[];
+      baseSemitones?: number;
+      pitchPoints?: PitchAutomationPoint[];
+    }>;
+  } {
+    const blocksPlayed = this.blockIndex;
+    const flowContinuation: Partial<Record<StemName, StemPoolEntry>> = {};
+    for (const stem of STEMS) {
+      const foundation = this.sliceFlow.foundation(stem);
+      const current = foundation ? this.entryById.get(`${foundation.phraseId}:${stem}`) : undefined;
+      if (current) flowContinuation[stem] = this.nextRunEntry(current, stem) ?? current;
+    }
+
+    // End of the 104-bar arc: rotate to a Camelot/tempo neighbour.  The new
+    // set starts with its own anchor record, exactly like a fresh session.
+    let rotation = false;
+    if (this.sessionBar >= SET_BARS) {
+      // The new cluster has a different key/tempo; a pinned stem from the old
+      // set must not keep playing across the boundary.
+      for (const stem of STEMS) {
+        const manual = this.manualPins[stem];
+        if (manual) manual.voice.fadeOut(at, 0.05);
+        delete this.manualPins[stem];
+        delete this.pins[stem];
+        this.pinning.delete(stem);
+        this.pinGeneration[stem] = (this.pinGeneration[stem] ?? 0) + 1;
+      }
+      const next = this.nextCluster ?? (this.sliceFlow.ready ? this.chooseNeighbourCluster() : null);
+      this.nextCluster = null;
+      if (next) {
+        this.applyCluster(next);
+        console.info(`[StemRemix] Cluster → ${next.id} • ${this.sessionBpm.toFixed(2)} BPM • ${this.sessionKey}`);
+      } else {
+        this.lastBlockEntries = {};
+        this.previousEntries = {};
+        this.lastBlockRuns = {};
+        this.scheduledRuns = {};
+        this.manualPins = {};
+      }
+      this.blockIndex = 0;
+      this.sessionStartAt = at;
+      this.nextBlockAt = at;
+      this.sessionBar = 0;
+      rotation = true;
+    }
+
+    const startBar = this.sessionBar;
+    // Section targets: prefer the learned section navigator (corpus-mined
+    // transitions/durations) for infinite navigation; fall back to the fixed
+    // 104-bar arc. The ranker/arc-models remain 5-class (base section).
+    const arc = targetAt(startBar);
+    const sampledArc = this.sampledArcTarget(startBar);
+    const barsForTarget = rotation ? 4 : this.blockBarsAt(startBar);
+    let normalized = arc.section;
+    let displaySection: string = arc.phase;
+    let targetKind = arc.section;
+    // The learned slice path keeps the bar grid but earns its releases;
+    // the legacy no-model path retains the original drumless bridge.
+    const bridge = !rotation && this.isBridgeBar(startBar) && !this.sliceFlow.ready;
+    let targetEnergy = arc.energy;
+    if (!bridge && this.sectionNavigator.ready) {
+      // On cluster rotation (new set), nudge to a natural re-entry.
+      if (rotation) {
+        this.sectionNavigator.force("WARMUP", 8);
+      }
+      const nav = this.sectionNavigator.targetAt(startBar, barsForTarget) as any;
+      if (nav && typeof nav.section === "string") {
+        normalized = String(nav.section).toUpperCase();
+        targetKind = String(nav.kind ?? nav.phase ?? normalized).toUpperCase();
+        displaySection = targetKind;
+        if (typeof nav.energy === "number" && Number.isFinite(nav.energy)) {
+          targetEnergy = clamp01(nav.energy);
+        }
+      }
+    } else if (bridge) {
+      // Bridge is a forced drumless handoff; keep navigator aligned on exit.
+      targetKind = "BRIDGE";
+      displaySection = "BRIDGE";
+      normalized = "BREAKDOWN";
+    }
+    {
+      const learned = this.arcPredict();
+      if (learned && !bridge) {
+        if (Math.abs(learned.energy - targetEnergy) <= 0.25) {
+          targetEnergy = clamp01(0.6 * targetEnergy + 0.4 * learned.energy);
+        }
+        // Only let the 5-class arc model override base section when not using
+        // learned navigation, or at very high confidence on a boundary.
+        if (!this.sectionNavigator.ready && arc.barInPhase === 0 && learned.confidence >= 0.55
+          && (ARC_SECTIONS as readonly string[]).includes(learned.section)) {
+          normalized = learned.section;
+          targetKind = learned.section;
+          displaySection = learned.section;
+        }
+      }
+    }
+    // Stash for selection helpers (base 5-class stays in `normalized`).
+    // A Twitch/viewer kind request colors one block without rewriting the
+    // 104-bar blueprint: it overrides the kind/energy the selectors see,
+    // then expires at the block boundary.
+    if (this.requestedKind && startBar < this.requestedKind.untilBar) {
+      targetKind = this.requestedKind.kind;
+      displaySection = this.requestedKind.kind;
+      if (this.requestedKind.boostEnergy) {
+        targetEnergy = clamp01(0.5 * targetEnergy + 0.5 * this.requestedKind.boostEnergy);
+      }
+    } else if (this.requestedKind) {
+      this.requestedKind = null;
+    }
+    this.targetKind = targetKind;
+    let sectionChanged = normalized !== this.lastSection;
+    this.lastSection = normalized;
+    if (bridge && this.nextCluster === null) {
+      this.nextCluster = this.chooseNeighbourCluster();
+      if (this.nextCluster) {
+        console.info(`[StemRemix] Bridge → ${this.nextCluster.id} in 8 bars`);
+      }
+    }
+    const bars = rotation ? 4 : this.blockBarsAt(startBar);
+    const blockSec = bars * this.barSec;
+    const phrasesPerStem = Math.max(1, Math.round(bars / 4));
+    const parsedSessionKey = parseTheoryKey(this.sessionKey);
+    const activeStyle = this.cluster?.style ?? "house";
+    const secCtx = this.songArchitect.describeBlock(
+      startBar,
+      bars,
+      activeStyle,
+      parsedSessionKey.root,
+      parsedSessionKey.mode,
+      targetEnergy,
+      normalized,
+      this.barComposer.getStyleProgressions(),
+    );
+    this.sessionRootParsed = parsedSessionKey.root;
+    this.currentProgression = secCtx.progression as ProgressionChord[];
+    if (this.varietyPrior) {
+      secCtx.vocalFreshness = (phraseId) => this.vocalFreshnessOf(phraseId);
+      secCtx.vocalFreshnessWeight = this.varietyPrior.vocal_freshness_weight;
+    }
+    if (this.songArchitect.getMode() === "song" && !bridge && !rotation) {
+      normalized = secCtx.kitSection;
+      displaySection = secCtx.role;
+      targetEnergy = secCtx.targetEnergy;
+    }
+    // The architect overrode the navigator's energy with its blueprint. Blend
+    // the corpus-mined arc back in *after* that override so section changes
+    // build/fade like the training songs instead of snapping to a fixed table.
+    if (sampledArc && !bridge && !rotation) {
+      targetEnergy = clamp01(0.60 * targetEnergy + 0.40 * sampledArc.energy);
+    }
+    // The learned conductor is the final arbiter of section and energy. With
+    // authority 1.0 it replaces the hand-written arc outright; lowering that
+    // single artifact field blends it back toward the curated rules.
+    const decision = !bridge && !rotation ? this.runConductor(startBar, normalized, targetEnergy) : null;
+    if (decision && decision.authority > 0) {
+      const authority = decision.authority;
+      normalized = decision.section;
+      targetKind = decision.section;
+      displaySection = decision.section;
+      targetEnergy = clamp01((1 - authority) * targetEnergy + authority * decision.energy);
+      secCtx.kitSection = decision.section as typeof secCtx.kitSection;
+      sectionChanged = normalized !== this.lastSection;
+      this.lastSection = normalized;
+    }
+    if (this.conductorModel) {
+      this.conductorSectionHistory.push(normalized);
+      this.conductorEnergyHistory.push(-20 + targetEnergy * 40);
+      if (this.conductorSectionHistory.length > 6) this.conductorSectionHistory.shift();
+      if (this.conductorEnergyHistory.length > 6) this.conductorEnergyHistory.shift();
+    }
+    this.qualityHistory.push({ bar: startBar, section: normalized, energy: targetEnergy });
+    if (this.qualityHistory.length > 104) this.qualityHistory.shift();
+    this.composedStats.mode = this.songArchitect.getMode();
+    this.composedStats.role = displaySection;
+    this.composedStats.chords = secCtx.progression
+      .map((c) => `${(parsedSessionKey.root + c.relRoot) % 12}:${c.quality.slice(0, 3)}`)
+      .join(" ");
+    const handoffThisBlock = sectionChanged && !bridge && !rotation && this.handoffAllowed(startBar);
+    const rawBudget = movementBudgetAt(
+      startBar, bars, sectionChanged, this.transitionCohort?.policy.max_changes_section,
+    );
+    const budget = handoffThisBlock ? { ...rawBudget, maxChanges: 4 } : rawBudget;
+
+    // Pins are measured in session bars.  Release at the first block boundary
+    // at or after 32 bars; the manual hold voice fades at the same boundary.
+    for (const stem of STEMS) {
+      const pin = this.pins[stem];
+      if (pin && startBar >= pin.untilBar) {
+        delete this.pins[stem];
+        delete this.manualPins[stem];
+        // The manual run is 32 bars long; resume from what is actually
+        // playing, not from the end of that long run.
+        const playing = this.current[stem]?.entry;
+        if (playing) {
+          this.lastBlockEntries[stem] = playing;
+          this.lastBlockRuns[stem] = [playing];
+        }
+        this.onStatus?.(`${stem} released back to auto-mix`);
+      }
+    }
+
+    const changed: StemName[] = [];
+    const trackChanged: StemName[] = [];
+    const phrases: Partial<Record<StemName, KitPhrase>> = {};
+    const kits: Partial<Record<StemName, Kit>> = {};
+    const stemTracks: Partial<Record<StemName, string>> = {};
+    const tasks: Array<{
+      stem: StemName;
+      run: StemPoolEntry[];
+      transition?: TransitionTechnique;
+      slices?: SliceSpec[];
+      baseSemitones?: number;
+      pitchPoints?: PitchAutomationPoint[];
+    }> = [];
+
+    if (bridge && !rotation) {
+      for (const stem of ["drums", "bass"] as const) {
+        this.current[stem]?.voice.fadeOut(at, 0.25);
+      }
+    }
+
+    // Rotation is a fresh anchor; otherwise two opening blocks establish the
+    // anchor record.  After that the joint ranker chooses 1-2 stems to move to
+    // a different track and the others hold.  If no candidate clears the
+    // threshold, the whole mix holds for a block.
+    const opening = rotation || (!bridge && this.blockIndex < this.anchorOpeningBlocks);
+    const holdAnchor = opening && !rotation && !sectionChanged
+      && this.blockIndex % 2 === 1 && this.currentAnchorPhrase !== null
+      && !this.hasConsecutiveNext();
+    const anchorPhrase = opening
+      ? (holdAnchor ? this.currentAnchorPhrase : this.chooseAnchorPhrase(normalized))
+      : null;
+
+    const priorEntries = { ...this.lastBlockEntries };
+    const forceMove = !opening && !bridge && !rotation
+      && startBar - this.lastMoveBar >= budget.maxHoldBars;
+    // A stem that has not changed track for maxHoldBars is stale and must be
+    // reconsidered even when the global cooldown would otherwise hold it.
+    const staleStems = new Set<StemName>();
+    if (!opening && !bridge && !rotation) {
+      for (const stem of STEMS) {
+        if (this.pins[stem] !== undefined || this.manualPins[stem]) continue;
+        if (startBar - (this.lastChangeBar[stem] ?? 0) >= budget.maxHoldBars) {
+          staleStems.add(stem);
+        }
+      }
+    }
+    const rankerReady = this.jointRanker?.ready === true;
+    const jointT0 = performance.now();
+    const joint = !opening && !bridge && !rotation && rankerReady
+      ? this.selectJoint(
+        normalized, targetEnergy, phrasesPerStem, startBar, sectionChanged, forceMove,
+        handoffThisBlock,
+      )
+      : null;
+    const jointMs = performance.now() - jointT0;
+    if (jointMs > 100) {
+      console.info(`[StemRemix] joint select took ${jointMs.toFixed(0)}ms @ bar ${startBar}`);
+    }
+    // Fallback heuristic when the learned ranker is unavailable, or when a
+    // stale stem still has no joint move (below the forced threshold).  Without
+    // this, a missing ranker makes the engine advance/loop the anchor run
+    // forever, which is exactly the "same slices over and over" failure.
+    const useFallback = !opening && !bridge && !rotation
+      && (!rankerReady || (joint === null && staleStems.size > 0));
+
+    // Stale stems get morph priority in fallback mode (they've waited
+    // longest); the budget cap below keeps simultaneous splices to at most
+    // budget.maxChanges stems, matching the joint path's discipline.
+    const order: StemName[] = bridge && !rotation
+      ? ["other", "vocals"]
+      : [...STEMS].sort((a, b) =>
+        (staleStems.has(b) ? 1 : 0) - (staleStems.has(a) ? 1 : 0));
+    const chosenRuns: Partial<Record<StemName, StemPoolEntry[]>> = {};
+    let fallbackMorphs = 0;
+    for (const stem of order) {
+      let manual = this.manualPins[stem];
+      if (manual && manual.runEndAt <= at + 0.05) {
+        // The partial manual commit has handed off at this boundary.  Keep
+        // pins[stem] and let the normal block scheduler choose a fresh run in
+        // the pinned region.
+        delete this.manualPins[stem];
+        manual = undefined;
+      }
+      if (manual || this.pinning.has(stem)) {
+        // A manual voice or its initial load already covers this block; do not
+        // schedule a competing voice while it loads.
+        const heldRun = manual?.run ?? this.lastBlockRuns[stem] ?? [];
+        if (heldRun.length > 0) chosenRuns[stem] = heldRun;
+        const first = manual?.entry ?? heldRun[0];
+        if (first) {
+          phrases[stem] = first.phrase;
+          kits[stem] = first.kit;
+          stemTracks[stem] = first.kit.track_id;
+        }
+        continue;
+      }
+      let entry: StemPoolEntry | null = null;
+      // Vocals sing whole takes or rest in silence: never hold-loop the
+      // previous take. Pinned/bridge/opening vocals keep the legacy path;
+      // auto vocals either start a fresh hard-gated unit or mute this block.
+      if (stem === "vocals" && !this.pins[stem] && !bridge && !opening && !rotation) {
+        const gapOk = this.vocalGapOk(startBar);
+        const presenceRest = !sectionChanged && vocalSongShouldRest(normalized, this.blockIndex);
+        if (!gapOk || presenceRest) {
+          // True rest: fade the old take and schedule nothing. The gap clock
+          // keeps accumulating across consecutive mutes; lastVocalEndBar
+          // stays at the end of the last sung block.
+          this.current[stem]?.voice.fadeOut(at, 0.16);
+          this.onStatus?.(
+            !gapOk
+              ? `vocals rest at bar ${startBar} (breath ${startBar - this.lastVocalEndBar}/${this.vocalMinGapBars()} bars)`
+              : `vocals rest at bar ${startBar} (${normalized} sparse)`,
+          );
+          continue;
+        }
+        // Want to sing: prefer the joint pick, else a fresh morph. A held
+        // loop is not an option; with no legal fresh unit the bus rests.
+        const jointPick = joint?.entries[stem] ?? null;
+        if (jointPick && this.vocalFreshLegal(jointPick, phrasesPerStem)) {
+          entry = jointPick;
+        } else {
+          const morph = fallbackMorphs < Math.max(budget.maxChanges, 1)
+            ? this.selectMorph(stem, at, normalized, phrasesPerStem)
+            : null;
+          if (morph) fallbackMorphs++;
+          entry = morph;
+        }
+        if (!entry) {
+          this.current[stem]?.voice.fadeOut(at, 0.16);
+          this.onStatus?.(`vocals rest at bar ${startBar} (no fitting take)`);
+          continue;
+        }
+      } else if (this.pins[stem]) {
+        entry = this.selectPinnedEntry(stem, this.pins[stem]!, phrasesPerStem)
+          ?? this.holdEntry(stem);
+      } else if (bridge) {
+        const base = this.holdEntry(stem);
+        if (base) {
+          const pair = this.runFor(base, 2);
+          entry = pair[Math.min(this.bridgeStep, pair.length - 1)] ?? pair[0] ?? base;
+        }
+      } else if (opening) {
+        entry = this.anchorEntry(stem, anchorPhrase);
+      } else if (joint) {
+        entry = joint.entries[stem] ?? this.holdEntry(stem);
+      } else if (useFallback) {
+        const cooldownBars = phrasesPerStem * 4 <= 4 ? 8 : 0;
+        const vocalOk = stem !== "vocals"
+          || vocalChangeAllowed(
+            startBar, this.lastVocalChangeBar, sectionChanged,
+            this.vocalCadence?.policy.min_hold_bars,
+          );
+        const sinceChange = startBar - (this.lastChangeBar[stem] ?? 0);
+        const cooledDown = cooldownBars === 0
+          || staleStems.has(stem)
+          || sinceChange >= cooldownBars
+          || (sectionChanged && sinceChange >= 4);
+        const morph = (vocalOk && cooledDown && fallbackMorphs < budget.maxChanges)
+          ? this.selectMorph(stem, at, normalized, phrasesPerStem)
+          : null;
+        if (morph) fallbackMorphs++;
+        entry = morph ?? this.holdEntry(stem);
+      } else {
+        entry = this.holdEntry(stem);
+      }
+      if (!entry) entry = this.holdEntry(stem);
+      if (!entry) continue;
+
+      // A held entry whose source run cannot fill an 8/16-bar block would loop
+      // the same 4 bars two to four times inside one block.  Prefer a fresh
+      // cross-song run with a real consecutive length instead (at most two
+      // such conversions per block, so the movement budget stays close).
+      // Vocals never loop-fill: fresh hard-gated units fit exactly or rest.
+      if (stem !== "vocals" && phrasesPerStem > 1 && !this.pins[stem] && !joint?.changed.includes(stem)
+        && !opening && !bridge && !rotation) {
+        const holdLen = this.runFor(entry, phrasesPerStem, false).length;
+        const conversions = trackChanged.length + changed.length;
+        if (holdLen < phrasesPerStem && conversions < budget.maxChanges * 2) {
+          const alt = this.selectMorph(stem, at, normalized, phrasesPerStem);
+          if (alt && alt.kit.track_id !== entry.kit.track_id) entry = alt;
+        }
+      }
+
+      const run = this.runFor(entry, phrasesPerStem);
+      chosenRuns[stem] = run;
+      const current = this.current[stem];
+      const samePhrase = current
+        && current.entry.phrase.id === run[0].phrase.id
+        && current.entry.kit.track_id === run[0].kit.track_id;
+      const sameTrack = current
+        && current.entry.kit.track_id === run[0].kit.track_id;
+      phrases[stem] = run[0].phrase;
+      kits[stem] = run[0].kit;
+      stemTracks[stem] = run[0].kit.track_id;
+      // (A) + (C) + (B) bookkeeping for this boundary:
+      // signature return clock, timbre window, and the DJ technique plan
+      // (pure selector; all scheduling happens in scheduleRun at audio time).
+      const outgoing = priorEntries[stem] ?? current?.entry;
+      const vocalChangedForTech = !sameTrack && stem === "vocals";
+      const technique = selectTransitionTechnique({
+        stem,
+        outgoingEnergy: outgoing?.energy ?? run[0].energy,
+        incomingEnergy: run[0].energy,
+        incomingRmsDb: run[0].rmsDb,
+        targetEnergy,
+        isBridge: bridge || rotation,
+        vocalChanged: stem === "vocals" ? vocalChangedForTech : undefined,
+      });
+      if (technique.eqOut || technique.vocalReverbTail || technique.vocalFadeInSec !== null) {
+        this.pendingTechniques[stem] = technique;
+      } else {
+        delete this.pendingTechniques[stem];
+      }
+      if (!sameTrack && this.isSignature(stem, run[0].phrase.id)) {
+        this.lastSignatureBar[stem] = startBar;
+        if (targetEnergy >= 0.5) {
+          this.onStatus?.(`signature ${stem} returns at bar ${startBar}`);
+        }
+      }
+      this.recordStyle(stem, run[0].kit.style, startBar);
+      tasks.push({ stem, run, transition: technique });
+      if (!samePhrase) changed.push(stem);
+      if (!sameTrack) trackChanged.push(stem);
+    }
+
+    if (!opening && this.barComposer.isReady()) {
+      const baseEntries: Partial<Record<StemName, StemPoolEntry>> = {};
+      for (const s of STEMS) {
+        const chosen = chosenRuns[s]?.[0] ?? this.holdEntry(s);
+        if (chosen) baseEntries[s] = chosen;
+      }
+      const pinnedSet = new Set<StemName>();
+      for (const s of STEMS) {
+        if (this.pins[s] !== undefined || this.manualPins[s] || this.pinning.has(s)) {
+          pinnedSet.add(s);
+        }
+      }
+      if (baseEntries.drums && baseEntries.bass && baseEntries.other && baseEntries.vocals) {
+        const composed = this.barComposer.composeBlock({
+          baseEntries: baseEntries as Record<StemName, StemPoolEntry>,
+          pools: this.pools,
+          sectionCtx: secCtx,
+          blockBars: bars,
+          blockDurationSec: blockSec,
+          blockIndex: blocksPlayed,
+          sessionRoot: parsedSessionKey.root,
+          sessionMode: parsedSessionKey.mode,
+          isBridgeBlock: bridge,
+          pinnedStems: pinnedSet,
+          compatScorer: this.cellCompat,
+          commit: !this.sliceFlow.ready,
+        });
+        for (const task of tasks) {
+          if (this.manualPins[task.stem] || this.pinning.has(task.stem)) continue;
+          const plan = composed.stems[task.stem];
+          if (!plan || plan.donors.length === 0) continue;
+          const origRun = chosenRuns[task.stem];
+          const contiguousUncut =
+            plan.isContiguousUncut ||
+            (plan.donors.length === 1 && isContiguousFullPhrase(plan.slices));
+          if (contiguousUncut) {
+            const keepOrigRun = Boolean(
+              origRun &&
+              origRun.length > 1 &&
+              origRun[0]?.phrase.id === plan.donors[0].phrase.id,
+            );
+            task.run = keepOrigRun && origRun ? origRun : plan.donors;
+            task.slices = undefined;
+          } else {
+            task.run = plan.donors;
+            task.slices = plan.slices;
+          }
+          task.baseSemitones = plan.baseSemitones;
+          task.pitchPoints = plan.pitchPoints;
+          chosenRuns[task.stem] = [...task.run];
+          phrases[task.stem] = task.run[0].phrase;
+          kits[task.stem] = task.run[0].kit;
+          stemTracks[task.stem] = plan.donorTrackIds.join("+");
+        }
+        this.composedStats.blocksComposed += 1;
+        this.composedStats.lastMeanTheoryScore = Number(composed.meanTheoryScore.toFixed(3));
+        this.composedStats.lastCrossTrackCells = composed.crossTrackCellCount;
+      }
+    }
+
+    if (this.sliceFlow.ready) {
+      const pinned = new Set<StemName>(STEMS.filter(stem => this.pins[stem] || this.manualPins[stem] || this.pinning.has(stem)));
+      const accepted = this.sliceFlow.select(tasks, {
+        at, bars, bpm: this.sessionBpm, section: normalized, targetEnergy,
+        sectionChanged, rotation, bridge,
+        sourceNoveltyWeight: this.varietyPrior?.source_novelty_weight,
+        songCriticAdjustment: this.barComposer.lastSongCriticAdjustment,
+        beamDepth: this.beamSearch?.depth,
+        beamWidth: this.beamSearch?.width,
+        lookaheadWeight: this.beamSearch?.lookahead_weight,
+        cohortMaxChanges: handoffThisBlock
+          ? Math.max(4, this.transitionCohort?.handoff?.max_stems ?? 4)
+          : sectionChanged
+            ? this.transitionCohort?.policy.max_changes_section
+            : undefined,
+      }, (stem) => {
+        const old = flowContinuation[stem];
+        const entry = old ? this.entryById.get(`${old.phrase.id}:${stem}`) : null;
+        if (entry && !this.failedKits.has(entry.kit.track_id)) {
+          return { stem, run: this.runFor(entry, phrasesPerStem) };
+        }
+        if (!rotation) return null;
+        // A tempo/key rung can make the outgoing source illegal. Do not
+        // bypass the acoustic judge merely because it cannot be held: find
+        // a compatible incoming run from the NEW legal pool instead.
+        const candidates = [...this.pools[stem]].filter(item=>!this.failedKits.has(item.kit.track_id))
+          .sort((a,b)=>Math.abs(a.energy-targetEnergy)-Math.abs(b.energy-targetEnergy)).slice(0,24);
+        let best: { stem: StemName; run: StemPoolEntry[] } | null = null;
+        let quality = -Infinity;
+        for (const candidate of candidates) {
+          const task = { stem, run: this.runFor(candidate, phrasesPerStem) };
+          const score = this.sliceFlow.score(describeFlowTask(task,bars,this.barSec), {
+            at,bars,bpm:this.sessionBpm,section:normalized,targetEnergy,sectionChanged:true,rotation:true,bridge:false,
+          }).score;
+          if (score > quality) { quality = score; best = task; }
+        }
+        return best;
+      }, pinned);
+      tasks.splice(0, tasks.length, ...accepted);
+    }
+    // Account for the accepted final assembly, not the pre-composer proposal.
+    changed.length = 0;
+    trackChanged.length = 0;
+    for (const task of tasks) {
+      const first = task.run[0];
+      if (!first) continue;
+      chosenRuns[task.stem] = task.run;
+      phrases[task.stem] = first.phrase;
+      kits[task.stem] = first.kit;
+      stemTracks[task.stem] = [...new Set(task.run.map(e => e.kit.track_id))].join("+");
+      const previous = priorEntries[task.stem];
+      if (!previous || previous.phrase.id !== first.phrase.id) changed.push(task.stem);
+      if (!previous || previous.kit.track_id !== first.kit.track_id) trackChanged.push(task.stem);
+    }
+
+    this.songArchitect.recordSectionTheme(secCtx, Object.fromEntries(tasks.map(task => [task.stem, task.run[0]?.phrase.id])));
+
+    this.previousEntries = priorEntries;
+    this.lastBlockRuns = chosenRuns;
+    const boundaryEntries: Partial<Record<StemName, StemPoolEntry>> = {};
+    for (const stem of STEMS) {
+      const run = chosenRuns[stem];
+      const task = tasks.find(item => item.stem === stem);
+      const cells = task ? describeFlowTask(task, bars, this.barSec) : [];
+      const tail = cells[cells.length - 1];
+      if (tail) boundaryEntries[stem] = this.entryById.get(`${tail.phraseId}:${stem}`);
+      else if (run && run.length > 0) boundaryEntries[stem] = run[run.length - 1];
+      else if (priorEntries[stem]) boundaryEntries[stem] = priorEntries[stem];
+    }
+    this.lastBlockEntries = boundaryEntries;
+    const autoTrackChanged = trackChanged.filter((stem) => this.pins[stem] === undefined);
+    if (autoTrackChanged.length > 0) {
+      this.lastMoveBar = startBar;
+      for (const stem of autoTrackChanged) this.lastChangeBar[stem] = startBar;
+      if (autoTrackChanged.includes("vocals")) this.lastVocalChangeBar = startBar;
+      if (autoTrackChanged.includes("drums")) this.lastDrumChangeBar = startBar;
+    }
+    // A scheduled vocal block ends the breath clock: the next fresh entrance
+    // needs a full silent gap after this block's end bar.
+    if (chosenRuns.vocals && chosenRuns.vocals.length > 0) {
+      this.lastVocalEndBar = startBar + bars;
+    }
+    if (opening) {
+      this.currentAnchorPhrase = anchorPhrase;
+      if (anchorPhrase) {
+        this.anchorRecent.push(anchorPhrase.id);
+        if (this.anchorRecent.length > 24) this.anchorRecent = this.anchorRecent.slice(-24);
+      }
+    }
+    if (this.recent.length > 48) {
+      this.recent = this.recent.slice(-48);
+    }
+    if (bridge) this.bridgeStep += 1;
+    else this.bridgeStep = 0;
+
+    const result: StemBlockResult = {
+      at,
+      section: displaySection,
+      changed,
+      blocksPlayed,
+      bridge,
+      rotation,
+      blockBars: bars,
+      blockDurationSec: blockSec,
+      slotSec: this.blockSec,
+      targetEnergy,
+      phrases,
+      kits,
+      stemTracks,
+      clusterId: this.cluster?.id ?? "",
+    };
+
+    this.blockStartBar = startBar;
+    this.currentBlockBars = bars;
+    this.currentBlockSec = blockSec;
+    this.sessionBar = startBar + bars;
+    this.nextBlockAt = at + blockSec;
+    this.blockIndex += 1;
+    this.blockGrid.push({ startAt: at, endAt: at + blockSec, startBar, bars });
+    this.onBlock?.(result);
+    return { result, tasks };
+  }
+
+  /** True when the kit contains the real next 4 bars (start_bar + 4). */
+  private hasConsecutiveNext(): boolean {
+    const kit = this.anchorKit;
+    const current = this.currentAnchorPhrase;
+    if (!kit || !current || typeof current.start_bar !== "number") return false;
+    return kit.phrases.some((phrase) =>
+      phrase.start_bar === current.start_bar + 4
+      && this.entryById.has(`${phrase.id}:drums`),
+    );
+  }
+
+  /** Assemble the joint state (424-d for v3, 400-d for the old v2 model). */
+  private jointState(entries: Partial<Record<StemName, StemPoolEntry>>): Float32Array | null {
+    const ranker = this.jointRanker;
+    if (!ranker?.ready) return null;
+    const stemDim = ranker.stemDim;
+    const embOffset = 4 * stemDim;
+    const out = new Float32Array(ranker.stateDim);
+    const emb = new Float32Array(64);
+    for (let i = 0; i < 4; i++) {
+      const stem = STEMS[i];
+      const entry = entries[stem];
+      if (!entry) return null;
+      const shift = stem === "drums" ? 0 : (entry.keyShift ?? 0);
+      const state = ranker.stateFor(entry.phrase.id, shift, entry.rate);
+      if (!state) return null;
+      out.set(state.subarray(i * stemDim, (i + 1) * stemDim), i * stemDim);
+      for (let k = 0; k < 64; k++) emb[k] += state[embOffset + k] / 4;
+    }
+    out.set(emb, embOffset);
+    return out;
+  }
+
+  /** Top cross-song options for one stem, ranked by the per-stem judge. */
+  private jointOptions(
+    stem: StemName,
+    current: StemPoolEntry,
+    usedTracks: ReadonlySet<string>,
+    phrases: number,
+    section: string,
+    targetEnergy: number,
+  ): StemPoolEntry[] {
+    // Per-stem memory, not a short global window: a phrase this stem played
+    // in the last STEM_HISTORY_AVOID slots is excluded, so the previous
+    // winner cannot simply win again two blocks later.  For 8/16-bar runs we
+    // also exclude the exact run just heard.
+    const avoid = new Set<string>();
+    for (const id of this.stemHistory[stem].slice(-STEM_HISTORY_AVOID)) avoid.add(id);
+    if (phrases > 1) {
+      for (const runEntry of this.lastBlockRuns[stem] ?? []) avoid.add(runEntry.phrase.id);
+    }
+    const outroAllowed = this.blockIndex >= BLOCKS_PER_SET - 2;
+    // Phrase-space conductor: one prediction per boundary, scored against
+    // every candidate phrase embedding. Trained on real phrase chronology.
+    let predictedPhraseEmbedding: number[] | null = null;
+    if (this.phraseConductor) {
+      const phrase = current.phrase as unknown as { embedding?: number[] };
+      const patterns = CONDUCTOR_STEMS.map((s) =>
+        this.barComposer.cellPatternVec(current.phrase.id, s, 0, current.keyShift, section));
+      const state = phraseConductorState({
+        embedding: phrase.embedding ?? [],
+        patterns,
+        section,
+        energy: current.energy,
+        bpm: current.kit.bpm,
+        keyRoot: parseTheoryKey(current.kit.key).root,
+      });
+      predictedPhraseEmbedding = inferPhraseConductor(this.phraseConductor, state);
+    }
+    let sequencePrediction: ReturnType<typeof inferSequence> | null = null;
+    if (this.sequenceConductor) {
+      const ids = (this.stemHistory[stem] ?? []).slice(-5);
+      const steps = ids.map((id) => this.sequenceStep(stem, id, section));
+      steps.push(this.sequenceStep(stem, current.phrase.id, section));
+      sequencePrediction = inferSequence(this.sequenceConductor, sequenceState(steps));
+    }
+    const recentTracks = new Set(
+      (this.stemHistory[stem] ?? []).slice(-4)
+        .map((id) => this.entryById.get(`${id}:${stem}`)?.kit.track_id),
+    );
+    const candidates = this.pools[stem].filter((entry) => {
+      if (entry.kit.track_id === current.kit.track_id) return false;
+      if (this.failedKits.has(entry.kit.track_id)) return false;
+      if (usedTracks.has(entry.kit.track_id)) return false;
+      if (avoid.has(entry.phrase.id)) return false;
+      if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) return false;
+      if (entry.phrase.is_intro && this.blockIndex > 0) return false;
+      if (entry.phrase.is_outro && !outroAllowed) return false;
+      // Hard gate for fresh vocal entrances: clean downbeat, segment start,
+      // exact fit to the upcoming block. Mid-segment chops are never offered
+      // to the joint ranker; vocals rest instead.
+      if (stem === "vocals" && !this.vocalFreshLegal(entry, phrases)) return false;
+      return true;
+    });
+    const scored = candidates.map((entry) => {
+      const run = this.runFor(entry, phrases, false);
+      let legal = run.length >= phrases;
+      if (legal) {
+        for (const runEntry of run) {
+          if (runEntry.phrase.once && this.playedOnce.has(runEntry.phrase.id)) {
+            legal = false;
+            break;
+          }
+        }
+      }
+      const judge = this.judgeScore(stem, current.phrase.id, entry.phrase.id);
+      // The per-stem judge only stores top-K links; when those are exhausted
+      // (current track/recent filtered) fall back to a musical heuristic so
+      // the joint ranker still sees plausible cross-song candidates.
+      const style = entry.kit.style === this.cluster?.style ? 0.15 : 0;
+      const energy = 0.35 - Math.abs(entry.energy - targetEnergy) * 0.5;
+      const kindMatch = this.entryKind(entry).toUpperCase() === (this.targetKind || section).toUpperCase();
+      let sectionScore = kindMatch ? 0.32 : (entry.section === section ? 0.20 : 0);
+      if ((section === "BUILDUP" || this.targetKind === "RISE") && entry.energy < current.energy - 0.05) {
+        sectionScore -= 0.15;
+      } else if ((section === "BREAKDOWN" || this.targetKind === "BRIDGE") && entry.energy > current.energy + 0.10) {
+        sectionScore -= 0.15;
+      }
+      const fallback = style + energy + sectionScore;
+      // Even when judge > 0, surface expanded-section & energy matches so
+      // SectionNavigator's learned progression shapes the shortlist.
+      const arcPrior = judge > 0 ? (0.35 * (sectionScore + Math.max(0, energy))) : 0;
+      // The judge scores are nearly flat at the top (all ~0.97+ for drums),
+      // so a deterministic sort would surface the same handful of tracks
+      // every block.  Play-count novelty plus a block-seeded hash breaks
+      // those ties toward material that has not played yet, rotating the
+      // whole pool through over a set instead of cycling a top-8.
+      // Tempo/key tiers keep far stretches rare: near matches win while they
+      // are fresh, but their play counts grow until a far, never-played
+      // phrase's novelty outweighs its stretch cost and it surfaces.
+      // Signature returns pay a discounted novelty decay so they are not
+      // scored out for having played before, and under-used timbres earn a
+      // small nudge (see arc_planner timbreBonus).
+      const plays = this.playCountOf(stem, entry.phrase.id);
+      const signatureBonus = this.signatureBonusFor(stem, entry, targetEnergy);
+      const isSig = this.isSignature(stem, entry.phrase.id);
+      const perceptionPlays = isSig ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
+      // Song-first repetition: per-stem novelty scaled by corpus novelty rates
+      // (drums 41% fresh, vocals 90% fresh) instead of flat 0.35 for all stems.
+      // Return bonus rewards 8/16/32-bar motif returns (drums 51% at 8 bars);
+      // far smaller hash tie-break so near matches win while fresh.
+      const hist = this.stemHistory[stem] ?? [];
+      const lastIdx = hist.lastIndexOf(entry.phrase.id);
+      const ageBars = lastIdx >= 0 ? (hist.length - 1 - lastIdx) * 4 : null;
+      const songRep = songRepetitionBonus(stem, perceptionPlays, ageBars);
+      const novelty = songRep
+        + hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.08;
+      const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
+        + entry.keyCost * KEY_COST_WEIGHT;
+      // Hard song compatibility: extreme stretches, far key shifts, tritones
+      // and harmonic mush are rejected outright in real songs. Apply a strong
+      // penalty here (shortlist stage) so they rarely reach the joint ranker.
+      const compat = songIsCompatible(
+        stem, entry.rate, entry.keyShift, null, null, true,
+      );
+      const compatPenalty = compat.ok ? 0 : 0.50;
+      const earBonus = EAR_W_JOINT * (entry.earQ - 0.5);
+      const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
+      const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
+      // Fresh vocal entrances win unless a played one fits way better: a
+      // strong never-played bonus on top of the corpus novelty term.
+      const vocalFreshBonus = stem === "vocals" && plays === 0 ? VOCAL_FRESH_BONUS : 0;
+      const variety = this.varietyBonusFor(stem, entry.kit.track_id);
+      const bank = this.bankTransition
+        ? 0.15 * (bankTransitionScore(
+          this.bankTransition, this.bankPhraseOf(current), this.bankPhraseOf(entry), section,
+        ) - 0.5)
+        : 0;
+      // Harmony: prefer phrases whose bass root already sits in the session key.
+      // Arbitrary cross-key phrases can be transposed, but their 4-bar chord
+      // motion still clashes with the other stems.
+      const sessionRoot = parseTheoryKey(this.sessionKey).root;
+      const root = entry.bassRoot;
+      const keyFit = root === null ? 0.5
+        : 1 - Math.min((root - sessionRoot + 12) % 12, (sessionRoot - root + 12) % 12) / 6;
+      const harmonyFit = 0.5 * (keyFit - 0.5);
+      const cooldown = recentTracks.has(entry.kit.track_id) ? -0.6 : 0;
+      const candidateEmbedding = (entry.phrase as unknown as { embedding?: number[] }).embedding ?? [];
+      const phraseConductor = predictedPhraseEmbedding && candidateEmbedding.length
+        ? 0.20 * (phraseConductorScore(predictedPhraseEmbedding, candidateEmbedding) - 0.5)
+        : 0;
+      const seqPrior = sequencePrediction && candidateEmbedding.length
+        ? 0.25 * (sequenceScore(sequencePrediction.embedding, candidateEmbedding) - 0.5)
+        : 0;
+      // Learned song-policy compatibility (trained on real +4-bar successors,
+      // val AUC 0.99): tempo/key/harmony/energy fit. Bounded ±0.15 so the
+      // joint ranker still decides; it only breaks ties toward song-like fits.
+      const songPrior = this.songPolicyBonus(entry, section, targetEnergy);
+      // Learned-similarity donor prior (Stage 1): audio neighbors of the
+      // current phrase win ties. Intersects the key/tempo ladder (hard
+      // filters already applied), never a veto. Neutral without embeddings.
+      const simPrior = this.phraseSimilarityBonus(current.phrase.id, entry.phrase.id);
+      // Weak-label donor prior (Stage 2): the synthetic-mix head ranks good
+      // two-song donors above gated-out ones. Bounded, neutral without sidecar.
+      const mixPrior = this.mixPreferenceBonus(current.phrase.id, entry, current);
+      return {
+        entry,
+        full: legal,
+        judge,
+        score: (judge > 0 ? judge : fallback) + arcPrior + novelty - tierCost + earBonus
+          + signatureBonus + timbre + vocalActBonus + vocalFreshBonus + variety + bank + phraseConductor + seqPrior + harmonyFit + cooldown - compatPenalty + songPrior + simPrior + mixPrior,
+      };
+    });
+    const full = scored.filter((item) => item.full);
+    // Prefer a real consecutive run.  Only loop a shorter run when the
+    // cluster genuinely has no full-length run for this stem.
+    const pool = full.length > 0 ? full : scored;
+    pool.sort((a, b) => {
+      if (a.full !== b.full) return a.full ? -1 : 1;
+      return b.score - a.score;
+    });
+    // One candidate per track, so the joint ranker sees genuinely different
+    // records instead of many windows from the same song.
+    const seen = new Set<string>();
+    const out: StemPoolEntry[] = [];
+    for (const item of pool) {
+      const trackId = item.entry.kit.track_id;
+      if (seen.has(trackId)) continue;
+      seen.add(trackId);
+      out.push(item.entry);
+      if (out.length >= JOINT_CANDIDATES_PER_STEM) break;
+    }
+    // Reserve a few shortlist slots for never-played material (least-played,
+    // then nearest tempo/key) so far stretches are always evaluated by the
+    // joint ranker instead of being scored out of the shortlist entirely.
+    // This is what guarantees the full bank traverses over a long session.
+    const reserve = [...pool]
+      .filter((item) => !out.includes(item.entry))
+      .sort((a, b) => {
+        const pa = this.playCountOf(stem, a.entry.phrase.id);
+        const pb = this.playCountOf(stem, b.entry.phrase.id);
+        if (pa !== pb) return pa - pb;
+        return a.entry.tempoCost + a.entry.keyCost * 0.05
+          - (b.entry.tempoCost + b.entry.keyCost * 0.05);
+      });
+    const reserveLimit = this.varietyPrior
+      ? Math.max(JOINT_RESERVE, Math.min(8, Math.floor(this.varietyPrior.joint_reserve)))
+      : JOINT_RESERVE;
+    let added = 0;
+    for (const item of reserve) {
+      if (added >= reserveLimit) break;
+      const trackId = item.entry.kit.track_id;
+      if (seen.has(trackId)) continue;
+      if (this.playCountOf(stem, item.entry.phrase.id) !== 0) continue;
+      seen.add(trackId);
+      out.push(item.entry);
+      added += 1;
+    }
+    // One guided slot for a rested signature return: without it the top-8
+    // shortlist (elite-dense by design) would never contain the motif the
+    // brief asks for, and the energy-gated bonus would have nothing to act
+    // on.  One slot, only when the signature is legal + rested, so the
+    // never-played reserve and the ranker keep their room.
+    if (FLOW_SIGNATURES_ENABLED && !out.some((e) => this.isSignature(stem, e.phrase.id))) {
+      const signature = pool.find((item) => {
+        if (!this.isSignature(stem, item.entry.phrase.id)) return false;
+        if (this.pins[stem] !== undefined || this.manualPins[stem]) return false;
+        if (this.signatureBonusFor(stem, item.entry, targetEnergy) <= 0) return false;
+        if (seen.has(item.entry.kit.track_id) && !out.some((e) => e.kit.track_id === item.entry.kit.track_id)) {
+          return false;
+        }
+        return true;
+      });
+      if (signature) {
+        if (out.length >= JOINT_CANDIDATES_PER_STEM) out.pop(); // keep one free
+        if (!out.includes(signature.entry)) out.push(signature.entry);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Choose the best joint transition over 1- and 2-stem replacements.
+   * Returns null when the best candidate is below the calibrated threshold.
+   */
+  private selectJoint(
+    section: string,
+    targetEnergy: number,
+    phrases: number,
+    startBar: number,
+    sectionChanged: boolean,
+    forceMove: boolean,
+    handoff = false,
+  ): {
+    entries: Partial<Record<StemName, StemPoolEntry>>;
+    changed: StemName[];
+  } | null {
+    const ranker = this.jointRanker;
+    if (!ranker?.ready) return null;
+    ranker.beginBatch();
+    const nextBlockBars = phrases * 4;
+    const threshold = ranker.thresholdFor(nextBlockBars);
+    const rawBudget = movementBudgetAt(
+      startBar, nextBlockBars, sectionChanged, this.transitionCohort?.policy.max_changes_section,
+    );
+    const budget = handoff ? { ...rawBudget, maxChanges: 4 } : rawBudget;
+    const sourceCap = handoff ? Math.max(2, Math.min(4, this.transitionCohort?.handoff?.max_per_source ?? 4)) : 2;
+    // Vocal song: hold vocals 8 bars minimum, 16 bars in verse/chorus
+    // sections so VERSE_1/CHORUS_1/VERSE_2/CHORUS_2 each play their full
+    // vocal unit before switching to new slices. The vocal_cadence sidecar
+    // still says 4 bars (mined from 84% 4-bar runs); song arrangement
+    // overrides so full 8/16-bar verses/choruses can play.
+    const vocalHoldBars = Math.max(
+      vocalSongHoldForBar(startBar),
+      this.vocalCadence?.policy.min_hold_bars ?? VOCAL_SONG_HOLD_BARS,
+    );
+    const allowVocals = vocalChangeAllowed(
+      startBar, this.lastVocalChangeBar, sectionChanged,
+      vocalHoldBars,
+    );
+    // A drum track can stay for a long time while bass/pads carry the mix.
+    // Song-first: refresh after 32 bars (one foundation), not 24. A 24-bar
+    // refresh broke foundations before they established their 8-bar loops.
+    const drumStale = startBar - this.lastDrumChangeBar >= 32;
+    // Song-first holds: each stem holds at least 12 bars (3 blocks) between
+    // track changes unless the section changes or the 32-bar foundation
+    // expires. 12 bars matches the mined GROOVE_A p50 (12 bars); the old
+    // 8-bar cooldown changed the whole mix every ~8 bars (each stem rotating
+    // every 8 bars = a new combination every 2 bars). 8/16-bar blocks are
+    // already long, so they keep no extra cooldown.
+    const cooldownBars = nextBlockBars <= 4 ? 12 : 0;
+    const cooledDown = (stem: StemName): boolean => {
+      if (cooldownBars === 0 || forceMove) return true;
+      const since = startBar - (this.lastChangeBar[stem] ?? 0);
+      if (since >= budget.maxHoldBars) return true;
+      if (since >= cooldownBars) return true;
+      // Section changes can encourage movement but don't force instant churn.
+      if (sectionChanged && since >= 4) return true;
+      return false;
+    };
+    const current: Partial<Record<StemName, StemPoolEntry>> = {};
+    for (const stem of STEMS) {
+      const manual = this.manualPins[stem];
+      // Unpinned stems are scored at the block boundary (the last phrase of
+      // the run just scheduled).  A manual pin is a long run, so use the
+      // phrase that is actually playing at the boundary.
+      current[stem] = manual
+        ? (this.current[stem]?.entry ?? manual.entry)
+        : (this.lastBlockEntries[stem] ?? this.current[stem]?.entry);
+      if (!current[stem]) {
+        this.onStatus?.(`Joint mix: no current ${stem}; holding`);
+        return null;
+      }
+    }
+    const previous: Partial<Record<StemName, StemPoolEntry>> = {};
+    for (const stem of STEMS) previous[stem] = this.previousEntries[stem] ?? current[stem];
+    const currentState = this.jointState(current);
+    const previousState = this.jointState(previous);
+    if (!currentState || !previousState) {
+      this.onStatus?.("Joint mix: missing ranker state; holding");
+      return null;
+    }
+
+    const unpinned = STEMS.filter((stem) => {
+      if (this.pins[stem] !== undefined || !cooledDown(stem)) return false;
+      if (stem === "vocals") {
+        if (!allowVocals) return false;
+        // Fresh vocal entrances breathe: enforce the mined silent gap after
+        // the last sung block before any new take may start.
+        if (!this.vocalGapOk(startBar)) return false;
+        // Vocal song: rest half the blocks (INTRO/BREAKDOWN mostly rest,
+        // DROP/CHORUS mostly sings). A rest mutes the vocal bus instead of
+        // holding/looping the previous take.
+        if (!sectionChanged && vocalSongShouldRest(section, this.blockIndex)) return false;
+      }
+      return true;
+    });
+    if (unpinned.length === 0) return null;
+    const usedTracks = new Set<string>();
+    for (const stem of STEMS) {
+      const entry = current[stem];
+      if (entry) usedTracks.add(entry.kit.track_id);
+    }
+    const options = new Map<StemName, StemPoolEntry[]>();
+    for (const stem of unpinned) {
+      options.set(
+        stem,
+        this.jointOptions(stem, current[stem]!, usedTracks, phrases, section, targetEnergy),
+      );
+    }
+    const subsets: StemName[][] = [];
+    for (const stem of unpinned) subsets.push([stem]);
+    for (let i = 0; i < unpinned.length; i++) {
+      for (let j = i + 1; j < unpinned.length; j++) {
+        subsets.push([unpinned[i], unpinned[j]]);
+      }
+    }
+    // At a real section boundary the learned cohort policy permits a fuller
+    // handoff (the corpus moves 3-4 stems ~50% of the time).  Only consider
+    // trios there; every other block keeps the historical 1/2-stem search.
+    if (sectionChanged && budget.maxChanges >= 3 && unpinned.length >= 3) {
+      for (let i = 0; i < unpinned.length; i++) {
+        for (let j = i + 1; j < unpinned.length; j++) {
+          for (let k = j + 1; k < unpinned.length; k++) {
+            subsets.push([unpinned[i], unpinned[j], unpinned[k]]);
+            if (handoff && budget.maxChanges >= 4) {
+              for (let l = k + 1; l < unpinned.length; l++) {
+                subsets.push([unpinned[i], unpinned[j], unpinned[k], unpinned[l]]);
+              }
+            }
+          }
+        }
+      }
+    }
+    const heldBase: Partial<Record<StemName, StemPoolEntry>> = {};
+    for (const stem of STEMS) {
+      heldBase[stem] = this.manualPins[stem]
+        ? current[stem]
+        : (this.holdEntry(stem) ?? current[stem]);
+    }
+    const bestRef: {
+      value: {
+        entries: Partial<Record<StemName, StemPoolEntry>>;
+        changed: StemName[];
+        score: number;
+        rawScore: number;
+        reasons: string[];
+      } | null;
+    } = { value: null };
+    const bestRawRef: {
+      value: {
+        entries: Partial<Record<StemName, StemPoolEntry>>;
+        changed: StemName[];
+        score: number;
+        rawScore: number;
+      } | null;
+    } = { value: null };
+    const bestDrumRef: {
+      value: {
+        entries: Partial<Record<StemName, StemPoolEntry>>;
+        changed: StemName[];
+        score: number;
+        rawScore: number;
+      } | null;
+    } = { value: null };
+
+    const scoredCandidates: Array<{
+      entries: Partial<Record<StemName, StemPoolEntry>>;
+      changed: StemName[];
+      score: number;
+      rawScore: number;
+      reasons: string[];
+    }> = [];
+
+    const consider = (subset: StemName[], picks: StemPoolEntry[]) => {
+      const changed = new Set(subset);
+      const candidate: Partial<Record<StemName, StemPoolEntry>> = { ...heldBase };
+      for (let i = 0; i < subset.length; i++) candidate[subset[i]] = picks[i];
+      // Cap any one source at 2 stems so the mix is a recombination, not a
+      // near-copy; never allow all 4 from the same source.  If the current
+      // mix is already over the cap (e.g. anchor opening), allow only moves
+      // that strictly reduce the worst overlap so it can repair.
+      {
+        const sourceCounts = new Map<string, number>();
+        for (const stem of STEMS) {
+          const tid = candidate[stem]?.kit.track_id;
+          if (!tid) return;
+          sourceCounts.set(tid, (sourceCounts.get(tid) ?? 0) + 1);
+        }
+        let maxCount = 0;
+        for (const count of sourceCounts.values()) if (count > maxCount) maxCount = count;
+        if (maxCount > sourceCap) {
+          let curMax = 0;
+          const curCounts = new Map<string, number>();
+          for (const stem of STEMS) {
+            const tid = heldBase[stem]?.kit.track_id;
+            if (tid) curCounts.set(tid, (curCounts.get(tid) ?? 0) + 1);
+          }
+          for (const count of curCounts.values()) if (count > curMax) curMax = count;
+          if (curMax <= sourceCap || maxCount >= curMax) return;
+        }
+      }
+      const candidateState = this.jointState(candidate);
+      if (!candidateState) return;
+      // The ranker was trained on 1-2 stem moves; a section cohort of three
+      // is an extrapolation, so discount its raw logit slightly and let the
+      // learned policy/mix terms decide.  Pairs and solos are unchanged.
+      const rawScore = ranker.score(
+        previousState, currentState, candidateState, changed, section, targetEnergy,
+        this.currentBlockBars, nextBlockBars,
+      ) * (subset.length === 4 ? 0.94 : subset.length === 3 ? 0.97 : 1);
+      let candidateEnergy = 0;
+      let harmony = 0;
+      let repetition = 0;
+      let novelty = 0;
+      let signatureTerm = 0;
+      let timbreTerm = 0;
+      // Coherence (stem-matched cosine, joint space) and syntax (learned
+      // phrase grammar) accumulate over the changed stems only; both are
+      // undefined (exactly neutral) when their artifact/sidecar is absent.
+      let coherenceSum = 0;
+      let coherenceN = 0;
+      let syntaxSum = 0;
+      let syntaxN = 0;
+      const stemDim = ranker.stemDim;
+      for (const stem of STEMS) {
+        const entry = candidate[stem];
+        if (!entry) return;
+        candidateEnergy += entry.energy;
+        if (changed.has(stem)) {
+          const stemIdx = STEMS.indexOf(stem);
+          const stemOff = stemIdx * stemDim;
+          coherenceSum += StemRemixPlayer.stemCosine(candidateState, currentState, stemOff);
+          coherenceN++;
+          const fromId = current[stem]?.phrase.id ?? "";
+          const toId = entry.phrase.id;
+          const table = this.syntaxSuccessors?.get(fromId);
+          const syntaxHit = table?.get(toId);
+          if (typeof syntaxHit === "number" && Number.isFinite(syntaxHit)) {
+            syntaxSum += syntaxHit;
+            syntaxN++;
+          }
+          const from = current[stem];
+          if (from) {
+            harmony += harmonyPenalty({
+              stem,
+              fromRoot: from.bassRoot,
+              toRoot: entry.bassRoot,
+              fromChroma: from.chroma,
+              toChroma: entry.chroma,
+              keyShift: entry.keyShift,
+            });
+          }
+          const plays = this.playCountOf(stem, entry.phrase.id);
+          // Signature returns cost discounted repetition so the motif can come
+          // back without the novelty loop spinning it every block.  The 16-bar
+          // rest (signatureBonus) is what keeps the discount honest.
+          const isSig = this.isSignature(stem, entry.phrase.id);
+          const discountedPlays = isSig ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
+          repetition += plays === 0 ? 0 : Math.min(1, 0.3 + 0.2 * discountedPlays);
+          novelty += plays === 0 ? 1 : 1 / (1 + discountedPlays);
+          signatureTerm += this.signatureBonusFor(stem, entry, targetEnergy);
+          timbreTerm += this.timbreBonusFor(stem, entry, startBar);
+        }
+      }
+      candidateEnergy /= 4;
+      harmony /= Math.max(1, subset.length);
+      repetition = Math.min(1, repetition / Math.max(1, subset.length));
+      novelty = subset.length > 0 ? novelty / subset.length : 0;
+      // Mean soft terms so a 2-stem candidate is not worth twice a 1-stem one.
+      const meanSignature = subset.length > 0 ? signatureTerm / subset.length : 0;
+      const meanTimbre = subset.length > 0 ? timbreTerm / subset.length : 0;
+      const meanCoherence = coherenceN > 0 ? coherenceSum / coherenceN : undefined;
+      const meanSyntax = syntaxN > 0 ? clamp01(syntaxSum / syntaxN) : undefined;
+      // Rhythm-mesh (candidate mix interlock), chord progression (grammar
+      // fit after the recent harmonic context) and vocal-edge (clean swap
+      // boundary) terms: all undefined (exactly neutral) when their sidecar
+      // is missing, so a partial deploy never changes the ranking.
+      const rhythmFit = this.rhythmFitFor(candidate);
+      const progression = this.progressionFor(candidate);
+      const vocalEdge = subset.includes("vocals") ? this.vocalEdgeFor(current, candidate) : undefined;
+      const vocalSegmentBars = subset.includes("vocals") ? this.vocalSegmentBarsFor(candidate) : undefined;
+      let earSum = 0;
+      for (let i = 0; i < subset.length; i++) {
+        earSum += candidate[subset[i]]!.earQ;
+      }
+      const earQuality = subset.length > 0 ? earSum / subset.length : 0.5;
+      // Per-bar mix compatibility (rhythm-prioritized): penalize mixes whose
+      // worst bar clashes, and reward rhythm-locked combinations. Neutral when
+      // the model/sidecar is unavailable.
+      let mixCompatScore: number | undefined;
+      let mixRhythmScore: number | undefined;
+      let mixMinBar: number | undefined;
+      if (this.mixCompat?.ready) {
+        const mix: Record<StemName, MixCompatPhrase> = {} as any;
+        let ok = true;
+        for (const stem of STEMS) {
+          const e = candidate[stem];
+          if (!e) { ok = false; break; }
+          const rms: Record<StemName, number> = { drums: -24, bass: -24, other: -24, vocals: -24 };
+          rms[stem] = e.rmsDb;
+          // prefer per-stem rms if present on phrase asset
+          const stemsObj = e.phrase.stems as any;
+          for (const s of STEMS) {
+            const v = stemsObj?.[s]?.rms_db;
+            if (typeof v === "number" && Number.isFinite(v)) rms[s] = v;
+          }
+          mix[stem] = {
+            id: e.phrase.id,
+            energy: e.energy,
+            chroma: e.chroma,
+            bassRoot: e.bassRoot,
+            rmsDbByStem: rms,
+          };
+        }
+        if (ok) {
+          const mc = this.mixCompat.score(mix);
+          mixCompatScore = mc.compat;
+          mixRhythmScore = mc.rhythm;
+          mixMinBar = mc.minBar;
+        }
+      }
+      const policy = scoreTransition({
+        jointScore: rawScore,
+        targetEnergy,
+        candidateEnergy,
+        novelty,
+        repetition,
+        harmony,
+        changedCount: subset.length,
+        budget,
+        includesVocals: subset.includes("vocals"),
+        vocalAllowed: allowVocals,
+        earQuality,
+        signatureBonus: meanSignature,
+        timbreBonus: meanTimbre,
+        coherence: meanCoherence,
+        syntax: meanSyntax,
+        rhythmFit,
+        progression,
+        vocalEdge,
+        vocalSegmentBars,
+      });
+      // Learned section cohort prior (real songs move bass/other/vocals
+      // together); a small centered tie-break, never a rank override.
+      if (sectionChanged && this.transitionCohort) {
+        policy.score = Math.max(0, Math.min(1,
+          policy.score + 0.10 * (this.cohortPriorFor(subset) - 0.2)));
+        if (this.cohortPriorFor(subset) >= 0.19) policy.reasons.push("cohort-prior");
+      }
+      // Learned per-bar quartet harmony: penalize mixes whose pitched stems
+      // clash below the real-song chroma floor or break the previous tail.
+      const clash = this.barComposer.harmonyPenaltyFor(candidate);
+      if (clash > 0) {
+        policy.score = Math.max(0, policy.score - 0.5 * clash);
+        policy.reasons.push("harmony-clash");
+      }
+      // Learned motif calendar: reward a pattern returning at its natural lag,
+      // or a fresh pattern when this stem has not introduced one lately.
+      const motifBonus = this.motifPriorFor(subset, picks);
+      if (motifBonus > 0) {
+        policy.score = Math.min(1, policy.score + motifBonus);
+        policy.reasons.push("motif-calendar");
+      }
+      if (sectionChanged && subset.includes("vocals") && this.vocalCadence) {
+        policy.score = Math.min(1, policy.score + this.vocalCadence.policy.section_change_bonus);
+      }
+      // Variety prior: break the near-ties created by saturated per-stem judge
+      // scores in favour of source tracks this stem has not used recently.
+      let variety = 0;
+      for (let i = 0; i < subset.length; i++) {
+        variety += this.varietyBonusFor(subset[i], picks[i]?.kit.track_id ?? "");
+      }
+      if (variety !== 0) {
+        policy.score = Math.max(0, Math.min(1, policy.score + variety / Math.max(1, subset.length)));
+      }
+      // Coherent handoffs: when several stems move together, prefer one source
+      // song. Real songs never have four unrelated chord progressions at once.
+      if (subset.length > 1) {
+        const movingTracks = new Set(subset.map((_, i) => picks[i]?.kit.track_id ?? ""));
+        if (movingTracks.size === 1) {
+          policy.score = Math.min(1, policy.score + 0.08);
+        }
+      }
+      // Backing instruments follow the learned vocal-section cohort.
+      const backing = this.vocalBackingBonus(section, subset);
+      if (backing !== 0) {
+        policy.score = Math.max(0, Math.min(1, policy.score + backing));
+      }
+      // The conductor's change head decides which stems should move here.
+      const changeBonus = this.conductorChangeBonus(subset);
+      if (changeBonus !== 0) {
+        policy.score = Math.max(0, Math.min(1, policy.score + changeBonus));
+      }
+      // Per-bar quartet harmony against the session progression: the selector
+      // now sees the assembled four-stem chord motion, not only phrase keys.
+      const quartet = this.barComposer.quartetHarmonyFit(
+        candidate, this.sessionRootParsed, this.currentProgression,
+      );
+      policy.score = Math.max(0, Math.min(1, policy.score + 0.5 * (quartet - 0.5)));
+      (policy.reasons as string[]).push(`quartet-harmony ${quartet.toFixed(3)}`);
+      // Unified short-horizon bias: best next bar / phrase / 2-3 block arc fit.
+      const horizon = this.horizonScoreFor(subset, picks, startBar, candidateEnergy, section);
+      if (horizon !== 0) {
+        policy.score = Math.max(0, Math.min(1, policy.score + horizon));
+        policy.reasons.push(`horizon ${horizon.toFixed(3)}`);
+      }
+      // Blend mix-compat (rhythm-first, worst-bar aware) on top of the policy
+      // score.  When unavailable these stay undefined and the score is unchanged.
+      if (mixCompatScore !== undefined && mixRhythmScore !== undefined && mixMinBar !== undefined) {
+        // rhythm is the top priority; a single bad bar is heavily penalized
+        const rhythmBlend = 0.65 * mixRhythmScore + 0.35 * mixCompatScore;
+        const barPenalty = mixMinBar < 0.35 ? (0.35 - mixMinBar) * 0.8 : 0;
+        policy.score = policy.score * 0.75 + rhythmBlend * 0.25 - barPenalty;
+        if (mixMinBar < 0.3) policy.reasons.push("bar-clash");
+        if (mixRhythmScore < 0.35) policy.reasons.push("rhythm-mismatch");
+      }
+      if (!bestRawRef.value || rawScore > bestRawRef.value.rawScore) {
+        bestRawRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
+      }
+      if (subset.includes("drums")
+        && (!bestDrumRef.value || rawScore > bestDrumRef.value.rawScore)) {
+        bestDrumRef.value = { entries: candidate, changed: subset, score: policy.score, rawScore };
+      }
+      if (!bestRef.value || policy.score > bestRef.value.score) {
+        bestRef.value = {
+          entries: candidate,
+          changed: subset,
+          score: policy.score,
+          rawScore,
+          reasons: policy.reasons,
+        };
+      }
+      scoredCandidates.push({
+        entries: candidate,
+        changed: subset,
+        score: policy.score,
+        rawScore,
+        reasons: policy.reasons,
+      });
+    };
+
+    for (const subset of subsets) {
+      if (subset.length > budget.maxChanges) continue;
+      const lists = subset.map((stem) => options.get(stem) ?? []);
+      if (lists.some((list) => list.length === 0)) continue;
+      if (subset.length === 1) {
+        const stem = subset[0];
+        const heldCounts = new Map<string, number>();
+        for (const other of STEMS) {
+          if (other === stem) continue;
+          const tid = heldBase[other]?.kit.track_id;
+          if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
+        }
+        for (const entry of lists[0]) {
+          if ((heldCounts.get(entry.kit.track_id) ?? 0) + 1 > sourceCap) continue;
+          consider(subset, [entry]);
+        }
+      } else if (subset.length >= 3) {
+        // Section-boundary cohort: three/four stems moving to a fresh handoff.
+        // The recombination source cap is relaxed only for a rare full takeover.
+        const heldCounts = new Map<string, number>();
+        for (const stem of STEMS) {
+          if (subset.includes(stem)) continue;
+          const tid = heldBase[stem]?.kit.track_id;
+          if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
+        }
+        const lists3 = subset.map((s) => (options.get(s) ?? []).slice(0, PAIR_TOP_N));
+        const recurse = (depth: number, picks: StemPoolEntry[], extra: Map<string, number>): void => {
+          if (depth === lists3.length) {
+            if (picks.length >= 3) consider(subset, [...picks]);
+            return;
+          }
+          for (const entry of lists3[depth]) {
+            const tid = entry.kit.track_id;
+            const n = (extra.get(tid) ?? 0) + 1;
+            if ((heldCounts.get(tid) ?? 0) + n > sourceCap) continue;
+            extra.set(tid, n);
+            picks.push(entry);
+            recurse(depth + 1, picks, extra);
+            picks.pop();
+            if (n === 1) extra.delete(tid); else extra.set(tid, n - 1);
+          }
+        };
+        recurse(0, [], new Map<string, number>());
+      } else {
+        // Pair scoring is the expensive part (a 2k-d MLP per combo).  Only
+        // combine the top-ranked entries from each stem; jointOptions has
+        // already rotated fresh material into that top set via play counts.
+        const heldCounts = new Map<string, number>();
+        for (const stem of STEMS) {
+          if (subset.includes(stem)) continue;
+          const tid = heldBase[stem]?.kit.track_id;
+          if (tid) heldCounts.set(tid, (heldCounts.get(tid) ?? 0) + 1);
+        }
+        const wouldExceedCap = (tid: string, extra: number): boolean =>
+          (heldCounts.get(tid) ?? 0) + extra > sourceCap;
+        const firsts = lists[0].slice(0, PAIR_TOP_N);
+        const seconds = lists[1].slice(0, PAIR_TOP_N);
+        for (const first of firsts) {
+          if (wouldExceedCap(first.kit.track_id, 1)) continue;
+          for (const second of seconds) {
+            if (first.kit.track_id === second.kit.track_id) {
+              // Two stems from the same source: allowed up to the source cap.
+              if (wouldExceedCap(first.kit.track_id, 2)) continue;
+            } else if (wouldExceedCap(second.kit.track_id, 1)) {
+              continue;
+            }
+            consider(subset, [first, second]);
+          }
+        }
+      }
+    }
+
+    const best = bestRef.value;
+    if (!best) {
+      const counts = unpinned.map((stem) => `${stem}:${options.get(stem)?.length ?? 0}`).join(" ");
+      this.onStatus?.(`Joint mix: no candidates (${counts}); holding`);
+      return null;
+    }
+    const bestRaw = bestRawRef.value;
+    const bestDrum = bestDrumRef.value;
+    if (drumStale && bestDrum && !best.changed.includes("drums")
+      && bestDrum.rawScore >= threshold * 0.8
+      && bestDrum.rawScore >= best.rawScore * 0.9) {
+      this.onStatus?.(
+        `Joint mix: drum refresh ${bestDrum.changed.join("+")} → ` +
+        `${bestDrum.score.toFixed(3)} (raw ${bestDrum.rawScore.toFixed(3)})`,
+      );
+      return { entries: bestDrum.entries, changed: bestDrum.changed };
+    }
+    if (best.rawScore < threshold) {
+      // The policy may rank a candidate below another raw candidate; fall
+      // back to the best raw candidate if it still clears the learned gate.
+      if (bestRaw && bestRaw.rawScore >= threshold) {
+        this.onStatus?.(
+          `Joint mix: policy pick ${best.score.toFixed(3)} below gate; ` +
+          `using best raw ${bestRaw.changed.join("+")} → ${bestRaw.rawScore.toFixed(3)}`,
+        );
+        return { entries: bestRaw.entries, changed: bestRaw.changed };
+      }
+      if (forceMove && bestRaw && bestRaw.rawScore >= threshold * 0.5) {
+        this.onStatus?.(
+          `Joint mix: forced ${bestRaw.changed.join("+")} after ` +
+          `${startBar} bars (raw ${bestRaw.rawScore.toFixed(3)})`,
+        );
+        return { entries: bestRaw.entries, changed: bestRaw.changed };
+      }
+      this.onStatus?.(
+        `Joint mix: best raw ${best.rawScore.toFixed(3)} < ${threshold.toFixed(3)}; holding`,
+      );
+      return null;
+    }
+    // Near-best exploration: the ranker scores are clustered, so always
+    // taking the argmax replays the same winning tracks.  When several
+    // candidates sit within EXPLORE_WINDOW of the best policy score (and
+    // still clear the learned gate), choose among them with a block-seeded
+    // hash so the mix rotates through equally-good material.
+    const gated = scoredCandidates
+      .filter((item) => item.rawScore >= threshold)
+      .sort((a, b) => b.score - a.score);
+    if (gated.length > 1 && gated[0]) {
+      const topScore = gated[0].score;
+      const nearBest = gated
+        .filter((item) => topScore - item.score <= EXPLORE_WINDOW)
+        .slice(0, EXPLORE_TOP_K);
+      if (nearBest.length > 1) {
+        const ids = nearBest
+          .map((item) => item.changed.map((stem) => item.entries[stem]?.phrase.id ?? stem).join("+"))
+          .join("|");
+        const pickIndex = Math.min(
+          nearBest.length - 1,
+          Math.floor(hashRoll(`${this.blockIndex}:${ids}`) * nearBest.length),
+        );
+        const picked = nearBest[pickIndex];
+        if (picked && picked !== best) {
+          const detail = picked.reasons.length > 0 ? ` [${picked.reasons.join(",")}]` : "";
+          this.onStatus?.(
+            `Joint mix: explore ${picked.changed.join("+")} → ${picked.score.toFixed(3)} ` +
+            `(raw ${picked.rawScore.toFixed(3)})${detail}`,
+          );
+          return { entries: picked.entries, changed: picked.changed };
+        }
+      }
+    }
+    const detail = best.reasons.length > 0 ? ` [${best.reasons.join(",")}]` : "";
+    this.onStatus?.(
+      `Joint mix: ${best.changed.join("+")} → ${best.score.toFixed(3)} ` +
+      `(raw ${best.rawScore.toFixed(3)})${detail}`,
+    );
+    return { entries: best.entries, changed: best.changed };
+  }
+
+  /** Continue the stem's run where it left off, or loop when it has ended. */
+  private holdEntry(stem: StemName): StemPoolEntry | null {
+    const run = this.lastBlockRuns[stem] ?? this.current[stem]?.run;
+    if (run && run.length > 0) {
+      const next = this.nextRunEntry(run[run.length - 1], stem);
+      return next ?? run[0];
+    }
+    return this.current[stem]?.entry ?? this.lastBlockEntries[stem] ?? null;
+  }
+
+  /** The real +4-bar successor in the same kit, if it is legal for this run. */
+  private nextRunEntry(entry: StemPoolEntry, stem: StemName): StemPoolEntry | null {
+    const start = entry.phrase.start_bar;
+    if (typeof start !== "number") return null;
+    const nextPhrase = entry.kit.phrases.find((candidate) =>
+      candidate.start_bar === start + 4
+      && this.entryById.has(`${candidate.id}:${stem}`)
+      && !(candidate.once && this.playedOnce.has(candidate.id)),
+    );
+    if (!nextPhrase) return null;
+    const before = Number(entry.phrase.duration_sec) || 0;
+    const after = Number(nextPhrase.duration_sec) || 0;
+    if (before > 0 && after > 0 && Math.abs(after - before) / before > 0.01) {
+      return null;
+    }
+    return this.entryById.get(`${nextPhrase.id}:${stem}`) ?? null;
+  }
+
+  /**
+   * Pick a fresh phrase/run start inside a pinned style region.  The pin is a
+   * region, not a frozen loop: candidates near the dropped point are scored by
+   * distance, arc energy/section, the per-stem judge, recency and style.
+   */
+  private selectPinnedEntry(
+    stem: StemName,
+    pin: StemPin,
+    phrases: number,
+  ): StemPoolEntry | null {
+    const pool = this.pools[stem];
+    if (pool.length === 0) return null;
+    const current = this.current[stem]?.entry ?? this.lastBlockEntries[stem] ?? null;
+    const arc = targetAt(this.sessionBar);
+    const targetSection = this.lastSection || arc.section;
+    let targetEnergy = arc.energy;
+    // Learned-arc energy blend (gated; section comes from the planned arc).
+    {
+      const learned = this.arcPredict();
+      if (learned && Math.abs(learned.energy - targetEnergy) <= 0.25) {
+        targetEnergy = clamp01(0.5 * targetEnergy + 0.5 * learned.energy);
+      }
+    }
+    const outroAllowed = this.blockIndex >= BLOCKS_PER_SET - 2;
+    const recent = new Set(this.stemHistory[stem].slice(-STEM_HISTORY_AVOID));
+
+    const eligible = pool.filter((entry) => {
+      if (this.failedKits.has(entry.kit.track_id)) return false;
+      if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) return false;
+      if (entry.phrase.is_intro && this.blockIndex > 0) return false;
+      if (entry.phrase.is_outro && !outroAllowed) return false;
+      return true;
+    });
+    if (eligible.length === 0) return null;
+
+    // Consecutive phrases are preferable, but a pin must still move when the
+    // cluster only has isolated windows near the region.
+    const runLength = (entry: StemPoolEntry): number => {
+      const run = this.runFor(entry, phrases, false);
+      let length = 0;
+      for (const item of run) {
+        if (item.phrase.once && this.playedOnce.has(item.phrase.id)) break;
+        length += 1;
+      }
+      return length;
+    };
+
+    const near: Array<{ entry: StemPoolEntry; distance: number }> = [];
+    let nearest: { entry: StemPoolEntry; distance: number } | null = null;
+    for (const entry of eligible) {
+      const distance = Math.hypot(entry.x - pin.x, entry.y - pin.y);
+      if (!nearest || distance < nearest.distance) nearest = { entry, distance };
+      if (distance <= PIN_RADIUS) near.push({ entry, distance });
+    }
+    if (near.length === 0) {
+      // Nothing survives the legal filters inside the region: fall back to the
+      // nearest legal phrase, which is normally the exact phrase dropped on.
+      if (nearest) {
+        this.onStatus?.(`${stem}: pin region empty; using the nearest legal phrase`);
+        return nearest.entry;
+      }
+      return null;
+    }
+
+    const fullNear = near.filter((item) => runLength(item.entry) >= phrases);
+    const candidates = fullNear.length > 0 ? fullNear : near;
+
+    const lastRun = new Set<string>();
+    for (const entry of this.lastBlockRuns[stem] ?? []) lastRun.add(entry.phrase.id);
+
+    const usedTracks = new Set<string>();
+    for (const other of STEMS) {
+      if (other === stem) continue;
+      const otherEntry = this.current[other]?.entry ?? this.lastBlockEntries[other];
+      if (otherEntry) usedTracks.add(otherEntry.kit.track_id);
+    }
+
+    let best: { entry: StemPoolEntry; score: number } | null = null;
+    for (const { entry, distance } of candidates) {
+      const proximity = Math.exp(-(distance * distance) / (2 * PIN_SIGMA * PIN_SIGMA));
+      const energyFit = 1 - Math.min(1, Math.abs(entry.energy - targetEnergy));
+      const sectionBonus = entry.section === targetSection ? 0.35 : 0;
+      const sectionEnergy = SECTION_ENERGY[entry.section];
+      const sectionFit = sectionEnergy === undefined
+        ? 0
+        : 0.12 * (1 - Math.abs(entry.energy - sectionEnergy));
+      const judge = this.judgeScore(stem, current?.phrase.id ?? null, entry.phrase.id);
+      const judgeBonus = judge > 0 ? 0.8 * judge : 0;
+      const recentPenalty = recent.has(entry.phrase.id) ? 0.8 : 0;
+      const lastRunPenalty = lastRun.has(entry.phrase.id) ? 1.4 : 0;
+      const samePenalty = current
+        && current.phrase.id === entry.phrase.id
+        && current.kit.track_id === entry.kit.track_id ? 0.5 : 0;
+      const styleBonus = entry.kit.style === this.cluster?.style ? 0.22 : 0;
+      const trackPenalty = usedTracks.has(entry.kit.track_id) ? PIN_TRACK_PENALTY : 0;
+      const plays = this.playCountOf(stem, entry.phrase.id);
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.08
+        + songRepetitionBonus(stem, plays, null);
+      const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT * 0.5
+        + entry.keyCost * KEY_COST_WEIGHT * 0.5;
+      const earBonus = EAR_W_FALLBACK * (entry.earQ - 0.5);
+      const score =
+        2.4 * proximity +
+        0.9 * energyFit +
+        sectionBonus +
+        sectionFit +
+        judgeBonus +
+        styleBonus +
+        novelty -
+        recentPenalty -
+        lastRunPenalty -
+        samePenalty -
+        trackPenalty -
+        tierCost +
+        earBonus;
+      if (!best || score > best.score) best = { entry, score };
+    }
+    return best?.entry ?? nearest?.entry ?? null;
+  }
+
+  /** Pick a cross-song phrase for one stem, excluding its current track. */
+  private selectMorph(stem: StemName, at: number, section: string, phrases: number = 1): StemPoolEntry | null {
+    const pool = this.pools[stem];
+    if (pool.length === 0) return null;
+    const current = this.current[stem]?.entry ?? null;
+    if (!current) return null;
+    const currentKit = current.kit.track_id;
+    const target = SECTION_ENERGY[section] ?? 0.65;
+    const chord = this.current.bass?.entry.chroma ?? null;
+    const anchorRoot = this.current.bass?.entry.bassRoot ?? null;
+    const recentSet = new Set(this.stemHistory[stem].slice(-STEM_HISTORY_AVOID));
+    const usedTracks = new Set<string>();
+    for (const other of STEMS) {
+      if (other === stem) continue;
+      const tid = this.current[other]?.entry.kit.track_id;
+      if (tid) usedTracks.add(tid);
+    }
+    let best: { entry: StemPoolEntry; score: number } | null = null;
+
+    // Prefer a track no other stem is using, so after four morphs all four
+    // instruments come from different records; fall back if none exists.
+    // Prefer candidates with a real consecutive run long enough for the
+    // block; a short run would loop the same bars inside an 8/16-bar block.
+    // Held stem counts for source-cap enforcement (<=2 per source).
+    const heldCountsMorph = new Map<string, number>();
+    for (const other of STEMS) {
+      if (other === stem) continue;
+      const tid = (this.current[other]?.entry ?? this.lastBlockEntries[other])?.kit.track_id;
+      if (tid) heldCountsMorph.set(tid, (heldCountsMorph.get(tid) ?? 0) + 1);
+    }
+    const heldMaxMorph = Math.max(0, ...heldCountsMorph.values());
+
+    for (const strict of [true, false]) {
+    for (const entry of pool) {
+      if (entry.kit.track_id === currentKit) continue;   // force a new track
+      {
+        const c = (heldCountsMorph.get(entry.kit.track_id) ?? 0) + 1;
+        if (c > 2 && !(heldMaxMorph > 2 && c < heldMaxMorph)) continue;
+      }
+      if (strict && usedTracks.has(entry.kit.track_id) && (heldCountsMorph.get(entry.kit.track_id) ?? 0) >= 1) continue;
+      if (this.failedKits.has(entry.kit.track_id)) continue;
+      if (entry.phrase.id === current.phrase.id) continue;
+      if (recentSet.has(entry.phrase.id)) continue;
+      if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) continue;
+      if (entry.phrase.is_intro && this.blockIndex > 0) continue;
+      if (entry.phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
+      // Hard gate for fresh vocal entrances (same as the joint path): clean
+      // downbeat, segment start, exact fit. Mid-segment chops rest instead.
+      if (stem === "vocals" && !this.vocalFreshLegal(entry, phrases)) continue;
+      const runLen = phrases > 1 ? this.runFor(entry, phrases, false).length : phrases;
+      const shortRunPenalty = runLen < phrases ? 2.0 : 0;
+
+      const energy = Number(entry.energy) || 0.5;
+      const kindMatch = this.entryKind(entry).toUpperCase() === (this.targetKind || section).toUpperCase();
+      const sectionScore = (kindMatch ? 0.75 : (entry.section === section ? 0.45 : 0))
+        - Math.abs(energy - target);
+      const jump = Math.abs(energy - current.energy);
+      const jumpPenalty = jump > 0.25 ? (jump - 0.25) * 0.8 : 0;
+
+      let harmonic = 0;
+      if (stem === "bass") {
+        harmonic = -rootPenalty(entry.bassRoot ?? null, anchorRoot);
+        if (chord && entry.chroma) harmonic += 0.4 * cosine(entry.chroma, chord);
+      } else if (stem !== "drums" && chord && entry.chroma) {
+        harmonic = 0.7 * cosine(entry.chroma, chord);
+      }
+
+      const judge = this.judgeScore(stem, current.phrase.id, entry.phrase.id);
+      const judgeBonus = judge > 0 ? 1.5 + 2.5 * judge : -0.2;
+      const style = entry.kit.style === this.cluster?.style ? 0.25 : 0;
+      const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *
+        (stem === "vocals" ? 0.45 : 0.6);
+      const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
+      const plays = this.playCountOf(stem, entry.phrase.id);
+      const isSigMorph = this.isSignature(stem, entry.phrase.id);
+      const morphPlays = isSigMorph ? plays * (1 - FLOW_SIGNATURE_REPETITION_DISCOUNT) : plays;
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.08
+        + songRepetitionBonus(stem, morphPlays, null);
+      const tierCost = entry.tempoCost * TEMPO_COST_WEIGHT
+        + entry.keyCost * KEY_COST_WEIGHT;
+      const earBonus = EAR_W_FALLBACK * (entry.earQ - 0.5);
+      // Fallback path honours the same soft policy as the joint path: a rested
+      // signature earns its energy-gated bonus and an under-used timbre earns
+      // its window bonus.  sectionEnergy is the fallback's target proxy since
+      // selectMorph has no arc targetEnergy parameter.
+      const sigBonus = this.signatureBonusFor(stem, entry, target);
+      const timbre = this.timbreBonusFor(stem, entry, this.sessionBar);
+      // Vocal segments: entering mid-segment means splicing into a vocal
+      // that is already underway (a fragment); starting a long segment
+      // means the whole performance can play. Hard-gated above; here a
+      // small bonus prefers longer whole takes that fit the block exactly.
+      let vocalSegmentPenalty = 0;
+      let vocalSegmentBonus = 0;
+      if (stem === "vocals") {
+        const seg = this.vocalSegmentOf(entry.phrase.id);
+        if (seg !== null) {
+          if (seg.pos > 0) vocalSegmentPenalty = 1.0;
+          else vocalSegmentBonus = 0.5 * Math.min(seg.lenBars, 12) / 12;
+        }
+        // Fresh vocal entrances win unless a played one fits way better.
+        if (plays === 0) vocalSegmentBonus += VOCAL_FRESH_BONUS;
+      }
+      // Learned-similarity donor prior (Stage 1): audio neighbors of the
+      // current phrase win ties, intersected with the key/tempo ladder.
+      const simPrior = this.phraseSimilarityBonus(current.phrase.id, entry.phrase.id);
+      // Weak-label donor prior (Stage 2): good synthetic donors above gated-out.
+      const mixPrior = this.mixPreferenceBonus(current.phrase.id, entry, current);
+      const score =
+        1.0 * sectionScore +
+        0.9 * harmonic +
+        0.25 * style +
+        presence +
+        vocalActBonus +
+        novelty +
+        judgeBonus -
+        jumpPenalty -
+        shortRunPenalty -
+        tierCost +
+        earBonus +
+        sigBonus +
+        timbre -
+        vocalSegmentPenalty +
+        vocalSegmentBonus +
+        simPrior +
+        mixPrior +
+        (this.varietyPrior ? 2 * this.varietyBonusFor(stem, entry.kit.track_id) : 0);
+      if (!best || score > best.score) best = { entry, score };
+    }
+    if (best) break;
+    }
+    if (!best) {
+      this.onStatus?.(`${stem}: no compatible cross-song phrase; keeping current`);
+    }
+    return best?.entry ?? null;
+  }
+
+  /** Pick the next phrase from the anchor song, following the section arc. */
+  private chooseAnchorPhrase(section: string): KitPhrase | null {
+    const kit = this.anchorKit;
+    if (!kit || kit.phrases.length === 0) return null;
+    const target = SECTION_ENERGY[section] ?? 0.65;
+    // Only avoid the last two phrases, so a six-phrase kit can keep cycling.
+    const recent = new Set(this.anchorRecent.slice(-2));
+    let best: { phrase: KitPhrase; score: number } | null = null;
+    for (const phrase of kit.phrases) {
+      if (recent.has(phrase.id) && kit.phrases.length > 2) continue;
+      if (phrase.once && this.playedOnce.has(phrase.id)) continue;
+      if (phrase.is_intro && this.blockIndex > 1) continue;
+      if (phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
+      const energy = Number(phrase.energy) || 0.5;
+      const fullStem = STEMS.every((stem) => this.entryById.has(`${phrase.id}:${stem}`));
+      const continuity = this.currentAnchorPhrase
+        ? Math.abs(energy - (Number(this.currentAnchorPhrase.energy) || 0.5))
+        : 0;
+      let score = (String(phrase.section).toUpperCase() === section ? 0.9 : 0)
+        - Math.abs(energy - target)
+        - continuity * 0.6
+        + (fullStem ? 0.5 : 0);
+      if (continuity > 0.3 && String(phrase.section).toUpperCase() !== section) score -= 0.4;
+      const currentStart = this.currentAnchorPhrase?.start_bar;
+      if (typeof currentStart === "number" && typeof phrase.start_bar === "number") {
+        const delta = phrase.start_bar - currentStart;
+        if (delta === 4 && fullStem) score += 2.8;   // the real next 4 bars wins
+        else if (delta === 4) score += 1.2;          // forward, but a stem is absent
+        else if (delta === 8) score += 1.0;          // one window skipped
+        else if (delta > 0 && delta < 16) score += 0.3;
+        else if (delta >= 16) score -= 0.5;
+        else if (delta < 0) score -= 0.2;    // prefer forward motion
+      }
+      if (phrase.once) score -= 0.2;
+      score += hashRoll(`${phrase.id}:${this.blockIndex}`) * 0.12;
+      if (!best || score > best.score) best = { phrase, score };
+    }
+    if (best) return best.phrase;
+    let fallback = kit.phrases[0];
+    let bestDelta = Number.POSITIVE_INFINITY;
+    for (const phrase of kit.phrases) {
+      const delta = Math.abs((Number(phrase.energy) || 0.5) - target);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        fallback = phrase;
+      }
+    }
+    return fallback;
+  }
+
+  /** The anchor phrase's entry for a stem, or the best same-song fallback. */
+  private anchorEntry(stem: StemName, phrase: KitPhrase | null): StemPoolEntry | null {
+    const kit = this.anchorKit;
+    if (!kit) return null;
+    if (phrase) {
+      const exact = this.entryById.get(`${phrase.id}:${stem}`);
+      if (exact) return exact;
+    }
+    const candidates = this.pools[stem].filter((entry) => entry.kit.track_id === kit.track_id);
+    if (candidates.length === 0) return null;
+    const targetSection = String(phrase?.section ?? "GROOVE_A").toUpperCase();
+    const target = SECTION_ENERGY[targetSection] ?? 0.65;
+    candidates.sort((a, b) => Math.abs(a.energy - target) - Math.abs(b.energy - target));
+    return candidates[0];
+  }
+
+  private async finishBlock(
+    tasks: Array<{
+      stem: StemName;
+      run: StemPoolEntry[];
+      transition?: TransitionTechnique;
+      slices?: SliceSpec[];
+      baseSemitones?: number;
+      pitchPoints?: PitchAutomationPoint[];
+    }>,
+    at: number,
+    resumes?: Map<StemName, ResumeHint>,
+  ): Promise<void> {
+    const callMs = performance.now();
+    let maxLoadMs = 0;
+    // Loads stay concurrent (fetch + decode are off-thread), but the
+    // synchronous tail of each stem (mixToMono + concat + worklet clone,
+    // 100-300 ms for 8/16-bar runs) is scheduled one stem at a time with a
+    // main-thread yield between.  Four stems fired back-to-back in one
+    // macrotask measured 600-1100 ms of blocking (v0.2.233 dropout).
+    const audios = await Promise.all(tasks.map(async (task) => {
+      const loadT0 = performance.now();
+      const audio = await this.loadRunAudio(task.run, task.slices);
+      maxLoadMs = Math.max(maxLoadMs, performance.now() - loadT0);
+      return { task, audio };
+    }));
+    for (const { task, audio } of audios) {
+      const targetAt = this.preparingBlock?.startAt ?? at;
+      const resume = resumes?.get(task.stem);
+      if (!audio) {
+        const current = this.current[task.stem];
+        const fallbackRun = current?.run ?? (current ? [current.entry] : null);
+        if (fallbackRun) {
+          const fallback = await this.loadRunAudio(fallbackRun, current?.slices);
+          if (fallback) {
+            await this.scheduleRun(task.stem, fallbackRun, fallback, targetAt, this.currentBlockBars, false, resume, task.transition, current?.baseSemitones, current?.pitchPoints, current?.slices);
+          }
+        }
+      } else {
+        await this.scheduleRun(
+          task.stem,
+          task.run,
+          audio,
+          targetAt,
+          this.currentBlockBars,
+          false,
+          resume,
+          task.transition,
+          task.baseSemitones,
+          task.pitchPoints,
+          task.slices,
+        );
+      }
+      await yieldToMain();
+    }
+    // Scheduling diagnostics: a slow fetch/decode that lands near the bar
+    // start explains 1 s dropout reports (schedule() clamps late starts).
+    const resolvedAt = this.preparingBlock?.startAt ?? at;
+    const latenessMs = (this.engine.now() - resolvedAt) * 1000;
+    if (maxLoadMs > 600 || latenessMs > -1200) {
+      console.info(
+        `[StemRemix] block load max=${maxLoadMs.toFixed(0)}ms ` +
+        `call=${(performance.now() - callMs).toFixed(0)}ms lateness=${latenessMs.toFixed(0)}ms @ ${resolvedAt.toFixed(2)}s`,
+      );
+    }
+  }
+
+  private select(stem: StemName, at: number, section: string, sectionChanged: boolean): StemPoolEntry | null {
+    const pool = this.pools[stem];
+    if (pool.length === 0) return null;
+    const current = this.current[stem]?.entry ?? null;
+    const pin = this.pins[stem] ?? null;
+    const anchor = this.current.bass?.entry ?? null;
+    const chord = anchor?.chroma ?? null;
+    const recentSet = new Set(this.stemHistory[stem].slice(-STEM_HISTORY_AVOID));
+    let best: { entry: StemPoolEntry; score: number } | null = null;
+
+    for (const entry of pool) {
+      if (entry.kit.track_id && this.failedKits.has(entry.kit.track_id)) continue;
+      if (current && entry.phrase.id === current.phrase.id && entry.stem === stem) continue;
+      if (recentSet.has(entry.phrase.id)) continue;
+      if (entry.phrase.once && this.playedOnce.has(entry.phrase.id)) continue;
+      if (entry.phrase.is_intro && this.blockIndex > 0) continue;
+      if (entry.phrase.is_outro && this.blockIndex < BLOCKS_PER_SET - 2) continue;
+
+      // Direction-aware section / energy rules (learned expanded kind aware).
+      const target = SECTION_ENERGY[section] ?? 0.65;
+      const energyDelta = Math.abs(entry.energy - target);
+      let sectionScore = 0.5 - energyDelta;
+      const kindMatch = this.entryKind(entry).toUpperCase() === (this.targetKind || section).toUpperCase();
+      if (kindMatch) sectionScore += 0.75;
+      else if (entry.section === section) sectionScore += 0.45;
+      if ((section === "BUILDUP" || this.targetKind === "RISE") && current && entry.energy < current.energy - 0.05) sectionScore -= 0.8;
+      if (section === "BREAKDOWN" && current && entry.energy > current.energy + 0.1) sectionScore -= 0.8;
+      if (section === "DROP" && entry.energy < 0.6) sectionScore -= 0.5;
+
+      // Harmonic fit: bass root motion + chroma overlap with the current bass.
+      let harmonic = 0;
+      if (stem === "bass" && anchor) {
+        harmonic = -rootPenalty(entry.bassRoot ?? null, anchor.bassRoot ?? null);
+        if (chord && entry.chroma) harmonic += 0.4 * cosine(entry.chroma, chord);
+      } else if (stem !== "drums" && chord && entry.chroma) {
+        harmonic = 0.7 * cosine(entry.chroma, chord);
+        if (stem === "vocals") harmonic += 0.2;
+      }
+
+      // Pin: the style region is a soft target; auto-advance still picks
+      // different phrases inside it.
+      let pinScore = 0;
+      let pinDist = 0;
+      if (pin) {
+        pinDist = Math.hypot(entry.x - pin.x, entry.y - pin.y);
+        pinScore = Math.exp(-(pinDist * pinDist) / (2 * 0.18 * 0.18));
+        if (pinDist > 0.42) pinScore *= 0.15;
+      }
+
+      const sameKit = current && entry.kit.track_id === current.kit.track_id ? 0.3 : 0;
+      const style = entry.kit.style === this.cluster?.style ? 0.25 : 0;
+      const playsSel = this.playCountOf(stem, entry.phrase.id);
+      const novelty = hashRoll(`${entry.phrase.id}:${this.blockIndex}:${stem}`) * 0.08
+        + songRepetitionBonus(stem, playsSel, null);
+      const judge = this.judgeScore(stem, current?.phrase.id ?? null, entry.phrase.id);
+      const judgeBonus = judge > 0 ? 1.5 + 2.5 * judge : -0.2;
+      const presence = clamp01((entry.rmsDb - MIN_RMS_DB[stem] + 8) / 16) *
+        (stem === "vocals" ? 0.45 : 0.6);
+      const vocalActBonus = stem === "vocals" ? this.vocalPresenceBonus(entry.phrase.id) : 0;
+      const score =
+        1.0 * sectionScore +
+        0.9 * harmonic +
+        (pin ? 2.2 * pinScore : 0) +
+        0.55 * sameKit +
+        0.25 * style +
+        novelty +
+        presence +
+        vocalActBonus +
+        judgeBonus;
+
+      if (best === null || score > best.score) best = { entry, score };
+    }
+
+    if (best === null && pin) {
+      // No legal phrase in the region: snap to the nearest legal phrase.
+      let nearest: StemPoolEntry | null = null;
+      let dist = Number.POSITIVE_INFINITY;
+      for (const entry of pool) {
+        const d = Math.hypot(entry.x - pin.x, entry.y - pin.y);
+        if (d < dist) {
+          dist = d;
+          nearest = entry;
+        }
+      }
+      if (nearest) {
+        this.onStatus?.(`${stem}: no phrase at the target, snapped to the nearest legal phrase`);
+        return nearest;
+      }
+    }
+    return best?.entry ?? null;
+  }
+
+  private judgeScore(stem: StemName, fromId: string | null, toId: string): number {
+    if (!fromId || this.stemNext.size === 0) return 0;
+    return this.stemNext.get(`${fromId}:${stem}:${toId}`) ?? 0;
+  }
+
+  private async prepareEntry(
+    stem: StemName,
+    entry: StemPoolEntry,
+  ): Promise<{ entry: StemPoolEntry; audio: LoadedStemRun } | null> {
+    try {
+      const audio = await this.loadRunAudio([entry]);
+      return audio ? { entry, audio } : null;
+    } catch (err) {
+      console.warn(`[StemRemix] ${stem} load failed for ${entry.phrase.id}`, err);
+      return null;
+    }
+  }
+
+  private cacheKey(entry: StemPoolEntry): string {
+    return `${entry.phrase.id}:${entry.stem}`;
+  }
+
+  private readonly audioLoads = new Map<string, Promise<LoadedStemAudio>>();
+
+  private loadAudio(entry: StemPoolEntry): Promise<LoadedStemAudio> {
+    const key = this.cacheKey(entry);
+    const pending = this.audioLoads.get(key);
+    if (pending) return pending;
+    const load = this.loadAudioUncached(entry).finally(() => this.audioLoads.delete(key));
+    this.audioLoads.set(key, load);
+    return load;
+  }
+
+  private async loadAudioUncached(entry: StemPoolEntry): Promise<LoadedStemAudio> {
+    const key = this.cacheKey(entry);
+    const cached = this.cache.get(key);
+    if (cached) {
+      this.cache.delete(key);
+      this.cache.set(key, cached);
+      return cached;
+    }
+    const asset = entry.phrase.stems?.[entry.stem];
+    if (!asset) throw new Error("missing stem asset");
+    const mainRes = await fetch(`${this.baseUrl}/${asset.file}`, { signal: AbortSignal.timeout(5000) });
+    if (!mainRes.ok) throw new Error(`stem ${mainRes.status} ${asset.file}`);
+    const main = await this.engine.decodeAudio(await mainRes.arrayBuffer());
+    let pre: AudioBuffer | null = null;
+    if (asset.pre_roll?.file) {
+      try {
+        const preRes = await fetch(`${this.baseUrl}/${asset.pre_roll.file}`, { signal: AbortSignal.timeout(1500) });
+        if (preRes.ok) pre = await this.engine.decodeAudio(await preRes.arrayBuffer());
+      } catch {
+        // A missing tail must not block the phrase.
+      }
+    }
+    const loaded: LoadedStemAudio = {
+      main,
+      pre,
+      preDur: pre ? pre.duration : 0,
+    };
+    this.cache.set(key, loaded);
+    if (this.cache.size > CACHE_LIMIT) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest) this.cache.delete(oldest);
+    }
+    return loaded;
+  }
+
+  private workerItem(entry: StemPoolEntry): WorkerRunItem | null {
+    const asset = entry.phrase.stems?.[entry.stem];
+    if (!asset?.file) return null;
+    return {
+      key: this.cacheKey(entry),
+      url: new URL(`${this.baseUrl}/${asset.file}`, document.baseURI).toString(),
+      preUrl: asset.pre_roll?.file
+        ? new URL(`${this.baseUrl}/${asset.pre_roll.file}`, document.baseURI).toString()
+        : null,
+    };
+  }
+
+  /** Decode every phrase in a run: worker first, main-thread fallback. */
+  private async loadRunAudio(
+    run: readonly StemPoolEntry[],
+    slices?: SliceSpec[],
+    crossfadeMs: number = 28,
+  ): Promise<LoadedStemRun | null> {
+    if (this.audioWorker.ok) {
+      const items: WorkerRunItem[] = [];
+      for (const entry of run) {
+        const item = this.workerItem(entry);
+        if (!item) {
+          this.failedKits.add(entry.kit.track_id);
+          return null;
+        }
+        items.push(item);
+      }
+      const loaded = await this.audioWorker.load(items, slices, crossfadeMs);
+      if (loaded) return loaded;
+      // The worker reported a failed run (or glitched silently): the
+      // main-thread loader keeps the session alive from here.  It records
+      // per-phrase failures (failedKits) the same way, so a genuinely
+      // missing file still fails the run.
+      return this.loadRunAudioMain(run, slices, crossfadeMs);
+    }
+    return this.loadRunAudioMain(run, slices, crossfadeMs);
+  }
+
+  private pcmAssembly: Promise<unknown> = Promise.resolve();
+
+  /** Main-thread fallback: fetch + decode through the audio cache, then
+   *  concat or slice-assemble into one PCM run (the pre-worker path, kept for coverage). */
+  private async loadRunAudioMain(
+    run: readonly StemPoolEntry[],
+    slices?: SliceSpec[],
+    crossfadeMs: number = 28,
+  ): Promise<LoadedStemRun | null> {
+    const audios = await Promise.all(run.map(async (entry) => {
+      try {
+        return await this.loadAudio(entry);
+      } catch (err) {
+        this.failedKits.add(entry.kit.track_id);
+        console.warn(`[StemRemix] run load failed for ${entry.phrase.id}`, err);
+        return null;
+      }
+    }));
+    if (audios.some((audio) => audio === null)) return null;
+    const loaded = audios as LoadedStemAudio[];
+    const sampleRate = loaded[0]?.main.sampleRate ?? ENGINE_SAMPLE_RATE;
+    const assembly = this.pcmAssembly.catch(() => {}).then(async () => {
+      await yieldToMain();
+      // These helpers only read channels; concat owns the outgoing buffers.
+      const channels = (buffer: AudioBuffer): [Float32Array, Float32Array] => [
+        buffer.getChannelData(0),
+        buffer.getChannelData(buffer.numberOfChannels > 1 ? 1 : 0),
+      ];
+      const pairs = loaded.map((audio) => channels(audio.main));
+      const prePair = loaded[0]?.pre ? channels(loaded[0].pre) : null;
+      if (slices && slices.length > 0) {
+        return assembleSlicedStereoRun(pairs, prePair, slices, sampleRate, crossfadeMs);
+      }
+      return concatStereoRun(pairs, prePair, sampleRate);
+    });
+    this.pcmAssembly = assembly;
+    return assembly;
+  }
+
+  /** Two reusable voices per stem: one playing, one being prepared. */
+  private async getVoice(stem: StemName, avoid?: StretchVoice): Promise<StretchVoice> {
+    let pool = this.voicePool[stem];
+    // The silence watchdog empties the pool ([]) when it rebuilds; an empty
+    // array is truthy, so a plain `!pool` check never recreates it and the
+    // index math below reads pool[NaN] = undefined, throwing on reset().
+    // Treat an empty pool as missing so recovery actually rebuilds voices.
+    if (!pool || pool.length === 0) {
+      const ctx = this.engine.ensureCtx();
+      const destination = this.engine.getStemInput(stem);
+      const pan = stemPan(stem, stem);
+      pool = await Promise.all([
+        StretchVoice.create(ctx, destination, { pan }),
+        StretchVoice.create(ctx, destination, { pan }),
+      ]);
+      this.voicePool[stem] = pool;
+      this.voiceIndex[stem] = 0;
+    }
+    let index = (this.voiceIndex[stem] | 0) % pool.length;
+    if (pool.length > 1 && pool[index] === avoid) {
+      index = (index + 1) % pool.length;
+    }
+    this.voiceIndex[stem] = (index + 1) % pool.length;
+    const voice = pool[index];
+    await voice.reset();
+    return voice;
+  }
+
+  private async scheduleRun(
+    stem: StemName,
+    run: readonly StemPoolEntry[],
+    audio: LoadedStemRun,
+    at: number,
+    bars: number,
+    manual: boolean,
+    resume?: ResumeHint,
+    transition?: TransitionTechnique,
+    baseSemitones?: number,
+    pitchPoints?: readonly PitchAutomationPoint[],
+    slices?: SliceSpec[],
+  ): Promise<void> {
+    const first = run[0];
+    if (!first) return;
+    try {
+      const previous = this.current[stem];
+      const voice = await this.getVoice(stem, previous?.voice);
+      await voice.loadSamples(audio.samples, true);
+      const preDur = audio.preDur;
+      const rate = this.effectiveEntryRate(first);
+      // Normal scheduling: the pre-roll starts preDur/rate before the
+      // downbeat.  A watchdog resume instead re-enters the run at the input
+      // position the block clock has reached, so the block continues where it
+      // stopped instead of restarting (or, as before, jumping to the next
+      // block), and keeps the run's original end.
+      let startAt = at - preDur / rate;
+      let inputSec = 0;
+      let runEndAt = at + bars * this.barSec;
+      let startedAt = at;
+      if (resume) {
+        const elapsed = Math.max(0, at - resume.startedAt);
+        if (resume.runEndAt - at < 0.08) return; // block already over
+        const totalInputDur = audio.mainDurations.reduce((sum, d) => sum + d, 0);
+        startAt = at;
+        inputSec = Math.min(preDur + elapsed * rate, preDur + Math.max(0, totalInputDur - 0.05 / rate));
+        runEndAt = resume.runEndAt;
+        startedAt = resume.startedAt;
+      }
+      // (B) Incoming-vocal fade: a loud incoming vocal fades from silence over
+      // ~150 ms instead of STEM_FADE_IN (80 ms) to avoid mid-vowel splats.
+      // Only the *fade length* changes; gain stays the equal-gain hand-off.
+      const vocalFade = transition?.vocalFadeInSec;
+      // Vocal-change seams: widen the boundary crossfade on both sides so the
+      // vocal hand-off reads as a mix, not a cut.
+      const vocalCross = transition?.vocalCrossfadeSec;
+      const crossfadeSec = resume
+        ? STEM_FADE_IN[stem]
+        : Math.max(
+          preDur > 0 ? preDur / rate : 0,
+          stem === "vocals" && vocalFade !== null && vocalFade !== undefined ? vocalFade : 0,
+          stem === "vocals" && vocalCross !== null && vocalCross !== undefined ? vocalCross : 0,
+          STEM_FADE_IN[stem],
+        );
+      voice.schedule({
+        when: startAt,
+        inputSec,
+        rate,
+        semitones: baseSemitones ?? first.keyShift,
+        formantCompensation: stem === "vocals",
+        fadeInSec: crossfadeSec,
+        gain: first.gain,
+        // Equal-gain hand-off: fade in at the outgoing voice's level so a
+        // quiet/loud phrase splice can't dip, then settle to this gain.
+        handoffGain: previous && previous.voice !== voice
+          ? this.seamGain(stem, previous.voice.outputGainTarget)
+          : undefined,
+      });
+      if (!resume && pitchPoints && pitchPoints.length > 0 && stem !== "drums") {
+        voice.schedulePitchAutomation(startedAt, rate, pitchPoints, stem === "vocals");
+      }
+      voice.fadeOut(runEndAt, STEM_FADE_OUT[stem]);
+
+      const offsets: number[] = [];
+      let offset = 0;
+      for (const dur of audio.mainDurations) {
+        offsets.push(offset);
+        offset += dur / rate;
+      }
+
+      if (previous && previous.voice !== voice) {
+        previous.voice.fadeOut(startAt, crossfadeSec);
+        // (B) EQ-OUT tail: sweep the *outgoing* voice down to 300 Hz across
+        // the same crossfade, so its mids do not mask the hotter incoming
+        // stem.  Per-voice automation (the incoming voice stays bright),
+        // scheduled sample-accurately at the boundary, restored on reuse.
+        if (transition?.eqOut && !resume) {
+          previous.voice.scheduleEqOut(startAt, crossfadeSec, transition.eqOutFloorHz);
+        }
+        // (B) Vocal reverb tail: extend the stem's send over the outgoing
+        // fade so the tail dissolves into the new vocal.  Absolute-time ramp
+        // on the glue bus; falls back to the plain hand-off when the bus
+        // is unreachable.
+        if (transition?.vocalReverbTail && stem === "vocals" && !resume) {
+          this.engine.scheduleReverbTail(stem, startAt, TRANSITION_VOCAL_REVERB_TAIL, TRANSITION_VOCAL_REVERB_TAIL_SEC);
+        }
+      } else if (transition?.vocalReverbTail && stem === "vocals" && !resume) {
+        // Same-voice hand-off (rare): the tail still belongs on the bus.
+        this.engine.scheduleReverbTail(stem, startAt, TRANSITION_VOCAL_REVERB_TAIL, TRANSITION_VOCAL_REVERB_TAIL_SEC);
+      }
+      const scheduled = this.scheduledRuns[stem] ?? [];
+      scheduled.push({
+        stem,
+        run: [...run],
+        voice,
+        startedAt,
+        offsets,
+        runEndAt,
+        blockIndex: this.blockIndex,
+        manual,
+        preDur,
+        mainDurations: [...audio.mainDurations],
+        crossfadeSec,
+        slices,
+        baseSemitones,
+        pitchPoints: pitchPoints ? [...pitchPoints] : undefined,
+      });
+      this.scheduledRuns[stem] = scheduled;
+      if (!resume) {
+        for (const entry of run) this.recordPlayed(stem, entry);
+        const flowTask = { stem, run: [...run], slices, baseSemitones, voiceRate: rate, pitchPoints: pitchPoints ? [...pitchPoints] : undefined };
+        this.sliceFlow.record(flowTask, startedAt, bars, this.sessionBpm);
+        const cells = describeFlowTask(flowTask, bars, this.barSec);
+        const tail = cells[cells.length - 1];
+        if (tail) this.barComposer.commitBoundary(stem, tail.phraseId, tail.bar, tail.semitones, this.lastSection);
+      }
+      console.info(
+        `[StemRemix] ${stem} ← ${run.map((entry) => entry.phrase.id).join("+")} @ ${at.toFixed(2)}s ` +
+        `(${bars} bars, start ${startAt.toFixed(2)}s, rate ${rate.toFixed(4)}, ` +
+        `shift ${first.keyShift}, pre ${preDur.toFixed(3)}s)${resume ? " (resumed)" : ""}`
+      );
+    } catch (err) {
+      console.warn(`[StemRemix] ${stem} schedule failed`, err);
+      this.failedKits.add(first.kit.track_id);
+    }
+  }
+
+  /** User dragged a reticle: pin the region and commit at the next bar. */
+  setTarget(stem: StemName, x: number, y: number): StemPin | null {
+    if (this.cluster === null) return null;
+    const cx = clamp01(x);
+    const cy = clamp01(y);
+    const current = this.current[stem]?.entry ?? null;
+    const nearest = this.nearest(stem, cx, cy);
+    // Pin the region at the nearest real phrase, not at an impossible point
+    // outside the stem's cloud; the dashed ring must always sit on the map.
+    const pinX = nearest?.x ?? cx;
+    const pinY = nearest?.y ?? cy;
+
+    const now = this.engine.now();
+    const grid = this.blockAt(now);
+    const blockStartAt = grid?.startAt ?? (this.sessionStartAt > 0 ? this.sessionStartAt : now);
+    const blockStartBar = grid?.startBar ?? this.blockStartBar;
+    const barsIn = Math.max(0, (now - blockStartAt) / this.barSec);
+    const offsetBars = Math.ceil(barsIn + 0.02);
+    const at = Math.max(now + 0.01, blockStartAt + offsetBars * this.barSec);
+    const partialBar = ((offsetBars % 4) + 4) % 4;
+    const releaseBar = this.blockEndBar(blockStartBar + offsetBars + PIN_BARS);
+    const pin: StemPin = {
+      x: pinX,
+      y: pinY,
+      untilBar: releaseBar,
+    };
+    this.pins[stem] = pin;
+    if (!nearest) return pin;
+    if (Math.hypot(nearest.x - cx, nearest.y - cy) > 0.15) {
+      this.onStatus?.(`${stem}: target outside the ${stem} cloud, snapped to the nearest legal phrase`);
+    }
+    const distance = current ? Math.hypot(nearest.x - current.x, nearest.y - current.y) : 1;
+    // Implicit preference: a drop near the playing phrase means "keep this";
+    // a drop elsewhere means "replace this stem with that territory". The
+    // outgoing and incoming phrase ids coexist only here, so log at this point.
+    this.recordPreference({
+      kind: distance <= 0.06 ? "hold" : "retarget",
+      at,
+      bar: blockStartBar + offsetBars,
+      stem,
+      from: current?.phrase.id ?? null,
+      to: nearest?.phrase.id ?? null,
+      fromTrack: current?.kit.track_id ?? null,
+      toTrack: nearest?.kit.track_id ?? null,
+      section: nearest?.phrase.section ?? null,
+      style: nearest?.kit.style ?? null,
+      x: pinX,
+      y: pinY,
+      dropX: cx,
+      dropY: cy,
+      snapped: Math.hypot(nearest.x - cx, nearest.y - cy) > 0.15,
+      untilBar: releaseBar,
+    });
+    const generation = (this.pinGeneration[stem] ?? 0) + 1;
+    this.pinGeneration[stem] = generation;
+    this.pinning.add(stem);
+    void this.applyPin(stem, nearest, pin, at, partialBar, generation);
+    if (distance > 0.06) {
+      this.onStatus?.(`${stem} → ${nearest.phrase.section} (${nearest.kit.style}) at next bar`);
+    } else {
+      const holdBars = Math.max(1, releaseBar - (blockStartBar + offsetBars));
+      this.onStatus?.(`${stem} pinned in place for ${holdBars} bars`);
+    }
+    return pin;
+  }
+
+  /**
+   * Prefer a nearby phrase from the same kit with a real consecutive run.
+   * The pin's centre stays where the user dropped it; only the starting window
+   * moves, and never to a different kit.
+   */
+  private pinRunEntry(entry: StemPoolEntry, phrases: number, x: number, y: number): StemPoolEntry {
+    const direct = this.runFor(entry, phrases, false);
+    if (direct.length >= Math.min(2, phrases)) return entry;
+    let best = entry;
+    let bestLength = direct.length;
+    let bestDistance = 0;
+    for (const candidate of this.pools[entry.stem]) {
+      if (candidate.kit.track_id !== entry.kit.track_id) continue;
+      const distance = Math.hypot(candidate.x - x, candidate.y - y);
+      if (distance > 0.2) continue;
+      const length = this.runFor(candidate, phrases, false).length;
+      if (length > bestLength || (length === bestLength && distance < bestDistance)) {
+        best = candidate;
+        bestLength = length;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Commit a pinned style region at the next bar.  The voice only covers the
+   * partial run up to the next block boundary (`handoffAt`); from there the
+   * normal block scheduler keeps the pin and selects fresh phrases inside it.
+   */
+  private async applyPin(
+    stem: StemName,
+    entry: StemPoolEntry,
+    pin: StemPin,
+    at: number,
+    partialBar: number,
+    generation: number,
+  ): Promise<void> {
+    const handoffAt = this.nextBlockAt;
+    if (at >= handoffAt - 0.05) {
+      // The drag landed on/after the block boundary: no partial manual voice.
+      // The block scheduler will pick the pinned phrase at the boundary.
+      delete this.manualPins[stem];
+      this.pinning.delete(stem);
+      return;
+    }
+    const blockSpan = 4 * this.barSec;
+    const phrases = Math.max(1, Math.ceil((handoffAt - at) / blockSpan) + 1);
+    // If the snapped phrase is an isolated window, prefer a nearby phrase from
+    // the same kit with a real consecutive run; the partial commit should not
+    // loop one 4-bar window if the kit can move.
+    const runEntry = this.pinRunEntry(entry, phrases, pin.x, pin.y);
+    const run = this.runFor(runEntry, phrases);
+    const audio = await this.loadRunAudio(run);
+    if (!audio || this.pins[stem] !== pin || this.pinGeneration[stem] !== generation) {
+      if (this.pinGeneration[stem] === generation) {
+        delete this.pins[stem];
+        this.pinning.delete(stem);
+        this.onStatus?.(`${stem}: target phrase failed to load; keeping current`);
+      }
+      return;
+    }
+    try {
+      const previous = this.current[stem];
+      const voice = await this.getVoice(stem, previous?.voice);
+      const rate = this.effectiveEntryRate(runEntry);
+      await voice.loadSamples(audio.samples, true);
+      const preDur = audio.preDur;
+      const crossfadeSec = Math.max(0.02, STEM_FADE_IN[stem], preDur / rate);
+      let startAt = at;
+      let inputBars = partialBar;
+      const now = this.engine.now();
+      const liveHandoffAt = this.nextBlockAt > 0 ? this.nextBlockAt : handoffAt;
+      if (now > at - 0.05) {
+        const lateBars = Math.min(6, Math.ceil((now - at) / this.barSec + 0.1));
+        startAt += Math.max(1, lateBars) * this.barSec;
+        inputBars += Math.max(1, lateBars);
+      }
+      if (startAt >= liveHandoffAt - 0.05) {
+        // The load arrived after the partial window; hand straight over to the
+        // block scheduler at the boundary instead of scheduling a dead voice.
+        delete this.manualPins[stem];
+        this.pinning.delete(stem);
+        this.onStatus?.(`${stem}: pin commit late; starting at the next block`);
+        return;
+      }
+      let sourceSec = 0;
+      for (const dur of audio.mainDurations) sourceSec += dur;
+      const firstDur = audio.mainDurations[0] ?? 0;
+      const inputSec = Math.min(
+        preDur + inputBars * (firstDur / 4),
+        preDur + sourceSec - 0.05,
+      );
+      const endAt = liveHandoffAt;
+      voice.schedule({
+        when: startAt,
+        inputSec: Math.max(preDur, inputSec),
+        rate,
+        semitones: runEntry.keyShift,
+        formantCompensation: stem === "vocals",
+        fadeInSec: crossfadeSec,
+        gain: runEntry.gain,
+        handoffGain: previous && previous.voice !== voice
+          ? this.seamGain(stem, previous.voice.outputGainTarget)
+          : undefined,
+      });
+      voice.fadeOut(endAt, STEM_FADE_OUT[stem]);
+
+      // Silence the current voice and any block voice already queued inside
+      // the partial commit window; this stem is manual until the handoff.
+      if (previous && previous.voice !== voice) previous.voice.fadeOut(startAt, crossfadeSec);
+      const kept: ScheduledRun[] = [];
+      for (const scheduled of this.scheduledRuns[stem] ?? []) {
+        if (scheduled.startedAt >= startAt - 0.02 && scheduled.startedAt < endAt) {
+          if (scheduled.voice !== voice) scheduled.voice.fadeOut(scheduled.startedAt, 0.01);
+        } else {
+          kept.push(scheduled);
+        }
+      }
+      const offsets: number[] = [];
+      let offset = 0;
+      for (const dur of audio.mainDurations) {
+        offsets.push(offset);
+        offset += dur / rate;
+      }
+      if (this.pinGeneration[stem] !== generation) {
+        voice.fadeOut(startAt, 0.02);
+        this.pinning.delete(stem);
+        return;
+      }
+      kept.push({
+        stem,
+        run,
+        voice,
+        startedAt: startAt,
+        offsets,
+        runEndAt: endAt,
+        blockIndex: this.blockIndex,
+        manual: true,
+        preDur,
+        mainDurations: [...audio.mainDurations],
+        crossfadeSec,
+      });
+      this.sliceFlow.cancel(stem, startAt, endAt);
+      this.sliceFlow.record({ stem, run: [...run] }, startAt, Math.max(1, (endAt - at) / this.barSec), this.sessionBpm);
+      this.scheduledRuns[stem] = kept;
+      this.manualPins[stem] = {
+        entry: runEntry,
+        run,
+        voice,
+        startedAt: startAt,
+        runEndAt: endAt,
+        untilBar: pin.untilBar,
+      };
+      for (const phraseEntry of run) {
+        this.recordPlayed(stem, phraseEntry);
+      }
+      this.pinning.delete(stem);
+    } catch (err) {
+      console.warn(`[StemRemix] ${stem} pinned run failed`, err);
+      this.failedKits.add(entry.kit.track_id);
+      delete this.pins[stem];
+      this.pinning.delete(stem);
+      this.onStatus?.(`${stem}: pinned run failed; keeping current`);
+    }
+  }
+
+  release(stem: StemName): void {
+    const manual = this.manualPins[stem];
+    const outgoing = manual?.entry ?? this.current[stem]?.entry;
+    this.recordPreference({
+      kind: "release",
+      at: this.engine.now(),
+      bar: this.sessionBar,
+      stem,
+      from: outgoing?.phrase.id ?? null,
+      to: null,
+      fromTrack: outgoing?.kit.track_id ?? null,
+      toTrack: null,
+      section: outgoing?.phrase.section ?? null,
+      style: outgoing?.kit.style ?? null,
+      x: outgoing?.x ?? 0,
+      y: outgoing?.y ?? 0,
+      dropX: 0,
+      dropY: 0,
+    });
+    delete this.pins[stem];
+    delete this.pending[stem];
+    this.pinGeneration[stem] = (this.pinGeneration[stem] ?? 0) + 1;
+    this.pinning.delete(stem);
+    if (manual) {
+      try {
+        manual.voice.fadeOut(this.engine.now() + 0.02, 0.05);
+      } catch {
+        // The context may be closing.
+      }
+      delete this.manualPins[stem];
+      this.scheduledRuns[stem] = (this.scheduledRuns[stem] ?? [])
+        .filter((scheduled) => !(scheduled.manual && scheduled.voice === manual.voice));
+    }
+    this.onStatus?.(`${stem} released back to auto-mix`);
+  }
+
+  private nearest(stem: StemName, x: number, y: number): StemPoolEntry | null {
+    let best: StemPoolEntry | null = null;
+    let dist = Number.POSITIVE_INFINITY;
+    for (const entry of this.pools[stem]) {
+      if (this.failedKits.has(entry.kit.track_id)) continue;
+      const d = Math.hypot(entry.x - x, entry.y - y);
+      if (d < dist) {
+        dist = d;
+        best = entry;
+      }
+    }
+    return best;
+  }
+
+  /** Called every scheduler tick; promote scheduled runs, release pins. */
+  tick(now: number): void {
+    if (this.blockGrid.length > 24) {
+      this.blockGrid = this.blockGrid.filter((block) => block.endAt > now - 8);
+    }
+    for (const stem of STEMS) {
+      const list = (this.scheduledRuns[stem] ?? [])
+        .filter((scheduled) => scheduled.runEndAt > now - 0.5);
+      let active: ScheduledRun | null = null;
+      for (const scheduled of list) {
+        if (scheduled.startedAt <= now + 0.01
+          && (active === null || scheduled.startedAt >= active.startedAt)) {
+          active = scheduled;
+        }
+      }
+      if (active) {
+        let index = 0;
+        for (let i = 0; i < active.offsets.length; i++) {
+          if (now >= active.startedAt + active.offsets[i] - 0.02) index = i;
+        }
+        const entry = active.run[Math.min(index, active.run.length - 1)];
+        const current = this.current[stem];
+        if (!current || current.voice !== active.voice) {
+          this.current[stem] = {
+            entry,
+            voice: active.voice,
+            startedAt: active.startedAt,
+            blockIndex: active.blockIndex,
+            run: active.run,
+            offsets: active.offsets,
+            runEndAt: active.runEndAt,
+            preDur: active.preDur,
+            mainDurations: active.mainDurations,
+            slices: active.slices,
+            baseSemitones: active.baseSemitones,
+            pitchPoints: active.pitchPoints,
+          };
+        } else {
+          current.entry = entry;
+        }
+      }
+      this.scheduledRuns[stem] = list;
+
+      const manual = this.manualPins[stem];
+      if (manual && now >= manual.runEndAt - 0.02) {
+        // The partial manual commit has handed off.  Keep pins[stem] so the
+        // block scheduler can keep varying phrases inside the region until the
+        // 32-bar boundary.
+        delete this.manualPins[stem];
+        const playing = this.current[stem]?.entry;
+        if (playing) {
+          this.lastBlockEntries[stem] = playing;
+          this.lastBlockRuns[stem] = [playing];
+        }
+      }
+      const pin = this.pins[stem];
+      if (pin && this.blockStartBar >= pin.untilBar) {
+        // Safety net; beginBlock normally releases at the same boundary.
+        delete this.pins[stem];
+        delete this.manualPins[stem];
+        this.pinning.delete(stem);
+        const playing = this.current[stem]?.entry;
+        if (playing) {
+          this.lastBlockEntries[stem] = playing;
+          this.lastBlockRuns[stem] = [playing];
+        }
+        this.onStatus?.(`${stem} released back to auto-mix`);
+      }
+    }
+
+    // Learned-arc context: record each newly-playing drums phrase once, so
+    // beginBlock can offer the last <=6 windows to the arc model.
+    const drumsNow = this.current.drums;
+    if (drumsNow) {
+      const phraseId = drumsNow.entry.phrase.id;
+      if (this.arcHistory[this.arcHistory.length - 1] !== phraseId) {
+        this.arcHistory.push(phraseId);
+        if (this.arcHistory.length > 6) this.arcHistory.shift();
+      }
+    }
+  }
+
+  state(): StemRemixState[] {
+    return STEMS.map((stem) => {
+      const current = this.current[stem];
+      const pin = this.pins[stem] ?? null;
+      return {
+        stem,
+        phraseId: current?.entry.phrase.id ?? null,
+        trackId: current?.entry.kit.track_id ?? null,
+        section: current?.entry.section ?? "",
+        energy: current?.entry.energy ?? 0,
+        x: current?.entry.x ?? 0.5,
+        y: current?.entry.y ?? 0.5,
+        pin,
+        buffering: this.pinning.has(stem),
+      };
+    });
+  }
+
+  points(): NebulaPoint[] {
+    const points: NebulaPoint[] = [];
+    if (this.kitById.size > 0) {
+      for (const kit of this.kitById.values()) {
+        if (this.styleFilter !== null && !this.styleFilter.has(kit.style)) {
+          continue;
+        }
+        if (this.genreFilter !== null && !(kit.genre && this.genreFilter.has(kit.genre))) {
+          continue;
+        }
+        for (const phrase of kit.phrases) {
+          for (const stem of STEMS) {
+            if (!phrase.stems[stem]) continue;
+            const xy = phrase.stem_xy?.[stem] ?? { x: phrase.x ?? 0.5, y: phrase.y ?? 0.5 };
+            points.push({
+              x: xy.x,
+              y: xy.y,
+              stem,
+              trackId: kit.track_id,
+              phraseId: phrase.id,
+              kitId: kit.track_id,
+            });
+          }
+        }
+      }
+      if (points.length > 0) {
+        return points;
+      }
+    }
+    for (const stem of STEMS) {
+      for (const entry of this.pools[stem]) {
+        points.push({
+          x: entry.x,
+          y: entry.y,
+          stem,
+          trackId: entry.kit.track_id,
+          phraseId: entry.phrase.id,
+          kitId: entry.kit.track_id,
+        });
+      }
+    }
+    return points;
+  }
+
+  /**
+   * Live phrase pool for one stem: exactly the phrases a pin can select at the
+   * current tempo/key/style. Hardware knob control maps onto this list so every
+   * detent lands on a legal phrase instead of an arbitrary catalogue point.
+   */
+  stemPoolPoints(stem: StemName): NebulaPoint[] {
+    const points: NebulaPoint[] = [];
+    for (const entry of this.pools[stem]) {
+      points.push({
+        x: entry.x,
+        y: entry.y,
+        stem,
+        trackId: entry.kit.track_id,
+        phraseId: entry.phrase.id,
+        kitId: entry.kit.track_id,
+      });
+    }
+    return points;
+  }
+
+  activePoints(): NebulaPoint[] {
+    const points: NebulaPoint[] = [];
+    for (const stem of STEMS) {
+      const current = this.current[stem];
+      if (!current) continue;
+      points.push({
+        x: current.entry.x,
+        y: current.entry.y,
+        stem,
+        trackId: current.entry.kit.track_id,
+        phraseId: current.entry.phrase.id,
+        kitId: current.entry.kit.track_id,
+        active: true,
+      });
+    }
+    return points;
+  }
+
+  private chooseNeighbourCluster(): KitCluster | null {
+    if (!this.cluster) return null;
+    // BPM-ladder walk: clusters sorted by tempo (then key), step one rung
+    // per set, bouncing at the ends.  The old ±3 BPM / Camelot-neighbour rule
+    // trapped the session in a single tempo band forever (e.g. 129 BPM could
+    // only ever reach 126/129), so whole BPM groups of the bank were never
+    // in session.  Walking the ladder systematically brings every tempo
+    // group into range over successive sets; any-key transposition makes the
+    // key jump at the set boundary safe (fresh anchor record).
+    const ladder = this.clusters.filter(cluster => this.styleFilter === null || this.styleFilter.has(cluster.style)).sort((a, b) => {
+      if (a.bpm !== b.bpm) return a.bpm - b.bpm;
+      return a.key.localeCompare(b.key) || a.id.localeCompare(b.id);
+    });
+    const index = ladder.findIndex((c) => c.id === this.cluster!.id);
+    if (index < 0 || ladder.length < 2) return null;
+    let next = index + this.ladderDirection;
+    if (next < 0 || next >= ladder.length) {
+      this.ladderDirection = -this.ladderDirection;
+      next = index + this.ladderDirection;
+    }
+    if (next < 0 || next >= ladder.length) return null;
+    return ladder[next] ?? null;
+  }
+
+  stop(): void {
+    for (const stem of STEMS) {
+      const current = this.current[stem];
+      if (current) current.voice.fadeOut(this.engine.now(), 0.05);
+    }
+    for (const stem of STEMS) {
+      for (const voice of this.voicePool[stem] ?? []) voice.dispose();
+    }
+    this.voicePool = {};
+    this.current = {};
+    this.pending = {};
+    this.pins = {};
+    this.manualPins = {};
+    this.scheduledRuns = {};
+    this.lastBlockRuns = {};
+    this.pinning.clear();
+    this.pinGeneration = {};
+    this.audioWorker.dispose();
+  }
+}
+
+const SECTION_ENERGY: Record<string, number> = {
+  INTRO: 0.25,
+  BUILDUP: 0.65,
+  DROP: 0.90,
+  GROOVE_A: 0.83,
+  BREAKDOWN: 0.20,
+};
+
+const TARGET_RMS_DB: Record<StemName, number> = {
+  drums: -17, bass: -18, other: -20, vocals: -21,
+};
+
+/** Runtime level match for quiet phrases, capped at ~+7 dB, never baked. */
+function stemGain(stem: StemName, rmsDb: number): number {
+  const delta = TARGET_RMS_DB[stem] - rmsDb;
+  return Math.max(0.45, Math.min(2.2, Math.pow(10, delta / 20)));
+}
+
+function stemPan(stem: StemName, key: string): number {
+  if (stem === "bass" || stem === "drums") return 0;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  const side = (hash & 1) === 0 ? -1 : 1;
+  return stem === "vocals" ? side * 0.18 : side * 0.3;
+}

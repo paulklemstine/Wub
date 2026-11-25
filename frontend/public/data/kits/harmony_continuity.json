@@ -1,0 +1,31 @@
+{
+  "format": "wub-harmony-continuity-v1",
+  "version": 1,
+  "bars": 254927,
+  "pair_chroma_cos": {
+    "raw": {
+      "p10": 0.6547,
+      "p50": 0.8387
+    },
+    "triad": {
+      "p10": 0.0,
+      "p50": 0.2545
+    }
+  },
+  "boundary_chroma_cos": {
+    "p10": 0.898,
+    "p50": 0.9931
+  },
+  "root_agreement_rate": 0.2927,
+  "policy": {
+    "min_bar_pair_cos": 0.42,
+    "min_boundary_cos": 0.898,
+    "max_clash_penalty": 0.22
+  },
+  "report": {
+    "source": "data/processed/*.json (real 4-stem songs)",
+    "pair_rule": "minimum cosine between any two pitched-stem chroma vectors in one bar",
+    "triad": "root + inferred third/fifth (major/minor/sus), same representation as browser cell r/q",
+    "label_provenance": "acoustic chroma, not human annotation"
+  }
+}

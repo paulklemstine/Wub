@@ -9,7 +9,6 @@ import pytest
 from scripts.harvest_style_kits import (
     clean_slice,
     classify_track_style,
-    verify_audio_slices,
     STYLES,
     STYLE_METADATA,
 )
@@ -63,50 +62,41 @@ def test_clean_slice_dsp():
     assert len(truncated) == int(0.10 * sr)
 
 
-def test_slices_manifest_and_files():
-    """Verify that slices directory contains valid Opus audio files for all 4 stems."""
-    slices_dir = Path("frontend/public/data/slices")
-    assert slices_dir.exists()
+def test_kit_manifest_and_files():
+    """Kit build: every phrase has four decodable stem files with matching duration."""
+    base = Path("frontend/public/data/kits")
+    manifest_path = base / "kit_manifest.json"
+    assert manifest_path.exists(), "kit manifest missing"
 
-    passed, failed = verify_audio_slices(slices_dir)
-    assert failed == 0, f"{failed} slices failed audio verification"
-    assert passed >= 200, f"Expected at least 200 valid slices, found {passed}"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest.get("version") in (1, 2)
+    assert manifest.get("bars") == 4
+    if manifest.get("version") == 2:
+        assert manifest.get("clusters"), "cluster bank must expose its session pools"
+    kits = manifest.get("kits") or []
+    assert len(kits) >= 300, f"only {len(kits)} kits in the shipped bank"
 
-    # Verify each stem is represented in Opus slice files
-    for stem in ("drums", "bass", "other", "vocals"):
-        matching = list(slices_dir.glob(f"{stem}_*.opus"))
-        assert len(matching) > 0, f"No slices found for stem '{stem}'"
-
-    # Check chromatic bass coverage (12 pitches) per category
-    for cat in ["sub", "rolling", "stab", "sustained"]:
-        for p in range(12):
-            matches = list(slices_dir.glob(f"bass_{cat}_p{p}.opus")) + list(slices_dir.glob(f"bass_{cat}_p{p}_v*.opus"))
-            assert len(matches) > 0, f"Missing chromatic slice bass_{cat}_p{p}"
-
-    # Check vocal categories are present
-    for cat in ["chop", "hook", "call", "phrase"]:
-        matches = list(slices_dir.glob(f"vocals_{cat}_*.opus"))
-        assert len(matches) > 0, f"Missing vocal slices for category '{cat}'"
-
-    # Every slice URL in the standalone manifest must resolve to a real file
-    with open("frontend/public/data/standalone_patterns.json") as f:
-        data = json.load(f)
-    missing: list = []
-
-    def walk(o):
-        if isinstance(o, dict):
-            for k, v in o.items():
-                if k == "url" and isinstance(v, str) and not v.startswith("http"):
-                    if not (Path("frontend/public") / v).exists():
-                        missing.append(v)
-                else:
-                    walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-
-    walk(data)
-    assert not missing, f"{len(missing)} manifest URLs have no file: {missing[:5]}"
+    n_phrases = 0
+    for kit in kits:
+        assert float(kit["bpm"]) > 0
+        assert kit.get("key")
+        phrases = kit.get("phrases") or []
+        assert 4 <= len(phrases) <= 8, f"{kit['track_id']} has {len(phrases)} phrases"
+        for ph in phrases:
+            n_phrases += 1
+            assert len(ph["embedding"]) == 64
+            assert 3.0 <= float(ph["duration_sec"]) <= 20.0
+            for stem in ("drums", "bass", "other", "vocals"):
+                asset = ph["stems"][stem]
+                path = base / asset["file"]
+                assert path.exists(), f"missing kit stem {path}"
+                info = sf.info(str(path))
+                assert info.frames > 0
+                assert abs(info.duration - float(ph["duration_sec"])) < 0.03, (
+                    f"{path} duration {info.duration:.4f} vs {ph['duration_sec']:.4f}"
+                )
+                assert float(asset["peak"]) > 0.0
+    assert n_phrases >= 1000, f"only {n_phrases} phrases shipped"
 
 
 def test_standalone_patterns_manifest_style_kits():

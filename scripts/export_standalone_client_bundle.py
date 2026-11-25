@@ -571,11 +571,10 @@ def export_bundle() -> None:
     public_dir = Path("frontend/public/data")
     slices_dir = public_dir / "slices"
     loops_dir = public_dir / "loops"
-    phrases_dir = public_dir / "phrases"
     public_dir.mkdir(parents=True, exist_ok=True)
     slices_dir.mkdir(parents=True, exist_ok=True)
     loops_dir.mkdir(parents=True, exist_ok=True)
-    phrases_dir.mkdir(parents=True, exist_ok=True)
+    # phrases/ removed: slice-vocab synthesis replaces pre-rendered 4-bar phrase audio (saves ~108MB static room for global vocab)
 
     # 1. Copy Composing ML Weights
     src_weights = Path("data/composing_ml_weights.json")
@@ -644,29 +643,55 @@ def export_bundle() -> None:
         flush=True,
     )
 
-    # 3. Harvest Cohesive 4-Bar Multi-Stem Phrase Blocks (all stemmed artists + diverse A-Z catalog artists)
-    phrase_candidates = multistem_tracks[:32] + [t for t in all_loaded_tracks if len(t.stems_available) < 4][:28]
-    extracted_phrase_blocks = harvest_cohesive_phrase_blocks(phrase_candidates, phrases_dir, fallback_mp3s=fallback_mp3s)
-
-    # Build phrase_part_transitions ML map so the client follows consecutive song parts
+    # 3. Phrase blocks removed: global slice-vocab synthesis replaces pre-rendered
+    # 4-bar phrase audio. Keep empty structures for backward-compat client loading.
+    extracted_phrase_blocks: list = []
     phrase_part_transitions: Dict[str, Dict[str, float]] = {}
     phrase_track_ids = set()
-    for pb in extracted_phrase_blocks:
-        phrase_track_ids.add(pb.get("track_id", ""))
-        nxt_id = pb.get("next_phrase_id")
-        if nxt_id:
-            phrase_part_transitions[pb["id"]] = {nxt_id: 0.96}
 
     # 4. Harvest Whole 1-Bar Pattern Loops Across Stems (stratified across all artists)
     extracted_loops_manifest = harvest_whole_pattern_loops(multistem_tracks, loops_dir)
 
-    # 4. Harvest Pure Audio Slices (Zero Duplicates, Chromatic Bass/Other 0..11)
-    from scripts.harvest_pure_slices import harvest_pure_slices
-    extracted_slices_manifest = harvest_pure_slices(
-        Path("data/stems"),
-        Path("data/processed"),
-        slices_dir,
-    )
+    # 4. Global reusable slice vocabulary (replaces per-song pure-slice harvest).
+    # Built by scripts/build_global_vocabulary.py -> data/global_vocabulary.json.
+    # Fall back to legacy harvest only if global vocab missing (first-run bootstrap).
+    from pathlib import Path as _P
+    _gv_full = _P("data/global_vocabulary.json")
+    _gv_pub = public_dir / "global_vocabulary.json"
+    if _gv_full.exists():
+        import json as _json
+        _gv_raw = _json.loads(_gv_full.read_bytes())
+        extracted_slices_manifest = {}
+        for _st, _vlist in _gv_raw.get("vocab_by_stem", {}).items():
+            _by_cat: Dict[str, list] = {}
+            for _vs in _vlist:
+                _cat = str(_vs.get("category", _st)).split(":")[-1]
+                _url = _vs.get("url") or f"data/slices/{_vs.get('id')}.opus"
+                _by_cat.setdefault(_cat, []).append({
+                    "name": _vs.get("id"),
+                    "url": _url,
+                    "pitch": int(_vs.get("pitch", 0)),
+                    "centroid": float(_vs.get("centroid", 1200.0)),
+                    "duration": float(_vs.get("duration", 0.25)),
+                    "loudness": 0.90,
+                    "track_id": _vs.get("track_id", ""),
+                    "track_title": "",
+                    "segment_id": _vs.get("segment_id", ""),
+                    "start": float(_vs.get("start", 0.0)),
+                })
+            extracted_slices_manifest[_st] = _by_cat
+        try:
+            if _gv_full.resolve() != _gv_pub.resolve():
+                shutil.copy(_gv_full, _gv_pub)
+        except Exception:
+            pass
+    else:
+        from scripts.harvest_pure_slices import harvest_pure_slices
+        extracted_slices_manifest = harvest_pure_slices(
+            Path("data/stems"),
+            Path("data/processed"),
+            slices_dir,
+        )
 
     # 4b. Export Song-Intrinsic Vocabulary Opus Slices for ALL Stemmed Corpus Songs
     print("Exporting song-intrinsic slice vocabulary Opus files across ALL stemmed corpus songs...", flush=True)

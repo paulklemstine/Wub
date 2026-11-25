@@ -1,0 +1,375 @@
+{
+  "format": "wub-transition-cohort-v1",
+  "version": 1,
+  "tracks": 1891,
+  "boundaries": 61118,
+  "change_count": {
+    "inside": {
+      "0": 0.079,
+      "1": 0.2222,
+      "2": 0.3119,
+      "3": 0.2695,
+      "4": 0.1173
+    },
+    "section": {
+      "0": 0.0523,
+      "1": 0.1723,
+      "2": 0.2751,
+      "3": 0.2879,
+      "4": 0.2124
+    }
+  },
+  "p_3plus": {
+    "inside": 0.3869,
+    "section": 0.5003
+  },
+  "cohorts": [
+    {
+      "kind": "inside",
+      "stems": [
+        "bass",
+        "other",
+        "vocals"
+      ],
+      "p": 0.218,
+      "count": 9431
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "other",
+        "vocals"
+      ],
+      "p": 0.1283,
+      "count": 5549
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "drums",
+        "bass",
+        "other",
+        "vocals"
+      ],
+      "p": 0.1173,
+      "count": 5077
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "vocals"
+      ],
+      "p": 0.1099,
+      "count": 4756
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "bass",
+        "vocals"
+      ],
+      "p": 0.1097,
+      "count": 4746
+    },
+    {
+      "kind": "inside",
+      "stems": [],
+      "p": 0.079,
+      "count": 3420
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "bass",
+        "other"
+      ],
+      "p": 0.058,
+      "count": 2509
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "bass"
+      ],
+      "p": 0.0554,
+      "count": 2395
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "other"
+      ],
+      "p": 0.0549,
+      "count": 2377
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "drums",
+        "bass",
+        "vocals"
+      ],
+      "p": 0.0226,
+      "count": 976
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "drums",
+        "other",
+        "vocals"
+      ],
+      "p": 0.0193,
+      "count": 835
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "drums",
+        "bass",
+        "other"
+      ],
+      "p": 0.0097,
+      "count": 420
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "drums",
+        "vocals"
+      ],
+      "p": 0.0079,
+      "count": 340
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "drums",
+        "bass"
+      ],
+      "p": 0.0042,
+      "count": 183
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "drums",
+        "other"
+      ],
+      "p": 0.0039,
+      "count": 167
+    },
+    {
+      "kind": "inside",
+      "stems": [
+        "drums"
+      ],
+      "p": 0.002,
+      "count": 86
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "drums",
+        "bass",
+        "other",
+        "vocals"
+      ],
+      "p": 0.2124,
+      "count": 3792
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "bass",
+        "other",
+        "vocals"
+      ],
+      "p": 0.1965,
+      "count": 3508
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "other",
+        "vocals"
+      ],
+      "p": 0.1106,
+      "count": 1975
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "bass",
+        "vocals"
+      ],
+      "p": 0.0922,
+      "count": 1646
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "vocals"
+      ],
+      "p": 0.0778,
+      "count": 1389
+    },
+    {
+      "kind": "section",
+      "stems": [],
+      "p": 0.0523,
+      "count": 933
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "other"
+      ],
+      "p": 0.05,
+      "count": 892
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "bass",
+        "other"
+      ],
+      "p": 0.0492,
+      "count": 878
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "bass"
+      ],
+      "p": 0.0412,
+      "count": 736
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "drums",
+        "bass",
+        "vocals"
+      ],
+      "p": 0.0398,
+      "count": 710
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "drums",
+        "other",
+        "vocals"
+      ],
+      "p": 0.0327,
+      "count": 584
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "drums",
+        "bass",
+        "other"
+      ],
+      "p": 0.0189,
+      "count": 337
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "drums",
+        "vocals"
+      ],
+      "p": 0.0115,
+      "count": 206
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "drums",
+        "bass"
+      ],
+      "p": 0.0067,
+      "count": 120
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "drums",
+        "other"
+      ],
+      "p": 0.0048,
+      "count": 86
+    },
+    {
+      "kind": "section",
+      "stems": [
+        "drums"
+      ],
+      "p": 0.0033,
+      "count": 59
+    }
+  ],
+  "stem_change": {
+    "inside": {
+      "drums": 0.1868,
+      "bass": 0.5948,
+      "other": 0.6094,
+      "vocals": 0.7329
+    },
+    "section": {
+      "drums": 0.3302,
+      "bass": 0.6569,
+      "other": 0.6751,
+      "vocals": 0.7736
+    }
+  },
+  "energy_delta": {
+    "inside": {
+      "p10": -3.026,
+      "p50": 0.11,
+      "p90": 3.704
+    },
+    "section": {
+      "p10": -4.434,
+      "p50": 0.354,
+      "p90": 6.35
+    }
+  },
+  "chroma_cos": {
+    "inside": {
+      "p10": 0.949,
+      "p50": 0.993
+    },
+    "section": {
+      "p10": 0.929,
+      "p50": 0.988
+    }
+  },
+  "policy": {
+    "max_changes_inside": 2,
+    "max_changes_section": 3,
+    "min_changes_section": 1,
+    "pitch_cohort": [
+      "bass",
+      "other",
+      "vocals"
+    ]
+  },
+  "report": {
+    "source": "data/processed/*.json (real 4-stem songs)",
+    "section_labels": "wub_core.section_arcs.segment_sections",
+    "change_rule": "4-bar union onset Jaccard < 0.55 or presence delta > 0.18",
+    "label_provenance": "acoustic section detection, not human annotation",
+    "track_disjoint": true,
+    "note": "cohort priors only; no audio is regenerated or repitched"
+  },
+  "handoff": {
+    "enabled": true,
+    "probability": 0.22,
+    "max_per_source": 4,
+    "max_stems": 4,
+    "note": "rare deterministic-random full-source takeover at a section change"
+  }
+}

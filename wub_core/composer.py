@@ -294,6 +294,11 @@ class PatternComposer:
             target_grooves[stem] = self.model.sample_next_groove(
                 phrase_bar, stem, curr_g, rng=self.rng
             )
+        # Structural invariant: bar 8 is always a drum turnaround fill,
+        # regardless of what the learned weights sample (a phrase must close
+        # its arc before the next one starts).
+        if is_turnaround:
+            target_grooves["drums"] = "fill"
 
         # 2. Select patterns from Tier 1 PatternBank with Song Continuation Priority
         new_patterns: Dict[str, Optional[SequencerPattern]] = {}
@@ -303,16 +308,19 @@ class PatternComposer:
             self.lead_base_bar += 8
 
         if is_turnaround:
-            # Bar 8: Prefer the current song's consecutive bar 7 pattern or a same-track fill!
+            # Bar 8: a turnaround fill ALWAYS closes the 8-bar phrase arc
+            # (structural invariant, not a suggestion). Prefer a same-track
+            # fill so it stays in the song's voice; only fall back to the
+            # track's literal bar when no fill exists anywhere.
             track_bar = self.lead_base_bar + phrase_bar
             fill_pat = (
-                (self.bank.get_track_pattern(self.lead_track_id, "drums", track_bar) if self.lead_track_id else None)
-                or self.bank.pick_pattern(
+                self.bank.pick_pattern(
                     "drums", groove_type="fill", min_energy=0.5,
                     preferred_track_id=self.lead_track_id,
                     feedback_weights=feedback_weights, densify=densify, rng=self.rng,
                 )
                 or self.bank.create_groove_pattern("drums", "fill", preferred_track_id=self.lead_track_id, rng=self.rng)
+                or ((self.bank.get_track_pattern(self.lead_track_id, "drums", track_bar) if self.lead_track_id else None))
             )
             new_patterns["drums"] = self.bank.densify_pattern(fill_pat, rng=self.rng) if densify and fill_pat else fill_pat
             for s in ("bass", "other", "vocals"):

@@ -141,3 +141,46 @@ The background visualizer (`frontend/src/psychedelic_bg.ts`) runs a GPU fragment
    - `DMT`: High-contrast neon purples, hot magentas, cyber teals, and intense greens.
    - `LSD`: Shifting rainbow spectrum with liquid melting domain distortion.
    - `Mescaline`: Warm earthen golds, oranges, ambers, and fiery reds.
+
+### Seamless polar wrapping
+
+Radial shaders wrap their angular/lattice coordinates with mirror repetition
+(`mirrorWrap` in `psychedelic_bg.ts`) instead of raw `fract`, so value matches
+on both sides of a tile edge.  The SuperAcid "space tubes" star field hashes a
+wrapped angular cell index and the post-process kaleidoscope folds the full
+`TAU` period, so the polar cut at `atan(-π/π)` no longer produces a visible
+seam — the field reads like infinite wallpaper.
+
+### Floating eye + mouth Wub Creature
+
+The visualiser shows a single disembodied face: two eyes and a mouth, with no
+head outline, halo, bow or border.  `TamagotchiAvatar.renderFloatingFace()`
+drives it from the **vocals** stem only (`vocalsLevel`, the vocal waveform and
+the trained singing-head articulation).  Its position drifts across the
+lightshow canvas on a butterfly/figure-eight orbit around the centre: the same
+frequency bands that animate the background widen and lift the orbit and speed
+it up, while a depth-derived scale (0.72–1.34) swells the face as it swings
+toward the viewer.  The eye and mouth drawing is copied **verbatim** from the
+v0.2.315 arrangement (anime waveform eyes and the detailed red lipstick mouth
+with teeth, tongue and throat glow); `renderFloatingFace()` only supplies that
+context and the orbit position.  The face is drawn into the existing offscreen
+buffer and composited into `#lightshow-bear-overlay`, so no extra texture or
+per-frame readback is needed.
+
+### 3D camera subsystems (removed)
+
+The interactive **3D CAM** Wub Bear stage (`frontend/src/bear_3d_view.ts`) was
+removed. It was a full Three.js scene at device pixel ratio 2 with OrbitControls
+camera presets and two offscreen render targets, and it caused halting frame
+drops on low-end and software-GL machines. Nothing in `tamagotchi.ts` constructs
+it any more, and its `3D CAM` / `CAM` buttons and host element are gone from
+`index.html`. The 2D kawaii head remains the shipped avatar.
+
+The Voice Workshop's **3D vocal tract** view (`vocal_sim/tract_3d_view.ts`)
+survives, but is now built lazily:
+
+- **Lazy construction.** `SingingHeadPanel.ensureTract3D()` runs only when the
+  user first selects the 3D mode. Building the tract scene, its meshes and a
+  WebGL context at page load held GPU memory for a view most sessions never
+  open.
+- The 2D mid-sagittal side view is the default and costs nothing extra.

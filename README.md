@@ -12,6 +12,33 @@
 
 ---
 
+## 🎧 Engine
+
+The shipped `v0.2.x` site runs the **song-kit phrase jukebox**, not the older
+VQ/medoid slice synthesizer.
+
+- A kit is one real four-stem track. A phrase is a real 4-bar window cut from
+  that track, played at rate **1.0** with no resampling, time-stretch, or pitch
+  shift. The kit locks the session tempo and key.
+- Sets are **12 blocks** (48 bars). The 12th block is a drumless bridge; the
+  next kit preloads during the set and switches in the gap.
+- Phrase and kit choices are driven by the trained taste model
+  (`taste_scores.json`): per-kit transition matrices, phrase quality, and
+  top-10 next kits. A missing taste file falls back to rule-based selection.
+- Assets live under `frontend/public/data/kits/` (`kit_manifest.json`,
+  `taste_scores.json`, `kits/<track_id>/*.opus`). The current bank is 355 kits /
+  2,466 phrases / ~602 MB; the published site is kept under GitHub Pages' 1 GB
+  cap.
+
+The `JUKEBOX`, `SLICES`, and `PHRASES` buttons are retired in the shipped UI;
+those paths remain only as internal fallbacks. Full architecture, manifest
+schema, training commands, and metrics: **[`docs/KIT_ENGINE.md`](docs/KIT_ENGINE.md)**.
+
+The older slice/VQ descriptions elsewhere in this README document the legacy
+path, not the deployed kit engine.
+
+---
+
 ## 🌟 Highlights & Capabilities
 
 ### 🧠 1. Dual-Engine Architecture

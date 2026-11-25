@@ -28,7 +28,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train pattern and song composing ML models.")
     parser.add_argument("--processed", default="data/processed", help="Path to processed JSON analyses")
     parser.add_argument("--stems", default="data/stems", help="Path to stems directory")
-    parser.add_argument("--max-tracks", type=int, default=200, help="Max tracks to train on (0 = all)")
+    parser.add_argument("--max-tracks", type=int, default=0, help="Max tracks to train on (0 = all)")
     parser.add_argument("--audio-eval", type=int, default=8, help="Generic patterns to optimize against real audio")
     parser.add_argument("--out", default=str(COMPOSING_WEIGHTS_FILE), help="Output weights JSON")
     args = parser.parse_args()

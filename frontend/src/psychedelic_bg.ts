@@ -41,6 +41,12 @@ uniform int u_palette;  // 0: Neon Hyper, 1: Acid Rainbow, 2: Solar Amber, 3: Cy
 #define PI 3.14159265359
 #define TAU 6.28318530718
 
+// Mirror repetition is C0-continuous at every tile edge: fract() jumps from
+// 1 to 0, but the folded triangle meets itself.  Use it wherever a polar or
+// lattice coordinate wraps, so the field behaves like infinite wallpaper.
+float mirrorWrap(float x) { return abs(fract(x * 0.5) * 2.0 - 1.0); }
+vec2 mirrorWrap2(vec2 p) { return abs(fract(p * 0.5) * 2.0 - 1.0); }
+
 // 2D Rotation matrix
 mat2 rot(float a) {
   float s = sin(a), c = cos(a);
@@ -116,8 +122,9 @@ vec3 renderDMT(vec2 uv, float t) {
   float twist = t * 0.12 + u_mid * 0.3;
   float sectorAngle = TAU / sectors;
   float na = (a + twist) / sectorAngle;
-  // Continuous triangle wave reflection ensures seamless borderless angular wrapping without discontinuities
-  float wrappedA = (abs(fract(na) - 0.5) * 2.0 - 0.5) * sectorAngle;
+  // Continuous triangle reflection: the last tatum of one sector meets the
+  // first of the next with no jump, so the angular seam disappears.
+  float wrappedA = (mirrorWrap(na) - 0.5) * sectorAngle;
   p = vec2(cos(wrappedA), sin(wrappedA)) * r;
 
   // Multi-tier DMT liquid melting domain warping
@@ -249,13 +256,27 @@ void main() {
     float w1 = 0.5 + 0.5 * sin(morphCycle);
     float w2 = 0.5 + 0.5 * sin(morphCycle + 2.094);
     float w3 = 0.5 + 0.5 * sin(morphCycle + 4.188);
+
+    // Drop the weakest blend term once it is barely visible and renormalise.
+    // The weights are phases of one slow cycle, so one mode is always small;
+    // skipping its fractal evaluation is a large fill-rate win with no
+    // visible pop at this threshold.  The branch is uniform (all pixels see
+    // the same weights), so it does not diverge.
+    if (w1 <= w2 && w1 <= w3) {
+      if (w1 < 0.12) w1 = 0.0;
+    } else if (w2 <= w3) {
+      if (w2 < 0.12) w2 = 0.0;
+    } else if (w3 < 0.12) {
+      w3 = 0.0;
+    }
     float sumW = w1 + w2 + w3;
     w1 /= sumW; w2 /= sumW; w3 /= sumW;
 
-    vec3 cDmt = renderDMT(uv, t);
-    vec3 cLsd = renderLSD(uv, t);
-    vec3 cMes = renderMescaline(uv, t);
-    finalColor = cDmt * w1 + cLsd * w2 + cMes * w3;
+    vec3 blend = vec3(0.0);
+    if (w1 > 0.0) blend += renderDMT(uv, t) * w1;
+    if (w2 > 0.0) blend += renderLSD(uv, t) * w2;
+    if (w3 > 0.0) blend += renderMescaline(uv, t) * w3;
+    finalColor = blend;
   }
 
   // Hyper-saturated neon bloom & radiance curve to make colors intensely bright and pop
@@ -277,6 +298,7 @@ void main() {
 export class PsychedelicBackground {
   private canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext | null = null;
+  private graphicsAttempted = false;
   private program: WebGLProgram | null = null;
 
   // Uniform locations
@@ -297,9 +319,11 @@ export class PsychedelicBackground {
   private smoothTreble = 0;
   private smoothLevel = 0;
 
-  // State
+  // State.  The light show is opt-in: it is a full-screen fragment shader
+  // (three raymarched looks blended per pixel), so leaving it on by default
+  // burns the whole frame budget on a layer the UI mostly covers.
   private state: TripControllerState = {
-    enabled: true,
+    enabled: false,
     mode: "hybrid",
     palette: "neon",
     intensity: 1.4,
@@ -311,6 +335,17 @@ export class PsychedelicBackground {
   private lastTime = performance.now();
   private accumulatedTime = 0;
 
+  // Resolution budget.  The shader is fill-rate bound, so the canvas is
+  // rendered below CSS size and stretched by the compositor.  It starts
+  // conservative and adapts to the measured frame interval.
+  private renderScale = 0.65;
+  private readonly maxPixels = 800_000;
+  private readonly minScale = 0.30;
+  private readonly maxScale = 0.85;
+  private frameAccumSec = 0;
+  private frameSamples = 0;
+  private resizeQueued = false;
+
   constructor(canvasId = "psychedelic-bg") {
     let el = document.getElementById(canvasId) as HTMLCanvasElement | null;
     if (!el) {
@@ -319,22 +354,34 @@ export class PsychedelicBackground {
       document.body.insertBefore(el, document.body.firstChild);
     }
     this.canvas = el;
-    this.initWebGL();
+    this.canvas.addEventListener("webglcontextlost", () => {
+      this.gl = null;
+      this.program = null;
+      this.state.enabled = false;
+      this.applyVisibility();
+    });
     this.initResize();
+    this.applyVisibility();
   }
 
   private initWebGL(): void {
-    const gl =
-      this.canvas.getContext("webgl", {
+    if (this.graphicsAttempted) return;
+    this.graphicsAttempted = true;
+    let gl: WebGLRenderingContext | null = null;
+    try {
+      gl = this.canvas.getContext("webgl", {
         alpha: false,
         depth: false,
         stencil: false,
         antialias: false,
         powerPreference: "high-performance",
-      }) ||
-      (this.canvas.getContext("experimental-webgl") as WebGLRenderingContext | null);
-
+      }) || (this.canvas.getContext("experimental-webgl") as WebGLRenderingContext | null);
+    } catch {
+      // A browser may throw when it has blocked this page after context loss.
+    }
     if (!gl) {
+      this.state.enabled = false;
+      this.applyVisibility();
       console.warn("[PsychedelicBG] WebGL not supported; psychedelic background disabled.");
       return;
     }
@@ -402,23 +449,71 @@ export class PsychedelicBackground {
     return shader;
   }
 
+  private applyVisibility(): void {
+    this.canvas.style.display = this.state.enabled ? "block" : "none";
+  }
+
   private initResize(): void {
-    const resize = () => {
-      // Downscale slightly on high-density / 4K displays to preserve 60fps
-      const dpr = Math.min(1.25, window.devicePixelRatio || 1);
-      const w = Math.round(window.innerWidth * dpr);
-      const h = Math.round(window.innerHeight * dpr);
-      if (this.canvas.width !== w || this.canvas.height !== h) {
-        this.canvas.width = w;
-        this.canvas.height = h;
-      }
-    };
-    window.addEventListener("resize", resize);
-    resize();
+    window.addEventListener("resize", () => {
+      if (this.resizeQueued) return;
+      this.resizeQueued = true;
+      requestAnimationFrame(() => {
+        this.resizeQueued = false;
+        this.resizeCanvas();
+      });
+    });
+    this.resizeCanvas();
+  }
+
+  /**
+   * Size the drawing buffer from the CSS viewport, never above the pixel
+   * budget.  A 1080p window renders at ~0.73x; a 4K window at ~0.36x.  The
+   * canvas is stretched by CSS, which is invisible on a soft field shader and
+   * is the single biggest FPS win here (fill rate, not geometry, is the cost).
+   */
+  private resizeCanvas(): void {
+    const cssW = Math.max(1, window.innerWidth);
+    const cssH = Math.max(1, window.innerHeight);
+    const budgetScale = Math.sqrt(this.maxPixels / (cssW * cssH));
+    const scale = Math.min(this.renderScale, budgetScale);
+    const w = Math.max(1, Math.round(cssW * scale));
+    const h = Math.max(1, Math.round(cssH * scale));
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+    }
+  }
+
+  /**
+   * Adapt the render scale to the measured frame interval.  Hysteresis plus a
+   * one-second window keeps it from oscillating; the shader's own animation is
+   * time-based, so a resolution change never alters motion.
+   */
+  private adaptQuality(frameSec: number): void {
+    this.frameAccumSec += frameSec;
+    this.frameSamples += 1;
+    if (this.frameSamples < 60) return;
+    const avg = this.frameAccumSec / this.frameSamples;
+    this.frameAccumSec = 0;
+    this.frameSamples = 0;
+    if (avg > 0.022 && this.renderScale > this.minScale) {
+      this.renderScale = Math.max(this.minScale, this.renderScale - 0.10);
+      this.resizeCanvas();
+    } else if (avg < 0.014 && this.renderScale < this.maxScale) {
+      this.renderScale = Math.min(this.maxScale, this.renderScale + 0.05);
+      this.resizeCanvas();
+    }
   }
 
   public setState(patch: Partial<TripControllerState>): void {
+    const wasEnabled = this.state.enabled;
     this.state = { ...this.state, ...patch };
+    if (this.state.enabled !== wasEnabled) {
+      this.applyVisibility();
+      // Avoid a huge dt spike (and a time jump) after the canvas was idle.
+      this.lastTime = performance.now();
+      if (this.state.enabled) this.resizeCanvas();
+    }
   }
 
   public getState(): TripControllerState {
@@ -435,21 +530,20 @@ export class PsychedelicBackground {
     trebleLevel?: number;
     masterLevel?: number;
   }): void {
+    if (!this.state.enabled || document.hidden) return;
+    if (!this.graphicsAttempted) this.initWebGL();
     const gl = this.gl;
     const prog = this.program;
-    if (!gl || !prog) return;
-
-    if (!this.state.enabled) {
-      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-      gl.clearColor(0.04, 0.05, 0.08, 1.0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      return;
-    }
+    // Disabled or backgrounded: do not touch the GL context at all.  The
+    // canvas is display:none, so the static CSS gradient shows through.
+    if (!gl || !prog || !this.state.enabled || document.hidden) return;
 
     const now = performance.now();
-    const dt = Math.min(0.1, (now - this.lastTime) / 1000);
+    const frameSec = Math.max(0, (now - this.lastTime) / 1000);
+    const dt = Math.min(0.1, frameSec);
     this.lastTime = now;
     this.accumulatedTime += dt;
+    this.adaptQuality(frameSec);
 
     // Audio reactivity with exponential smoothing
     let targetBass = 0;

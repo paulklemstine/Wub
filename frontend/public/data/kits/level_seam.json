@@ -1,0 +1,37 @@
+{
+  "format": "wub-level-seam-v1",
+  "version": 1,
+  "window_sec": 0.02,
+  "correction": {
+    "drums": 1.12,
+    "bass": 0.9947,
+    "other": 1.0207,
+    "vocals": 0.9358
+  },
+  "report": {
+    "drums": {
+      "phrases": 3670,
+      "median_head": 0.03967,
+      "median_tail": 0.06859,
+      "raw_ratio": 1.729
+    },
+    "bass": {
+      "phrases": 3670,
+      "median_head": 0.10425,
+      "median_tail": 0.1037,
+      "raw_ratio": 0.9947
+    },
+    "other": {
+      "phrases": 3670,
+      "median_head": 0.04665,
+      "median_tail": 0.04761,
+      "raw_ratio": 1.0207
+    },
+    "vocals": {
+      "phrases": 3670,
+      "median_head": 0.02019,
+      "median_tail": 0.0189,
+      "raw_ratio": 0.9358
+    }
+  }
+}

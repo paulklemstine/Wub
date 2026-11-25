@@ -10,6 +10,9 @@
 
 import type { StemName } from "./types";
 import { AudioEngine } from "./audio_engine";
+import { KitPlayer } from "./kit_player";
+import type { Kit, KitBlockResult, KitManifest, KitPhrase, KitSteering } from "./kit_player";
+import type { NebulaPoint } from "./visualizer";
 
 export interface SerializedPattern {
   id: string;
@@ -59,6 +62,7 @@ export interface SliceManifestItem {
   vowel?: string;
   track_title?: string;
   loudness?: number;
+  loudDb?: number; // analysis loud_max in dB (preferred over 0..1 loudness placeholder)
   track_id: string;
   segment_id: string;
   start?: number;
@@ -70,6 +74,7 @@ export interface SliceAsset {
   centroid: number;
   duration: number;
   loudness: number;
+  loudDb?: number; // analysis loud_max in dB; -14 = neutral (see loudnessNormalizeGain)
   name: string;
   vowel?: string;
   trackTitle?: string;
@@ -240,6 +245,46 @@ export interface CuratedSongKit {
 
 // Semitone pitch constants: 0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B
 export const ROOT_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+// Global reusable slice vocabulary (two-stage compression: per-song medoids -> global KMeans).
+// Stored static at data/global_vocabulary.json, audio at data/slices/g_{stem}_*.opus.
+// Playback pitch-shifts live with playbackRate=2^(shift/12), |shift|<=6.
+export interface GlobalVocabItem {
+  id: string;
+  stem: string;
+  category: string;
+  pitch: number;
+  duration: number;
+  clarity: number;
+  centroid: number;
+  track_id: string;
+  segment_id: string;
+  start: number;
+  loud_max?: number; // analysis loud_max in dB for loudness normalization
+  url: string;
+}
+
+export interface GlobalVocabularyManifest {
+  version: number;
+  budget: Record<string, number>;
+  total: number;
+  vocab_by_stem: Record<string, GlobalVocabItem[]>;
+}
+
+export interface GlobalPatternsManifest {
+  version: number;
+  total_bars: number;
+  tracks: number;
+  bar_prototypes: Record<string, Array<{ signature: string; count: number; tokens: Array<string | null> }>>;
+  bar_transitions: Record<string, Record<string, Record<string, number>>>;
+  slice_bigrams: Record<string, Record<string, Record<string, number>>>;
+  joint_tuples?: Array<{ sig: string; count: number; pmi: number }>;
+  call_response?: Record<string, Record<string, Record<string, number>>>;
+  section_arcs?: {
+    arcs: Array<{ sections: string[]; count: number }>;
+    durations: Record<string, { mean: number; std: number; count: number }>;
+  };
+}
 
 // -----------------------------------------------------------------------------
 // 4 Map-Territory Quadrants & Sound Territories
@@ -2280,9 +2325,13 @@ export class ClientSongArranger {
     }
   }
 
-  public setSection(section: string): void {
+  public setSection(section: string, durationBars?: number): void {
     this.currentSection = section;
     this.barInSection = 0;
+    if (typeof durationBars === "number" && Number.isFinite(durationBars)) {
+      this.sectionDuration = Math.max(4, Math.min(32, Math.round(durationBars)));
+      return;
+    }
     if (section === "GROOVE_A" || section === "DROP") {
       this.sectionDuration = 16;
     } else if (section === "INTRO" || section === "BREAKDOWN") {
@@ -2442,6 +2491,14 @@ export class ClientAdversarialRejectionClassifier {
 // -----------------------------------------------------------------------------
 
 export class ClientGrooveboxConductor {
+  // Single switch for the M1 kit asset base.  Default is the same-origin
+  // `data/kits` (dev server + local `vite preview`).  CI sets
+  // `VITE_KIT_BASE` to raw.githubusercontent.com at the pinned commit SHA
+  // (`.../frontend/public/data/kits`) so the 708 MB / 20k+ file bank never
+  // goes through the Pages sync — Pages ships only the app shell.
+  private static readonly KIT_BASE_PATH: string =
+    import.meta.env.VITE_KIT_BASE ?? "data/kits";
+
   private engine: AudioEngine;
   private synth: WebAudioSliceSynthesizer;
   private phraseModel: ClientMarkovPhraseModel;
@@ -2479,6 +2536,7 @@ export class ClientGrooveboxConductor {
     vocals: { x: 0.35, y: 0.72 },
     other: { x: 0.35, y: 0.72 },
   };
+  private userSteeredStems: Set<StemName> = new Set();
 
   // Dynamic Sidechain Nodes
   private bassSidechainGain: GainNode | null = null;
@@ -2499,7 +2557,28 @@ export class ClientGrooveboxConductor {
     other: 0,
   };
 
-  public playbackMode: "jukebox" | "slices" | "phrase_blocks" = "jukebox";
+  public playbackMode: "jukebox" | "slices" | "phrase_blocks" | "kit" = "kit";
+  private kitPlayer: KitPlayer | null = null;
+  private pendingSongMode: "song" | "morph" = "song";
+  private kitLoadStarted: boolean = false;
+  private kitAudioActive: boolean = false;
+  private kitFailureLogged: boolean = false;
+  private userBpmOverride: number | null = null;
+  // Genre (style) filter: null = all styles.  genreStyles lists the styles
+  // present in the bank (from the manifest clusters), surfaced to the UI
+  // through onGenreStyles.
+  private kitManifest: KitManifest | null = null;
+  private styleFilter: Set<string> | null = null;
+  public genreStyles: string[] = [];
+  public onGenreStyles?: (styles: string[]) => void;
+  // MusicBrainz genre filter: null = all.  mbGenres lists the buckets
+  // present in the bank, surfaced through onMbGenreStyles.
+  private mbGenreFilter: Set<string> | null = null;
+  public mbGenres: string[] = [];
+  public onMbGenreStyles?: (genres: string[]) => void;
+  private staticBundleSkippedForKit: boolean = false;
+  private staticBundleLoaded: boolean = false;
+  private staticBundleBasePath: string = "data";
   private stemMixLevels: Record<StemName, number> = { drums: 1.0, bass: 1.0, other: 1.0, vocals: 1.0 };
   private sliceRegistry: Map<string, SliceAsset[]> = new Map();
   private sliceById: Map<string, SliceAsset> = new Map();
@@ -2521,6 +2600,18 @@ export class ClientGrooveboxConductor {
   private loadedCatalogShards: Set<number> = new Set();
   private catalogShardLoads: Map<number, Promise<boolean>> = new Map();
   private catalogVocabLoaded: Set<string> = new Set();
+  // Global reusable slice vocabulary (data/global_vocabulary.json). Lazy audio decode.
+  private globalVocab: GlobalVocabularyManifest | null = null;
+  private globalVocabById: Map<string, GlobalVocabItem> = new Map();
+  private globalPatterns: GlobalPatternsManifest | null = null;
+  // Play-path stats: proves which brain is actually driving the speakers.
+  public playStats = { globalBars: 0, legacyBars: 0, loopBars: 0 };
+  // Global-bar planner state: hold each bar 4 bars for long-phrase feel
+  private globalBarSig: Record<StemName, string | null> = { drums: null, bass: null, other: null, vocals: null };
+  private globalBarHeld: Record<StemName, number> = { drums: 4, bass: 4, other: 4, vocals: 4 };
+  // Section journey state: follow mined full-song arcs instead of Markov hops
+  private activeJourney: string[] | null = null;
+  private journeyIdx: number = 0;
   private nextCatalogSongId?: string;
   private catalogPrefetching: boolean = false;
   private catalogSongActive: boolean = false;
@@ -2532,6 +2623,11 @@ export class ClientGrooveboxConductor {
   private jointTemperature: number = 0.9;
   private jointMaxCopyRun: number = 4;
   private lastComposedSection: string = "INTRO";
+  // Phase-2 switches (A/B evaluation via ?joint=0&harm=0 URL params)
+  public jointEnabled: boolean = true;
+  public harmonicFitEnabled: boolean = true;
+  private lastChordRoot: number = 0;
+  private lastChordMinor: boolean = false;
   private phraseBarCount: number = 0;
   private totalBarsPlayed: number = 0;
   private recentLoops: Record<StemName, string[]> = {
@@ -2552,6 +2648,22 @@ export class ClientGrooveboxConductor {
   private isRunning: boolean = false;
   private timer: number | null = null;
   private nextStepTime: number = 0;
+  private nextKitBlockTime: number = 0;
+  private lastKitBlockDurationSec: number = 0;
+  private kitBlockLogQueue: Array<{ at: number; result: KitBlockResult }> = [];
+  /** Fired when a kit block becomes due, with the phrase's nebula coordinate. */
+  public onKitPhrase?: (p: { x: number; y: number; at: number }) => void;
+  /** Per-stem active phrase coordinates (remix mode). */
+  public onStemPhrases?: (points: Array<{ stem: StemName; x: number; y: number; phraseId: string; at: number }>) => void;
+  /** Hidden transition telemetry: fired when a kit block becomes due. */
+  public onKitTransition?: (at: number, result: KitBlockResult) => void;
+  private kitSteeringDirty: boolean = false;
+  private onKitSetChange?: (info: {
+    kit: Kit;
+    blocksPlayed: number;
+    nextKit: Kit | null;
+    blocksLeft: number;
+  }) => void;
   private currentBpm: number = 126;
   private onMetaCallback?: (meta: any, atAudioSec: number, step: number, totalSteps: number) => void;
   private activeSongKit: CuratedSongKit | null = null;
@@ -2577,6 +2689,207 @@ export class ClientGrooveboxConductor {
     this.loadRecentTracksFromStorage();
     this.initSidechain(ctx);
     this.initDefaultPatterns();
+    this.ensureKitPlayer();
+  }
+
+  // ---------------------------------------------------------------------------
+  // M1 Kit Player: locked 4-bar real stem phrases, no resampling.
+  // ---------------------------------------------------------------------------
+
+  /** True while the legacy jukebox/phrase path owns audio, including kit boot fall-through. */
+  private get legacyAudioMode(): boolean {
+    return this.playbackMode === "jukebox"
+      || this.playbackMode === "phrase_blocks"
+      || (this.playbackMode === "kit" && !this.kitAudioActive);
+  }
+
+  /** Lazily load the kit manifest + first kit once the audio engine exists. */
+  private ensureKitPlayer(): void {
+    if (this.kitPlayer !== null || this.kitLoadStarted || !this.engine.ready) return;
+    this.kitLoadStarted = true;
+    const player = new KitPlayer(this.engine);
+    player.setSongMode(this.pendingSongMode);
+    if (this.userBpmOverride !== null) {
+      player.setBpm(this.userBpmOverride, true);
+    }
+    this.kitPlayer = player;
+    void (async () => {
+      try {
+        const manifest = await player.loadManifest(ClientGrooveboxConductor.KIT_BASE_PATH);
+        await player.loadTasteScores(ClientGrooveboxConductor.KIT_BASE_PATH);
+        if (manifest.kits.length === 0) throw new Error("Kit manifest contains no kits");
+        this.kitManifest = manifest;
+        const styles = [...new Set((manifest.clusters ?? []).map((c) => c.style).filter(Boolean))].sort();
+        this.genreStyles = styles;
+        this.onGenreStyles?.(styles);
+        const genres = [...new Set(manifest.kits.map((k) => k.genre).filter((g): g is string => Boolean(g) && g !== "unclassified"))].sort();
+        this.mbGenres = genres;
+        this.onMbGenreStyles?.(genres);
+        await this.startKitSession();
+      } catch (err) {
+        this.handleKitFailure(err);
+      }
+    })();
+  }
+
+  /** Pick the first kit for the (filtered) pool and start the session. */
+  /** Pick the first kit for the (filtered) pool and start the session.
+   *  Tokenized: when genre flips stack restarts, only the newest one lands —
+   *  stale starts bail before publishing their locks/clocks. */
+  private async startKitSession(): Promise<void> {
+    const player = this.kitPlayer;
+    const manifest = this.kitManifest;
+    if (player === null || manifest === null) return;
+    const gen = ++this.kitSessionGen;
+    const stale = () => gen !== this.kitSessionGen;
+    // Pick a full-length kit at random so each session starts on a different
+    // record instead of always manifest order (which is track-id sorted).
+    const filtered = manifest.kits.filter(
+      (k) => k.phrases.length >= 6
+        && (this.styleFilter === null || this.styleFilter.has(k.style))
+        && (this.mbGenreFilter === null || (k.genre ? this.mbGenreFilter.has(k.genre) : false)),
+    );
+    const pool = filtered.length > 0 ? filtered : manifest.kits;
+    // Prefer kits whose DROP phrase is actually hotter than the groove;
+    // a weak "DROP" label is what made builds loop instead of dropping.
+    const strongDrop = pool.filter(
+      (k) =>
+        k.phrases.some((ph) => ph.section === "DROP" && ph.energy >= 0.8) &&
+        k.phrases.some((ph) => ph.section === "GROOVE_A")
+    );
+    const choices = strongDrop.length > 0 ? strongDrop : (pool.length > 0 ? pool : manifest.kits);
+    const firstKit = choices[Math.floor(Math.random() * choices.length)];
+    await player.loadKit(firstKit, this.styleFilter, this.mbGenreFilter);
+    if (stale()) return;
+    this.kitAudioActive = true;
+    if (this.playbackMode === "kit") {
+      this.applyKitLock();
+      this.resetKitBlockClock();
+      if (this.isRunning) {
+        this.scheduleKitBlocks(this.engine.now());
+      }
+      console.info("[KitPlayer] Kit mode active — 4-bar real stem phrases at rate 1.0 (no resampling)");
+    }
+  }
+
+  /** Browser timer used to collapse rapid genre flips into one restart. */
+  private genreDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private kitSessionGen = 0;
+
+  /**
+   * Apply a style selection (null/empty = all styles) and restart the kit
+   * session in the narrowed pool.  The old set keeps playing while the new
+   * anchors decode (no transport stop); the switch lands through the per-voice
+   * hand-off.  Before the player boots, this only stores the filter for the
+   * upcoming start.
+   */
+  public applyGenreSelection(styles: Iterable<string> | null): void {
+    const list = styles ? [...new Set(styles)] : [];
+    this.styleFilter = list.length > 0 ? new Set(list) : null;
+    this.restartKitSetDebounced();
+  }
+
+  /** Apply a MusicBrainz-genre selection (null/empty = all) — same restart
+   *  semantics as the style filter, narrowing the pool to matching genres. */
+  public applyMbGenreSelection(genres: Iterable<string> | null): void {
+    const list = genres ? [...new Set(genres)] : [];
+    this.mbGenreFilter = list.length > 0 ? new Set(list) : null;
+    this.restartKitSetDebounced();
+  }
+
+  /**
+   * Debounced restarts: rapid clicks collapse into one restart.  Each restart
+   * supersedes the previous start (tokenized in startKitSession), and the
+   * running session keeps ringing until the new set lands.
+   */
+  private restartKitSetDebounced(): void {
+    if (this.genreDebounceTimer !== null) clearTimeout(this.genreDebounceTimer);
+    this.genreDebounceTimer = setTimeout(() => {
+      this.genreDebounceTimer = null;
+      if (this.kitPlayer === null || !this.kitAudioActive) return;
+      const gen = ++this.kitSessionGen;
+      const label = `style=${this.styleFilter === null ? "all" : [...this.styleFilter].sort().join(" + ")}`
+        + ` genre=${this.mbGenreFilter === null ? "all" : [...this.mbGenreFilter].sort().join(" + ")}`;
+      console.info(`[KitPlayer] Filter update: ${label}`);
+      void (async () => {
+        try {
+          await this.startKitSession();
+          // A newer flip superseded us while starting: leave the field to it.
+          if (this.kitSessionGen !== gen) return;
+          if (this.isRunning) this.scheduleKitBlocks(this.engine.now());
+        } catch (err) {
+          if (this.kitSessionGen === gen) this.handleKitFailure(err);
+        }
+      })();
+    }, 900);
+  }
+
+  private handleKitFailure(err: unknown): void {
+    this.kitPlayer = null;
+    this.kitAudioActive = false;
+    if (this.kitFailureLogged) return;
+    this.kitFailureLogged = true;
+    console.warn("[KitPlayer] Load/decode failed — falling back to jukebox mode.", err);
+    if (this.playbackMode === "kit") {
+      this.setPlaybackMode("jukebox");
+      this.syncPlaybackModeButtons("jukebox");
+    }
+  }
+
+  /** Keep the ENGINE selector honest if the kit falls back programmatically. */
+  private syncPlaybackModeButtons(mode: string): void {
+    if (typeof document === "undefined") return;
+    try {
+      document.querySelectorAll<HTMLButtonElement>("[data-playback]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.playback === mode);
+      });
+    } catch {
+      // Non-browser context; the engine mode is still correct internally.
+    }
+  }
+
+  /** Lock session tempo and harmonic centre to the loaded kit. */
+  private applyKitLock(): void {
+    const player = this.kitPlayer;
+    const kit = player?.currentKit;
+    if (!kit) return;
+    if (this.userBpmOverride !== null) {
+      player.setBpm(this.userBpmOverride, true);
+    }
+    // Use the user's requested tempo if pinned, else the tempo fitted to the
+    // actual phrase cut lengths so the 4-bar grid matches the audio.
+    const sessionBpm = this.userBpmOverride ?? player?.fitBpm ?? kit.bpm;
+    this.currentBpm = Math.max(60, Math.min(200, sessionBpm));
+    this.engine.setTargetBpm(this.currentBpm);
+    const camelot = this.camelotCodeForKey(kit.key);
+    if (camelot) {
+      this.currentCamelotCode = camelot;
+      this.currentTemplateIndex = 0;
+      this.barsInCurrentKey = 0;
+      this.activeProgression = buildProgressionFromKey(CAMELOT_KEYS[camelot], 0);
+    }
+    this.activeTrackId = kit.track_id;
+    console.info(
+      `[KitPlayer] Session lock: ${this.currentBpm.toFixed(2)} BPM • ${kit.key}${camelot ? ` (${camelot})` : ""} • kit ${kit.track_id}`
+    );
+  }
+
+  private camelotCodeForKey(keyName: string): string | null {
+    const match = /^([A-Ga-g])([#b♯♭]?)\s*(major|minor|maj|min)$/.exec(keyName.trim());
+    if (!match) return null;
+    const accidental = match[2] === "♯" ? "#" : match[2] === "♭" ? "b" : match[2];
+    const rootName = `${match[1].toUpperCase()}${accidental}`;
+    const rootPitches: Record<string, number> = {
+      C: 0, "C#": 1, Db: 1, D: 2, "D#": 3, Eb: 3, E: 4, F: 5,
+      "F#": 6, Gb: 6, G: 7, "G#": 8, Ab: 8, A: 9, "A#": 10, Bb: 10, B: 11,
+    };
+    const rootPitch = rootPitches[rootName];
+    if (rootPitch === undefined) return null;
+    const isMinor = match[3].toLowerCase().startsWith("min");
+    for (const info of Object.values(CAMELOT_KEYS)) {
+      if (info.rootPitch === rootPitch && info.isMinor === isMinor) return info.code;
+    }
+    return null;
   }
 
   private loadRecentTracksFromStorage(): void {
@@ -2634,6 +2947,12 @@ export class ClientGrooveboxConductor {
    * Guides and steers the timbre, texture, and pattern sliding of a stem
    * based on reticule coordinates (0..1).
    */
+  /** Release a reticle: stop treating it as a user steering input. */
+  public clearReticleSteering(stem: StemName): void {
+    this.userSteeredStems.delete(stem);
+    this.kitPlayer?.releaseStemPin(stem);
+  }
+
   public setReticleSteering(stem: StemName, x: number, y: number, isUserDrag: boolean = false): void {
     const cx = Math.max(0, Math.min(1, x));
     const cy = Math.max(0, Math.min(1, y));
@@ -2642,8 +2961,22 @@ export class ClientGrooveboxConductor {
     // Pure acoustic slices: keep filters transparently wide open at 20 kHz for maximum punch, clarity and grit
     this.engine.setStemFilter(stem, 20000, 0.7);
 
-    // Dynamic Reticule Slice Steering: update slices when user drags the reticle (or on passive startup before playback)
-    this.updateStemSlicesForReticle(stem, { x: cx, y: cy }, isUserDrag);
+    if (isUserDrag) {
+      this.userSteeredStems.add(stem);
+      if (this.kitPlayer?.remixActive) {
+        this.kitPlayer.setStemTarget(stem, cx, cy);
+        return;
+      }
+    }
+
+    if (this.playbackMode === "kit") {
+      // Kit mode uses reticles as a phrase-selection bias; the legacy slice
+      // registry and pattern update are intentionally skipped.
+      if (isUserDrag) this.kitSteeringDirty = true;
+    } else {
+      // Dynamic Reticule Slice Steering: update slices when user drags the reticle (or on passive startup before playback)
+      this.updateStemSlicesForReticle(stem, { x: cx, y: cy }, isUserDrag);
+    }
   }
 
   public setTrackStemPositions(positions: Map<string, { x: number; y: number }>): void {
@@ -2706,9 +3039,13 @@ export class ClientGrooveboxConductor {
   }
 
   public async loadStaticBundle(basePath: string = "data"): Promise<boolean> {
+    this.staticBundleBasePath = basePath;
+    if (this.staticBundleLoaded && !this.staticBundleSkippedForKit) {
+      return true;
+    }
     try {
       // 1. Fetch Composing ML Weights
-      const wRes = await fetch(`${basePath}/composing_ml_weights.json`);
+      const wRes = await this.fetchWithRetry(`${basePath}/composing_ml_weights.json`);
       if (wRes.ok) {
         const weights = (await wRes.json()) as ComposingMLWeights;
         this.phraseModel.updateWeights(weights);
@@ -2721,7 +3058,7 @@ export class ClientGrooveboxConductor {
       }
 
       // 2. Fetch Standalone Patterns & Slices Manifest
-      const pRes = await fetch(`${basePath}/standalone_patterns.json`);
+      const pRes = await this.fetchWithRetry(`${basePath}/standalone_patterns.json`);
       if (pRes.ok) {
         this.manifest = (await pRes.json()) as StandaloneManifest;
         if (this.manifest.stem_cohesion_weights && !this.stemCohesionWeights) {
@@ -2745,19 +3082,29 @@ export class ClientGrooveboxConductor {
         }
         // Initialize default active patterns with the nearest real patterns from the authentic manifest
         this.initDefaultPatterns();
-        // 1. Await priority 4-part cohesive song chains FIRST before queuing hundreds of slice/loop HTTP fetches!
-        // This guarantees complete 4-part (16-bar) songs are in memory immediately when Play is clicked.
+        // Register slice metadata in-memory immediately (zero network requests)
+        this.registerManifestSliceMetadata();
+        // Load the full-corpus catalog index (every analyzed song)
+        this.catalogBasePath = basePath;
+        void this.loadFullCatalog(basePath).then(() => {
+          if (this.playbackMode !== "kit") {
+            this.prefetchNextCatalogSong();
+          }
+        });
+        if (this.playbackMode === "kit") {
+          this.staticBundleSkippedForKit = true;
+          return true;
+        }
+        // Legacy slice/jukebox mode only: load optional loops & phrase blocks with rate-limit protection
         await this.preloadPhraseBlocks(basePath, true);
-        // 2. Background load remaining song chains, slice vocabulary, and 1-bar loops without starving phrase playback
         void (async () => {
           await this.preloadPhraseBlocks(basePath, false);
           await this.preloadAudioSlices(basePath);
           await this.preloadPatternLoops(basePath);
         })();
-        // 3. Load the full-corpus catalog index (every analyzed song) and prefetch a fresh catalog song
-        this.catalogBasePath = basePath;
-        void this.loadFullCatalog(basePath).then(() => this.prefetchNextCatalogSong());
       }
+      this.staticBundleLoaded = true;
+      this.staticBundleSkippedForKit = false;
       return true;
     } catch (err) {
       console.warn("[Client ML] Bundle load failed, using algorithmic synthesizer fallback:", err);
@@ -2779,7 +3126,7 @@ export class ClientGrooveboxConductor {
 
   private async loadFullCatalog(basePath: string): Promise<void> {
     try {
-      const res = await fetch(`${basePath}/full_catalog_manifest.json`);
+      const res = await this.fetchWithRetry(`${basePath}/full_catalog_manifest.json`);
       if (!res.ok) return;
       const cat = (await res.json()) as FullCatalogManifest;
       if (!cat || !Array.isArray(cat.songs)) return;
@@ -2800,6 +3147,640 @@ export class ClientGrooveboxConductor {
     }
   }
 
+  /** Loads the global reusable slice vocabulary (data/global_vocabulary.json).
+   * Merges entries into manifest.slices so existing preload + synthesis paths reuse them,
+   * and registers global IDs in sliceById metadata for hierarchical (bar + tatum) generation. */
+  public async loadGlobalVocabulary(basePath: string = "data"): Promise<boolean> {
+    try {
+      const res = await this.fetchWithRetry(`${basePath}/global_vocabulary.json`);
+      if (!res.ok) return false;
+      const gv = (await res.json()) as GlobalVocabularyManifest;
+      if (!gv || !gv.vocab_by_stem) return false;
+      this.globalVocab = gv;
+      this.globalVocabById.clear();
+      for (const [stem, list] of Object.entries(gv.vocab_by_stem)) {
+        for (const vs of list || []) {
+          this.globalVocabById.set(vs.id, vs as GlobalVocabItem);
+        }
+      }
+      // Merge into manifest.slices grouped by short category for existing preload path
+      if (this.manifest) {
+        if (!this.manifest.slices) this.manifest.slices = {} as StandaloneManifest["slices"];
+        for (const stem of Object.keys(gv.vocab_by_stem) as StemName[]) {
+          const byCat: Record<string, typeof gv.vocab_by_stem[string]> = {};
+          for (const vs of gv.vocab_by_stem[stem] || []) {
+            const cat = (vs.category || stem).split(":").pop() || "default";
+            (byCat[cat] = byCat[cat] || []).push(vs);
+          }
+          const target = this.manifest.slices[stem] || (this.manifest.slices[stem] = {});
+          for (const [cat, arr] of Object.entries(byCat)) {
+            const existing = new Set((target[cat] || []).map((x) => x.name));
+            const merged = [...(target[cat] || [])];
+            for (const vs of arr) {
+              const item = {
+                name: vs.id,
+                url: vs.url || `data/slices/${vs.id}.opus`,
+                pitch: vs.pitch,
+                centroid: vs.centroid,
+                duration: vs.duration,
+                loudness: 0.9,
+                loudDb: typeof vs.loud_max === "number" ? vs.loud_max : -14,
+                track_id: vs.track_id,
+                trackTitle: vs.track_id,
+                segment_id: vs.segment_id,
+                start: vs.start,
+              };
+              if (!existing.has(vs.id)) merged.push(item);
+            }
+            // Highest clarity first so preloadAudioSlices (cap 128/cat) keeps the best
+            merged.sort((a, b) => (b as { clarity?: number }).clarity as number - ((a as { clarity?: number }).clarity as number || 0));
+            target[cat] = merged as typeof target[string];
+          }
+        }
+      }
+      console.info(`[Client ML] Global vocab ready: ${gv.total} reusable slices.`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Nearest global slice for a stem + pitch-shift in semitones (-6..6). Live transposition. */
+  public pickGlobalSlice(stem: StemName, targetPitch: number): { item: GlobalVocabItem; shift: number } | null {
+    const list = this.globalVocab?.vocab_by_stem?.[stem];
+    if (!list || list.length === 0) return null;
+    // Lightweight: sample up to 400 candidates for speed, prefer same-category proximity by pitch
+    let best: GlobalVocabItem | null = null;
+    let bestDist = Infinity;
+    const n = list.length;
+    const stride = Math.max(1, Math.floor(n / 400));
+    for (let i = 0; i < n; i += stride) {
+      const vs = list[i];
+      let d = Math.abs(vs.pitch - targetPitch);
+      if (d > 6) d = 12 - d;
+      const score = d - (vs.clarity || 0) * 0.5;
+      if (score < bestDist) {
+        bestDist = score;
+        best = vs;
+      }
+    }
+    if (!best) return null;
+    let shift = (targetPitch - best.pitch) % 12;
+    if (shift > 6) shift -= 12;
+    if (shift < -6) shift += 6;
+    return { item: best, shift };
+  }
+
+  /** Loads hierarchical global patterns (data/global_patterns.json): bar planner + tatum bigrams. */
+  public async loadGlobalPatterns(basePath: string = "data"): Promise<boolean> {
+    try {
+      const res = await this.fetchWithRetry(`${basePath}/global_patterns.json`);
+      if (!res.ok) return false;
+      const gp = (await res.json()) as GlobalPatternsManifest;
+      if (!gp || !gp.bar_transitions) return false;
+      this.globalPatterns = gp;
+      this.pickJourney("INTRO");
+      console.info(`[Client ML] Global patterns ready: ${gp.total_bars} bars, ${Object.keys(gp.bar_transitions.drums || {}).length} drum bar states.`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Groove pocket: per-step microtiming nudge in ms (ported from wub_core/fill_pocket_spec.py).
+   * Kick pushes (-2), snare sits back (+4), hats swing late on off-16ths (+8), bass lays back (+6). Bounded ±15ms. */
+  public pocketNudge(stem: StemName | string, step: number): number {
+    const s = ((step % 16) + 16) % 16;
+    const key = String(stem).toLowerCase();
+    const clamp = (v: number): number => Math.max(-15, Math.min(15, v));
+    const off16 = (s % 2 === 1) || (s % 4 === 2);
+    if (key === "kick") return clamp(-2);
+    if (key === "snare") return clamp(4);
+    if (key === "hat" || key === "hats" || key === "hat_closed" || key === "hat_open") return clamp(off16 ? 8 : 0);
+    if (key === "bass") return clamp(6);
+    if (key === "drums") {
+      if (s === 0 || s === 8) return clamp(-2);
+      if (s === 4 || s === 12) return clamp(4);
+      if (s === 2 || s === 6 || s === 10 || s === 14 || s % 2 === 1) return clamp(8);
+      return 0;
+    }
+    return 0;
+  }
+
+  /** Deterministic ±8% velocity humanize from hashed (bar, step) — A/B safe. */
+  public humanizeVelocity(velocity: number, bar: number, step: number): number {
+    const h = (((bar * 16 + step) * 2654435761) % 1000) / 1000 * 2 - 1;
+    return Math.max(0, Math.min(1.5, velocity * (1 + 0.08 * h)));
+  }
+
+  /** Slice loudness normalization (ported from wub_core/fill_pocket_spec.py).
+   * Mapping decision: uses analysis loud_max in dB (loudDb), NOT the 0..1
+   * `loudness` placeholder (which is a constant 0.9 in our manifests).
+   * gain = 10^((target - sliceDb)/20), clamped 0.5..2. -14 dBFS = neutral. */
+  public loudnessNormalizeGain(sliceDb: number | undefined, targetDb: number = -14): number {
+    const db = typeof sliceDb === "number" && Number.isFinite(sliceDb) ? sliceDb : targetDb;
+    return Math.max(0.5, Math.min(2.0, Math.pow(10, (targetDb - db) / 20)));
+  }
+
+  /** Combined musical gain: humanized velocity × loudness normalization,
+   * clamped to the engine's 0..1.5 range. */
+  public finalGain(velocity: number, bar: number, step: number, loudDb?: number): number {
+    const v = Math.max(0, Math.min(1.5, velocity));
+    return Math.max(0, Math.min(1.5, this.humanizeVelocity(v, bar, step) * this.loudnessNormalizeGain(loudDb)));
+  }
+
+  /** Joint-tuple PMI lookup: how strongly these 4 stem bars co-occurred in training.
+   * sig order: drums|bass|other|vocals (per-stem bar signatures joined). Unseen => 0. */
+  private jointPmiRange: { min: number; max: number } | null = null;
+
+  private jointPmiFor(barSigs: Record<StemName, string>): number {
+    const gp = this.globalPatterns;
+    const tuples = gp?.joint_tuples;
+    if (!tuples || tuples.length === 0) return 0;
+    // Raw PMI (~9-19) would drown every other signal, so normalize to 0..1
+    // against the table's own range (cached on first use). Unseen = 0.
+    if (!this.jointPmiRange) {
+      let lo = Infinity, hi = -Infinity;
+      for (const t of tuples as Array<{ pmi?: number }>) {
+        const v = typeof t.pmi === "number" ? t.pmi : 0;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+      this.jointPmiRange = { min: lo === Infinity ? 0 : lo, max: hi === -Infinity ? 1 : hi };
+    }
+    const key = (["drums", "bass", "other", "vocals"] as StemName[]).map((s) => barSigs[s] || ".").join("|");
+    // Linear scan is fine: top-2000 list, checked once per bar, not per tatum.
+    for (const t of tuples as Array<{ sig?: string; pmi?: number }>) {
+      if (t.sig === key) {
+        const range = this.jointPmiRange || { min: 0, max: 1 };
+        if (range.max <= range.min) return typeof t.pmi === "number" && t.pmi > 0 ? 1 : 0;
+        return Math.max(0, Math.min(1, ((t.pmi as number) - range.min) / (range.max - range.min)));
+      }
+    }
+    return 0;
+  }
+
+  /** Section-appropriate density (0..1): keeps INTRO sparse and DROPs driving. */
+  private static readonly SECTION_DENSITY: Record<string, Record<StemName, number>> = {
+    INTRO: { drums: 0.15, bass: 0.1, other: 0.25, vocals: 0.1 },
+    GROOVE_A: { drums: 0.45, bass: 0.3, other: 0.35, vocals: 0.2 },
+    BUILDUP: { drums: 0.5, bass: 0.3, other: 0.4, vocals: 0.3 },
+    DROP: { drums: 0.55, bass: 0.35, other: 0.5, vocals: 0.3 },
+    BREAKDOWN: { drums: 0.05, bass: 0.05, other: 0.3, vocals: 0.3 },
+  };
+
+  private sectionDensityFit(stem: StemName, candSig: string, sec: string): number {
+    const onsets = candSig.split("-").filter((t) => t !== ".").length;
+    const target = (ClientGrooveboxConductor.SECTION_DENSITY[sec] || ClientGrooveboxConductor.SECTION_DENSITY.GROOVE_A)[stem];
+    return Math.max(0, 1 - Math.abs(onsets / 16 - target) / 0.35);
+  }
+
+  /** Pick a full-song section journey weighted by mined counts, preferring arcs
+   * that start at `from` so transitions sound intentional. */
+  private pickJourney(from: string | null): void {
+    const arcs = this.globalPatterns?.section_arcs?.arcs;
+    if (!arcs || arcs.length === 0) {
+      this.activeJourney = null;
+      this.journeyIdx = 0;
+      return;
+    }
+    const matches = from ? arcs.filter((a) => a.sections[0] === from) : [];
+    const pool = matches.length > 0 ? matches : arcs;
+    let total = 0;
+    for (const a of pool) total += a.count;
+    let r = this.rnd() * total;
+    let picked = pool[0];
+    for (const a of pool) {
+      r -= a.count;
+      if (r <= 0) {
+        picked = a;
+        break;
+      }
+    }
+    this.activeJourney = [...picked.sections];
+    this.journeyIdx = 0;
+  }
+
+  private rnd(): number {
+    return Math.random();
+  }
+
+  // Resilient fetching: shared 8-wide semaphore so hundreds of slice/loop
+  // preloads can't exhaust the browser connection pool (which surfaces as
+  // TypeError: Failed to fetch), plus retry with backoff for the big
+  // manifest JSONs (a transient reset mid-download shouldn't kill the boot).
+  private fetchInFlight = 0;
+  private fetchQueue: Array<() => void> = [];
+  private static readonly FETCH_CONCURRENCY = 8;
+
+  private async fetchSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.fetchInFlight >= ClientGrooveboxConductor.FETCH_CONCURRENCY) {
+      await new Promise<void>((res) => this.fetchQueue.push(res));
+    }
+    this.fetchInFlight++;
+    try {
+      return await fn();
+    } finally {
+      this.fetchInFlight--;
+      const next = this.fetchQueue.shift();
+      if (next) next();
+    }
+  }
+
+  private async fetchWithRetry(url: string, tries = 3): Promise<Response> {
+    let lastErr: unknown = null;
+    for (let i = 0; i < tries; i++) {
+      try {
+        return await this.fetchSlot(() => fetch(url));
+      } catch (e) {
+        lastErr = e;
+        await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(`fetch failed: ${url}`);
+  }
+
+  // Bar-arranger GPT (ONNX worker): plans whole 4-stem bars from arrangement
+  // history. Consumed ONLY at phrase anchors (phraseBar 0/4) so all stems stay
+  // synchronized; Markov + holds cover everything between. Null = use Markov.
+  private arrangerWorker: Worker | null = null;
+  private arrangerReady = false;
+  private planInFlight = false;
+  private modelPlan: { sec: string; chord: number; ranks: Record<StemName, number> } | null = null;
+  private barHistory: number[][] = []; // committed model-planned bars, 6 tokens each
+
+  /** One-shot playback diagnostic: which audio each stem will actually use.
+   * Paste the output while music plays. slices "R/T" = resolved/total slice
+   * IDs; low R with high T = fallback synths/kits (the "sounds bad" smell). */
+  public debugBar(): Record<string, unknown> {
+    const out: Record<string, unknown> = {
+      section: this.arranger.getSection(),
+      catalog: this.catalogSongActive,
+      track: this.activeTrackId,
+      mode: this.playbackMode,
+      stems: {},
+    };
+    const stems = out.stems as Record<string, unknown>;
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const pat = this.activePatterns[stem];
+      const ids = (pat?.step_slice_ids || []) as Array<string | null>;
+      const total = ids.filter(Boolean).length;
+      const resolved = ids.filter((id) => id && this.sliceById.has(id as string)).length;
+      stems[stem] = {
+        pattern: pat?.id ?? null,
+        onsets: pat?.onset_grid?.length ?? 0,
+        slices: `${resolved}/${total}`,
+        global: (pat?.id ?? "").startsWith("global_"),
+        kit: this.activeSongKit ? true : false,
+      };
+    }
+    return out;
+  }
+  private static readonly ARR_SECTIONS = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"];
+
+  /** Boot the ONNX planner worker (lazy; Markov fallback on any failure). */
+  public ensureArrangerModel(basePath: string = "data"): void {
+    if (this.arrangerWorker || typeof Worker === "undefined") return;
+    // Absolute base URL: relative fetch() inside a worker resolves against
+    // the *worker script* URL (dist/assets/), not the document, so a bare
+    // "data/..." path 404s there. Anchor it to the document instead.
+    let absBase = basePath;
+    try {
+      absBase = new URL(`${basePath}/`, document.baseURI).href.replace(/\/$/, "");
+    } catch {
+      // keep relative path as fallback
+    }
+    try {
+      const w = new Worker(new URL("./arranger_worker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (ev: MessageEvent) => {
+        const msg = ev.data as { type?: string; steps?: number[]; message?: string };
+        if (msg.type === "ready") {
+          this.arrangerReady = true;
+          console.info("[Client ML] Bar-arranger GPT ready (ONNX worker).");
+        } else if (msg.type === "plan" && Array.isArray(msg.steps) && msg.steps.length >= 6) {
+          this.planInFlight = false;
+          this.modelPlan = this.decodePlannedBar(msg.steps.slice(0, 6));
+          if (!this.modelPlan) this.requestBarPlan(); // undecodable: retry with fresh draw
+          else this.requestTatumFill(); // chain: fill the planned bar's 16 steps
+        } else if (msg.type === "error") {
+          console.warn("[Client ML] Arranger worker error, Markov fallback:", msg.message);
+          this.planInFlight = false;
+          if ((msg as { fatal?: boolean }).fatal !== false) this.arrangerReady = false;
+        }
+      };
+      w.onerror = () => {
+        this.arrangerReady = false;
+        this.planInFlight = false;
+      };
+      w.postMessage({ type: "init", basePath: absBase, config: "arranger_gpt.json" });
+      this.arrangerWorker = w;
+    } catch {
+      this.arrangerReady = false;
+    }
+  }
+
+  /** Decode one worker-planned 6-token bar; null when unusable (caller falls back).
+   * The bar GPT emits model-space token ids (drums 0..299, bass 301..600,
+   * other 602..901, vocals 903..1202); ranks are normalized to 0..299 here,
+   * with -1 for out-of-range/UNK slots (per-stem Markov fallback covers them). */
+  private decodePlannedBar(tokens: number[]): { sec: string; chord: number; ranks: Record<StemName, number> } | null {
+    if (!tokens || tokens.length < 6) return null;
+    const secIdx = tokens[0] - 1204;
+    const sec = secIdx >= 0 && secIdx < 5 ? (["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"] as const)[secIdx] : null;
+    if (!sec) return null;
+    const chord = tokens[1] >= 1209 && tokens[1] <= 1220 ? tokens[1] - 1209 : 0;
+    const base = { drums: 0, bass: 301, other: 602, vocals: 903 } as Record<StemName, number>;
+    const ranks = {} as Record<StemName, number>;
+    (["drums", "bass", "other", "vocals"] as StemName[]).forEach((stem, i) => {
+      const r = tokens[2 + i] - base[stem];
+      ranks[stem] = r >= 0 && r < 300 ? r : -1;
+    });
+    return { sec, chord, ranks };
+  }
+
+  /** Ask the worker for the bar after history (single inflight; silent no-op otherwise). */
+  private requestBarPlan(): void {
+    if (!this.arrangerReady || !this.arrangerWorker || this.planInFlight || this.modelPlan) return;
+    const flat: number[] = [];
+    for (const b of this.barHistory.slice(-32)) flat.push(...b);
+    if (flat.length < 6) return; // need at least one committed bar to continue from
+    this.planInFlight = true;
+    const seed = Math.floor(Math.random() * 1e9);
+    this.arrangerWorker.postMessage({ type: "plan", history: flat, nSteps: 6, temp: 1.0, topK: 20, seed });
+  }
+
+  // Decoded tatum fill, converted once per bar into per-stem slice ids.
+  private tatumTokens: Record<StemName, Array<string | null>> | null = null;
+  // Committed tatum tokens (70 per bar: 6 header + 64 steps) for the tatum
+  // GPT's 4-bar context. The model was trained on 280-token windows, so a
+  // 6-token header alone is out of distribution; feeding the last 3 bars
+  // plus the current header matches training exactly.
+  private tatumHist: number[] = [];
+  private tatumHeader: number[] = [];
+  private tatumCtx = 280; // ONNX config ctx, read on worker "ready"
+
+  /** Convert the pending tatum fill into this stem's 16-step slice ids.
+   * Code -> medoid slice; HOLD extends the previous onset (null step, the
+   * downstream span builder stretches it); SIL is rest. */
+  private consumeTatumFill(stem: StemName): Array<string | null> | null {
+    if (!this.tatumFill) return this.tatumTokens?.[stem] ?? null;
+    const sil = ClientGrooveboxConductor.TATUM_SIL;
+    const order: StemName[] = ["drums", "bass", "other", "vocals"];
+    const out: Record<StemName, Array<string | null>> = {
+      drums: [], bass: [], other: [], vocals: [],
+    };
+    for (let i = 0; i < 16; i++) {
+      const step = this.tatumFill.steps[i] || [0, 0, 0, 0];
+      order.forEach((s, k) => {
+        const code = step[k];
+        const med = this.codeMedoid[s]?.[code];
+        out[s].push(med && code < sil[s] ? med : null);
+      });
+    }
+    this.tatumTokens = out;
+    this.tatumFill = null;
+    return out[stem];
+  }
+
+  /** Prototype rank -> 16-step tokens; null when the rank is out of range. */
+  private tokensForRank(stem: StemName, rank: number): Array<string | null> | null {
+    const protos = this.globalPatterns?.bar_prototypes?.[stem];
+    if (!protos || rank < 0 || rank >= protos.length) return null;
+    return [...protos[rank].tokens];
+  }
+
+  /** Prototype signature -> rank; -1 when the bar isn't a known prototype. */
+  private rankForSig(stem: StemName, sig: string): number {
+    const protos = this.globalPatterns?.bar_prototypes?.[stem];
+    if (!protos) return -1;
+    for (let i = 0; i < protos.length; i++) {
+      if (protos[i].signature === sig) return i;
+    }
+    return -1;
+  }
+
+  // Tatum filler (second ONNX worker): fills a planned bar's 16 steps x 4
+  // stems with VQ codes. Chained after the bar plan arrives; the bar anchor
+  // consumes the fill when present, else falls back to Markov prototypes.
+  private tatumWorker: Worker | null = null;
+  private tatumReady = false;
+  private tatumInFlight = false;
+  private tatumFill: { sec: string; steps: number[][] } | null = null;
+  private codeMedoid: Record<string, Record<number, string>> = {};
+  // Tatum VQ code layout (fixed; must match scripts/build_tatum_dataset.py):
+  // per-stem codes 0..1023, SIL next, HOLD last of each 1026-slot block.
+  private static readonly TATUM_SIL: Record<StemName, number> = { drums: 1024, bass: 2050, other: 3076, vocals: 4102 };
+
+  /** Boot the tatum filler worker (lazy; Markov fallback on any failure). */
+  public ensureTatumModel(basePath: string = "data"): void {
+    if (this.tatumWorker || typeof Worker === "undefined") return;
+    // Absolute base URL: see ensureArrangerModel (worker-relative fetch 404s).
+    let absBase = basePath;
+    try {
+      absBase = new URL(`${basePath}/`, document.baseURI).href.replace(/\/$/, "");
+    } catch {
+      // keep relative path as fallback
+    }
+    try {
+      const w = new Worker(new URL("./arranger_worker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (ev: MessageEvent) => {
+        const msg = ev.data as { type?: string; steps?: number[]; message?: string };
+        if (msg.type === "ready") {
+          this.tatumReady = true;
+          this.tatumCtx = (msg as { ctx?: number }).ctx || 280;
+          console.info("[Client ML] Tatum filler ready (ONNX worker).");
+        } else if (msg.type === "plan" && Array.isArray(msg.steps) && msg.steps.length >= 64) {
+          this.tatumInFlight = false;
+          const steps = msg.steps.slice(0, 64);
+          this.tatumFill = this.decodeTatumFill(steps);
+          if (this.tatumFill) {
+            // Extend the model's 4-bar context with the bar we just generated.
+            this.tatumHist.push(...this.tatumHeader, ...steps);
+            this.trimTatumHist();
+          } else {
+            this.requestTatumFill();
+          }
+        } else if (msg.type === "error") {
+          this.tatumInFlight = false;
+          if ((msg as { fatal?: boolean }).fatal !== false) this.tatumReady = false;
+        }
+      };
+      w.onerror = () => {
+        this.tatumReady = false;
+        this.tatumInFlight = false;
+      };
+      w.postMessage({ type: "init", basePath: absBase, config: "tatum_gpt.json" });
+      this.tatumWorker = w;
+    } catch {
+      this.tatumReady = false;
+    }
+    void this.loadTatumCodebook(basePath);
+  }
+
+  /** Map VQ code -> medoid global slice id per stem (for rendering). */
+  private async loadTatumCodebook(basePath: string): Promise<void> {
+    try {
+      const res = await this.fetchWithRetry(`${basePath}/tatum_vq.json`);
+      if (!res.ok) return;
+      const vq = (await res.json()) as { stems: Record<string, { medoid_slice: string[] }> };
+      for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+        const med = vq.stems?.[stem]?.medoid_slice;
+        if (!med) continue;
+        this.codeMedoid[stem] = {};
+        med.forEach((id, code) => {
+          this.codeMedoid[stem][code] = id;
+        });
+      }
+    } catch {
+      // renderer falls back to prototype tokens
+    }
+  }
+
+  /** Decode 64 flat tatum tokens into 16 steps x [D,B,O,V]; null if unusable. */
+  private decodeTatumFill(tokens: number[]): { sec: string; steps: number[][] } | null {
+    if (!tokens || tokens.length < 64) return null;
+    const steps: number[][] = [];
+    for (let i = 0; i < 16; i++) steps.push(tokens.slice(i * 4, i * 4 + 4));
+    return { sec: this.arranger.getSection(), steps };
+  }
+
+  /** Keep exactly one model window of committed history (ctx - header). */
+  private trimTatumHist(): void {
+    // Exactly three bars of committed history. With the current header that
+    // is 216 tokens: a valid training window (bar headers sit at 0/70/140,
+    // and this header lands at 210). Using ctx-6 (274) would put the header
+    // at position 274, which the model never saw in training.
+    const keep = Math.max(70, Math.min(210, this.tatumCtx - 70));
+    if (this.tatumHist.length > keep) this.tatumHist.splice(0, this.tatumHist.length - keep);
+  }
+
+  /** Ask the tatum worker to fill the currently planned bar (single inflight).
+   * Header ids follow the FIXED tatum layout (SEC 4104+, CHORD 4109+, ranks
+   * 4122/4422/4722/5022); the bar-GPT 1222-layout ids are NOT interchangeable. */
+  private requestTatumFill(): void {
+    if (!this.tatumReady || !this.tatumWorker || this.tatumInFlight || this.tatumFill || !this.modelPlan) return;
+    const off = { drums: 4122, bass: 4422, other: 4722, vocals: 5022 };
+    const secIdx = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"].indexOf(this.modelPlan.sec);
+    const header = [
+      4104 + (secIdx >= 0 ? secIdx : 1),
+      4109 + ((this.modelPlan.chord % 12) + 12) % 12,
+      ...(["drums", "bass", "other", "vocals"] as StemName[]).map((s) => off[s] + this.modelPlan!.ranks[s]),
+    ];
+    if (header.some((t) => !Number.isFinite(t) || t < 0)) return;
+    this.tatumInFlight = true;
+    const seed = Math.floor(Math.random() * 1e9);
+    // Header at position 210 after three full bars of history: in-distribution
+    // (training windows start at a bar header, so headers live at 0/70/140/210)
+    // and the model gets three bars of musical context. Short prompts are sent
+    // at their true length now; the worker no longer left-pads to ctx.
+    this.tatumHeader = header;
+    this.tatumWorker.postMessage({ type: "plan", history: [...this.tatumHist, ...header], nSteps: 64, temp: 1.0, topK: 20, seed });
+  }
+
+  /** Hierarchical sample: bar planner (global bar transitions) -> tatum slice bigrams.
+   * Returns 16-step global slice IDs for a stem given previous bar signature. */
+  // Last committed bar sigs per stem (previous bar) for call-response bias.
+  private prevBarGlobalSig: Record<StemName, string | null> = { drums: null, bass: null, other: null, vocals: null };
+  // Ranks driving the current bar per stem (model plan or Markov lookup).
+  /**
+   * Phrase-level beam plan: look ahead a 4-bar phrase, scoring each step by
+   * joint PMI + call-response + section density (+ downbeats for drums), and
+   * return the best-scoring phrase. The caller commits the first bar now;
+   * planning the arc up front is what makes phrases hang together instead
+   * of wandering bar to bar.
+   */
+  private planPhraseBars(
+    stem: StemName,
+    startSig: string | null,
+    sec: string,
+    depth = 4,
+    width = 3,
+  ): Array<{ sig: string; tokens: Array<string | null>; score: number }> | null {
+    type Beam = { sigs: string[]; toks: Array<Array<string | null>>; score: number; prev: string | null };
+    let beams: Beam[] = [{ sigs: [], toks: [], score: 0, prev: startSig }];
+    for (let d = 0; d < depth; d++) {
+      const next: Beam[] = [];
+      for (const b of beams) {
+        for (let attempt = 0; attempt < width; attempt++) {
+          const cand = this.sampleGlobalBar(stem, b.prev);
+          if (!cand || cand.length !== 16) continue;
+          const candSig = cand.map((t) => t || ".").join("-");
+          const combo: Record<StemName, string> = {
+            drums: stem === "drums" ? candSig : (this.globalBarSig.drums || "."),
+            bass: stem === "bass" ? candSig : (this.globalBarSig.bass || "."),
+            other: stem === "other" ? candSig : (this.globalBarSig.other || "."),
+            vocals: stem === "vocals" ? candSig : (this.globalBarSig.vocals || "."),
+          };
+          const pmi = this.jointPmiFor(combo);
+          const cross = this.callResponseBonus(stem, candSig);
+          const dens = this.sectionDensityFit(stem, candSig, sec);
+          let down = 0;
+          if (stem === "drums" && (sec === "DROP" || sec === "GROOVE_A")) {
+            const hits = [0, 4, 8, 12].filter((x) => candSig.split("-")[x] !== ".").length;
+            down = hits / 4;
+          }
+          const score = pmi * 2 + cross * 1 + dens * 1.5 + down * 2;
+          next.push({ sigs: [...b.sigs, candSig], toks: [...b.toks, cand], score: b.score + score, prev: candSig });
+        }
+      }
+      if (next.length === 0) break;
+      next.sort((a, c) => c.score - a.score);
+      beams = next.slice(0, width);
+    }
+    const best = beams
+      .filter((b) => b.sigs.length > 0)
+      .sort((a, b2) => b2.score / Math.max(1, b2.sigs.length) - a.score / Math.max(1, a.sigs.length))[0];
+    if (!best) return null;
+    return best.sigs.map((sig, i) => ({ sig, tokens: best.toks[i], score: best.score / best.sigs.length }));
+  }
+
+  private usedRankByStem: Record<StemName, number> = { drums: -1, bass: -1, other: -1, vocals: -1 };
+
+  /** Cross-stem call-response bonus: how likely is `candSig` on `stem` as an
+   * answer to the other stems' *previous*-bar sigs (mined `other->stem` pairs). */
+  private callResponseBonus(stem: StemName, candSig: string): number {
+    const cr = this.globalPatterns?.call_response;
+    if (!cr) return 0;
+    let bonus = 0;
+    for (const o of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      if (o === stem) continue;
+      const prev = this.prevBarGlobalSig[o];
+      if (!prev) continue;
+      const p = (cr[`${o}->${stem}`] as Record<string, Record<string, number>> | undefined)?.[prev]?.[candSig];
+      if (typeof p === "number") bonus += p;
+    }
+    return bonus;
+  }
+
+  public sampleGlobalBar(stem: StemName, prevSig: string | null): Array<string | null> {
+    const gp = this.globalPatterns;
+    if (!gp) return [];
+    // Never plan silence: empty bars (mix-only tracks, gaps) teach nothing and
+    // would hold the kit mute for 4 bars. Densest first keeps the groove alive.
+    const protos = (gp.bar_prototypes?.[stem] || []).filter((p) => p.tokens.some((t) => t));
+    if (protos.length === 0) return [];
+    if (!prevSig) {
+      const top = protos[0];
+      return top ? [...top.tokens] : [];
+    }
+    const nexts = gp.bar_transitions?.[stem]?.[prevSig];
+    if (nexts) {
+      let r = this.rnd();
+      const entries = Object.entries(nexts);
+      for (const [sig, p] of entries) {
+        r -= p as number;
+        if (r <= 0) {
+          const found = protos.find((x) => x.signature === sig);
+          if (found) return [...found.tokens];
+          return sig.split("-").map((t) => (t === "." ? null : t));
+        }
+      }
+    }
+    // Fallback: most reusable prototype (max compression = max reuse)
+    const top = protos[0];
+    return top ? [...top.tokens] : [];
+  }
+
   private loadCatalogShard(shard: number): Promise<boolean> {
     if (this.loadedCatalogShards.has(shard)) return Promise.resolve(true);
     const existing = this.catalogShardLoads.get(shard);
@@ -2807,7 +3788,7 @@ export class ClientGrooveboxConductor {
     const p = (async (): Promise<boolean> => {
       try {
         const name = `shard_${String(shard).padStart(2, "0")}.json`;
-        const res = await fetch(`${this.catalogBasePath}/catalog/${name}`);
+        const res = await this.fetchWithRetry(`${this.catalogBasePath}/catalog/${name}`);
         if (!res.ok) return false;
         const payload = (await res.json()) as { songs?: Record<string, any> };
         if (!payload?.songs || !this.manifest) return false;
@@ -2858,7 +3839,7 @@ export class ClientGrooveboxConductor {
         if (!dec) {
           dec = (async () => {
             try {
-              const res = await fetch(url);
+              const res = await this.fetchSlot(() => fetch(url));
               if (!res.ok) return null;
               return await this.engine.decodeAudio(await res.arrayBuffer());
             } catch {
@@ -2877,6 +3858,7 @@ export class ClientGrooveboxConductor {
             centroid: typeof vs.centroid === "number" ? vs.centroid : 1200,
             duration: buf.duration,
             loudness: 0.9,
+            loudDb: typeof vs.loud_max === "number" ? vs.loud_max : -14,
             name: vid,
             trackTitle: model.title,
             trackId,
@@ -2944,7 +3926,7 @@ export class ClientGrooveboxConductor {
     this.jointHistory = [];
     this.lastComposedSection = "INTRO";
     this.recordTrackPlayed(trackId);
-    if (typeof model.bpm === "number" && model.bpm >= 85 && model.bpm <= 175) {
+    if (this.userBpmOverride === null && typeof model.bpm === "number" && model.bpm >= 85 && model.bpm <= 175) {
       const bpmDelta = Math.max(-3, Math.min(3, Math.round(model.bpm - this.currentBpm)));
       this.currentBpm = Math.max(85, Math.min(175, this.currentBpm + bpmDelta));
     }
@@ -2969,22 +3951,109 @@ export class ClientGrooveboxConductor {
     return true;
   }
 
-  private async preloadAudioSlices(basePath: string): Promise<void> {
+  /**
+   * Registers slice metadata from standalone_patterns.json into sliceRegistry and sliceById
+   * using embedded b64 or synthesized fallback buffers, with zero network requests.
+   */
+  private registerManifestSliceMetadata(): void {
     if (!this.manifest || !this.manifest.slices) return;
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       const stemSlices = this.manifest.slices[stem];
       if (!stemSlices) continue;
       for (const [cat, list] of Object.entries(stemSlices)) {
+        if (!Array.isArray(list) || list.length === 0) continue;
+        const fallbackBuf = this.synth.getSliceBuffer(`${stem}:${cat}`) || this.synth.getSliceBuffer(stem);
+        if (!fallbackBuf) continue;
         const assets: SliceAsset[] = [];
-        // Big Codebook: Load up to 128 slices per stem category from the authentic training corpus
-        const maxSlices = 128;
-        for (let i = 0; i < Math.min(maxSlices, list.length); i++) {
+        const limit = Math.min(list.length, 64);
+        for (let i = 0; i < limit; i++) {
           const item = list[i];
+          const normCentroid = Math.max(0, Math.min(1, Math.log2(Math.max(50, item.centroid || 500) / 50) / 7.6));
+          const isRight = cat.includes("cyber") || cat.includes("breaks");
+          const isBottom = cat.includes("house") || cat.includes("breaks");
+          const x = (isRight ? 0.52 : 0.04) + 0.44 * normCentroid;
+          const y = (isBottom ? 0.52 : 0.04) + 0.44 * Math.max(0, Math.min(1, (item.duration || 0.2) / 0.8));
+          const asset: SliceAsset = {
+            buffer: fallbackBuf,
+            pitch: typeof item.pitch === "number" ? item.pitch : 0,
+            centroid: typeof item.centroid === "number" ? item.centroid : 0,
+            duration: typeof item.duration === "number" ? item.duration : fallbackBuf.duration,
+            loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
+            loudDb: typeof (item as { loudDb?: unknown }).loudDb === "number" ? (item as { loudDb: number }).loudDb : -14,
+            name: item.name,
+            vowel: item.vowel,
+            trackTitle: item.track_title,
+            trackId: item.track_id,
+            segmentId: item.segment_id,
+            start: typeof item.start === "number" ? item.start : 0,
+            x,
+            y,
+          };
+          assets.push(asset);
+          this.sliceById.set(asset.name, asset);
+          if (asset.segmentId) {
+            this.sliceById.set(asset.segmentId, asset);
+          }
+        }
+        if (assets.length > 0 && !this.sliceRegistry.has(`${stem}:${cat}`)) {
+          this.sliceRegistry.set(`${stem}:${cat}`, assets);
+          if (cat.includes("_")) {
+            this.sliceRegistry.set(`${stem}:${cat.replace("_", ":")}`, assets);
+          }
+        }
+      }
+    }
+  }
+
+  private async preloadAudioSlices(basePath: string): Promise<void> {
+    if (!this.manifest || !this.manifest.slices) return;
+    // Probe one slice file first; if /data/slices/ is not deployed on static hosting,
+    // skip firing hundreds of 404/429 requests and rely on registerManifestSliceMetadata().
+    const probeItem = this.manifest.slices.drums
+      ? Object.values(this.manifest.slices.drums).find((arr) => Array.isArray(arr) && arr.length > 0)?.[0]
+      : null;
+    if (probeItem && probeItem.url && !probeItem.b64) {
+      try {
+        const probeUrl = probeItem.url.startsWith("http")
+          ? probeItem.url
+          : `${basePath}/${probeItem.url.replace(/^data\//, "")}`;
+        const probeRes = await this.fetchSlot(() => fetch(probeUrl));
+        if (!probeRes.ok) {
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
+    type SliceGroup = { stem: StemName; cat: string; list: any[]; assets: SliceAsset[] };
+    const groups: SliceGroup[] = [];
+    for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
+      const stemSlices = this.manifest.slices[stem];
+      if (!stemSlices) continue;
+      for (const [cat, list] of Object.entries(stemSlices)) {
+        groups.push({ stem, cat, list, assets: [] });
+      }
+    }
+    // Round-robin by slice index instead of stem-major: the old order loaded
+    // 5 categories x 128 drum slices before touching bass, so pressing Play
+    // early produced drums plus algorithmic bass/vocals and *silence* for the
+    // chord/pad stem. Index-major gives every stem ~16 slices immediately.
+    // 256 per category: the shipped bank now carries a full-corpus vocabulary
+    // (27.9k medoid slices across 1,699 tracks), so a wider prime costs a few
+    // seconds and removes the "same 128 sounds" repetition.
+    const maxSlices = 256;
+    for (let i = 0; i < maxSlices; i++) {
+      await Promise.all(groups.map(async (g) => {
+        if (i >= g.list.length) return;
+        const assets = g.assets;
+        const cat = g.cat;
+        const stem = g.stem;
+        const item = g.list[i];
           try {
             let bytes: ArrayBuffer | null = null;
             try {
               const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
-              const res = await fetch(url);
+              const res = await this.fetchSlot(() => fetch(url));
               if (res.ok) {
                 bytes = await res.arrayBuffer();
               }
@@ -3033,6 +4102,9 @@ export class ClientGrooveboxConductor {
                 centroid: typeof item.centroid === "number" ? item.centroid : 0,
                 duration: typeof item.duration === "number" ? item.duration : decoded.duration,
                 loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
+                loudDb: typeof (item as { loudDb?: unknown }).loudDb === "number"
+                  ? (item as { loudDb: number }).loudDb
+                  : -14,
                 name: item.name,
                 vowel: item.vowel,
                 trackTitle: item.track_title,
@@ -3056,11 +4128,14 @@ export class ClientGrooveboxConductor {
             // Silently fall back to algorithmic synth
           }
         }
-        if (assets.length > 0) {
-          this.sliceRegistry.set(`${stem}:${cat}`, assets);
+      ));
+      // Publish after every index pass so partial banks are usable immediately.
+      for (const g of groups) {
+        if (g.assets.length > 0) {
+          this.sliceRegistry.set(`${g.stem}:${g.cat}`, g.assets);
           // Also alias underscore style keys (e.g. 'bass:sub_wave' <-> 'bass:sub:wave')
-          if (cat.includes("_")) {
-            this.sliceRegistry.set(`${stem}:${cat.replace("_", ":")}`, assets);
+          if (g.cat.includes("_")) {
+            this.sliceRegistry.set(`${g.stem}:${g.cat.replace("_", ":")}`, g.assets);
           }
         }
       }
@@ -3073,7 +4148,7 @@ export class ClientGrooveboxConductor {
       for (const item of vocalCorpus) {
         try {
           const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
-          const res = await fetch(url);
+          const res = await this.fetchSlot(() => fetch(url));
           if (res.ok) {
             const bytes = await res.arrayBuffer();
             const decoded = await this.engine.decodeAudio(bytes);
@@ -3083,6 +4158,9 @@ export class ClientGrooveboxConductor {
               centroid: typeof item.centroid === "number" ? item.centroid : 0,
               duration: typeof item.duration === "number" ? item.duration : decoded.duration,
               loudness: typeof item.loudness === "number" ? item.loudness : 1.0,
+              loudDb: typeof (item as { loudDb?: unknown }).loudDb === "number"
+                ? (item as { loudDb: number }).loudDb
+                : -14,
               name: item.name,
               vowel: item.vowel,
               trackTitle: item.track_title,
@@ -3123,14 +4201,18 @@ export class ClientGrooveboxConductor {
       const list = this.manifest.loops[stem];
       if (!list || list.length === 0) continue;
       const loaded: LoadedLoop[] = [];
-      for (const item of list) {
+      // Cap initial loop preloads per stem to avoid triggering GitHub Pages HTTP 429 rate limits
+      const capped = list.slice(0, 12);
+      for (const item of capped) {
         try {
           const url = item.url.startsWith("http") ? item.url : `${basePath}/${item.url.replace(/^data\//, "")}`;
-          const res = await fetch(url);
+          const res = await this.fetchWithRetry(url);
           if (res.ok) {
             const bytes = await res.arrayBuffer();
             const decoded = await this.engine.decodeAudio(bytes);
             loaded.push({ meta: item, buffer: decoded });
+          } else if (res.status === 404 || res.status === 429) {
+            break;
           }
         } catch {
           // Graceful fallback
@@ -3167,7 +4249,7 @@ export class ClientGrooveboxConductor {
           if (!urlStr) return;
           try {
             const url = urlStr.startsWith("http") ? urlStr : `${basePath}/${urlStr.replace(/^data\//, "")}`;
-            const res = await fetch(url);
+            const res = await this.fetchSlot(() => fetch(url));
             if (res.ok) {
               const bytes = await res.arrayBuffer();
               const decoded = await this.engine.decodeAudio(bytes);
@@ -3348,7 +4430,7 @@ export class ClientGrooveboxConductor {
     this.jointHistory = [];
     this.lastComposedSection = "INTRO";
       // Gently glide tempo toward new track's natural groove (max +/- 3 BPM step so rhythm never jerks)
-      if (pick.meta.source_bpm >= 85 && pick.meta.source_bpm <= 170) {
+      if (this.userBpmOverride === null && pick.meta.source_bpm >= 85 && pick.meta.source_bpm <= 170) {
         const bpmDelta = Math.max(-3, Math.min(3, Math.round(pick.meta.source_bpm - this.currentBpm)));
         this.currentBpm = Math.max(85, Math.min(170, this.currentBpm + bpmDelta));
       }
@@ -3565,6 +4647,7 @@ export class ClientGrooveboxConductor {
     }
 
     // For pitched stems (bass, other, vocals): score by trained quality + harmonic pitch proximity
+    const scoreStem = stemCategory.split(":")[0];
     const scoredCandidates = list.map((item) => {
       let diff = (targetPitch - item.pitch) % 12;
       if (diff > 6) diff -= 12;
@@ -3573,7 +4656,11 @@ export class ClientGrooveboxConductor {
       const baseQuality = (trainedScores && trainedScores[item.name]) ? trainedScores[item.name] : 0.85;
       const vowelBonus = (targetVowel && item.vowel === targetVowel) ? 0.50 : 0.0;
       const trackBonus = (effectiveTrackId && item.trackId === effectiveTrackId) ? 2.5 : 0.0;
-      const score = baseQuality * 2.0 + trackBonus + vowelBonus - absDiff * 0.25;
+      // Learned harmonic fit: slices whose native pitch co-occurred in this
+      // harmonic context across real songs need less repitch and sit better.
+      const fitBonus = (scoreStem === "bass" || scoreStem === "other" || scoreStem === "vocals")
+        ? this.harmonicFit(scoreStem, item.pitch) * 0.75 : 0.0;
+      const score = baseQuality * 2.0 + trackBonus + vowelBonus + fitBonus - absDiff * 0.25;
       return { item, shift: diff, score };
     });
 
@@ -4085,15 +5172,184 @@ export class ClientGrooveboxConductor {
     return { buffer: asset.buffer, rate, asset };
   }
 
-  public setPlaybackMode(mode: "jukebox" | "slices" | "phrase_blocks"): void {
+  public setPlaybackMode(mode: "jukebox" | "slices" | "phrase_blocks" | "kit"): void {
+    const previous = this.playbackMode;
     this.playbackMode = mode;
     this.activePhraseBlock = null;
     this.activeLoops = {};
+    if (mode === "kit") {
+      this.ensureKitPlayer();
+      this.applyKitLock();
+      if (previous !== "kit") {
+        this.resetKitBlockClock();
+        if (this.isRunning && this.kitAudioActive) {
+          this.scheduleKitBlocks(this.engine.now());
+        }
+      }
+    } else {
+      this.nextKitBlockTime = 0;
+      this.lastKitBlockDurationSec = 0;
+      this.kitBlockLogQueue = [];
+      if (previous === "kit") {
+        this.kitPlayer?.stop();
+      }
+      // Kit boot deliberately skipped the legacy bank. If the user switches
+      // away from kit, lazily bring the legacy bank in for that mode.
+      if (this.staticBundleSkippedForKit && !this.staticBundleLoaded) {
+        this.staticBundleSkippedForKit = false;
+        console.info(`[KitPlayer] Legacy bundle loads deferred from kit mode; loading for ${mode}...`);
+        void this.loadStaticBundle(this.staticBundleBasePath);
+      }
+    }
     console.info(`[Client ML] Jukebox playback mode set to: ${mode}`);
   }
 
-  public getPlaybackMode(): "jukebox" | "slices" | "phrase_blocks" {
+  public getPlaybackMode(): "jukebox" | "slices" | "phrase_blocks" | "kit" {
     return this.playbackMode;
+  }
+
+  /** Silence watchdog: rebuild voices and re-run the current runs. */
+  public recoverSilence(at: number): void {
+    this.kitPlayer?.recoverSilence(at);
+  }
+
+  /** Kit set state exposed on __wubConductor for the UI/verification. */
+  public get activeKit(): Kit | null {
+    return this.kitPlayer?.activeKit ?? null;
+  }
+
+  public getKitNebulaPoints(): NebulaPoint[] {
+    return this.kitPlayer?.nebulaPoints() ?? [];
+  }
+
+  /** Per-stem reticle state (remix mode). */
+  public getStemRemixState(): ReturnType<KitPlayer["stemRemixState"]> {
+    return this.kitPlayer?.stemRemixState() ?? [];
+  }
+
+  /** Current cluster id (nebula base-point cache key). */
+  public get activeClusterId(): string | null {
+    return this.kitPlayer?.activeClusterId ?? null;
+  }
+
+  /** True while the per-stem remix engine owns the kit audio. */
+  public get isStemRemix(): boolean {
+    return this.kitPlayer?.remixActive ?? false;
+  }
+
+  /** Debug hook for the four stem currents. */
+  public debugStemRemix(): ReturnType<KitPlayer["stemRemixState"]> {
+    return this.kitPlayer?.stemRemixState() ?? [];
+  }
+
+  public getAllKitPhrasePoints(): NebulaPoint[] {
+    return this.kitPlayer?.allPhrasePoints() ?? [];
+  }
+
+  /** One stem's legal slice pool for the FM-1/CTL-1 knob controller. */
+  public stemSlices(stem: StemName): NebulaPoint[] {
+    return this.kitPlayer?.stemSlices(stem) ?? [];
+  }
+
+  /** Switch between structured Song Mode and Infinite DJ Morph Mode. */
+  public setSongMode(mode: "song" | "morph"): void {
+    this.pendingSongMode = mode;
+    this.kitPlayer?.setSongMode(mode);
+  }
+
+  public getSongMode(): "song" | "morph" {
+    return this.kitPlayer?.getSongMode() ?? this.pendingSongMode;
+  }
+
+  public getCompositionTelemetry() {
+    return this.kitPlayer?.getCompositionTelemetry() ?? null;
+  }
+
+  public qualitySnapshot(): unknown {
+    return this.kitPlayer?.qualitySnapshot?.() ?? null;
+  }
+
+  public get steeringStems(): string[] {
+    return [...this.userSteeredStems];
+  }
+
+  public get kitSteerTarget(): { x: number; y: number } | null {
+    return this.kitPlayer?.kitSteerTarget ?? null;
+  }
+
+  public get kitSteerDistance(): number | null {
+    return this.kitPlayer?.kitSteerDistance ?? null;
+  }
+
+  public get blocksInSet(): number {
+    return this.kitPlayer?.blocksInSet ?? 0;
+  }
+
+  public get nextKit(): Kit | null {
+    return this.kitPlayer?.nextKit ?? null;
+  }
+
+  public get kitSetBlocksLeft(): number {
+    return this.kitPlayer?.kitSetBlocksLeft ?? 0;
+  }
+
+  public get nextKitTrack(): string | null {
+    return this.kitPlayer?.nextKitTrack ?? null;
+  }
+
+  public get kitSetChanges(): number {
+    return this.kitPlayer?.setChanges ?? 0;
+  }
+
+  public get tasteModelName(): string | null {
+    return this.kitPlayer?.tasteModelName ?? null;
+  }
+
+  public get tasteValAuc(): number | null {
+    return this.kitPlayer?.tasteValAuc ?? null;
+  }
+
+  public get lastTransitionTop3(): Array<{ id: string; weight: number }> {
+    return this.kitPlayer?.lastTransitionTop3 ?? [];
+  }
+
+  public get lastKitScore(): number | null {
+    return this.kitPlayer?.lastKitScore ?? null;
+  }
+
+  public forceNextKit(): void {
+    this.kitPlayer?.forceNextKit();
+  }
+
+  /**
+   * Viewer section request (Twitch co-DJ). In kit remix mode it colors the
+   * next block's selectors without rewriting the song blueprint; in legacy
+   * modes it moves the arranger section directly.
+   */
+  public requestSectionKind(kind: string): void {
+    const clean = (kind || "").toUpperCase();
+    if (this.kitPlayer?.remixActive) {
+      const boost = clean === "DROP" ? 0.95 : clean === "BUILDUP" ? 0.85
+        : clean === "BREAKDOWN" ? 0.25 : clean === "INTRO" ? 0.30 : undefined;
+      this.kitPlayer.requestKind(clean, this.kitPlayer.sessionBarCount, 4, boost);
+      return;
+    }
+    this.arranger.setSection(clean);
+  }
+
+  /** Current session bar (for viewer request windows). */
+  public get sessionBar(): number {
+    if (this.kitPlayer?.remixActive) return this.kitPlayer.sessionBarCount;
+    return this.arranger.getTotalBars();
+  }
+
+  public setKitSetChangeCallback(cb: (info: {
+    kit: Kit;
+    blocksPlayed: number;
+    nextKit: Kit | null;
+    blocksLeft: number;
+  }) => void): void {
+    this.onKitSetChange = cb;
   }
 
   public getMovementPhase(): "FOUNDATION" | "DEVELOPMENT" | "CLIMAX" | "PRE_TRANSITION" {
@@ -4135,7 +5391,43 @@ export class ClientGrooveboxConductor {
   }
 
   public setBpm(bpm: number): void {
-    this.currentBpm = Math.max(60, Math.min(200, bpm));
+    if (!Number.isFinite(bpm)) return;
+    const clamped = Math.max(60, Math.min(200, bpm));
+    const prevBpm = this.currentBpm > 0 ? this.currentBpm : clamped;
+    this.userBpmOverride = clamped;
+    this.currentBpm = clamped;
+    this.engine.setTargetBpm(clamped);
+    if (this.playbackMode === "kit" && this.kitPlayer) {
+      const updated = this.kitPlayer.setBpm(clamped, true);
+      if (updated) {
+        this.syncKitClockAfterTempoChange(clamped, prevBpm);
+      }
+    }
+  }
+
+  private syncKitClockAfterTempoChange(newBpm: number, prevBpm: number): void {
+    const player = this.kitPlayer;
+    if (!player) return;
+    const now = this.engine.now();
+    const changeAt = now + 0.025;
+    const ratio = prevBpm > 0 ? prevBpm / newBpm : 1;
+    const newSlotSec = player.currentRemixSlotSec > 0 ? player.currentRemixSlotSec : 960 / newBpm;
+    for (const queued of this.kitBlockLogQueue) {
+      if (queued.at > changeAt) {
+        queued.at = changeAt + (queued.at - changeAt) * ratio;
+      }
+      queued.result.slotSec = newSlotSec;
+      queued.result.fitBpm = newBpm;
+      if (queued.result.blockBars > 0) {
+        queued.result.blockDurationSec = queued.result.blockBars * (newSlotSec / 4);
+      }
+    }
+    if (player.nextRemixBlockTime > 0) {
+      this.nextKitBlockTime = player.nextRemixBlockTime;
+    }
+    if (player.currentRemixBlockDurationSec > 0) {
+      this.lastKitBlockDurationSec = player.currentRemixBlockDurationSec;
+    }
   }
 
   public getBpm(): number {
@@ -4228,7 +5520,9 @@ export class ClientGrooveboxConductor {
   public start(bpm?: number): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    if (bpm) {
+    if (this.userBpmOverride !== null) {
+      this.currentBpm = this.userBpmOverride;
+    } else if (bpm) {
       this.currentBpm = Math.max(60, Math.min(200, bpm));
     }
     this.nextStepTime = this.engine.now() + 0.05;
@@ -4334,6 +5628,18 @@ export class ClientGrooveboxConductor {
       this.engine.setStemFilter(stem, 20000, 0.7);
     }
 
+    // Kit mode: lock tempo and key to the kit before the first 4-bar block.
+    this.ensureKitPlayer();
+    if (this.playbackMode === "kit") {
+      this.applyKitLock();
+    }
+    this.resetKitBlockClock();
+    if (this.playbackMode === "kit" && this.kitAudioActive) {
+      // Schedule the first block before the first (potentially slow) paint so
+      // it is already in the Web Audio graph when the main thread stalls.
+      this.scheduleKitBlocks(this.engine.now());
+    }
+
     if (this.catalogSongActive) {
       this.compressedBarCursor = -1;
     }
@@ -4354,6 +5660,10 @@ export class ClientGrooveboxConductor {
     this.activeTrackId = undefined;
     this.activePhraseBlock = null;
     this.activeLoops = {};
+    this.kitPlayer?.stop();
+    this.nextKitBlockTime = 0;
+    this.lastKitBlockDurationSec = 0;
+    this.kitBlockLogQueue = [];
     this.lockedCategorySlices.clear();
     this.jointHistory = [];
     this.lastComposedSection = "INTRO";
@@ -4367,6 +5677,13 @@ export class ClientGrooveboxConductor {
     const now = this.engine.now();
     const tatumSec = 60 / this.currentBpm / 4;
 
+    // Kit audio runs on its own 4-bar clock so UI/rendering stalls cannot
+    // stretch the block spacing.
+    if (this.playbackMode === "kit" && this.kitAudioActive) {
+      this.kitPlayer?.tick(now);
+      this.scheduleKitBlocks(now);
+    }
+
     // Clamp if nextStepTime fell behind current audio clock (e.g. background tab)
     if (this.nextStepTime < now) {
       this.nextStepTime = now + 0.02;
@@ -4376,6 +5693,135 @@ export class ClientGrooveboxConductor {
     while (this.nextStepTime < now + 0.15) {
       this.processStep(this.nextStepTime);
       this.nextStepTime += tatumSec;
+    }
+  }
+
+  /** Restart the kit's dedicated 4-bar block clock (independent of UI stalls). */
+  private resetKitBlockClock(): void {
+    this.nextKitBlockTime = this.playbackMode === "kit" && this.kitAudioActive
+      ? this.engine.now() + 0.05
+      : 0;
+    this.lastKitBlockDurationSec = 0;
+    this.kitSteeringDirty = false;
+    this.kitBlockLogQueue = [];
+  }
+
+  /** Session BPM shown to the UI for the current per-phrase block slot. */
+  private applySlotBpm(slotDurationSec: number): void {
+    if (this.userBpmOverride !== null) return;
+    if (!(slotDurationSec > 0)) return;
+    const bpm = Math.max(60, Math.min(200, 960 / slotDurationSec));
+    this.currentBpm = bpm;
+    this.engine.setTargetBpm(bpm);
+  }
+
+  /**
+   * Kit phrases must keep their 4-bar cadence even when the main thread stalls
+   * (WebGL/visualizers in headless Chrome). This clock only schedules the next
+   * future block; missed blocks are fast-forwarded instead of stacked.
+   */
+  private scheduleKitBlocks(now: number): void {
+    const player = this.kitPlayer;
+    if (!player || !player.ready) return;
+    let blockSec = this.lastKitBlockDurationSec > 0
+      ? this.lastKitBlockDurationSec
+      : (player.medianPhraseDuration > 0
+        ? player.medianPhraseDuration
+        : (64 * 60) / (this.currentBpm * 4));
+    if (!(blockSec > 0.1)) return;
+
+    if (this.nextKitBlockTime <= 0) {
+      this.nextKitBlockTime = now + 0.05;
+    }
+    // Allow a small late window so a normal scheduler delay plays the current
+    // block; if more than half a block has been missed, jump to the next grid
+    // slot rather than dumping several phrases on top of each other.
+    if (this.nextKitBlockTime < now - 0.5) {
+      const missed = Math.floor((now - this.nextKitBlockTime) / blockSec);
+      this.nextKitBlockTime += Math.max(1, missed) * blockSec;
+      if (this.nextKitBlockTime < now - 0.5) this.nextKitBlockTime += blockSec;
+    }
+
+    // Prefetch one full block ahead so a long main-thread stall cannot leave a
+    // hole. Logs are queued and emitted when each block becomes due, keeping
+    // one line per block rather than clustering the prefetched ones.
+    while (this.nextKitBlockTime < now + blockSec + 0.15) {
+      const at = this.nextKitBlockTime;
+      if (this.kitSteeringDirty) {
+        const kitChangeRequested = player.requestSteeringKitChange(
+          this.steering,
+          this.userSteeredStems
+        );
+        this.kitSteeringDirty = false;
+        console.info(
+          `[KitPlayer] Reticle steering applied to next kit block${kitChangeRequested ? " (kit change requested)" : ""}`
+        );
+      }
+      const result = player.scheduleBlock(
+        this.engine,
+        at,
+        this.arranger.getSection(),
+        this.steering,
+        this.userSteeredStems
+      );
+      if (result === null) break;
+      // Telemetry wants the boundary at schedule time, not when the log line
+      // becomes due; the probe needs a pre-boundary analyser snapshot.
+      this.onKitTransition?.(at, result);
+      this.kitBlockLogQueue.push({ at, result });
+      blockSec = result.blockDurationSec > 0 ? result.blockDurationSec : blockSec;
+      this.lastKitBlockDurationSec = blockSec;
+      this.nextKitBlockTime += blockSec;
+    }
+
+    while (this.kitBlockLogQueue.length > 0 && this.kitBlockLogQueue[0].at < now + 0.15) {
+      const entry = this.kitBlockLogQueue.shift();
+      if (!entry) continue;
+      if (entry.result.setChanged) {
+        // Apply the new kit's fit tempo/key at the new block downbeat, not
+        // while the bridge is still playing.
+        this.applyKitLock();
+      }
+      // Session BPM reflects one 4-bar slot, not the whole block, so an
+      // 8/16-bar arc block does not halve the displayed tempo.
+      this.applySlotBpm(entry.result.slotSec ?? entry.result.blockDurationSec);
+      if (entry.result.setChanged) {
+        player.logSetChange(entry.result.kit, entry.result.blocksPlayedInSet);
+        this.onKitSetChange?.({
+          kit: entry.result.kit,
+          blocksPlayed: entry.result.blocksPlayedInSet,
+          nextKit: player.nextKit,
+          blocksLeft: player.kitSetBlocksLeft,
+        });
+      }
+      player.logBlock(
+        entry.at,
+        entry.result.phrase,
+        entry.result.stems,
+        entry.result.bridge,
+        entry.result.targetSection,
+        entry.result.energyDelta,
+        entry.result.selectionBand,
+        entry.result.blockBars
+      );
+      if (entry.result.stemPoints) {
+        const points = Object.entries(entry.result.stemPoints)
+          .filter(([, value]) => value !== undefined)
+          .map(([stem, value]) => ({
+            stem: stem as StemName,
+            x: value.x,
+            y: value.y,
+            phraseId: value.phrase.id,
+            at: entry.at,
+          }));
+        this.onStemPhrases?.(points);
+      } else {
+        this.onKitPhrase?.({
+          x: entry.result.phrase.x ?? 0.5,
+          y: entry.result.phrase.y ?? 0.5,
+          at: entry.at,
+        });
+      }
     }
   }
 
@@ -4433,8 +5879,8 @@ export class ClientGrooveboxConductor {
     // Invariant: NEVER modulate key on BUILDUP -> DROP transition!
     // A drop must always land with crushing resolve in the same key as the buildup.
     // Modulate key only after a full 32+ bar song arc completes!
-    const isHarmonicResetPoint = (section === "BREAKDOWN" || section === "INTRO") && isSectionChange && this.trackBarsPlayed >= 32;
-    const isSongCycleComplete = this.barsInCurrentKey >= 48 && this.trackBarsPlayed >= 32 && section !== "BUILDUP" && section !== "DROP";
+    const isHarmonicResetPoint = this.playbackMode !== "kit" && (section === "BREAKDOWN" || section === "INTRO") && isSectionChange && this.trackBarsPlayed >= 32;
+    const isSongCycleComplete = this.playbackMode !== "kit" && this.barsInCurrentKey >= 48 && this.trackBarsPlayed >= 32 && section !== "BUILDUP" && section !== "DROP";
 
     if (isHarmonicResetPoint || isSongCycleComplete) {
       if (!this.catalogSongActive) {
@@ -4688,6 +6134,13 @@ export class ClientGrooveboxConductor {
     // Automate volume levels of the four instruments for transcendent flow
     this.updateStemMixAutomation(when, sec, barInSec, totalSecBars, step % 16);
 
+    // M1 Kit: one locked, real 4-bar phrase per block. Blocks are scheduled by
+    // the dedicated kit clock in clockTick(); while the kit is loading this
+    // falls through to the existing jukebox/phrase path below.
+    if (this.playbackMode === "kit" && this.kitAudioActive) {
+      return;
+    }
+
     const dInput = this.engine.getStemInput("drums");
     const bDest = this.bassSidechainGain || this.engine.getStemInput("bass");
     const oDest = this.synthSidechainGain || this.engine.getStemInput("other");
@@ -4699,7 +6152,7 @@ export class ClientGrooveboxConductor {
     const vTerr = this.getStemTerritory("vocals");
 
     // 0. Downbeat handling: phrase blocks mode vs jukebox studio loops mode vs live slice mode
-    if (this.playbackMode === "phrase_blocks" || this.playbackMode === "jukebox") {
+    if (this.legacyAudioMode) {
       if (step % 16 === 0 && this.catalogSongActive) {
         // Full-corpus catalog song: play its own compressed bar sequence through the slice engine
         this.trackBarsPlayed++;
@@ -4777,7 +6230,7 @@ export class ClientGrooveboxConductor {
     const movement = this.getMovementPhase();
     const barsLeft = this.arranger.getSectionBarsLeft();
     const isTransitionBar = (barsLeft <= 1);
-    const isLoopDrumActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activePhraseBlock?.buffers?.drums || this.activeLoops.drums));
+    const isLoopDrumActive = Boolean(this.legacyAudioMode && (this.activePhraseBlock?.buffers?.drums || this.activeLoops.drums));
 
     // Only trigger synthetic crash/sub-drop/swell or filter sweeps in pure slices mode so authentic studio phrase blocks never get interrupted!
     if (!isLoopDrumActive) {
@@ -4835,11 +6288,28 @@ export class ClientGrooveboxConductor {
           rate: 1.0,
           duration: dSpan > 1 ? dSpan * tatumSec + 0.012 : undefined,
           fadeMs: 2.0,
-          gain: dVel,
+          gain: this.finalGain(dVel, phraseBar, step % 16, vocabDrumAsset.loudDb),
           voiceKey: dCat,
+          whenOffsetMs: this.pocketNudge("drums", step % 16),
         });
         if (sec !== "BREAKDOWN" && [0, 4, 8, 12].includes(step % 16)) {
           this.applySidechainDucking(when);
+        }
+        // Kick reinforcement: in driving sections, a missing downbeat kills
+        // the pocket, so layer a kit kick under empty downbeats. The pattern
+        // keeps its own groove; the kick just guarantees the floor.
+        if ((sec === "DROP" || sec === "GROOVE_A") && [0, 4, 8, 12].includes(step % 16)
+            && !dPat.onset_grid.includes(step % 16)) {
+          const floorKick = this.activeSongKit?.kick || this.getBestSlice("drums:kick", undefined, 0, dTerr);
+          if (floorKick) {
+            this.engine.scheduleSlice("drums", floorKick.buffer, when, {
+              rate: 1.0,
+              fadeMs: 1.5,
+              gain: 0.85,
+              voiceKey: "drums:kick",
+              whenOffsetMs: this.pocketNudge("drums", step % 16),
+            });
+          }
         }
       } else {
       const isBuildup = (sec === "BUILDUP");
@@ -5056,7 +6526,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const bPat = this.activePatterns.bass;
     const bSteer = this.steering.bass;
-    const isLoopBassActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.bass || this.activePhraseBlock?.buffers?.bass));
+    const isLoopBassActive = Boolean(this.legacyAudioMode && (this.activeLoops.bass || this.activePhraseBlock?.buffers?.bass));
     if (bPat && !isLoopBassActive && !(sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15)) {
       const bassCat = bSteer.x < 0.38 ? "bass:sub" : (bSteer.x < 0.72 ? "bass:rolling" : "bass:stab");
       const isSparseBass = (bSteer.y < 0.35 && bTerr !== "cyber");
@@ -5106,8 +6576,9 @@ export class ClientGrooveboxConductor {
             rate: subSlice.rate,
             duration: Math.min(subSlice.buffer.duration / (subSlice.rate || 1.0), spanDurSec),
             fadeMs: 14,
-            gain: vel,
+            gain: this.finalGain(vel, phraseBar, step % 16, subSlice.asset?.loudDb),
             voiceKey: "bass",
+            whenOffsetMs: this.pocketNudge("bass", step % 16),
           });
         } else {
           const noteHz = 440 * Math.pow(2, (targetPitch - 9 - 24) / 12);
@@ -5121,7 +6592,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const oPat = this.activePatterns.other;
     const oSteer = this.steering.other;
-    const isLoopOtherActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.other || this.activePhraseBlock?.buffers?.other));
+    const isLoopOtherActive = Boolean(this.legacyAudioMode && (this.activeLoops.other || this.activePhraseBlock?.buffers?.other));
     if (oPat && !isLoopOtherActive) {
       const otherCat = oSteer.x < 0.25 ? "other:pad" : (oSteer.x < 0.80 ? "other:chord" : "other:arp");
       const isArpMode = (otherCat === "other:arp" || oSteer.y > 0.80);
@@ -5153,7 +6624,7 @@ export class ClientGrooveboxConductor {
               rate: arpSlice.rate,
               duration: Math.min(arpSlice.buffer.duration / (arpSlice.rate || 1.0), otherSpanDurSec),
               fadeMs: 16,
-              gain: vel,
+              gain: this.finalGain(vel, phraseBar, step % 16, arpSlice.asset?.loudDb),
               voiceKey: "other:arp",
             });
           } else {
@@ -5185,7 +6656,7 @@ export class ClientGrooveboxConductor {
               rate: chordSlice.rate,
               duration: Math.min(chordSlice.buffer.duration / (chordSlice.rate || 1.0), otherSpanDurSec),
               fadeMs: 18,
-              gain: vel,
+              gain: this.finalGain(vel, phraseBar, step % 16, chordSlice.asset?.loudDb),
               voiceKey: isSparsePad ? "other:pad" : "other:chord",
             });
           } else {
@@ -5200,7 +6671,7 @@ export class ClientGrooveboxConductor {
     // -------------------------------------------------------------------------
     const vPat = this.activePatterns.vocals;
     const vSteer = this.steering.vocals;
-    const isLoopVocalActive = Boolean((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && (this.activeLoops.vocals || this.activePhraseBlock?.buffers?.vocals));
+    const isLoopVocalActive = Boolean(this.legacyAudioMode && (this.activeLoops.vocals || this.activePhraseBlock?.buffers?.vocals));
     const isDropGap = (sec === "BUILDUP" && phraseBar === 7 && (step % 16) === 15);
 
     const totalBars = this.arranger.getTotalBars();
@@ -5316,7 +6787,7 @@ export class ClientGrooveboxConductor {
             this.engine.scheduleSlice("vocals", slice.buffer, when, {
               rate: slice.rate,
               fadeMs: naturalDur >= 0.50 ? 12 : 6,
-              gain: sliceGain,
+              gain: this.finalGain(sliceGain, phraseBar, step % 16, slice.asset?.loudDb),
               voiceKey: "vocals:phrase",
             });
             // ZERO vocoloid synthesis! No playSingingVoice layer.
@@ -5578,7 +7049,82 @@ export class ClientGrooveboxConductor {
     pat.density = pat.onset_grid.length / 16;
   }
 
+  // ---------------------------------------------------------------------------
+  // Harmonic Fit (learned pitch co-occurrence: prefer slices whose native
+  // pitch was actually observed in this harmonic context across real songs)
+  // ---------------------------------------------------------------------------
+  private harmonicFit(stem: string, pitchPc: number): number {
+    if (!this.harmonicFitEnabled) return 0;
+    const table = this.manifest?.harmonic_compat as any;
+    const hist = table?.hist as Record<string, Record<string, Record<string, number>>> | undefined;
+    if (!hist) return 0;
+    const sec = this.arranger.getSection();
+    const root = ((this.lastChordRoot % 12) + 12) % 12;
+    const pc = ((Math.round(pitchPc) % 12) + 12) % 12;
+    const keys = [
+      `${sec}|${root}|${this.lastChordMinor ? "min" : "maj"}`,
+      `${sec}|${root}|maj`,
+      `${sec}|${root}|min`,
+    ];
+    for (const key of keys) {
+      const stemHist = hist[key]?.[stem];
+      if (!stemHist) continue;
+      let max = 0;
+      for (const v of Object.values(stemHist)) {
+        if ((v as number) > max) max = v as number;
+      }
+      if (max <= 0) continue;
+      return ((stemHist[String(pc)] ?? 0) as number) / max;
+    }
+    return 0.25;
+  }
+
   private composeBarPatterns(phraseBar: number, isSectionChange: boolean = false): void {
+    // Kit mode owns the audio: real 4-bar stem phrases are already composed,
+    // so skip Markov/GPT bar composition and let the arranger only advance
+    // sections for phrase selection.
+    if (this.playbackMode === "kit" && this.kitAudioActive) {
+      return;
+    }
+
+    // Model anchor: whole-bar GPT plans land only on phrase anchors (0/4) so
+    // all stems resample in lockstep. The anchor needs a COMPLETE plan (all 4
+    // ranks valid); a partial plan falls back to per-stem Markov choice.
+    const modelGates = this.globalPatterns && !this.catalogSongActive && !this.activePhraseBlock
+      && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
+    const mp = this.modelPlan;
+    const takeModelBar = Boolean(modelGates && mp && (phraseBar === 0 || phraseBar === 4)
+      && mp.ranks.drums >= 0 && mp.ranks.bass >= 0 && mp.ranks.other >= 0 && mp.ranks.vocals >= 0);
+    if (takeModelBar) {
+      for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) this.globalBarHeld[s] = 4;
+    }
+    for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) this.usedRankByStem[s] = -1;
+    this.tatumTokens = null; // rebuilt from the pending fill on first consuming stem
+    // Journey follow: mined full-song arcs override Markov section hops so the
+    // song travels INTRO->...->DROP like real arrangements instead of wandering.
+    // Seeded lazily (arranger's own pick stands as journey head); overrides
+    // begin at the *next* change, and any drift reseeds from the live section.
+    // Skipped on model bars (the plan carries its own section).
+    if (!takeModelBar && isSectionChange && !this.activePhraseBlock && !this.catalogSongActive
+      && (this.playbackMode === "jukebox" || this.playbackMode === "slices")) {
+      const cur = this.arranger.getSection();
+      if (!this.activeJourney || this.journeyIdx >= this.activeJourney.length) {
+        this.pickJourney(cur);
+        this.journeyIdx = 0;
+      } else if (this.activeJourney[this.journeyIdx] !== cur) {
+        this.pickJourney(cur);
+        this.journeyIdx = 0;
+      } else if (this.journeyIdx + 1 < this.activeJourney.length) {
+        this.journeyIdx++;
+        const nextSec = this.activeJourney[this.journeyIdx];
+        // Mined duration target for this section (bars), else arranger default.
+        const durMean = this.globalPatterns?.section_arcs?.durations?.[nextSec]?.mean;
+        this.arranger.setSection(nextSec, typeof durMean === "number" ? durMean : undefined);
+      } else {
+        this.pickJourney(cur);
+        this.journeyIdx = 0;
+      }
+    }
     const sec = this.arranger.getSection();
     const isNewPhrase = (phraseBar === 0);
     const isTurnaround = (phraseBar === 7);
@@ -5587,7 +7133,7 @@ export class ClientGrooveboxConductor {
     // When a studio 4-bar phrase block is active in jukebox/phrase_blocks mode,
     // keep activePatterns synchronized with the phrase block's per-bar onset grids (Part X.1..4)
     // and never overwrite them with unrelated 1-bar loops!
-    if ((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && this.activePhraseBlock) {
+    if (this.legacyAudioMode && this.activePhraseBlock) {
       this.updatePhraseBlockBarPatterns(this.activePhraseBlock, this.totalBarsPlayed % 4);
       return;
     }
@@ -5595,6 +7141,8 @@ export class ClientGrooveboxConductor {
     // Harmonic pacing: chords sustain for 4 bars across the phrase sequence for smooth song flow
     const chordIndex = Math.floor(phraseBar / 4) % this.activeProgression.length;
     const chord = this.activeProgression[chordIndex];
+    this.lastChordRoot = chord.rootPitch;
+    this.lastChordMinor = chord.isMinor;
 
     const songModels = this.manifest?.compressed_song_models || (this.manifest?.stem_cohesion_weights as any)?.compressed_song_models;
     if (!this.activeTrackId && songModels && Object.keys(songModels).length > 0) {
@@ -5609,13 +7157,16 @@ export class ClientGrooveboxConductor {
     // still sound composed together). Skipped for phrase-block / catalog /
     // loop playback, which already carry authentic joint audio.
     let jointTargets: Record<StemName, string> | null = null;
-    const jointEligible = !this.activePhraseBlock && !this.catalogSongActive &&
-      !hasBarSequence && (this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks" || this.playbackMode === "slices");
+    const jointEligible = this.jointEnabled && !this.activePhraseBlock && !this.catalogSongActive &&
+      !hasBarSequence && (this.legacyAudioMode || this.playbackMode === "slices");
     if (jointEligible) {
       jointTargets = this.jointGrooveTargets(sec);
     }
     const fromSec = this.lastComposedSection;
     this.lastComposedSection = sec;
+    // Snapshot last bar's committed sigs for call-response bias (must precede
+    // the per-stem updates below, which overwrite globalBarSig in place).
+    this.prevBarGlobalSig = { ...this.globalBarSig };
 
     for (const stem of ["drums", "bass", "other", "vocals"] as StemName[]) {
       // 1. Studio Loop Continuity: if a 1-bar loop is active for this section, keep it locked!
@@ -5637,7 +7188,102 @@ export class ClientGrooveboxConductor {
         continue;
       }
 
-      if ((this.playbackMode === "jukebox" || this.playbackMode === "phrase_blocks") && !this.catalogSongActive) {
+      // Global-bar planner (two-stage vocab + full-corpus transitions): holds each
+      // bar 4 bars for long-phrase feel, harmonized to the active chord at schedule
+      // time. Takes precedence over 1-bar loops so songs evolve instead of looping.
+      if (isSectionChange) {
+        this.globalBarHeld[stem] = 4; // force resample on section change
+      }
+      const gp = this.globalPatterns;
+      // Global planner drives jukebox/slices whenever its data is loaded —
+      // per-song bar sequences stay available to catalog mode (which sets
+      // catalogSongActive) and to the A/B "old" control. Requiring
+      // !hasBarSequence here previously starved the planner (song models
+      // almost always carry sequences), so none of the joint/call-response
+      // machinery ever executed.
+      const gpUsable = gp && !this.catalogSongActive && !this.activePhraseBlock
+        && (this.playbackMode === "jukebox" || this.playbackMode === "slices");
+      if (gpUsable && this.globalBarHeld[stem] >= 4) {
+        // Model-planned bar (GPT): whole-arrangement prediction from history.
+        // Tatum fill (second GPT) renders the 16 steps; rank prototypes are
+        // the fallback when the fill isn't ready. Markov draws are last resort.
+        let tokens: Array<string | null> = [];
+        let usedRank = -1;
+        if (takeModelBar && this.modelPlan) {
+          const filled = this.consumeTatumFill(stem);
+          if (filled && filled.length === 16 && filled.some((t) => t)) {
+            tokens = filled;
+            usedRank = this.modelPlan.ranks[stem];
+          } else {
+            const rank = this.modelPlan.ranks[stem];
+            const ranked = this.tokensForRank(stem, rank);
+            if (ranked && ranked.length === 16 && ranked.some((t) => t)) {
+              tokens = ranked;
+              usedRank = rank;
+            }
+          }
+        }
+        if (tokens.length === 0) {
+          // This bar is not model-filled, so the tatum GPT's context is
+          // broken here; a stale 4-bar window would mislead it later.
+          this.tatumHist = [];
+          // Phrase-level beam plan: score 4-bar arcs, commit the first bar.
+          // Planning the arc up front is what makes phrases hang together.
+          const phrase = this.planPhraseBars(stem, this.globalBarSig[stem], sec);
+          if (phrase && phrase.length > 0 && phrase[0].tokens.length === 16) {
+            tokens = phrase[0].tokens;
+          }
+        }
+        // Record the rank driving this bar for arrangement-history + A/B.
+        this.usedRankByStem[stem] = usedRank >= 0 ? usedRank : this.rankForSig(stem, tokens.map((t) => t || ".").join("-"));
+        if (tokens.length === 16) {
+          const onset: number[] = [];
+          const vels = new Array(16).fill(0.0);
+          const spans = new Array(16).fill(1);
+          const pitches = new Array(16).fill(chord.rootPitch);
+          for (let i = 0; i < 16; i++) {
+            if (tokens[i]) {
+              onset.push(i);
+              vels[i] = sec === "DROP" ? 0.95 : sec === "BUILDUP" ? 0.85 : 0.9;
+              // Span to next onset for legato pitched phrases (holds long phrases)
+              let span = 1;
+              for (let j = i + 1; j < 16; j++) {
+                if (tokens[j]) break;
+                span++;
+              }
+              spans[i] = Math.min(8, span);
+              const gi = this.globalVocabById.get(tokens[i] as string);
+              pitches[i] = gi ? gi.pitch : chord.rootPitch;
+            }
+          }
+          if (onset.length > 0) {
+            const sig = tokens.map((t) => t || ".").join("-");
+            this.globalBarSig[stem] = sig;
+            this.globalBarHeld[stem] = 1;
+            this.activeLoops[stem] = undefined;
+            this.playStats.globalBars++;
+            this.activePatterns[stem] = {
+              id: `global_${stem}_${sig.slice(0, 12)}`,
+              name: `Global ${stem} [${sec}]`,
+              groove_type: this.activePatterns[stem]?.groove_type || "global",
+              energy: sec === "DROP" ? 0.9 : 0.7,
+              density: onset.length / 16,
+              onset_grid: onset,
+              velocities: vels,
+              step_slice_ids: [...tokens],
+              step_spans: spans,
+              step_pitches: pitches,
+              length: 16,
+            };
+            continue;
+          }
+        }
+      } else if (gpUsable && this.globalBarSig[stem] && this.activePatterns[stem]?.id?.startsWith("global_")) {
+        this.globalBarHeld[stem] = Math.min(4, this.globalBarHeld[stem] + 1);
+        continue; // hold long phrase
+      }
+
+      if (this.legacyAudioMode && !this.catalogSongActive) {
         // 1. Try to select matching 1-bar studio loop from the authentic training corpus
         const loopMatch = this.getBestLoop(stem, sec, phraseBar, stem === "drums" ? undefined : chord.rootPitch);
         if (loopMatch) {
@@ -5672,11 +7318,13 @@ export class ClientGrooveboxConductor {
             length: 16,
             key: loopMatch.loop.meta.key,
           };
+          this.playStats.loopBars++;
           continue;
         }
       }
 
       this.activeLoops[stem] = undefined;
+      this.playStats.legacyBars++;
       const currPat = this.activePatterns[stem];
       const currG = currPat?.groove_type || "four_on_floor_hats";
 
@@ -5892,6 +7540,32 @@ export class ClientGrooveboxConductor {
       if (isSectionChange) {
         this.applyTransitionEntry(stem, this.activePatterns[stem], fromSec, sec);
       }
+    }
+    // Model-plan bookkeeping (once per bar): commit the played bar to history,
+    // drive the section the plan predicted, and prefetch the next bar.
+    // Markov-planned global bars also seed history so the worker has context
+    // before the first model bar lands.
+    const ranks = (["drums", "bass", "other", "vocals"] as StemName[]).map((s) => this.usedRankByStem[s]);
+    if (ranks.every((r) => r >= 0)) {
+      const secName = takeModelBar && this.modelPlan ? this.modelPlan.sec : sec;
+      const secIdx = ["INTRO", "GROOVE_A", "BUILDUP", "DROP", "BREAKDOWN"].indexOf(secName);
+      const bar = [secIdx >= 0 ? 1204 + secIdx : 1205, 1209 + (((chord?.rootPitch ?? 0) % 12 + 12) % 12)];
+      for (const s of ["drums", "bass", "other", "vocals"] as StemName[]) {
+        const off = { drums: 0, bass: 301, other: 602, vocals: 903 }[s];
+        bar.push(off + this.usedRankByStem[s]);
+      }
+      this.barHistory.push(bar);
+      if (this.barHistory.length > 32) this.barHistory.splice(0, this.barHistory.length - 32);
+      if (!this.modelPlan) this.requestBarPlan(); // Markov-seeded: ask worker to take over
+    }
+    if (takeModelBar) {
+      const planSec = this.modelPlan?.sec;
+      if (planSec && planSec !== this.arranger.getSection()) {
+        const durMean = this.globalPatterns?.section_arcs?.durations?.[planSec]?.mean;
+        this.arranger.setSection(planSec, typeof durMean === "number" ? durMean : undefined);
+      }
+      this.modelPlan = null;
+      this.requestBarPlan();
     }
   }
 
