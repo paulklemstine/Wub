@@ -131,6 +131,7 @@ def main() -> None:
             "energy": mt.N_ENERGY,
             "bar8": mt.N_BAR8,
             "bound": mt.N_BOUND,
+            "density": mt.N_DENSITY,
         }
         print(f"conditioning ON: {cond_vocabs} "
               f"(style_map={'yes' if style_map else 'no, style=0'})")

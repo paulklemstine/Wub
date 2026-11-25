@@ -1,4 +1,4 @@
-"""Tests for WubGPT conditioning (style/energy/bar8/bound) + weighted loss."""
+"""Tests for WubGPT conditioning (style/energy/bar8/bound/density) + weighted loss."""
 from __future__ import annotations
 
 import numpy as np
@@ -8,6 +8,7 @@ from wub_core.model_transformer import (
     COND_ORDER,
     N_BAR8,
     N_BOUND,
+    N_DENSITY,
     N_ENERGY,
     STEM_ORDER,
     StemVQ,
@@ -120,6 +121,12 @@ def test_build_dataset_cond_streams():
     # loud rows alternate -30 (bucket 4) / -6 (bucket 7)
     assert rows[0]["energy"] == energy_bucket(-30.0)
     assert rows[1]["energy"] == energy_bucket(-6.0)
+    # all 4 stems audible in every row
+    assert {r["density"] for r in rows} == {4}
+    # sparse track: only drums available -> density 1
+    tr_sparse = _track("song_b", n=8, louds=(-10.0,), stems=["drums"])
+    rows_sp = build_dataset([tr_sparse], vqs, style_map={"song_b": 1}, n_styles=12)
+    assert {r["density"] for r in rows_sp} == {1}
     # unknown style -> 0; out-of-range clamped -> 0
     rows2 = build_dataset([tr], vqs, style_map={"other": 2}, n_styles=12)
     assert {r["style"] for r in rows2} == {0}
@@ -133,7 +140,7 @@ def test_cond_model_trains_and_legacy_ignores_cond():
     vqs = _vqs()
     tr = _track("song_a")
     rows = build_dataset([tr], vqs, style_map={"song_a": 2}, n_styles=12)
-    cond_vocabs = {"style": 13, "energy": N_ENERGY, "bar8": N_BAR8, "bound": N_BOUND}
+    cond_vocabs = {"style": 13, "energy": N_ENERGY, "bar8": N_BAR8, "bound": N_BOUND, "density": N_DENSITY}
     m = WubGPT.from_vqs(vqs, cond_vocabs=cond_vocabs, d_model=16, n_layers=1,
                         n_heads=2, max_steps=64)
     assert set(m.cond_emb.keys()) == set(COND_ORDER)
@@ -159,16 +166,19 @@ def test_weighted_vs_uniform_runs():
 def test_sample_cond_and_legacy_checkpoint_roundtrip(tmp_path):
     vqs = _vqs()
     rows = build_dataset([_track("song_a")], vqs, style_map={"song_a": 5})
-    cond_vocabs = {"style": 13, "energy": N_ENERGY, "bar8": N_BAR8, "bound": N_BOUND}
+    cond_vocabs = {"style": 13, "energy": N_ENERGY, "bar8": N_BAR8, "bound": N_BOUND, "density": N_DENSITY}
     m = WubGPT.from_vqs(vqs, cond_vocabs=cond_vocabs, d_model=16, n_layers=1,
                         n_heads=2, max_steps=64)
     train_model(m, rows, epochs=1, batch_size=4, seed=0, T=16)
     arc = [2, 3, 4, 5, 6, 7]
+    darc = [4, 4, 2, 2, 4, 4]
     gen = sample(m, vqs, rows[:4], steps=20, temperature=0.8, top_k=2, seed=0,
-                 style_id=5, energy=4, energy_schedule=arc, start_bar8=2)
+                 style_id=5, energy=4, energy_schedule=arc, start_bar8=2,
+                 density=4, density_schedule=darc)
     assert len(gen) == 20
     assert [g["style"] for g in gen] == [5] * 20
     assert [g["energy"] for g in gen] == arc + [4] * 14
+    assert [g["density"] for g in gen] == darc + [4] * 14
     assert [g["bar8"] for g in gen[:16]] == [2] * 16
     assert [g["bar8"] for g in gen[16:20]] == [3] * 4
     ckpt = tmp_path / "cond.pt"

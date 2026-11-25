@@ -30,7 +30,7 @@ from wub_core.model_transformer import (
 )
 
 
-def _parse_energy_arc(text: str) -> Optional[List[int]]:
+def _parse_int_arc(text: str, lo: int, hi: int, name: str) -> Optional[List[int]]:
     text = (text or "").strip()
     if not text:
         return None
@@ -40,10 +40,14 @@ def _parse_energy_arc(text: str) -> Optional[List[int]]:
         if not tok:
             continue
         try:
-            vals.append(max(0, min(7, int(float(tok)))))
+            vals.append(max(lo, min(hi, int(float(tok)))))
         except ValueError:
-            raise SystemExit(f"Bad --energy-arc value: {tok!r} (want 0..7 csv)")
+            raise SystemExit(f"Bad --{name} value: {tok!r} (want {lo}..{hi} csv)")
     return vals or None
+
+
+def _parse_energy_arc(text: str) -> Optional[List[int]]:
+    return _parse_int_arc(text, 0, 7, "energy-arc")
 
 
 def main() -> None:
@@ -86,6 +90,10 @@ def main() -> None:
                     help="csv energy buckets per step, e.g. '3,3,4,5,6,7,6,5' (cond models only)")
     ap.add_argument("--start-bar8", type=int, default=-1,
                     help="bar8 of first generated step; -1 = continue seed (cond models only)")
+    ap.add_argument("--density", type=int, default=4,
+                    help="audible-stem count 0..4 (cond models only)")
+    ap.add_argument("--density-arc", default="",
+                    help="csv density buckets per step, e.g. '4,4,2,4' (cond models only)")
     args = ap.parse_args()
 
     ckpt_path = Path(args.checkpoint)
@@ -151,12 +159,16 @@ def main() -> None:
             last_bar8 = 0
         start_bar8 = int(args.start_bar8) if int(args.start_bar8) >= 0 else last_bar8
         energy_schedule = _parse_energy_arc(args.energy_arc)
+        density_schedule = _parse_int_arc(args.density_arc, 0, 4, "density-arc")
         print(f"cond: style={args.style_id} energy={args.energy} "
               f"arc={'yes(%d)' % len(energy_schedule) if energy_schedule else 'no'} "
+              f"density={args.density} "
+              f"darc={'yes(%d)' % len(density_schedule) if density_schedule else 'no'} "
               f"start_bar8={start_bar8}")
     else:
         start_bar8 = 0
         energy_schedule = None
+        density_schedule = None
 
     print(f"Sampling {args.steps} tatums with temperature={args.temperature}, top_k={args.top_k}, top_p={args.top_p}...")
     sampled_rows = sample(
@@ -172,6 +184,8 @@ def main() -> None:
         energy=int(args.energy),
         energy_schedule=energy_schedule,
         start_bar8=int(start_bar8),
+        density=int(args.density),
+        density_schedule=density_schedule,
     )
     print(f"Generated {len(sampled_rows)} token steps.")
 

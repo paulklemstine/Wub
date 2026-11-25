@@ -61,25 +61,35 @@ def main() -> None:
         model.to(device)
         seed_rows = build_dataset([primer], vqs, stride=1)[:16]
         steer = {}
-        for e in (2, 7):
-            for temp in (0.75, 1.0):
-                gen = _sample(model, vqs, seed_rows, steps=args.steps, temperature=temp,
-                              top_k=0, top_p=0.0, seed=args.seed, style_id=1,
-                              energy=e, start_bar8=-1)
-                dns, du = [], set()
-                for r in gen:
-                    t = int(r.get("drums", -1))
-                    dns.append(t != vqs["drums"].silence_id)
-                    du.add(t)
-                key = f"energy{e}_temp{temp}"
-                steer[key] = {"drum_nonsilence_rate": sum(dns) / max(len(dns), 1),
-                              "drum_unique": len(du)}
-                print(f"[steer {key}] {steer[key]}", flush=True)
+
+        def _probe(energy, density, temp, tag):
+            gen = _sample(model, vqs, seed_rows, steps=args.steps, temperature=temp,
+                          top_k=0, top_p=0.0, seed=args.seed, style_id=1,
+                          energy=energy, density=density, start_bar8=-1)
+            dns, du = [], set()
+            for r in gen:
+                t = int(r.get("drums", -1))
+                dns.append(t != vqs["drums"].silence_id)
+                du.add(t)
+            steer[tag] = {"drum_nonsilence_rate": sum(dns) / max(len(dns), 1),
+                          "drum_unique": len(du)}
+            print(f"[steer {tag}] {steer[tag]}", flush=True)
+
+        for temp in (0.75, 1.0):
+            _probe(2, 4, temp, f"energy2_temp{temp}")
+            _probe(7, 4, temp, f"energy7_temp{temp}")
+        for temp in (0.75, 1.0):
+            _probe(5, 1, temp, f"density1_temp{temp}")
+            _probe(5, 4, temp, f"density4_temp{temp}")
         report = {"steer": steer}
-        spread = (steer["energy7_temp1.0"]["drum_nonsilence_rate"]
-                  - steer["energy2_temp1.0"]["drum_nonsilence_rate"])
-        report["energy_steers_drums"] = bool(spread > 0.05)
-        print("energy steers drums:", report["energy_steers_drums"], f"(delta={spread:.3f})", flush=True)
+        spread_e = (steer["energy7_temp1.0"]["drum_nonsilence_rate"]
+                    - steer["energy2_temp1.0"]["drum_nonsilence_rate"])
+        spread_d = (steer["density4_temp1.0"]["drum_nonsilence_rate"]
+                    - steer["density1_temp1.0"]["drum_nonsilence_rate"])
+        report["energy_steers_drums"] = bool(spread_e > 0.05)
+        report["density_steers_drums"] = bool(spread_d > 0.20)
+        print("energy steers drums:", report["energy_steers_drums"], f"(delta={spread_e:.3f})", flush=True)
+        print("density steers drums:", report["density_steers_drums"], f"(delta={spread_d:.3f})", flush=True)
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(json.dumps(report, indent=1))
         raise SystemExit(0 if report["energy_steers_drums"] else 1)

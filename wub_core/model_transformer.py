@@ -51,6 +51,7 @@ __all__ = [
     "STREAM_ORDER",
     "STEM_ORDER",
     "COND_ORDER",
+    "N_DENSITY",
     "FEAT_DIM",
     "N_ENERGY",
     "N_BAR8",
@@ -70,10 +71,11 @@ STREAM_ORDER = ["r", "drums", "bass", "other", "vocals"]
 STEM_ORDER = ["drums", "bass", "other", "vocals"]
 
 # Conditioning streams (input-only; WubGPT never predicts these).
-COND_ORDER = ["style", "energy", "bar8", "bound"]
+COND_ORDER = ["style", "energy", "bar8", "bound", "density"]
 N_ENERGY = 8
 N_BAR8 = 8
 N_BOUND = 2
+N_DENSITY = 5  # count of audible (present + non-silent) stems, 0..4
 # Fixed dBFS edges -> 8 buckets (index 0 = near-silence, 7 = full-scale).
 ENERGY_EDGES = (-90.0, -48.0, -40.0, -34.0, -28.0, -22.0, -16.0, -10.0, 0.0)
 
@@ -243,6 +245,10 @@ def build_dataset(
       bar8   - bar_position % 8 (phrase position)
       bound  - 0 (cross-song splices set 1 near the junction; see
                build_transition_rows)
+      density - count of audible (present and non-silent) stems, 0..4.
+               Corpus ladder for drum activity: d1~0%, d2~18%, d3~73%,
+               d4=100%. This is the primary "beats move with energy" knob;
+               loudness buckets (energy) are weaker and non-monotonic.
 
     r = beat_position * 4 + tatum_position (0..15). Per stem, the first
     segment id in tatum.stem_segments[stem] is VQ-encoded; missing segment
@@ -268,6 +274,7 @@ def build_dataset(
             row: Dict[str, int] = {"r": int(r)}
             segmap = tat.stem_segments or {}
             loud_peak = float("-inf")
+            audible = 0
             for stem in STEM_ORDER:
                 vq = vqs.get(stem)
                 sil = int(vq.silence_id) if vq is not None else 0
@@ -284,6 +291,7 @@ def build_dataset(
                     row[stem] = sil
                     continue
                 row[stem] = int(vq.encode(sg))
+                audible += 1
                 try:
                     loud_peak = max(loud_peak, float(getattr(sg, "loudness_max", float("-inf"))))
                 except (TypeError, ValueError):
@@ -292,6 +300,7 @@ def build_dataset(
                 loud_peak = -90.0
             row["style"] = int(style)
             row["energy"] = int(energy_bucket(loud_peak))
+            row["density"] = int(min(max(audible, 0), N_DENSITY - 1))
             try:
                 bar_pos = int(getattr(tat, "bar_position", tat.get("bar_position", 0) if isinstance(tat, dict) else 0))
             except (TypeError, ValueError):
@@ -617,7 +626,7 @@ class WubGPT(nn.Module):
         return sum(parts)
 
     def forward(self, r, drums=None, bass=None, other=None, vocals=None,
-                style=None, energy=None, bar8=None, bound=None):
+                style=None, energy=None, bar8=None, bound=None, density=None):
         if isinstance(r, dict):
             d = dict(r)
             drums = d.get("drums")
@@ -628,6 +637,7 @@ class WubGPT(nn.Module):
             energy = d.get("energy")
             bar8 = d.get("bar8")
             bound = d.get("bound")
+            density = d.get("density")
             r = d["r"]
         toks = [r, drums, bass, other, vocals]
         B, T = r.shape
@@ -642,7 +652,8 @@ class WubGPT(nn.Module):
         sids = torch.arange(n_stream, device=dev).view(1, 1, n_stream).expand(B, T, n_stream)
         h = e + self.stream_emb(sids)
         ch = self._cond_sum(
-            {"style": style, "energy": energy, "bar8": bar8, "bound": bound}, dev
+            {"style": style, "energy": energy, "bar8": bar8,
+             "bound": bound, "density": density}, dev
         )
         if ch is not None:
             if ch.shape != (B, T, self.d_model):
@@ -787,6 +798,8 @@ def sample(
     energy_schedule: Optional[List[int]] = None,
     start_bar8: int = -1,
     bound_id: int = 0,
+    density: int = 4,
+    density_schedule: Optional[List[int]] = None,
 ) -> List[Dict[str, int]]:
     """Autoregressively generate `steps` new token rows after `seed_steps`.
 
@@ -796,6 +809,9 @@ def sample(
       start_bar8 - bar8 of the first generated step; -1 = continue the
         seed's last bar8 (explicit values always win over the seed)
       bound_id - constant bound flag (0 = inside one song)
+      density / density_schedule - per-step audible-stem count 0..4
+        (schedule wins). Corpus ladder: d1~0%, d2~18%, d3~73%, d4=100%
+        drum activity. This is the primary beats-with-energy knob.
     Seed rows carrying cond keys keep them as context; missing keys fall
     back to the constants above.
     """
@@ -830,6 +846,7 @@ def sample(
         s.setdefault("energy", int(energy))
         s.setdefault("bar8", bar0)
         s.setdefault("bound", int(bound_id))
+        s.setdefault("density", int(density))
     out: List[Dict[str, int]] = []
     with torch.no_grad():
         for i in range(int(steps)):
@@ -847,6 +864,11 @@ def sample(
                     if energy_schedule and i < len(energy_schedule)
                     else int(energy)
                 )
+                d_i = (
+                    int(density_schedule[i])
+                    if density_schedule and i < len(density_schedule)
+                    else int(density)
+                )
                 inp["style"] = torch.full((1, nctx), int(style_id), dtype=torch.long, device=dev)
                 inp["energy"] = torch.tensor(
                     [[int(row.get("energy", e_i)) for row in ctx]], dtype=torch.long, device=dev
@@ -856,6 +878,9 @@ def sample(
                     dtype=torch.long, device=dev,
                 )
                 inp["bound"] = torch.full((1, nctx), int(bound_id), dtype=torch.long, device=dev)
+                inp["density"] = torch.tensor(
+                    [[int(row.get("density", d_i)) for row in ctx]], dtype=torch.long, device=dev
+                )
             logits = model(inp)
             nxt: Dict[str, int] = {}
             for kk in keys:
@@ -895,6 +920,11 @@ def sample(
                 nxt["energy"] = e_i
                 nxt["bar8"] = (bar0 + (i // 16)) % N_BAR8
                 nxt["bound"] = int(bound_id)
+                nxt["density"] = (
+                    int(density_schedule[i])
+                    if density_schedule and i < len(density_schedule)
+                    else int(density)
+                )
             hist.append(nxt)
             out.append(dict(nxt))
     if was_training:
