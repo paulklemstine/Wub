@@ -128,7 +128,9 @@ def main() -> None:
     )
     store.refresh()
     pools = store.pools()
-    primer = store.analyses[args.seed % len(store.analyses)] if store.analyses else None
+    _analyses = (list(store.analyses.values()) if isinstance(store.analyses, dict)
+                 else list(store.analyses))
+    primer = _analyses[args.seed % len(_analyses)] if _analyses else None
     if primer is None:
         raise SystemExit("No analyses found.")
 
