@@ -28,6 +28,8 @@ def main() -> None:
     ap.add_argument("--n-samples", type=int, default=4)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="data/eval_cond/token_gates.json")
+    ap.add_argument("--n-seeds", type=int, default=4,
+                    help="independent rollouts per condition (averaged; autoregressive variance is large)")
     ap.add_argument("--steer", action="store_true",
                     help="energy-steering test: sample cond model at energy 2 vs 7 "
                          "(temp 1.0) and compare drum non-silence rate")
@@ -63,17 +65,21 @@ def main() -> None:
         steer = {}
 
         def _probe(energy, density, temp, tag):
-            gen = _sample(model, vqs, seed_rows, steps=args.steps, temperature=temp,
-                          top_k=0, top_p=0.0, seed=args.seed, style_id=1,
-                          energy=energy, density=density, start_bar8=-1)
-            dns, du = [], set()
-            for r in gen:
-                t = int(r.get("drums", -1))
-                dns.append(t != vqs["drums"].silence_id)
-                du.add(t)
-            steer[tag] = {"drum_nonsilence_rate": sum(dns) / max(len(dns), 1),
-                          "drum_unique": len(du)}
-            print(f"[steer {tag}] {steer[tag]}", flush=True)
+            rates, uniqs, n = [], set(), max(1, int(args.n_seeds))
+            for r in range(n):
+                gen = _sample(model, vqs, seed_rows, steps=args.steps, temperature=temp,
+                              top_k=0, top_p=0.0, seed=args.seed + r, style_id=1,
+                              energy=energy, density=density, start_bar8=-1)
+                dns, du = [], set()
+                for row in gen:
+                    t = int(row.get("drums", -1))
+                    dns.append(t != vqs["drums"].silence_id)
+                    du.add(t)
+                rates.append(sum(dns) / max(len(dns), 1))
+                uniqs.update(du)
+            steer[tag] = {"drum_nonsilence_rate": sum(rates) / len(rates),
+                          "drum_unique": len(uniqs)}
+            print(f"[steer {tag} n={n}] {steer[tag]}", flush=True)
 
         for temp in (0.75, 1.0):
             _probe(2, 4, temp, f"energy2_temp{temp}")
