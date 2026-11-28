@@ -1296,10 +1296,27 @@
       border: none;
       width: 100vw;
       height: 100vh;
+      padding: 0;
     }
+    /* Fullscreen = pure visualization: hide the right VJ controls and the
+       bottom bear/creature strip so the trippy canvas owns every pixel.
+       The stage header stays so EXIT ✕ (or F / ESC) can leave fullscreen. */
     #panel-lightshow:fullscreen .lightshow-body {
       height: calc(100vh - 42px);
-      grid-template-columns: 1fr 150px;
+      grid-template-columns: 1fr;
+      gap: 0;
+      padding: 0;
+      min-height: 0;
+    }
+    #panel-lightshow:fullscreen .lightshow-side,
+    #panel-lightshow:fullscreen .lightshow-bear-strip {
+      display: none;
+    }
+    #panel-lightshow:fullscreen .lightshow-stage-wrap {
+      border: none;
+      border-radius: 0;
+      min-height: 0;
+      height: 100%;
     }
     /* --- STUDIO RACK VISUALIZERS --- */
     #stages {
@@ -2807,7 +2824,7 @@
       <div class="mc-brand-block">
         <span class="mc-logo">KLEMSTINE</span>
         <span class="mc-model">KG-505</span>
-        <span class="mc-version-badge" id="mc-version-badge">v0.2.382 <span class="mc-build-num">#382</span></span>
+        <span class="mc-version-badge" id="mc-version-badge">v0.2.384 <span class="mc-build-num">#384</span></span>
       </div>
       <div id="panel-dock" class="panel-dock" role="toolbar" aria-label="Toggle Front Page Panels">
         <button type="button" class="panel-dock-btn active" data-panel="panel-dj-surface">DJ SURFACE</button>
@@ -3781,7 +3798,7 @@
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #64748b; font-family: monospace;">
       <span id="status-line" role="status">Loading…</span>
-      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.382 (Build #382 • rev 644b139936)</span>
+      <span id="footer-version-tag" style="letter-spacing: 0.05em; color: var(--neon-cyan); opacity: 0.85;">v0.2.384 (Build #384 • rev 12ecded377)</span>
     </div>
   </div>
 
